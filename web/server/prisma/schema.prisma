@@ -1,0 +1,399 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  // Direct URL is used for migrations
+  url       = env("DATABASE_URL")
+  directUrl = env("DATABASE_DIRECT_URL")
+}
+
+enum OrganizationRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  EXPIRED
+}
+
+model User {
+  id            String    @id
+  name          String
+  email         String
+  emailVerified Boolean
+  image         String?
+  createdAt     DateTime
+  updatedAt     DateTime
+  sessions      Session[]
+  accounts      Account[]
+
+  twoFactorEnabled Boolean?
+  role             String?
+  banned           Boolean?
+  banReason        String?
+  banExpires       DateTime?
+  twofactors       TwoFactor[]
+  members          Member[]
+  invitations      Invitation[]
+
+  finishedOnboarding Boolean?
+  OnboardingDetails  OnboardingDetails?
+  ApiKey             ApiKey[]
+  Feedback           Feedback[]
+  Runs               Runs[]
+
+  @@unique([email])
+  @@map("user")
+}
+
+model OnboardingDetails {
+  id                   String   @id
+  userId               String   @unique
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  location             String?
+  background           String?
+  company              String?
+  howDidYouHearAboutUs String?
+  agreeToMarketing     Boolean  @default(false)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@map("onboarding_details")
+}
+
+model Session {
+  id        String   @id
+  expiresAt DateTime
+  token     String
+  createdAt DateTime
+  updatedAt DateTime
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  impersonatedBy       String?
+  activeOrganizationId String?
+
+  @@unique([token])
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime
+  updatedAt             DateTime
+
+  @@map("account")
+}
+
+model Verification {
+  id         String    @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime?
+  updatedAt  DateTime?
+
+  @@map("verification")
+}
+
+model TwoFactor {
+  id          String @id
+  secret      String
+  backupCodes String
+  userId      String
+  user        User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("twoFactor")
+}
+
+model OrganizationSubscription {
+  id                   String           @id @default(uuid())
+  organizationId       String           @unique
+  organization         Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  stripeCustomerId     String
+  stripeSubscriptionId String
+  plan                 SubscriptionPlan
+  seats                Int
+  usageLimits          Json // flexible, so you can customize per org
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+
+  @@map("organization_subscription")
+}
+
+enum SubscriptionPlan {
+  FREE
+  PRO
+}
+
+model Organization {
+  id                       String                    @id
+  name                     String
+  slug                     String
+  logo                     String?
+  createdAt                DateTime
+  metadata                 String?
+  members                  Member[]
+  invitations              Invitation[]
+  ApiKey                   ApiKey[]
+  Projects                 Projects[]
+  Runs                     Runs[]
+  Feedback                 Feedback[]
+  Notification             Notification[]
+  OrganizationSubscription OrganizationSubscription?
+
+  @@unique([slug])
+  @@map("organization")
+}
+
+model Member {
+  id             String           @id
+  organizationId String
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role           OrganizationRole
+  createdAt      DateTime
+
+  @@map("member")
+}
+
+model Feedback {
+  id                Int          @id @default(autoincrement())
+  organizationId    String
+  organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId            String
+  user              User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt         DateTime     @default(now())
+  feedback          String
+  feedbackSentiment String?
+
+  @@map("feedback")
+}
+
+model Invitation {
+  id             String           @id
+  organizationId String
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  email          String
+  role           OrganizationRole
+  status         InvitationStatus
+  expiresAt      DateTime
+  inviterId      String
+  user           User             @relation(fields: [inviterId], references: [id], onDelete: Cascade)
+
+  @@map("invitation")
+}
+
+model ApiKey {
+  id             String       @id
+  key            String
+  name           String
+  // user facing key
+  keyString      String       @default("*********")
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt      DateTime
+  isHashed       Boolean      @default(true)
+  lastUsed       DateTime?
+  expiresAt      DateTime?
+  Runs           Runs[]
+
+  @@unique([key])
+  @@map("api_key")
+}
+
+model Projects {
+  id             BigInt       @id @default(autoincrement())
+  name           String       @db.VarChar(255)
+  organizationId String
+  tags           String[]     @default([])
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  runs           Runs[]
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  // This unique constraint ensures we can efficiently look up projects by name + orgId
+  @@unique([organizationId, name])
+  @@map("projects")
+}
+
+enum RunStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+  TERMINATED
+  CANCELLED
+}
+
+enum RunLogType {
+  METRIC
+  IMAGE
+  VIDEO
+  AUDIO
+  FILE
+  TEXT
+  ARTIFACT
+  HISTOGRAM
+  TABLE
+  DATA
+}
+
+model RunLogs {
+  id        BigInt     @id @default(autoincrement())
+  runId     BigInt
+  logGroup  String?
+  logName   String
+  logType   RunLogType
+  run       Runs       @relation(fields: [runId], references: [id], onDelete: Cascade)
+  createdAt DateTime   @default(now())
+
+  @@index([runId])
+  @@map("run_logs")
+}
+
+model Runs {
+  id              BigInt    @id @default(autoincrement())
+  name            String    @db.VarChar(255)
+  organizationId  String
+  tags            String[]  @default([])
+  loggerSettings  Json?
+  systemMetadata  Json?
+  config          Json?
+  projectId       BigInt
+  status          RunStatus @default(RUNNING)
+  statusUpdated   DateTime?
+  statusMetadata  Json?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  createdById     String
+  creatorApiKeyId String
+
+  creator      User           @relation(fields: [createdById], references: [id])
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  project      Projects       @relation(fields: [projectId], references: [id])
+  logs         RunLogs[]
+  triggers     RunTriggers[]
+  Notification Notification[]
+  RunGraphNode RunGraphNode[]
+  RunGraphEdge RunGraphEdge[]
+  ApiKey       ApiKey         @relation(fields: [creatorApiKeyId], references: [id])
+
+  // Add compound index on projectId and organizationId to efficiently find runs for a project
+  @@index([projectId, organizationId])
+  @@index([status])
+  @@index([createdById])
+  @@map("runs")
+}
+
+enum RunGraphNodeType {
+  MODULE
+  UNKNOWN
+  CONTAINER
+  IO
+}
+
+model RunGraphNode {
+  id       BigInt            @id @default(autoincrement())
+  runId    BigInt
+  run      Runs              @relation(fields: [runId], references: [id], onDelete: Cascade)
+  name     String
+  depth    Int
+  type     String
+  order    Int?
+  label    String?
+  nodeId   String?
+  nodeType RunGraphNodeType?
+  instId   String?
+  args     Json?
+  kwargs   Json?
+  params   Json?
+
+  @@index([runId])
+  @@index([depth])
+  @@index([name])
+  @@index([nodeId])
+  @@map("run_graph_nodes")
+}
+
+model RunGraphEdge {
+  id       BigInt @id @default(autoincrement())
+  runId    BigInt
+  run      Runs   @relation(fields: [runId], references: [id], onDelete: Cascade)
+  sourceId String
+  targetId String
+
+  @@index([runId])
+  @@index([sourceId])
+  @@index([targetId])
+  @@map("run_graph_edges")
+}
+
+enum RunTriggerType {
+  CANCEL // Trigger to cancel a run
+}
+
+model RunTriggers {
+  id          BigInt         @id @default(autoincrement())
+  runId       BigInt
+  run         Runs           @relation(fields: [runId], references: [id], onDelete: Cascade)
+  trigger     String
+  createdAt   DateTime       @default(now())
+  triggerType RunTriggerType
+
+  @@index([runId])
+  @@index([triggerType])
+  @@map("run_triggers")
+}
+
+enum NotificationType {
+  RUN_CANCELLED
+  RUN_FAILED
+  INFO
+  WARNING
+  ERROR
+  DEBUG
+}
+
+model Notification {
+  id             BigInt           @id @default(autoincrement())
+  runId          BigInt
+  organizationId String
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  run            Runs             @relation(fields: [runId], references: [id], onDelete: Cascade)
+  createdAt      DateTime         @default(now())
+  type           NotificationType
+  content        String
+  read           Boolean          @default(false)
+
+  @@index([runId])
+  @@index([organizationId])
+  @@map("notifications")
+}

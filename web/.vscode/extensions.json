@@ -1,0 +1,11 @@
+{
+  "recommendations": [
+    "esbenp.prettier-vscode",
+    "bradlc.vscode-tailwindcss",
+    "ms-vscode.vscode-typescript-next",
+    "dbaeumer.vscode-eslint",
+    "Prisma.prisma",
+    "zhang-renyang.vscode-react",
+    "YoavBls.pretty-ts-errors"
+  ]
+}

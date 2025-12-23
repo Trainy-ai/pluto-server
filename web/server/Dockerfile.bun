@@ -1,0 +1,18 @@
+FROM oven/bun:latest
+RUN apt-get update && apt-get install -y libc6-dev nodejs npm
+
+# FROM node:18-alpine AS base
+# RUN apk add --no-cache libc6-compat openssl
+
+WORKDIR /app
+
+COPY . .
+RUN npm i pnpm --global
+RUN bun install; bun run build
+
+ENV NODE_ENV=production
+ENV PORT=3001
+ENV HOSTNAME="0.0.0.0"
+
+CMD ["bun", "./.next/standalone/server.js"]
+EXPOSE 3001

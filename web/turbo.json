@@ -1,0 +1,52 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "ui": "tui",
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": [".next/**", "!.next/cache/**", "dist/**"]
+    },
+    "check-types": {
+      "dependsOn": ["^check-types"]
+    },
+    "dev:dev": {
+      "persistent": true,
+      "cache": false
+    },
+    "dev:local": {
+      "persistent": true,
+      "cache": false
+    },
+    "dev:prod": {
+      "persistent": true,
+      "cache": false
+    },
+    "start": {
+      "dependsOn": ["^build"],
+      "persistent": true,
+      "cache": false
+    }
+  },
+  "globalEnv": [
+    "BETTER_AUTH_URL",
+    "BETTER_AUTH_SECRET",
+    "PUBLIC_URL",
+    "DATABASE_URL",
+    "DATABASE_DIRECT_URL",
+    "VITE_SERVER_URL",
+    "CLICKHOUSE_URL",
+    "CLICKHOUSE_USER",
+    "CLICKHOUSE_PASSWORD",
+    "GITHUB_CLIENT_ID",
+    "GITHUB_CLIENT_SECRET",
+    "GOOGLE_CLIENT_ID",
+    "GOOGLE_CLIENT_SECRET",
+    "VITE_IS_DOCKER",
+    "STORAGE_ACCESS_KEY_ID",
+    "STORAGE_SECRET_ACCESS_KEY",
+    "STORAGE_ENDPOINT",
+    "STORAGE_BUCKET",
+    "STORAGE_REGION",
+    "VITE_ENV"
+  ]
+}

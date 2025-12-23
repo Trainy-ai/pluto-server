@@ -1,0 +1,22 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+
+# TRPC V11
+
+We are using trpc v11 not v10 there has been a different way of performing queries and mutations. In trpc v10 you did
+
+```ts
+trpc.greeting.useQuery({ name: 'Jerry' })
+```
+
+Now in V11 you use
+
+```ts
+useQuery(trpc.greeting.queryOptions({ name: 'Jerry' }))
+```
+
+Using useQuery from tanstack query
+The same goes for mutations where you now use `useMutation` 

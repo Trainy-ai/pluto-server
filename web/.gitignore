@@ -1,0 +1,17 @@
+/node_modules/
+.turbo
+
+.DS_Store
+*.local
+*.log*
+
+node_modules
+dist/
+.vinxi
+.output
+.vercel
+.netlify
+.wrangler
+
+*.env*
+!.env.example

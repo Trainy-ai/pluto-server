@@ -1,0 +1,17 @@
+{
+  "name": "mlop",
+  "private": true,
+  "dependencies": {
+    "turbo": "^2.4.4"
+  },
+  "packageManager": "pnpm@10.9.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/client",
+      "@prisma/engines",
+      "esbuild",
+      "prisma",
+      "sharp"
+    ]
+  }
+}
