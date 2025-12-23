@@ -42,6 +42,23 @@ impl Config {
                 .expect("DATABASE_DIRECT_URL is not set"),
         }
     }
+
+    // Creates a test configuration with default values
+    // Used in testing to avoid requiring environment variables
+    #[cfg(test)]
+    pub fn for_testing() -> Self {
+        Self {
+            clickhouse_url: "http://localhost:8123".to_string(),
+            clickhouse_user: "default".to_string(),
+            clickhouse_password: "".to_string(),
+            storage_access_key_id: "test".to_string(),
+            storage_secret_access_key: "test".to_string(),
+            storage_bucket: "test-bucket".to_string(),
+            storage_region: "us-east-1".to_string(),
+            storage_endpoint: "http://localhost:9000".to_string(),
+            database_url: "postgresql://test:test@localhost:5432/test".to_string(),
+        }
+    }
 }
 
 // Constants for ClickHouse table names

@@ -3,6 +3,14 @@ name = "server-rs"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "server_rs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "server-rs"
+path = "src/main.rs"
+
 [dependencies]
 axum = "0.7.1"
 clickhouse = { version = "0.12.2", features = ["rustls-tls"] }
@@ -32,3 +40,10 @@ simd-json = "0.15.1"
 bytes = "1.10.1"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"] }
+
+[dev-dependencies]
+testcontainers = { version = "0.23.3", features = ["blocking"] }
+testcontainers-modules = { version = "0.11.6", features = ["postgres", "clickhouse"] }
+http-body-util = "0.1"
+tower = { version = "0.4", features = ["util"] }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] }
