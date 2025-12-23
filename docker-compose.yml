@@ -4,9 +4,9 @@ services:
   clickhouse:
     image: clickhouse/clickhouse-server:latest-alpine
     # image: altinity/clickhouse-server:24.8.14.10459.altinitystable-alpine
-    # ports:
+    ports:
     #   - "8123:8123"
-    #   - "9001:9000"
+      - "9001:9000"
     volumes:
       - ./.mlop/clickhouse:/var/lib/clickhouse
     networks:
@@ -63,7 +63,7 @@ services:
       retries: 5
 
   minio_create:
-    image: minio/mc
+    image: "minio/mc:RELEASE.2025-02-21T16-00-46Z"
     networks:
       - mlop_network
     depends_on:
@@ -129,6 +129,7 @@ services:
         - STORAGE_ACCESS_KEY_ID=${STORAGE_ACCESS_KEY_ID}
         - STORAGE_SECRET_ACCESS_KEY=${STORAGE_SECRET_ACCESS_KEY}
         - STORAGE_BUCKET=${STORAGE_BUCKET}
+        - STORAGE_REGION=${STORAGE_REGION}
         - CLICKHOUSE_URL=${CLICKHOUSE_URL}
         - CLICKHOUSE_USER=${CLICKHOUSE_USER}
         - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
