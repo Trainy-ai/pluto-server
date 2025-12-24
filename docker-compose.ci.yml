@@ -52,7 +52,7 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
-    entrypoint: ["/bin/sh", "-c", "corepack enable pnpm && pnpm exec prisma migrate deploy && node ./.next/standalone/server.js"]
+    entrypoint: ["/bin/sh", "-c", "corepack enable pnpm && cd /app && pnpm exec prisma migrate deploy && cd /app/.next/standalone && node server.js"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
       interval: 5s
