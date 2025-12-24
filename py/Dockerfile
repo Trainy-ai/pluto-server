@@ -1,5 +1,6 @@
 # FROM python:3
 FROM condaforge/miniforge3
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 ADD compat compat
 ADD python python
 ADD main.py main.py

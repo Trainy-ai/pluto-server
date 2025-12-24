@@ -4,10 +4,21 @@ services:
   ingest:
     image: mlop-ingest:latest
     build: null
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3003/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   backend:
     image: mlop-backend:latest
     build: null
+    entrypoint: ["/bin/sh", "-c", "corepack enable pnpm && pnpm exec prisma migrate deploy && node ./.next/standalone/server.js"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   frontend:
     image: mlop-frontend:latest
@@ -16,3 +27,8 @@ services:
   py:
     image: mlop-py:latest
     build: null
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3004/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
