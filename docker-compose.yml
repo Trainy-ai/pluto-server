@@ -123,25 +123,6 @@ services:
       context: ./web/server
       dockerfile: Dockerfile
       # dockerfile: Dockerfile.bun
-      args:
-        - IS_DOCKER=${IS_DOCKER}
-        - STORAGE_ENDPOINT=${STORAGE_ENDPOINT}
-        - STORAGE_ACCESS_KEY_ID=${STORAGE_ACCESS_KEY_ID}
-        - STORAGE_SECRET_ACCESS_KEY=${STORAGE_SECRET_ACCESS_KEY}
-        - STORAGE_BUCKET=${STORAGE_BUCKET}
-        - STORAGE_REGION=${STORAGE_REGION}
-        - CLICKHOUSE_URL=${CLICKHOUSE_URL}
-        - CLICKHOUSE_USER=${CLICKHOUSE_USER}
-        - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
-        - DATABASE_URL=${DATABASE_URL}
-        - DATABASE_DIRECT_URL=${DATABASE_DIRECT_URL}
-        - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
-        - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
-        - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
-        - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
-        - PUBLIC_URL=${PUBLIC_URL}
-        - BETTER_AUTH_URL=${BETTER_AUTH_URL}
-        - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
     ports:
       - "3001:3001"
     networks:
@@ -162,15 +143,11 @@ services:
     build:
       context: ./web/app
       dockerfile: Dockerfile
-      args:
-        - VITE_IS_DOCKER=${VITE_IS_DOCKER}
-        - VITE_SERVER_URL=${VITE_SERVER_URL}
-        - VITE_ENV=production
     ports:
       - "3000:3000"
     networks:
       - mlop_network
-    depends_on: # TODO: check build time env vars
+    depends_on:
       - backend
     env_file:
       - .env
