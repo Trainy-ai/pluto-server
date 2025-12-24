@@ -49,6 +49,11 @@ ENV BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
 COPY . .
 RUN corepack enable pnpm && pnpm i && pnpm run build
 
+# Copy Prisma files to standalone output for migrations
+RUN mkdir -p .next/standalone/prisma && \
+    cp -r prisma/migrations .next/standalone/prisma/ && \
+    cp prisma/schema.prisma .next/standalone/prisma/
+
 # Runtime environment - all secrets provided via K8s ConfigMaps/Secrets
 ENV NODE_ENV=production
 ENV PORT=3001
