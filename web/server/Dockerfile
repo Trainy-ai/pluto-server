@@ -1,5 +1,5 @@
 FROM node:lts AS base
-RUN apt-get update && apt-get install -y libc6-dev && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y libc6-dev curl && rm -rf /var/lib/apt/lists/*
 
 # FROM node:18-alpine AS base
 # RUN apk add --no-cache libc6-compat openssl
