@@ -4,8 +4,10 @@
   "type": "module",
   "scripts": {
     "check-types": "tsc --noEmit",
-    "test:smoke": "vitest run",
-    "test:smoke:watch": "vitest",
+    "test:setup": "tsx tests/setup.ts",
+    "test:setup:cleanup": "tsx tests/setup.ts cleanup",
+    "test:smoke": "dotenv -e .env.test -- vitest run",
+    "test:smoke:watch": "dotenv -e .env.test -- vitest",
     "test:smoke:local": "dotenv -e .env.locals -- vitest run",
     "test:smoke:dev": "dotenv -e .env.dev -- vitest run",
     "dev:local": "pnpm db:generate:local && dotenv -e .env.locals -- next dev -p 3001",
