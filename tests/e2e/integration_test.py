@@ -17,10 +17,10 @@ def main():
     # Configure mlop to use local self-hosted instance
     settings = mlop.Settings()
     settings.update({
-        'url_app': 'http://localhost:3000',
-        'url_api': 'http://localhost:3001',
-        'url_ingest': 'http://localhost:3003',
-        'url_py': 'http://localhost:3004'
+        'url_app': 'https://trakkur-dev.trainy.ai',
+        'url_api': 'https://trakkur-api-dev.trainy.ai',
+        'url_ingest': 'https://trakkur-ingest-dev.trainy.ai',
+        'url_py': 'https://trakkur-py-dev.trainy.ai'
     })
 
     print("Starting integration test...")
