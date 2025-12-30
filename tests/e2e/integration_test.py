@@ -8,9 +8,24 @@ This test validates the full stack deployment by:
 4. Finishing the run successfully
 """
 
+import subprocess
 import time
+from pathlib import Path
 
 import mlop
+
+
+def get_commit_hash() -> str:
+    resolved = Path(__file__).resolve()
+    repo_root = resolved.parents[2] if len(resolved.parents) > 2 else resolved.parent
+    try:
+        result = subprocess.check_output(
+            ['git', 'rev-parse', '--short', 'HEAD'],
+            cwd=str(repo_root),
+        )
+        return result.decode().strip()
+    except Exception:
+        return 'unknown'
 
 
 def main():
@@ -30,17 +45,20 @@ def main():
     print(f"  Ingest: {settings.url_ingest}")
     print(f"  Py: {settings.url_py}")
 
+    commit_hash = get_commit_hash()
+    print(f"Using commit hash {commit_hash} for the run name...")
+
     # Test basic logging functionality
     config = {
         'lr': 0.001,
         'epochs': 10,
         'batch_size': 32,
-        'test': 'ci-integration'
+        'test': f'test-ci-commit-{commit_hash}'
     }
 
     run = mlop.init(
-        project='ci-integration-test',
-        name='quick-test',
+        project='test-ci',
+        name=f'integration-test-commit-{commit_hash}',
         config=config,
         settings=settings
     )
