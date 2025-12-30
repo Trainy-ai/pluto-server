@@ -106,7 +106,7 @@ export function StatusIndicator({
             }
             iconComponent={<InfoIcon className="size-4" />}
             description={statusConfig[status].description}
-            link={`https://docs.mlop.ai/docs/experiments/status`}
+            link={`https://docs.trainy.ai/trakkur`}
           />
         </UnstyledTooltipContent>
       </Tooltip>
@@ -191,21 +191,19 @@ const mainNavItems = [
     title: "Dashboard",
     href: "/",
     description: "The home page for your organization",
-    // link: "https://docs.mlop.ai",
     icon: RiDashboardFill,
   },
   {
     title: "Projects",
     href: "/projects",
     description: "Projects that are associated with your organization",
-    link: "https://docs.mlop.ai/docs/experiments/projects",
+    link: "https://docs.trainy.ai/trakkur/projects",
     icon: RiFolderFill,
   },
   {
     title: "Settings",
     href: "/settings",
     description: "Manage your organization and account settings",
-    // link: "https://docs.mlop.ai/settings",
     icon: RiSettings3Fill,
   },
 ];
