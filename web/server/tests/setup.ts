@@ -12,6 +12,7 @@
 
 import { PrismaClient } from '@prisma/client';
 import crypto from 'crypto';
+import { nanoid } from 'nanoid';
 
 const prisma = new PrismaClient();
 
@@ -43,10 +44,13 @@ async function setupTestData(): Promise<TestData> {
   if (!user) {
     user = await prisma.user.create({
       data: {
+        id: nanoid(),
         email: testEmail,
         name: 'Smoke Test User',
         emailVerified: true,
         finishedOnboarding: true,
+        createdAt: new Date(),
+        updatedAt: new Date(),
       },
     });
     console.log(`   ✓ Created user: ${user.email} (ID: ${user.id})`);
@@ -65,12 +69,16 @@ async function setupTestData(): Promise<TestData> {
   if (!org) {
     org = await prisma.organization.create({
       data: {
+        id: nanoid(),
         name: 'Smoke Test Organization',
         slug: orgSlug,
+        createdAt: new Date(),
         members: {
           create: {
+            id: nanoid(),
             userId: user.id,
             role: 'OWNER',
+            createdAt: new Date(),
           },
         },
       },
@@ -92,13 +100,37 @@ async function setupTestData(): Promise<TestData> {
     if (!membership) {
       await prisma.member.create({
         data: {
+          id: nanoid(),
           userId: user.id,
           organizationId: org.id,
           role: 'OWNER',
+          createdAt: new Date(),
         },
       });
       console.log(`   ✓ Added user as OWNER`);
     }
+  }
+
+  // Ensure organization has a subscription with usage limits
+  const subscription = await prisma.organizationSubscription.findUnique({
+    where: { organizationId: org.id },
+  });
+
+  if (!subscription) {
+    await prisma.organizationSubscription.create({
+      data: {
+        organizationId: org.id,
+        stripeCustomerId: 'cus_test_smoke_' + org.id.substring(0, 8),
+        stripeSubscriptionId: 'sub_test_smoke_' + org.id.substring(0, 8),
+        plan: 'PRO',
+        seats: 10,
+        usageLimits: {
+          dataUsageGB: 100,
+          trainingHoursPerMonth: 750,
+        },
+      },
+    });
+    console.log(`   ✓ Created organization subscription with usage limits`);
   }
 
   // 3. Create or get test API key
@@ -119,11 +151,14 @@ async function setupTestData(): Promise<TestData> {
   if (!apiKey) {
     apiKey = await prisma.apiKey.create({
       data: {
+        id: nanoid(),
         name: 'Smoke Test Key',
         key: hashedKey,
-        secure: true,
+        keyString: apiKeyPrefix + '***',
+        isHashed: true,
         userId: user.id,
         organizationId: org.id,
+        createdAt: new Date(),
       },
     });
     console.log(`   ✓ Created API key: ${fullApiKey.substring(0, 20)}...`);
@@ -153,7 +188,6 @@ async function setupTestData(): Promise<TestData> {
     project = await prisma.projects.create({
       data: {
         name: projectName,
-        description: 'Project for smoke tests',
         organizationId: org.id,
       },
     });
@@ -188,8 +222,9 @@ async function setupTestData(): Promise<TestData> {
   console.log(`export TEST_PROJECT_NAME="${testData.projectName}"`);
   console.log(`export TEST_USER_EMAIL="${testEmail}"\n`);
 
-  // Write to .env.test file
-  const envContent = `# Auto-generated test environment variables
+  // Append test-specific variables to .env.test file
+  const envContent = `
+# Auto-generated test environment variables
 TEST_API_KEY="${testData.apiKey}"
 TEST_ORG_SLUG="${testData.organizationSlug}"
 TEST_PROJECT_NAME="${testData.projectName}"
@@ -199,8 +234,8 @@ TEST_PY_URL="http://localhost:3004"
 `;
 
   const fs = await import('fs/promises');
-  await fs.writeFile('.env.test', envContent);
-  console.log('📝 Wrote variables to .env.test\n');
+  await fs.appendFile('.env.test', envContent);
+  console.log('📝 Appended test variables to .env.test\n');
 
   return testData;
 }
@@ -215,9 +250,10 @@ async function cleanupTestData() {
 
   if (org) {
     // Delete in correct order to respect foreign key constraints
-    await prisma.apiKey.deleteMany({ where: { organizationId: org.id } });
     await prisma.runs.deleteMany({ where: { organizationId: org.id } });
+    await prisma.apiKey.deleteMany({ where: { organizationId: org.id } });
     await prisma.projects.deleteMany({ where: { organizationId: org.id } });
+    await prisma.organizationSubscription.deleteMany({ where: { organizationId: org.id } });
     await prisma.member.deleteMany({ where: { organizationId: org.id } });
     await prisma.organization.delete({ where: { id: org.id } });
     console.log('   ✓ Deleted test organization and related data');

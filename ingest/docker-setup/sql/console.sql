@@ -1,4 +1,4 @@
-CREATE TABLE mlop_logs (
+CREATE TABLE IF NOT EXISTS mlop_logs (
     tenantId LowCardinality(String) CODEC(ZSTD(1)),
     projectName String CODEC(ZSTD(1)),
     runId UInt64 CODEC(ZSTD(1)),
