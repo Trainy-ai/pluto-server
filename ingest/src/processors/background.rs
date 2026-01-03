@@ -8,6 +8,7 @@ use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, instrument, warn, Instrument};
 
 use crate::config::{Config, FlushConfig};
+use crate::dlq::{self, DlqConfig};
 use crate::traits::{DatabaseRow, EnrichmentData, InputData};
 
 // Starts a generic background processor task
@@ -18,6 +19,7 @@ pub async fn start_background_processor<F, R, E>(
     flush_config: FlushConfig,       // Configuration for batch size and flush interval
     skip_upload: bool,               // Flag to skip actual database uploads (for testing)
     config: Arc<Config>,             // Shared application configuration (for DB credentials etc)
+    dlq_config: Arc<DlqConfig>,      // Dead-Letter Queue configuration
 ) where
     F: DatabaseRow<R, E> + Send + 'static, // `F` must be a DatabaseRow, Send, and static lifetime
     R: InputData,
@@ -76,6 +78,7 @@ pub async fn start_background_processor<F, R, E>(
                         &mut consecutive_errors,
                         &mut last_flush,
                         table_name.clone(),
+                        &dlq_config,
                     )
                     .await;
                 }
@@ -110,7 +113,7 @@ pub async fn start_background_processor<F, R, E>(
                     // Check if the flush interval has passed since the last record was received
                     // and if the buffer is not empty
                     if last_flush.elapsed() >= flush_config.flush_interval && buffer_len > 0 && !skip_upload {
-                        debug!(buffer_len, elapsed_since_last_flush_ms = last_flush.elapsed().as_millis(), "Flushing due to interval"); 
+                        debug!(buffer_len, elapsed_since_last_flush_ms = last_flush.elapsed().as_millis(), "Flushing due to interval");
                         // Flush the buffer due to inactivity
                         flush_records(
                             &client,
@@ -118,6 +121,7 @@ pub async fn start_background_processor<F, R, E>(
                             &mut consecutive_errors,
                             &mut last_flush,
                             table_name.clone(),
+                            &dlq_config,
                         ).await;
                     }
                 }
@@ -129,13 +133,14 @@ pub async fn start_background_processor<F, R, E>(
 }
 
 // Function to flush a batch of records to ClickHouse with retry logic
-#[instrument(skip(client, buffer, consecutive_errors, last_flush, table_name), fields(batch_size = buffer.len()))]
+#[instrument(skip(client, buffer, consecutive_errors, last_flush, table_name, dlq_config), fields(batch_size = buffer.len()))]
 async fn flush_records<F, R, E>(
     client: &Client,              // ClickHouse client instance
     buffer: &mut VecDeque<F>,     // Buffer containing records to flush
     consecutive_errors: &mut u32, // Mutable counter for consecutive errors
     last_flush: &mut Instant,     // Mutable timestamp of the last successful flush
     table_name: String,           // Name of the target ClickHouse table
+    dlq_config: &DlqConfig,       // Dead-Letter Queue configuration
 ) where
     F: DatabaseRow<R, E> + Send + 'static + std::fmt::Debug + Clone, // Added Clone requirement
     R: InputData,
@@ -219,12 +224,19 @@ async fn flush_records<F, R, E>(
                 if retry_count >= max_retries {
                     error!(
                         attempts = max_retries,
-                        "Failed to upload batch after multiple attempts. Dropping batch."
+                        "Failed to upload batch. Persisting to DLQ for later replay."
                     );
+
+                    // Persist to DLQ instead of dropping
+                    if let Err(e) = dlq::persist_batch(&records_to_flush, table_name.clone(), dlq_config).await {
+                        error!(error = %e, "CRITICAL: Failed to persist to DLQ. DATA LOSS POSSIBLE.");
+                    } else {
+                        info!(batch_size = records_to_flush.len(), "Batch persisted to DLQ");
+                    }
+
                     // Increment consecutive errors, update last flush (attempt) time, and return
                     *consecutive_errors += 1;
                     *last_flush = Instant::now();
-                    // Note: The records are dropped here as `records_to_flush` goes out of scope
                     return;
                 }
 

@@ -1,0 +1,2 @@
+locust==2.20.0
+trainy-mlop-nightly

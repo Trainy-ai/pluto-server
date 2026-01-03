@@ -1,5 +1,6 @@
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
+use std::path::PathBuf;
 use std::sync::Arc;
 use testcontainers::{
     runners::AsyncRunner,
@@ -11,6 +12,7 @@ use testcontainers_modules::{
 };
 use tokio::sync::mpsc;
 
+use server_rs::dlq::DlqConfig;
 use server_rs::models::{data::DataRow, files::FilesRow, log::LogRow, metrics::MetricRow};
 
 // Test database helper
@@ -192,6 +194,17 @@ pub fn create_test_app_state(
     let (data_sender, data_receiver) = mpsc::channel::<DataRow>(100);
     let (files_sender, files_receiver) = mpsc::channel::<FilesRow>(100);
 
+    // Create a disabled DLQ config for testing
+    let dlq_config = Arc::new(DlqConfig {
+        enabled: false,
+        base_path: PathBuf::from("/tmp/dlq-test"),
+        max_disk_mb: 100,
+        batch_ttl_hours: 24,
+        replay_on_startup: false,
+        replay_interval_secs: 60,
+        cleanup_interval_secs: 60,
+    });
+
     let app_state = Arc::new(server_rs::routes::AppState {
         metrics_record_sender: metrics_sender,
         log_record_sender: log_sender,
@@ -199,6 +212,7 @@ pub fn create_test_app_state(
         files_record_sender: files_sender,
         clickhouse_client,
         db,
+        dlq_config,
         config,
     });
 

@@ -1,0 +1,9 @@
+reports/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.log
+*.html
+*.csv
