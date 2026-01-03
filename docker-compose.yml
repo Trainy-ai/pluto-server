@@ -116,6 +116,8 @@ services:
       - minio
     env_file:
       - .env
+    volumes:
+      - ./.mlop/dlq:/var/mlop/dlq
     entrypoint: [ "/bin/sh", "-c", "/opt/docker-setup/create_tables.sh; exec server-rs" ]
 
   backend:

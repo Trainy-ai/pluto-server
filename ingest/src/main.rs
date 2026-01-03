@@ -1,6 +1,7 @@
 mod auth;
 mod config;
 mod db;
+mod dlq;
 mod error;
 mod models;
 mod processors;
@@ -11,6 +12,7 @@ mod utils;
 use axum::Router;
 use clap::Parser;
 use clickhouse::Client;
+use tracing::info;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use config::{
@@ -124,6 +126,101 @@ async fn main() {
     // Wrap config in an Arc for shared access
     let config = Arc::new(config);
 
+    // Initialize Dead-Letter Queue configuration
+    let dlq_config = Arc::new(dlq::DlqConfig::from_env());
+    info!(
+        enabled = dlq_config.enabled,
+        path = %dlq_config.base_path.display(),
+        "DLQ configuration loaded"
+    );
+
+    // Initialize DLQ directories
+    if dlq_config.enabled {
+        dlq::init_directories(&dlq_config)
+            .await
+            .expect("Failed to initialize DLQ directories");
+        info!("DLQ directories initialized");
+    }
+
+    // Replay batches from previous pod lifetime on startup (in background)
+    // This runs asynchronously to avoid blocking server startup if there are many batches
+    if dlq_config.enabled && dlq_config.replay_on_startup {
+        let replay_config = dlq_config.clone();
+        let replay_client = clickhouse_client.clone();
+
+        tokio::spawn(async move {
+            info!("Starting DLQ startup replay in background");
+
+            // Replay metrics batches
+            match dlq::replay::replay_on_startup::<MetricRow, _, _>(
+                &replay_client,
+                &replay_config,
+                crate::config::METRICS_TABLE_NAME,
+            ).await {
+                Ok(stats) => info!(
+                    table = crate::config::METRICS_TABLE_NAME,
+                    replayed = stats.replayed,
+                    failed_batches = stats.failed_batches,
+                    failed_records = stats.failed_records,
+                    "Metrics DLQ startup replay completed"
+                ),
+                Err(e) => tracing::error!(error = %e, "Metrics DLQ startup replay failed"),
+            }
+
+            // Replay logs batches
+            match dlq::replay::replay_on_startup::<LogRow, _, _>(
+                &replay_client,
+                &replay_config,
+                crate::config::LOGS_TABLE_NAME,
+            ).await {
+                Ok(stats) => info!(
+                    table = crate::config::LOGS_TABLE_NAME,
+                    replayed = stats.replayed,
+                    failed_batches = stats.failed_batches,
+                    failed_records = stats.failed_records,
+                    "Logs DLQ startup replay completed"
+                ),
+                Err(e) => tracing::error!(error = %e, "Logs DLQ startup replay failed"),
+            }
+
+            // Replay data batches
+            match dlq::replay::replay_on_startup::<DataRow, _, _>(
+                &replay_client,
+                &replay_config,
+                crate::config::DATA_TABLE_NAME,
+            ).await {
+                Ok(stats) => info!(
+                    table = crate::config::DATA_TABLE_NAME,
+                    replayed = stats.replayed,
+                    failed_batches = stats.failed_batches,
+                    failed_records = stats.failed_records,
+                    "Data DLQ startup replay completed"
+                ),
+                Err(e) => tracing::error!(error = %e, "Data DLQ startup replay failed"),
+            }
+
+            // Replay files batches
+            match dlq::replay::replay_on_startup::<FilesRow, _, _>(
+                &replay_client,
+                &replay_config,
+                crate::config::FILES_TABLE_NAME,
+            ).await {
+                Ok(stats) => info!(
+                    table = crate::config::FILES_TABLE_NAME,
+                    replayed = stats.replayed,
+                    failed_batches = stats.failed_batches,
+                    failed_records = stats.failed_records,
+                    "Files DLQ startup replay completed"
+                ),
+                Err(e) => tracing::error!(error = %e, "Files DLQ startup replay failed"),
+            }
+
+            info!("DLQ startup replay completed for all tables");
+        });
+
+        info!("DLQ startup replay task spawned");
+    }
+
     // Spawn background processors for each data type
     // These processors receive data through channels and upload it
     tokio::spawn(start_background_processor(
@@ -131,6 +228,7 @@ async fn main() {
         METRICS_FLUSH_CONFIG,
         skip_upload,
         config.clone(),
+        dlq_config.clone(),
     ));
 
     tokio::spawn(start_background_processor(
@@ -138,6 +236,7 @@ async fn main() {
         LOGS_FLUSH_CONFIG,
         skip_upload,
         config.clone(),
+        dlq_config.clone(),
     ));
 
     tokio::spawn(start_background_processor(
@@ -145,6 +244,7 @@ async fn main() {
         DATA_FLUSH_CONFIG,
         skip_upload,
         config.clone(),
+        dlq_config.clone(),
     ));
 
     tokio::spawn(start_background_processor(
@@ -152,7 +252,102 @@ async fn main() {
         FILES_FLUSH_CONFIG,
         skip_upload,
         config.clone(),
+        dlq_config.clone(),
     ));
+
+    // Spawn DLQ background tasks
+    if dlq_config.enabled {
+        // Spawn cleanup task with panic recovery
+        let cleanup_config = dlq_config.clone();
+        tokio::spawn(async move {
+            let mut restart_count = 0u32;
+            let max_backoff_secs = 300; // 5 minutes
+
+            loop {
+                info!(restart_count = restart_count, "Starting DLQ cleanup task");
+
+                // Spawn cleanup loop in nested task to catch panics
+                let task_config = cleanup_config.clone();
+                let handle = tokio::spawn(async move {
+                    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(task_config.cleanup_interval_secs));
+                    loop {
+                        interval.tick().await;
+                        if let Err(e) = dlq::cleanup::cleanup_expired_batches(&task_config).await {
+                            tracing::error!(error = %e, "DLQ cleanup failed");
+                        }
+                        if let Err(e) = dlq::cleanup::enforce_disk_quota(&task_config).await {
+                            tracing::error!(error = %e, "DLQ quota enforcement failed");
+                        }
+                    }
+                });
+
+                // Wait for task to complete (panic or normal exit)
+                match handle.await {
+                    Ok(_) => {
+                        tracing::warn!("DLQ cleanup task exited normally (unexpected)");
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, restart_count = restart_count, "DLQ cleanup task panicked, will restart");
+                    }
+                }
+
+                // Exponential backoff before restart (capped at max_backoff_secs)
+                restart_count += 1;
+                let backoff_secs = (2u64.pow(restart_count).min(max_backoff_secs as u64)) as u64;
+                tracing::warn!(backoff_secs = backoff_secs, "Waiting before restarting DLQ cleanup task");
+                tokio::time::sleep(tokio::time::Duration::from_secs(backoff_secs)).await;
+            }
+        });
+
+        info!("DLQ cleanup task spawned");
+
+        // Spawn replay tasks for continuous retry of failed batches
+        // Metrics replay loop
+        let metrics_client = clickhouse_client.clone();
+        let metrics_config = dlq_config.clone();
+        tokio::spawn(async move {
+            dlq::replay::start_replay_loop::<MetricRow, _, _>(
+                metrics_client,
+                metrics_config,
+                crate::config::METRICS_TABLE_NAME.to_string(),
+            ).await;
+        });
+
+        // Logs replay loop
+        let logs_client = clickhouse_client.clone();
+        let logs_config = dlq_config.clone();
+        tokio::spawn(async move {
+            dlq::replay::start_replay_loop::<LogRow, _, _>(
+                logs_client,
+                logs_config,
+                crate::config::LOGS_TABLE_NAME.to_string(),
+            ).await;
+        });
+
+        // Data replay loop
+        let data_client = clickhouse_client.clone();
+        let data_config = dlq_config.clone();
+        tokio::spawn(async move {
+            dlq::replay::start_replay_loop::<DataRow, _, _>(
+                data_client,
+                data_config,
+                crate::config::DATA_TABLE_NAME.to_string(),
+            ).await;
+        });
+
+        // Files replay loop
+        let files_client = clickhouse_client.clone();
+        let files_config = dlq_config.clone();
+        tokio::spawn(async move {
+            dlq::replay::start_replay_loop::<FilesRow, _, _>(
+                files_client,
+                files_config,
+                crate::config::FILES_TABLE_NAME.to_string(),
+            ).await;
+        });
+
+        info!("DLQ replay loops spawned for all tables");
+    }
 
     // Create the application state, wrapping shared resources in Arc
     let state = Arc::new(AppState {
@@ -162,6 +357,7 @@ async fn main() {
         files_record_sender,
         clickhouse_client,
         db: db.clone(),
+        dlq_config: dlq_config.clone(),
         config: config.clone(),
     });
 

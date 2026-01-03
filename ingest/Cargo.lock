@@ -3335,12 +3335,15 @@ dependencies = [
  "sha2",
  "simd-json",
  "sqlx",
+ "tempfile",
  "testcontainers",
  "testcontainers-modules",
+ "thiserror 2.0.17",
  "tokio",
  "tower 0.4.13",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -4266,6 +4269,10 @@ name = "uuid"
 version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "458f7a779bf54acc9f347480ac654f68407d3aab21269a6e3c9f922acd9e2da9"
+dependencies = [
+ "getrandom 0.3.2",
+ "serde",
+]
 
 [[package]]
 name = "valuable"

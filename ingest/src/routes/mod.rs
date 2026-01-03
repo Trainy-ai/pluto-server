@@ -23,6 +23,8 @@ pub struct AppState {
     pub clickhouse_client: Client,
     // Arc-wrapped primary database connection pool
     pub db: Arc<Database>,
+    // Dead-Letter Queue configuration
+    pub dlq_config: Arc<crate::dlq::DlqConfig>,
     // Arc-wrapped application configuration
     pub config: Arc<Config>,
 }

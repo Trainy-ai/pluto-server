@@ -216,11 +216,12 @@ async function setupTestData(): Promise<TestData> {
   console.log(`API Key:          ${testData.apiKey}`);
   console.log('─────────────────────────────────────────────────\n');
 
-  console.log('💡 Export these environment variables:');
-  console.log(`export TEST_API_KEY="${testData.apiKey}"`);
-  console.log(`export TEST_ORG_SLUG="${testData.organizationSlug}"`);
-  console.log(`export TEST_PROJECT_NAME="${testData.projectName}"`);
-  console.log(`export TEST_USER_EMAIL="${testEmail}"\n`);
+  // Output in CI-compatible format (no quotes, no export prefix)
+  console.log('# Environment variables for CI:');
+  console.log(`TEST_API_KEY=${testData.apiKey}`);
+  console.log(`TEST_ORG_SLUG=${testData.organizationSlug}`);
+  console.log(`TEST_PROJECT_NAME=${testData.projectName}`);
+  console.log(`TEST_USER_EMAIL=${testEmail}`);
 
   // Append test-specific variables to .env.test file
   const envContent = `

@@ -6,6 +6,10 @@ web/app/public
 .mlop/
 ingest/target
 
+load_tests/load_tests
+load_tests/baseline
+load_tests/reports
+load_tests/__pycache__
 
 web/.turbo
 web/.DS_Store
