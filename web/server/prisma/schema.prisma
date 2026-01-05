@@ -131,6 +131,19 @@ model TwoFactor {
   @@map("twoFactor")
 }
 
+model SsoProvider {
+  id             String  @id @default(cuid())
+  issuer         String
+  oidcConfig     String? // JSON string for OIDC configuration
+  samlConfig     String? // JSON string for SAML configuration
+  userId         String?
+  providerId     String  @unique
+  organizationId String?
+  domain         String
+
+  @@map("ssoProvider")
+}
+
 model OrganizationSubscription {
   id                   String           @id @default(uuid())
   organizationId       String           @unique

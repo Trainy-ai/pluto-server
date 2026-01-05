@@ -36,6 +36,7 @@ async function setupTestData(): Promise<TestData> {
   // 1. Create or get test user
   console.log('1️⃣  Creating test user...');
   const testEmail = 'test-smoke@mlop.local';
+  const testPassword = 'TestPassword123!';
 
   let user = await prisma.user.findUnique({
     where: { email: testEmail },
@@ -56,6 +57,50 @@ async function setupTestData(): Promise<TestData> {
     console.log(`   ✓ Created user: ${user.email} (ID: ${user.id})`);
   } else {
     console.log(`   ✓ User already exists: ${user.email} (ID: ${user.id})`);
+  }
+
+  // Ensure user has a password for email/password auth
+  // Use better-auth's custom password hashing (scrypt with salt:hash format)
+  const { scryptAsync } = await import('@noble/hashes/scrypt.js');
+  const { randomBytes } = crypto;
+
+  const salt = randomBytes(16).toString('hex');
+  const key = await scryptAsync(testPassword.normalize('NFKC'), salt, {
+    N: 16384,
+    r: 16,
+    p: 1,
+    dkLen: 64,
+    maxmem: 128 * 16384 * 16 * 2
+  });
+  const hashedPassword = `${salt}:${Buffer.from(key).toString('hex')}`;
+
+  const existingAccount = await prisma.account.findFirst({
+    where: {
+      userId: user.id,
+      providerId: 'credential',
+    },
+  });
+
+  if (!existingAccount) {
+    await prisma.account.create({
+      data: {
+        id: nanoid(),
+        userId: user.id,
+        accountId: user.id,
+        providerId: 'credential',
+        password: hashedPassword,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    });
+    console.log(`   ✓ Created password for user`);
+  } else {
+    // Update password
+    await prisma.account.update({
+      where: { id: existingAccount.id },
+      data: { password: hashedPassword },
+    });
+    console.log(`   ✓ Updated password for user`);
   }
 
   // 2. Create or get test organization
@@ -88,12 +133,10 @@ async function setupTestData(): Promise<TestData> {
     console.log(`   ✓ Organization already exists: ${org.name} (slug: ${org.slug})`);
 
     // Ensure user is a member
-    const membership = await prisma.member.findUnique({
+    const membership = await prisma.member.findFirst({
       where: {
-        userId_organizationId: {
-          userId: user.id,
-          organizationId: org.id,
-        },
+        userId: user.id,
+        organizationId: org.id,
       },
     });
 
@@ -171,29 +214,155 @@ async function setupTestData(): Promise<TestData> {
     console.log(`   ✓ Updated existing API key: ${fullApiKey.substring(0, 20)}...`);
   }
 
-  // 4. Create or get test project
-  console.log('\n4️⃣  Creating test project...');
-  const projectName = 'smoke-test-project';
+  // 4. Create or get test projects (multiple for pagination tests)
+  console.log('\n4️⃣  Creating test projects...');
+  const projectNames = ['smoke-test-project', 'test-project-2', 'test-project-3'];
+  const projects = [];
 
-  let project = await prisma.projects.findUnique({
-    where: {
-      organizationId_name: {
-        organizationId: org.id,
-        name: projectName,
+  for (const projectName of projectNames) {
+    let project = await prisma.projects.findUnique({
+      where: {
+        organizationId_name: {
+          organizationId: org.id,
+          name: projectName,
+        },
       },
+    });
+
+    if (!project) {
+      project = await prisma.projects.create({
+        data: {
+          name: projectName,
+          organizationId: org.id,
+        },
+      });
+      console.log(`   ✓ Created project: ${project.name}`);
+    } else {
+      console.log(`   ✓ Project already exists: ${project.name}`);
+    }
+    projects.push(project);
+  }
+
+  const project = projects[0]; // Main test project
+
+  // 5. Create test runs with graph data
+  console.log('\n5️⃣  Creating test runs with graph data...');
+
+  // Check if runs already exist
+  const existingRuns = await prisma.runs.findMany({
+    where: {
+      projectId: project.id,
+      organizationId: org.id,
     },
   });
 
-  if (!project) {
-    project = await prisma.projects.create({
-      data: {
-        name: projectName,
-        organizationId: org.id,
-      },
-    });
-    console.log(`   ✓ Created project: ${project.name}`);
+  if (existingRuns.length === 0) {
+    // Create 2 test runs
+    const runNames = ['test-run-1', 'test-run-2'];
+
+    for (const runName of runNames) {
+      const run = await prisma.runs.create({
+        data: {
+          name: runName,
+          organizationId: org.id,
+          projectId: project.id,
+          createdById: user.id,
+          creatorApiKeyId: apiKey.id,
+          status: 'COMPLETED',
+          config: {
+            framework: 'pytorch',
+            version: '2.0',
+          },
+          systemMetadata: {
+            hostname: 'test-host',
+            python_version: '3.11',
+          },
+        },
+      });
+
+      // Create graph nodes
+      const nodes = await Promise.all([
+        prisma.runGraphNode.create({
+          data: {
+            runId: run.id,
+            name: 'input_layer',
+            depth: 0,
+            type: 'input',
+            order: 0,
+            label: 'Input Layer',
+            nodeId: 'node_input_1',
+            nodeType: 'IO',
+            params: { shape: [28, 28, 1] },
+          },
+        }),
+        prisma.runGraphNode.create({
+          data: {
+            runId: run.id,
+            name: 'conv2d_1',
+            depth: 1,
+            type: 'conv',
+            order: 1,
+            label: 'Conv2D Layer 1',
+            nodeId: 'node_conv_1',
+            nodeType: 'MODULE',
+            params: { filters: 32, kernel_size: [3, 3] },
+          },
+        }),
+        prisma.runGraphNode.create({
+          data: {
+            runId: run.id,
+            name: 'activation_1',
+            depth: 2,
+            type: 'activation',
+            order: 2,
+            label: 'ReLU Activation',
+            nodeId: 'node_activation_1',
+            nodeType: 'MODULE',
+            params: { type: 'relu' },
+          },
+        }),
+        prisma.runGraphNode.create({
+          data: {
+            runId: run.id,
+            name: 'dense_1',
+            depth: 3,
+            type: 'dense',
+            order: 3,
+            label: 'Dense Layer',
+            nodeId: 'node_dense_1',
+            nodeType: 'MODULE',
+            params: { units: 128 },
+          },
+        }),
+        prisma.runGraphNode.create({
+          data: {
+            runId: run.id,
+            name: 'output_layer',
+            depth: 4,
+            type: 'output',
+            order: 4,
+            label: 'Output Layer',
+            nodeId: 'node_output_1',
+            nodeType: 'IO',
+            params: { units: 10 },
+          },
+        }),
+      ]);
+
+      // Create edges connecting the nodes
+      await prisma.runGraphEdge.createMany({
+        data: [
+          { runId: run.id, sourceId: 'node_input_1', targetId: 'node_conv_1' },
+          { runId: run.id, sourceId: 'node_conv_1', targetId: 'node_activation_1' },
+          { runId: run.id, sourceId: 'node_activation_1', targetId: 'node_dense_1' },
+          { runId: run.id, sourceId: 'node_dense_1', targetId: 'node_output_1' },
+        ],
+      });
+
+      console.log(`   ✓ Created run: ${run.name} with ${nodes.length} nodes and 4 edges`);
+    }
   } else {
-    console.log(`   ✓ Project already exists: ${project.name}`);
+    console.log(`   ✓ Runs already exist (${existingRuns.length} runs found)`);
   }
 
   const testData: TestData = {

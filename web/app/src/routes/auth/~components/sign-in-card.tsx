@@ -89,9 +89,11 @@ export function SignInCard({
   const [oauthLoading, setOAuthLoading] = React.useState<{
     google: boolean;
     github: boolean;
+    sso: boolean;
   }>({
     google: false,
     github: false,
+    sso: false,
   });
   const [errorMessage, setErrorMessage] = React.useState<string>();
   const [unverifiedEmail, setUnverifiedEmail] = React.useState<
@@ -202,6 +204,25 @@ export function SignInCard({
   };
 
   /**
+   * Handles SSO/SAML sign in (test/dev environments only)
+   * - Manages loading state
+   * - Calls SSO auth service
+   */
+  const handleSignInWithSSO = async (): Promise<void> => {
+    if (oauthLoading.sso) return;
+    setOAuthLoading((prev) => ({ ...prev, sso: true }));
+    try {
+      setRecentAuthMethod("sso");
+      await authClient.signIn.sso({
+        providerId: "dummyidp-test",
+        callbackURL: redirect || "/",
+      });
+    } finally {
+      setOAuthLoading((prev) => ({ ...prev, sso: false }));
+    }
+  };
+
+  /**
    * Renders OAuth sign in buttons
    * - Sorts buttons to show recently used method first
    * - Adds visual indicators for recently used method
@@ -236,6 +257,18 @@ export function SignInCard({
         onClick: handleSignInWithGithub,
         loading: oauthLoading.github,
       },
+      // SSO button only shown in test/dev environments
+      ...(env.VITE_ENV === "test" || env.VITE_ENV === "development"
+        ? [
+            {
+              provider: "sso",
+              label: "SSO",
+              icon: <LockIcon className="h-5 w-5" />,
+              onClick: handleSignInWithSSO,
+              loading: oauthLoading.sso,
+            },
+          ]
+        : []),
     ];
 
     // Sort buttons to put recent method first
