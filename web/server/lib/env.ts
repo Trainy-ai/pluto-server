@@ -28,6 +28,13 @@ const envSchema = z.object({
   BETTER_AUTH_URL: z.string().url(), // URL of web app
   BETTER_AUTH_SECRET: z.string().min(1),
 
+  // SAML/SSO (test/dev only)
+  DUMMYIDP_ENTRY_POINT: z.string().url().optional(),
+  DUMMYIDP_ENTITY_ID: z.string().url().optional(),
+  DUMMYIDP_APP_ID: z.string().optional(),
+  DUMMYIDP_CERTIFICATE: z.string().optional(),
+  SAML_ISSUER: z.string().url().optional(),
+
   // Deployment/Environment Specific
   NODE_ENV: z.enum(["development", "production", "test"]).optional(),
   IS_DOCKER: z.string().optional(), // Could refine if specific values like "true" are expected

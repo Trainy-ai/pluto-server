@@ -24,6 +24,7 @@ web/.netlify
 web/.wrangler
 web/*.env*
 web/!.env.example
+web/.next
 
 py/__pycache__
 py/.DS_Store
@@ -34,3 +35,13 @@ py/!.env.example
 py/test.ipynb
 py/.tmp
 py/.mlop
+
+# Playwright E2E tests
+test-results/
+web/test-results/
+web/playwright-report/
+web/playwright/.cache/
+web/e2e/.auth/
+web/app/test-results/
+web/app/playwright-report/
+web/server/test-results/
