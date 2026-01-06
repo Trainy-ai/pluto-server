@@ -133,7 +133,7 @@ services:
       - clickhouse
       - db
       - minio
-    entrypoint: [ "/bin/sh", "-c", "corepack enable pnpm && pnpm exec prisma migrate dev && node ./.next/standalone/server.js" ]
+    entrypoint: [ "/bin/sh", "-c", "corepack enable pnpm && pnpm exec prisma migrate deploy && node ./.next/standalone/server.js" ]
     # entrypoint: [ "/bin/sh", "-c", "bun ./.next/standalone/server.js" ]
     restart: unless-stopped
     environment:
