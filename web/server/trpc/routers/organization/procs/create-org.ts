@@ -94,6 +94,12 @@ export const createOrgProcedure = protectedProcedure
           usageLimits: getLimits(SubscriptionPlan.FREE),
         },
       });
+
+      // Mark user as having finished onboarding after creating their first org
+      await ctx.prisma.user.update({
+        where: { id: ctx.user.id },
+        data: { finishedOnboarding: true },
+      });
     } catch (error) {
       console.error(error);
       throw new TRPCError({
