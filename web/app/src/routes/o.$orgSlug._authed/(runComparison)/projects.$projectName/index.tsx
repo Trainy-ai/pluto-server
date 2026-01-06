@@ -12,6 +12,11 @@ import { DataTable } from "./~components/runs-table/data-table";
 import { useRefresh } from "./~hooks/use-refresh";
 import { useRunCount } from "./~queries/run-count";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  ResizablePanelGroup,
+  ResizablePanel,
+  ResizableHandle,
+} from "@/components/ui/resizable";
 
 export const Route = createFileRoute(
   "/o/$orgSlug/_authed/(runComparison)/projects/$projectName/",
@@ -121,36 +126,56 @@ function RouteComponent() {
           />
         }
       >
-        <div className="flex h-[calc(100vh-4rem)] w-full gap-2 p-2">
-          <div className="flex h-full flex-col">
-            <DataTable
-              runs={runs}
-              orgSlug={organizationSlug}
-              projectName={projectName}
-              onColorChange={handleColorChange}
-              onSelectionChange={handleRunSelection}
-              selectedRunsWithColors={selectedRunsWithColors}
-              runColors={runColors}
-              defaultRowSelection={defaultRowSelection}
-              isLoading={isLoading || runCountLoading}
-              runCount={runCount || 0}
-              fetchNextPage={fetchNextPage}
-              hasNextPage={hasNextPage}
-              isFetchingNextPage={isFetchingNextPage}
-            />
-          </div>
-          {isLoading || runCountLoading ? (
-            <Skeleton className="h-full w-full" />
-          ) : (
-            <MetricsDisplay
-              groupedMetrics={groupedMetrics}
-              onRefresh={refresh}
-              organizationId={organizationId}
-              projectName={projectName}
-              lastRefreshed={lastRefreshed}
-            />
-          )}
-        </div>
+        <ResizablePanelGroup
+          direction="horizontal"
+          className="h-[calc(100vh-4rem)] w-full p-2"
+          defaultLayout={{
+            "runs-list": 30,
+            "metrics-display": 70,
+          }}
+        >
+          <ResizablePanel
+            id="runs-list"
+            order={1}
+          >
+            <div className="flex h-full flex-col pr-2">
+              <DataTable
+                runs={runs}
+                orgSlug={organizationSlug}
+                projectName={projectName}
+                onColorChange={handleColorChange}
+                onSelectionChange={handleRunSelection}
+                selectedRunsWithColors={selectedRunsWithColors}
+                runColors={runColors}
+                defaultRowSelection={defaultRowSelection}
+                isLoading={isLoading || runCountLoading}
+                runCount={runCount || 0}
+                fetchNextPage={fetchNextPage}
+                hasNextPage={hasNextPage}
+                isFetchingNextPage={isFetchingNextPage}
+              />
+            </div>
+          </ResizablePanel>
+          <ResizableHandle withHandle />
+          <ResizablePanel
+            id="metrics-display"
+            order={2}
+          >
+            <div className="h-full pl-2">
+              {isLoading || runCountLoading ? (
+                <Skeleton className="h-full w-full" />
+              ) : (
+                <MetricsDisplay
+                  groupedMetrics={groupedMetrics}
+                  onRefresh={refresh}
+                  organizationId={organizationId}
+                  projectName={projectName}
+                  lastRefreshed={lastRefreshed}
+                />
+              )}
+            </div>
+          </ResizablePanel>
+        </ResizablePanelGroup>
       </PageLayout>
     </RunComparisonLayout>
   );

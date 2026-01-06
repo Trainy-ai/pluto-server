@@ -56,6 +56,7 @@ export const columns = ({
   return [
     {
       id: "select",
+      size: 48,
       header: ({ table }) => {
         const totalSelected = table.getSelectedRowModel().rows.length;
         const isAllSelected = table.getIsAllPageRowsSelected();
@@ -139,23 +140,23 @@ export const columns = ({
         const color = runColors[runId];
 
         return (
-          <div className="flex items-center gap-2">
+          <div className="flex w-full items-center gap-2 overflow-hidden">
             <ColorPicker
               color={color}
               onChange={(newColor) => onColorChange(runId, newColor)}
-              className="h-5 w-5"
+              className="h-5 w-5 flex-shrink-0"
             />
             <Link
               to="/o/$orgSlug/projects/$projectName/$runId"
               preload="intent"
-              className="group flex items-center rounded-md transition-colors hover:bg-accent/50"
+              className="group flex min-w-0 flex-1 items-center rounded-md transition-colors hover:bg-accent/50"
               params={{ orgSlug, projectName, runId }}
             >
-              <span className="max-w-[8rem] truncate text-sm font-medium group-hover:underline">
+              <span className="truncate text-sm font-medium group-hover:underline">
                 {name}
               </span>
             </Link>
-            <div className="ml-auto pr-2">
+            <div className="flex-shrink-0">
               <StatusIndicator status={row.original.status} />
             </div>
           </div>

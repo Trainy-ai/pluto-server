@@ -96,6 +96,7 @@
     "react-day-picker": "^9.6.6",
     "react-dom": "^19.1.0",
     "react-hook-form": "^7.55.0",
+    "react-resizable-panels": "^4.2.2",
     "reactflow": "^11.11.4",
     "sonner": "^2.0.3",
     "superjson": "^2.2.2",
