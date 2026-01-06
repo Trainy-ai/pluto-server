@@ -66,3 +66,13 @@ You should be aware of all your data stored on the server. That's why the conten
 
 We welcome any contributions to the project! Please feel free to submit any code, docs, feedback, or examples.
 
+#### Local Development with Docker Compose
+
+When developing locally with Docker Compose, simply run:
+
+```bash
+docker compose --env-file .env up --build
+```
+
+The frontend container runs Nginx which serves the static build and proxies API requests (`/trpc` and `/api`) to the backend container via Docker's internal network (`http://backend:3001`). This is configured in `web/app/nginx.conf`.
+
