@@ -50,7 +50,7 @@ export const createOrgProcedure = protectedProcedure
       throw new TRPCError({
         code: "FORBIDDEN",
         message:
-          "You have reached the maximum number of free organizations. Please contact founders@mlop.ai for a pro account.",
+          "You have reached the maximum number of free organizations. Please contact founders@trainy.ai for a pro account.",
       });
     }
 

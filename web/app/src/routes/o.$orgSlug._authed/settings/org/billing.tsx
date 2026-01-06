@@ -54,7 +54,7 @@ function RouteComponent() {
             We are currently in beta and only selecting a few users to join our
             pro plan. Please{" "}
             <a
-              href="mailto:founders@mlop.ai"
+              href="mailto:founders@trainy.ai"
               className="text-blue-500 underline"
             >
               contact us
