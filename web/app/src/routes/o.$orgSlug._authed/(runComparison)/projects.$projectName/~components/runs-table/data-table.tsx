@@ -187,7 +187,7 @@ export function DataTable({
   }
 
   return (
-    <div className="flex h-full w-52 flex-col">
+    <div className="flex h-full w-full min-w-[200px] flex-col">
       <div className="mb-2 space-y-2">
         <div className="mt-2 flex items-center gap-1 pl-1 text-sm text-muted-foreground">
           <span className="font-medium">
@@ -219,6 +219,9 @@ export function DataTable({
                     <TableHead
                       key={header.id}
                       className="sticky top-0 bg-background px-2 py-2 text-left text-sm font-medium whitespace-nowrap text-muted-foreground"
+                      style={{
+                        width: header.getSize() !== 150 ? header.getSize() : undefined,
+                      }}
                     >
                       {header.isPlaceholder
                         ? null
@@ -338,7 +341,7 @@ export function DataTable({
 
 const LoadingSkeleton = () => {
   return (
-    <div className="flex h-full w-52 flex-col">
+    <div className="flex h-full w-full min-w-[200px] flex-col">
       <div className="mb-2 space-y-2">
         <div className="mt-2 flex items-center gap-1 pl-1">
           <Skeleton className="h-5 w-24" />
