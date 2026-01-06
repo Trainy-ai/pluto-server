@@ -201,7 +201,7 @@ function RouteComponent() {
                       </span>
                       <Separator className="h-4" orientation="vertical" />
                       <span className="text-sm text-muted-foreground">
-                        Contact founders@mlop.ai to upgrade
+                        Contact founders@trainy.ai to upgrade
                       </span>
                     </>
                   ) : (

@@ -45,7 +45,7 @@ function RouteComponent() {
         <div className="mx-auto flex h-16 max-w-screen-2xl items-center justify-between px-4 sm:px-6 lg:px-8">
           <div className="flex items-center gap-4">
             <a
-              href="https://mlop.ai"
+              href="https://trakkur.trainy.ai"
               className="group flex items-center gap-2 rounded-lg px-2 py-1 transition-colors hover:bg-accent"
             >
               <span className="text-lg font-semibold tracking-tight">

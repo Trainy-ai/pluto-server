@@ -100,8 +100,9 @@ function ModelGraphHelpDialog() {
             </p>
           </div>
           <div className="flex items-center justify-between pt-2">
+            {/* TODO(asaiacai): Update to /docs/experiments/visualizations/model-graph when model graphs are implemented */}
             <a
-              href="https://docs.mlop.ai/docs/experiments/visualizations/model-graph"
+              href="https://docs.trainy.ai/trakkur/"
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex w-fit items-center gap-0.5 rounded-md bg-muted px-2 py-1 text-xs font-medium transition-colors hover:bg-accent/80"
@@ -174,8 +175,9 @@ function ModelGraphMissingInfo() {
               </div>
 
               <Button variant="secondary" size="lg">
+                {/* TODO(asaiacai): Update to /docs/experiments/visualizations/model-graph when model graphs are implemented */}
                 <a
-                  href="https://docs.mlop.ai/docs/experiments/visualizations/model-graph"
+                  href="https://docs.trainy.ai/trakkur/"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-2"
@@ -277,8 +279,9 @@ function RouteComponent() {
             <ModelGraphHelpDialog />
           </div>
           <div className="flex items-center gap-2">
+            {/* TODO(asaiacai): Update to /docs/experiments/visualizations/model-graph when model graphs are implemented */}
             <a
-              href="https://docs.mlop.ai/docs/experiments/visualizations/model-graph"
+              href="https://docs.trainy.ai/trakkur/"
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex h-8 items-center gap-1.5 rounded-md bg-muted px-3 text-sm font-medium transition-colors hover:bg-accent/80"

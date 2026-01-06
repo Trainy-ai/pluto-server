@@ -136,10 +136,10 @@ export function Feedback({
             <DialogDescription>
               You can also email us directly at{" "}
               <a
-                href="mailto:founders@mlop.ai"
+                href="mailto:founders@trainy.ai"
                 className="text-primary hover:underline"
               >
-                founders@mlop.ai
+                founders@trainy.ai
               </a>
             </DialogDescription>
           </DialogHeader>
