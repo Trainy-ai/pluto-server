@@ -201,7 +201,14 @@ function RouteComponent() {
                       </span>
                       <Separator className="h-4" orientation="vertical" />
                       <span className="text-sm text-muted-foreground">
-                        Contact founders@trainy.ai to upgrade
+                        Contact{" "}
+                        <a
+                          href="mailto:founders@trainy.ai"
+                          className="text-primary hover:underline"
+                        >
+                          founders@trainy.ai
+                        </a>{" "}
+                        to upgrade
                       </span>
                     </>
                   ) : (
