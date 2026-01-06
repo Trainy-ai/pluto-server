@@ -21,6 +21,7 @@ import {
   RiTerminalFill,
 } from "@remixicon/react";
 import { DocsTooltip } from "@/components/ui/tooltip";
+import { MODEL_GRAPH_DOCS_URL } from "@/lib/constants";
 
 const mainNavItems = [
   {
@@ -61,8 +62,7 @@ const mainNavItems = [
     href: "/projects/$projectName/$runId/graph",
     matchPattern: /^projects\/[^/]+\/[^/]+\/graph$/,
     icon: RiNodeTree,
-    // TODO(asaiacai): Update to /docs/experiments/visualizations/model-graph when model graphs are implemented
-    link: "https://docs.trainy.ai/trakkur/",
+    link: MODEL_GRAPH_DOCS_URL,
     description: "Visual graph of the model architecture",
   },
 ];
