@@ -9,8 +9,6 @@ import {
   ZoomIn,
   ZoomOut,
   RotateCcw,
-  ChevronLeft,
-  ChevronRight,
 } from "lucide-react";
 import {
   Dialog,
@@ -19,6 +17,8 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
+import { StepNavigator } from "../../../../(run)/projects.$projectName.$runId/~components/shared/step-navigator";
+import { useStepNavigation } from "../../../../(run)/projects.$projectName.$runId/~hooks/use-step-navigation";
 
 interface MultiGroupImageProps {
   logName: string;
@@ -50,10 +50,6 @@ const MultiGroupImageComponent = ({
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
-  const [currentPage, setCurrentPage] = useState(1);
-
-  // Pagination config
-  const itemsPerPage = 6;
 
   // Use useQueries at the top level
   const imageQueries = useQueries({
@@ -82,30 +78,47 @@ const MultiGroupImageComponent = ({
     [queriesWithRuns],
   );
 
-  // Calculate visible images - MUST be defined before conditional returns
-  const visibleImages = useMemo(
-    () => queriesWithRuns.filter(({ data }) => data?.[0]),
+  // Flatten all images with runId for step navigation
+  const allImages = useMemo(
+    () =>
+      queriesWithRuns
+        .map((query) => {
+          const images = query.data || [];
+          return images.map((image) => ({
+            ...image,
+            runId: query.run.runId,
+          }));
+        })
+        .flat()
+        .filter(Boolean),
     [queriesWithRuns],
   );
 
-  // ---- START: Pagination Logic ----
-  const numberOfImages = visibleImages.length;
-  const totalPages = Math.ceil(numberOfImages / itemsPerPage);
+  // Use step navigation hook
+  const {
+    currentStepIndex,
+    currentStepValue,
+    availableSteps,
+    goToStepIndex,
+    hasMultipleSteps,
+  } = useStepNavigation(allImages);
 
-  const paginatedImages = useMemo(() => {
-    const startIndex = (currentPage - 1) * itemsPerPage;
-    const endIndex = startIndex + itemsPerPage;
-    return visibleImages.slice(startIndex, endIndex);
-  }, [visibleImages, currentPage, itemsPerPage]);
+  // Filter images for current step and group by run
+  const imagesByRun = useMemo(() => {
+    const currentStepImages = allImages.filter(
+      (image) => image.step === currentStepValue,
+    );
 
-  const handlePrevPage = useCallback(() => {
-    setCurrentPage((prev) => Math.max(prev - 1, 1));
-  }, []);
-
-  const handleNextPage = useCallback(() => {
-    setCurrentPage((prev) => Math.min(prev + 1, totalPages));
-  }, [totalPages]);
-  // ---- END: Pagination Logic ----
+    return runs.map((run) => {
+      const runImages = currentStepImages.filter(
+        (image: any) => image.runId === run.runId,
+      );
+      return {
+        run,
+        images: runImages,
+      };
+    });
+  }, [allImages, currentStepValue, runs]);
 
   // ---- START: Helper Function Callbacks ----
   // Define helper functions callbacks *before* JSX callbacks that use them.
@@ -218,8 +231,8 @@ const MultiGroupImageComponent = ({
     );
   }
 
-  // Use numberOfImages for the "No images found" check
-  if (numberOfImages === 0) {
+  // Check if there are any images
+  if (allImages.length === 0 && !isLoading) {
     return (
       <div
         className={cn("flex h-full w-full flex-col space-y-4 p-4", className)}
@@ -245,13 +258,13 @@ const MultiGroupImageComponent = ({
         <div
           className={cn(
             "grid flex-1 grid-cols-1 gap-4 overflow-auto",
-            numberOfImages > 1 && "sm:grid-cols-2",
-            numberOfImages === 2 && "lg:grid-cols-2",
-            numberOfImages >= 3 && "lg:grid-cols-3",
+            imagesByRun.length > 1 && "sm:grid-cols-2",
+            imagesByRun.length === 2 && "lg:grid-cols-2",
+            imagesByRun.length >= 3 && "lg:grid-cols-3",
           )}
         >
-          {paginatedImages.map(({ data, run }) => {
-            const image = data![0];
+          {imagesByRun.map(({ run, images }) => {
+            const image = images[0]; // Take the first image for each run at current step
             if (!image) return null;
 
             return (
@@ -299,31 +312,14 @@ const MultiGroupImageComponent = ({
             );
           })}
         </div>
-        {totalPages > 1 && (
-          <div className="flex items-center justify-center gap-4 pt-2">
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={handlePrevPage}
-              disabled={currentPage === 1}
-              className="h-8 w-8"
-            >
-              <ChevronLeft className="h-4 w-4" />
-              <span className="sr-only">Previous Page</span>
-            </Button>
-            <span className="text-sm text-muted-foreground">
-              Page {currentPage} of {totalPages}
-            </span>
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={handleNextPage}
-              disabled={currentPage === totalPages}
-              className="h-8 w-8"
-            >
-              <ChevronRight className="h-4 w-4" />
-              <span className="sr-only">Next Page</span>
-            </Button>
+        {hasMultipleSteps() && (
+          <div className="border-t pt-4">
+            <StepNavigator
+              currentStepIndex={currentStepIndex}
+              currentStepValue={currentStepValue}
+              availableSteps={availableSteps}
+              onStepChange={goToStepIndex}
+            />
           </div>
         )}
       </div>

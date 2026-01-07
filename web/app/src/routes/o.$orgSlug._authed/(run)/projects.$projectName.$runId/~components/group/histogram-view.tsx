@@ -23,6 +23,7 @@ import {
 import GIF from "gif.js";
 import { toast } from "@/components/ui/sonner";
 import { useGetHistogram } from "../../~queries/get-histogram";
+import { StepNavigator } from "../shared/step-navigator";
 
 // ---------------------- Constants ----------------------
 const ANIMATION_CONFIG = {
@@ -773,6 +774,12 @@ export const HistogramView = ({
         </div>
         {normalizedData.length > 1 && (
           <>
+            <StepNavigator
+              currentStepIndex={currentStepIndex}
+              currentStepValue={currentStep}
+              availableSteps={normalizedData.map((d) => d.step)}
+              onStepChange={setCurrentStepIndex}
+            />
             <div className="text-center font-mono text-xs text-muted-foreground">
               Step {formatNumber(currentStep, true)} of{" "}
               {formatNumber(maxStep, true)}

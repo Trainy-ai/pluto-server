@@ -16,7 +16,7 @@ import {
   BarChart3,
   X,
 } from "lucide-react";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { Slider } from "@/components/ui/slider";
 import {
   Dialog,
@@ -25,6 +25,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useStepNavigation } from "../../~hooks/use-step-navigation";
+import { StepNavigator } from "../shared/step-navigator";
 
 interface AudioViewProps {
   log: LogGroup["logs"][number];
@@ -32,43 +34,6 @@ interface AudioViewProps {
   projectName: string;
   runId: string;
 }
-
-interface StepSliderProps {
-  currentStep: number;
-  totalSteps: number;
-  onStepChange: (value: number[]) => void;
-}
-
-const StepSlider = ({
-  currentStep,
-  totalSteps,
-  onStepChange,
-}: StepSliderProps) => {
-  // Ensure currentStep is within valid bounds
-  const safeCurrentStep = Math.min(Math.max(0, currentStep), totalSteps);
-
-  return (
-    <div className="mx-auto max-w-2xl px-4">
-      <div className="flex items-center gap-4">
-        <span className="font-mono text-sm font-medium">Step:</span>
-        <Slider
-          value={[safeCurrentStep]}
-          onValueChange={onStepChange}
-          max={totalSteps}
-          step={1}
-          className="flex-1"
-        />
-        <div className="flex min-w-[100px] items-center justify-center">
-          <div className="flex items-center gap-1.5 rounded-md bg-muted px-2 py-1">
-            <span className="font-mono text-sm font-medium">
-              {safeCurrentStep}/{totalSteps}
-            </span>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
 
 interface PaginationControlsProps {
   currentPage: number;
@@ -738,9 +703,40 @@ export const AudioView = ({
     }),
   );
 
-  const [currentStep, setCurrentStep] = useState(0);
   const [currentPage, setCurrentPage] = useState(0);
   const audiosPerPage = 4;
+
+  // Use step navigation hook
+  const {
+    currentStepIndex,
+    currentStepValue,
+    availableSteps,
+    goToStepIndex,
+  } = useStepNavigation(data || []);
+
+  const currentStepAudios = useMemo(() => {
+    if (!data) return [];
+    return data.filter((audio) => audio.step === currentStepValue);
+  }, [data, currentStepValue]);
+
+  const totalPages = Math.max(
+    1,
+    Math.ceil(currentStepAudios.length / audiosPerPage),
+  );
+
+  const safeCurrentPage = Math.min(Math.max(0, currentPage), totalPages - 1);
+
+  const paginatedAudios = useMemo(() => {
+    return currentStepAudios.slice(
+      safeCurrentPage * audiosPerPage,
+      (safeCurrentPage + 1) * audiosPerPage,
+    );
+  }, [currentStepAudios, safeCurrentPage, audiosPerPage]);
+
+  const handleStepChange = (index: number) => {
+    goToStepIndex(index);
+    setCurrentPage(0);
+  };
 
   if (isLoading || !data) {
     return (
@@ -788,55 +784,17 @@ export const AudioView = ({
     );
   }
 
-  // Group audio files by step
-  const audioByStep = data.reduce(
-    (acc, audio) => {
-      const step = audio.step || 0;
-      if (!acc[step]) {
-        acc[step] = [];
-      }
-      acc[step].push(audio);
-      return acc;
-    },
-    {} as Record<number, typeof data>,
-  );
-
-  const steps = Object.keys(audioByStep)
-    .map(Number)
-    .sort((a, b) => a - b);
-
-  // Ensure currentStep is within valid bounds
-  const safeCurrentStep = Math.min(Math.max(0, currentStep), steps.length - 1);
-  const currentStepAudios = audioByStep[steps[safeCurrentStep]] || [];
-  const totalPages = Math.max(
-    1,
-    Math.ceil(currentStepAudios.length / audiosPerPage),
-  );
-
-  // Ensure currentPage is within valid bounds
-  const safeCurrentPage = Math.min(Math.max(0, currentPage), totalPages - 1);
-
-  const paginatedAudios = currentStepAudios.slice(
-    safeCurrentPage * audiosPerPage,
-    (safeCurrentPage + 1) * audiosPerPage,
-  );
-
-  const handleStepChange = (value: number[]) => {
-    const newStep = value[0];
-    setCurrentStep(newStep);
-    setCurrentPage(0);
-  };
-
   return (
     <div className="space-y-6 p-4">
       <h3 className="text-center font-mono text-lg font-medium">
         {log.logName}
       </h3>
 
-      {steps.length > 1 && (
-        <StepSlider
-          currentStep={safeCurrentStep}
-          totalSteps={steps.length - 1}
+      {availableSteps.length > 1 && (
+        <StepNavigator
+          currentStepIndex={currentStepIndex}
+          currentStepValue={currentStepValue}
+          availableSteps={availableSteps}
           onStepChange={handleStepChange}
         />
       )}

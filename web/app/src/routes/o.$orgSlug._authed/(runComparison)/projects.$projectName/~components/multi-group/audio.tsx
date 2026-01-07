@@ -13,8 +13,10 @@ import {
   Volume2,
   VolumeX,
 } from "lucide-react";
-import { useState, useRef, useEffect } from "react";
+import { useRef, useEffect, useMemo } from "react";
 import { Slider } from "@/components/ui/slider";
+import { StepNavigator } from "../../../../(run)/projects.$projectName.$runId/~components/shared/step-navigator";
+import { useStepNavigation } from "../../../../(run)/projects.$projectName.$runId/~hooks/use-step-navigation";
 
 interface MultiGroupAudioProps {
   logName: string;
@@ -48,12 +50,61 @@ export const MultiGroupAudio = ({
   });
 
   // Combine queries with run data
-  const queriesWithRuns = audioQueries.map((query, index) => ({
-    ...query,
-    run: runs[index],
-  }));
+  const queriesWithRuns = useMemo(
+    () =>
+      audioQueries.map((query, index) => ({
+        ...query,
+        run: runs[index],
+      })),
+    [audioQueries, runs],
+  );
 
-  const isLoading = queriesWithRuns.some((query) => query.isLoading);
+  const isLoading = useMemo(
+    () => queriesWithRuns.some((query) => query.isLoading),
+    [queriesWithRuns],
+  );
+
+  // Flatten all audio with runId for step navigation
+  const allAudio = useMemo(
+    () =>
+      queriesWithRuns
+        .map((query) => {
+          const audio = query.data || [];
+          return audio.map((file) => ({
+            ...file,
+            runId: query.run.runId,
+          }));
+        })
+        .flat()
+        .filter(Boolean),
+    [queriesWithRuns],
+  );
+
+  // Use step navigation hook
+  const {
+    currentStepIndex,
+    currentStepValue,
+    availableSteps,
+    goToStepIndex,
+    hasMultipleSteps,
+  } = useStepNavigation(allAudio);
+
+  // Filter audio for current step and group by run
+  const audioByRun = useMemo(() => {
+    const currentStepAudio = allAudio.filter(
+      (file) => file.step === currentStepValue,
+    );
+
+    return runs.map((run) => {
+      const runAudio = currentStepAudio.filter(
+        (file: any) => file.runId === run.runId,
+      );
+      return {
+        run,
+        audio: runAudio,
+      };
+    });
+  }, [allAudio, currentStepValue, runs]);
 
   if (isLoading) {
     return (
@@ -78,10 +129,7 @@ export const MultiGroupAudio = ({
     );
   }
 
-  // Filter out runs with no audio data
-  const runsWithAudio = queriesWithRuns.filter((query) => query.data?.[0]);
-
-  if (runsWithAudio.length === 0) {
+  if (allAudio.length === 0 && !isLoading) {
     return (
       <div className={cn("space-y-4", className)}>
         <h3 className="text-center font-mono text-sm font-medium text-muted-foreground">
@@ -100,10 +148,23 @@ export const MultiGroupAudio = ({
         {logName}
       </h3>
       <div className="grid grid-cols-1 gap-4">
-        {runsWithAudio.map(({ data, run }) => (
-          <AudioPlayer key={run.runId} audio={data![0]} run={run} />
-        ))}
+        {audioByRun.map(({ run, audio }) => {
+          const audioFile = audio[0]; // Take the first audio for each run at current step
+          if (!audioFile) return null;
+
+          return <AudioPlayer key={run.runId} audio={audioFile} run={run} />;
+        })}
       </div>
+      {hasMultipleSteps() && (
+        <div className="border-t pt-4">
+          <StepNavigator
+            currentStepIndex={currentStepIndex}
+            currentStepValue={currentStepValue}
+            availableSteps={availableSteps}
+            onStepChange={goToStepIndex}
+          />
+        </div>
+      )}
     </div>
   );
 };

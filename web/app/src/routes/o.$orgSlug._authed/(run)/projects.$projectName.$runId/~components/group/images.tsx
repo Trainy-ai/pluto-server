@@ -16,7 +16,8 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
-import { Slider } from "@/components/ui/slider";
+import { useStepNavigation } from "../../~hooks/use-step-navigation";
+import { StepNavigator } from "../shared/step-navigator";
 
 interface ImagesViewProps {
   log: LogGroup["logs"][number];
@@ -24,44 +25,6 @@ interface ImagesViewProps {
   projectName: string;
   runId: string;
 }
-
-interface StepSliderProps {
-  currentStep: number;
-  totalSteps: number;
-  onStepChange: (value: number[]) => void;
-  currentStepValue: number;
-  totalStepValue: number;
-}
-
-const StepSlider = ({
-  currentStep,
-  totalSteps,
-  onStepChange,
-  currentStepValue,
-  totalStepValue,
-}: StepSliderProps) => {
-  return (
-    <div className="mx-auto max-w-2xl px-4">
-      <div className="flex items-center gap-4">
-        <span className="font-mono text-sm font-medium">Step:</span>
-        <Slider
-          value={[currentStep]}
-          onValueChange={onStepChange}
-          max={totalSteps - 1}
-          step={1}
-          className="flex-1"
-        />
-        <div className="flex min-w-[100px] items-center justify-center">
-          <div className="rounded-mdpx-2 flex items-center gap-1.5 py-1">
-            <span className="font-mono text-sm font-medium">
-              {currentStepValue}/{totalStepValue}
-            </span>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
 
 interface PaginationControlsProps {
   currentPage: number;
@@ -308,51 +271,20 @@ export const ImagesView = ({
     log.logName,
   );
 
-  const [currentStep, setCurrentStep] = useState(0);
   const [currentPage, setCurrentPage] = useState(0);
   const imagesPerPage = 4;
 
-  // Memoize the steps array and current step value
-  const { steps, currentStepValue, totalStepValue } = useMemo(() => {
-    if (!data) return { steps: [], currentStepValue: 0, totalStepValue: 0 };
-
-    const imagesByStep = data.reduce(
-      (acc: Record<number, typeof data>, image: any) => {
-        const step = image.step || 0;
-        if (!acc[step]) {
-          acc[step] = [];
-        }
-        acc[step].push(image);
-        return acc;
-      },
-      {} as Record<number, typeof data>,
-    );
-
-    const sortedSteps = Object.keys(imagesByStep)
-      .map(Number)
-      .sort((a, b) => a - b);
-
-    return {
-      steps: sortedSteps,
-      currentStepValue: sortedSteps[currentStep] || 0,
-      totalStepValue: sortedSteps[sortedSteps.length - 1] || 0,
-    };
-  }, [data, currentStep]);
+  // Use step navigation hook
+  const {
+    currentStepIndex,
+    currentStepValue,
+    availableSteps,
+    goToStepIndex,
+  } = useStepNavigation(data || []);
 
   const currentStepImages = useMemo(() => {
     if (!data) return [];
-    const imagesByStep = data.reduce(
-      (acc: Record<number, typeof data>, image: any) => {
-        const step = image.step || 0;
-        if (!acc[step]) {
-          acc[step] = [];
-        }
-        acc[step].push(image);
-        return acc;
-      },
-      {} as Record<number, typeof data>,
-    );
-    return imagesByStep[currentStepValue] || [];
+    return data.filter((image) => image.step === currentStepValue);
   }, [data, currentStepValue]);
 
   const totalPages = Math.ceil(currentStepImages.length / imagesPerPage);
@@ -364,8 +296,8 @@ export const ImagesView = ({
     );
   }, [currentStepImages, currentPage, imagesPerPage]);
 
-  const handleStepChange = (value: number[]) => {
-    setCurrentStep(value[0]);
+  const handleStepChange = (index: number) => {
+    goToStepIndex(index);
     setCurrentPage(0);
   };
 
@@ -427,12 +359,11 @@ export const ImagesView = ({
         {log.logName}
       </h3>
 
-      <StepSlider
-        currentStep={currentStep}
-        totalSteps={steps.length}
-        onStepChange={handleStepChange}
+      <StepNavigator
+        currentStepIndex={currentStepIndex}
         currentStepValue={currentStepValue}
-        totalStepValue={totalStepValue}
+        availableSteps={availableSteps}
+        onStepChange={handleStepChange}
       />
 
       {/* Images Grid */}
