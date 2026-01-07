@@ -5,6 +5,7 @@ import path from "path";
 import { defineConfig } from "vite";
 
 export default defineConfig({
+  appType: 'spa', // Enable SPA mode for client-side routing
   plugins: [
     tailwindcss(),
     TanStackRouterVite({
