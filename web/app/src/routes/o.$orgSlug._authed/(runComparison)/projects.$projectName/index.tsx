@@ -161,7 +161,7 @@ function RouteComponent() {
             id="metrics-display"
             order={2}
           >
-            <div className="h-full pl-2">
+            <div className="flex h-full flex-col pl-2">
               {isLoading || runCountLoading ? (
                 <Skeleton className="h-full w-full" />
               ) : (
