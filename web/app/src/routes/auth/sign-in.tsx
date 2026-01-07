@@ -26,6 +26,16 @@ export const Route = createFileRoute("/auth/sign-in")({
 });
 
 function RouteComponent() {
+  const { redirect: unsafeRedirect } = Route.useSearch();
+
+  // Only allow relative paths for redirect to prevent open redirect vulnerabilities.
+  const redirect =
+    unsafeRedirect &&
+    unsafeRedirect.startsWith("/") &&
+    !unsafeRedirect.startsWith("//")
+      ? unsafeRedirect
+      : undefined;
+
   return (
     <div className="relative min-h-screen bg-gray-50 dark:bg-background">
       <main className="px-4">
@@ -33,7 +43,7 @@ function RouteComponent() {
           <Link to="/" className="mx-auto block w-fit text-2xl font-semibold">
             m:lop
           </Link>
-          <SignInCard />
+          <SignInCard redirect={redirect} />
         </div>
       </main>
       <Footer />
