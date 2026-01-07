@@ -29,6 +29,7 @@ import { useNormalizedHistogramData } from "./hooks/use-normalized-histogram";
 import { useHistogramCanvas } from "./hooks/use-histogram-canvas";
 import { useAnimationFrame } from "./hooks/use-animation-frame";
 import { AnimationControls } from "./components/animation-controls"; // retain or further break down as needed
+import { StepNavigator } from "../../../../(run)/projects.$projectName.$runId/~components/shared/step-navigator";
 
 // Configuration for animation speed etc.
 const ANIMATION_CONFIG = {
@@ -175,6 +176,12 @@ export const MultiHistogramView: React.FC<{
         </div>
         {maxStepIndex > 0 && (
           <div className="flex w-full flex-col space-y-2">
+            <StepNavigator
+              currentStepIndex={stepIndex}
+              currentStepValue={currentStep}
+              availableSteps={stepValues}
+              onStepChange={setStepIndex}
+            />
             <AnimationControls
               currentStep={stepIndex}
               maxStep={maxStepIndex}
@@ -186,9 +193,6 @@ export const MultiHistogramView: React.FC<{
               onExport={handleExport}
               isExporting={isExporting}
             />
-            <div className="text-xs text-muted-foreground">
-              Step: {currentStep} ({stepIndex + 1}/{maxStepIndex + 1})
-            </div>
           </div>
         )}
       </div>

@@ -3,8 +3,8 @@ import { trpc } from "@/utils/trpc";
 import { useQueries } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
-import { Slider } from "@/components/ui/slider";
 import { VideoPlayer } from "../../../../(run)/projects.$projectName.$runId/~components/group/video";
+import { StepNavigator } from "../../../../(run)/projects.$projectName.$runId/~components/shared/step-navigator";
 
 interface Video {
   url: string;
@@ -231,53 +231,14 @@ export const MultiGroupVideo = ({
 
       {steps.length > 1 && (
         <div className="border-t pt-4">
-          <StepSlider
-            currentStep={currentStep}
-            totalSteps={steps.length}
-            onStepChange={(value) => setCurrentStep(value[0])}
+          <StepNavigator
+            currentStepIndex={currentStep}
             currentStepValue={currentStepValue}
-            totalStepValue={totalStepValue}
+            availableSteps={steps}
+            onStepChange={setCurrentStep}
           />
         </div>
       )}
-    </div>
-  );
-};
-
-interface StepSliderProps {
-  currentStep: number;
-  totalSteps: number;
-  onStepChange: (value: number[]) => void;
-  currentStepValue: number;
-  totalStepValue: number;
-}
-
-const StepSlider: React.FC<StepSliderProps> = ({
-  currentStep,
-  totalSteps,
-  onStepChange,
-  currentStepValue,
-  totalStepValue,
-}) => {
-  return (
-    <div className="mx-auto max-w-2xl px-4">
-      <div className="flex items-center gap-4">
-        <span className="font-mono text-sm font-medium">Step:</span>
-        <Slider
-          value={[currentStep]}
-          onValueChange={onStepChange}
-          max={totalSteps - 1}
-          step={1}
-          className="flex-1"
-        />
-        <div className="flex min-w-[100px] items-center justify-center">
-          <div className="rounded-mdpx-2 flex items-center gap-1.5 py-1">
-            <span className="font-mono text-sm font-medium">
-              {currentStepValue}/{totalStepValue}
-            </span>
-          </div>
-        </div>
-      </div>
     </div>
   );
 };

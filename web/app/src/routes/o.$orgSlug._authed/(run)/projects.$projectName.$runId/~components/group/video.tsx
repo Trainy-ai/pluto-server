@@ -27,6 +27,8 @@ import {
   DropdownMenuContent,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useStepNavigation } from "../../~hooks/use-step-navigation";
+import { StepNavigator } from "../shared/step-navigator";
 
 const VIDEOS_PER_PAGE = 2;
 
@@ -42,44 +44,6 @@ interface VideoPlayerProps {
   fileName: string;
   autoHideDelay?: number;
 }
-
-interface StepSliderProps {
-  currentStep: number;
-  totalSteps: number;
-  onStepChange: (value: number[]) => void;
-  currentStepValue: number;
-  totalStepValue: number;
-}
-
-const StepSlider: React.FC<StepSliderProps> = ({
-  currentStep,
-  totalSteps,
-  onStepChange,
-  currentStepValue,
-  totalStepValue,
-}) => {
-  return (
-    <div className="mx-auto max-w-2xl px-4">
-      <div className="flex items-center gap-4">
-        <span className="font-mono text-sm font-medium">Step:</span>
-        <Slider
-          value={[currentStep]}
-          onValueChange={onStepChange}
-          max={totalSteps - 1}
-          step={1}
-          className="flex-1"
-        />
-        <div className="flex min-w-[100px] items-center justify-center">
-          <div className="rounded-mdpx-2 flex items-center gap-1.5 py-1">
-            <span className="font-mono text-sm font-medium">
-              {currentStepValue}/{totalStepValue}
-            </span>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
 
 const isGif = (fileName: string) => {
   return fileName.toLowerCase().endsWith(".gif");
@@ -452,46 +416,23 @@ export const VideoView: React.FC<VideoViewProps> = ({
     runId,
     log.logName,
   );
-  const [currentStep, setCurrentStep] = useState(0);
   const [page, setPage] = useState(0);
 
-  // Memoize the steps array and current step value
-  const { steps, currentStepValue, totalStepValue, currentStepVideos } =
-    useMemo(() => {
-      if (!data || !Array.isArray(data))
-        return {
-          steps: [],
-          currentStepValue: 0,
-          totalStepValue: 0,
-          currentStepVideos: [],
-        };
+  // Use step navigation hook
+  const {
+    currentStepIndex,
+    currentStepValue,
+    availableSteps,
+    goToStepIndex,
+  } = useStepNavigation((data as Video[]) || []);
 
-      const videosByStep = (data as Video[]).reduce(
-        (acc: Record<number, Video[]>, video: Video) => {
-          const step = video.step || 0;
-          if (!acc[step]) {
-            acc[step] = [];
-          }
-          acc[step].push(video);
-          return acc;
-        },
-        {} as Record<number, Video[]>,
-      );
+  const currentStepVideos = useMemo(() => {
+    if (!data || !Array.isArray(data)) return [];
+    return (data as Video[]).filter((video) => video.step === currentStepValue);
+  }, [data, currentStepValue]);
 
-      const sortedSteps = Object.keys(videosByStep)
-        .map(Number)
-        .sort((a, b) => a - b);
-
-      return {
-        steps: sortedSteps,
-        currentStepValue: sortedSteps[currentStep] || 0,
-        totalStepValue: sortedSteps[sortedSteps.length - 1] || 0,
-        currentStepVideos: videosByStep[sortedSteps[currentStep] || 0] || [],
-      };
-    }, [data, currentStep]);
-
-  const handleStepChange = (value: number[]) => {
-    setCurrentStep(value[0]);
+  const handleStepChange = (index: number) => {
+    goToStepIndex(index);
     setPage(0);
   };
 
@@ -596,14 +537,13 @@ export const VideoView: React.FC<VideoViewProps> = ({
         </>
       )}
 
-      {steps.length > 1 && (
+      {availableSteps.length > 1 && (
         <div className="border-t pt-4">
-          <StepSlider
-            currentStep={currentStep}
-            totalSteps={steps.length}
-            onStepChange={handleStepChange}
+          <StepNavigator
+            currentStepIndex={currentStepIndex}
             currentStepValue={currentStepValue}
-            totalStepValue={totalStepValue}
+            availableSteps={availableSteps}
+            onStepChange={handleStepChange}
           />
         </div>
       )}

@@ -84,7 +84,8 @@ export function GettingStarted({ orgSlug }: GettingStartedProps) {
         </p>
       </div>
 
-      <Alert className="mb-6 border-primary/20 bg-primary/5 sm:mb-8">
+      {/* TODO(asaiacai): Add our own example */}
+      {/* <Alert className="mb-6 border-primary/20 bg-primary/5 sm:mb-8">
         <AlertTitle className="text-sm font-medium text-primary sm:text-base">
           Try it out instantly
         </AlertTitle>
@@ -108,7 +109,7 @@ export function GettingStarted({ orgSlug }: GettingStartedProps) {
             </div>
           </div>
         </AlertDescription>
-      </Alert>
+      </Alert> */}
 
       <div className="relative flex flex-col gap-4">
         <Card className="relative bg-muted/50 transition-all hover:shadow-md">
