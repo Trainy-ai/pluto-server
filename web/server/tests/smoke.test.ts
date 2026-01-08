@@ -480,4 +480,161 @@ describe('SDK API Endpoints (with API Key)', () => {
       });
     });
   });
+
+  describe('Test Suite 8: Config Management', () => {
+    const hasApiKey = TEST_API_KEY.length > 0;
+
+    describe.skipIf(!hasApiKey)('Update Config via HTTP API', () => {
+      it('Test 8.1: Update config on existing run', async () => {
+        // Create a run first
+        const createResponse = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `update-config-${Date.now()}`,
+            config: JSON.stringify({ lr: 0.001 }),
+          }),
+        });
+
+        expect(createResponse.status).toBe(200);
+        const { runId } = await createResponse.json();
+
+        // Update config via HTTP API
+        const updateResponse = await makeRequest('/api/runs/config/update', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            runId: runId,
+            config: JSON.stringify({ model: 'resnet50', epochs: 100 }),
+          }),
+        });
+
+        expect(updateResponse.status).toBe(200);
+        const data = await updateResponse.json();
+        expect(data.success).toBe(true);
+      });
+
+      it('Test 8.2: Config merge preserves existing keys', async () => {
+        // Create a run with initial config
+        const createResponse = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `merge-config-${Date.now()}`,
+            config: JSON.stringify({ lr: 0.001, batch_size: 32 }),
+          }),
+        });
+
+        expect(createResponse.status).toBe(200);
+        const { runId } = await createResponse.json();
+
+        // Update config - should merge, not replace
+        const updateResponse = await makeRequest('/api/runs/config/update', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            runId: runId,
+            config: JSON.stringify({ model: 'resnet50', lr: 0.01 }), // lr should override
+          }),
+        });
+
+        expect(updateResponse.status).toBe(200);
+        const data = await updateResponse.json();
+        expect(data.success).toBe(true);
+      });
+
+      it('Test 8.3: Reject config update for non-existent run', async () => {
+        const updateResponse = await makeRequest('/api/runs/config/update', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            runId: 999999999,
+            config: JSON.stringify({ should: 'fail' }),
+          }),
+        });
+
+        expect(updateResponse.status).toBe(404);
+        const data = await updateResponse.json();
+        expect(data.error).toBe('Run not found');
+      });
+
+      it('Test 8.4: Reject invalid JSON config', async () => {
+        // Create a run first
+        const createResponse = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `invalid-config-${Date.now()}`,
+          }),
+        });
+
+        expect(createResponse.status).toBe(200);
+        const { runId } = await createResponse.json();
+
+        // Try to update with invalid JSON
+        const updateResponse = await makeRequest('/api/runs/config/update', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            runId: runId,
+            config: 'not valid json {{{',
+          }),
+        });
+
+        expect(updateResponse.status).toBe(400);
+        const data = await updateResponse.json();
+        expect(data.error).toBe('Invalid config JSON');
+      });
+
+      it('Test 8.5: Update config on run without initial config', async () => {
+        // Create a run without config
+        const createResponse = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `no-initial-config-${Date.now()}`,
+          }),
+        });
+
+        expect(createResponse.status).toBe(200);
+        const { runId } = await createResponse.json();
+
+        // Add config to run that had none
+        const updateResponse = await makeRequest('/api/runs/config/update', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            runId: runId,
+            config: JSON.stringify({ model: 'gpt-4', temperature: 0.7 }),
+          }),
+        });
+
+        expect(updateResponse.status).toBe(200);
+        const data = await updateResponse.json();
+        expect(data.success).toBe(true);
+      });
+    });
+  });
 });
