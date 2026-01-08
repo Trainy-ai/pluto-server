@@ -3,7 +3,7 @@ import PageLayout from "@/components/layout/page-layout";
 import { OrganizationPageTitle } from "@/components/layout/page-title";
 import RunsLayout from "@/components/layout/run/layout";
 import type { inferOutput } from "@trpc/tanstack-react-query";
-import { useState, type PropsWithChildren } from "react";
+import { useState, useCallback, type PropsWithChildren } from "react";
 import { queryClient, trpc } from "@/utils/trpc";
 import { DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -24,6 +24,8 @@ import {
   UnstyledTooltipContent,
 } from "@/components/ui/tooltip";
 import { AlertTriangle } from "lucide-react";
+import { RunTags } from "./run-tags";
+import { useUpdateTags } from "../~queries/update-tags";
 
 type Run = inferOutput<typeof trpc.runs.get>;
 
@@ -123,6 +125,20 @@ export const Layout = ({
   title,
   organizationId,
 }: LayoutProps) => {
+  const updateTagsMutation = useUpdateTags(organizationId, projectName, runId);
+
+  const handleTagsUpdate = useCallback(
+    (tags: string[]) => {
+      updateTagsMutation.mutate({
+        organizationId,
+        runId,
+        projectName,
+        tags,
+      });
+    },
+    [organizationId, projectName, runId, updateTagsMutation]
+  );
+
   return (
     <RunsLayout>
       <PageLayout
@@ -141,6 +157,10 @@ export const Layout = ({
               title={title}
             />
             <RunStatusBadge run={run} />
+            <RunTags
+              tags={run.tags || []}
+              onTagsUpdate={handleTagsUpdate}
+            />
           </div>
         }
         headerRight={

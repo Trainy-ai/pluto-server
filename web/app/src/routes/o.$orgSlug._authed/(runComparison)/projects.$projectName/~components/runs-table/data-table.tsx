@@ -8,6 +8,7 @@ import {
   getPaginationRowModel,
   getFilteredRowModel,
   type PaginationState,
+  type ColumnSizingState,
 } from "@tanstack/react-table";
 
 import {
@@ -29,6 +30,7 @@ import {
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
 import { columns } from "./columns";
 import type { Run } from "../../~queries/list-runs";
 import { DEFAULT_PAGE_SIZE } from "./config";
@@ -80,6 +82,9 @@ export function DataTable({
   });
 
   const [globalFilter, setGlobalFilter] = useState("");
+
+  // Column sizing state for resizable columns
+  const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
 
   // Keep track of previous data length to maintain pagination position
   const prevDataLengthRef = useRef(runs.length);
@@ -169,12 +174,16 @@ export function DataTable({
     onGlobalFilterChange: setGlobalFilter,
     onRowSelectionChange: setRowSelection,
     onPaginationChange: setPagination,
+    onColumnSizingChange: setColumnSizing,
     state: {
       rowSelection,
       pagination: { pageIndex, pageSize },
       globalFilter,
+      columnSizing,
     },
     enableRowSelection: true,
+    enableColumnResizing: true,
+    columnResizeMode: "onChange",
     // Prevent TanStack Table from auto-resetting pagination
     autoResetPageIndex: false,
   });
@@ -198,7 +207,7 @@ export function DataTable({
   }
 
   return (
-    <div className="flex h-full w-full min-w-[200px] flex-col">
+    <div className="flex w-full min-w-[200px] flex-col">
       <div className="mb-2 space-y-2">
         <div className="mt-2 flex items-center gap-1 pl-1 text-sm text-muted-foreground">
           <span className="font-medium">
@@ -227,18 +236,19 @@ export function DataTable({
         </div>
       </div>
 
-      <div className="flex-1 overflow-hidden rounded-md border">
-        <div className="h-full overflow-y-auto">
-          <Table>
-            <TableHeader>
+      <div className="rounded-md border overflow-x-auto">
+        <Table className="w-full">
+          <TableHeader className="sticky top-0 z-10 bg-background">
               {table.getHeaderGroups().map((headerGroup) => (
                 <TableRow key={headerGroup.id}>
                   {headerGroup.headers.map((header) => (
                     <TableHead
                       key={header.id}
-                      className="sticky top-0 bg-background px-2 py-2 text-left text-sm font-medium whitespace-nowrap text-muted-foreground"
+                      className="relative bg-background px-2 py-2 text-left text-sm font-medium whitespace-nowrap text-muted-foreground"
                       style={{
-                        width: header.getSize() !== 150 ? header.getSize() : undefined,
+                        width: header.getSize(),
+                        minWidth: header.column.columnDef.minSize,
+                        maxWidth: header.column.columnDef.maxSize,
                       }}
                     >
                       {header.isPlaceholder
@@ -247,6 +257,16 @@ export function DataTable({
                             header.column.columnDef.header,
                             header.getContext(),
                           )}
+                      {header.column.getCanResize() && (
+                        <div
+                          onMouseDown={header.getResizeHandler()}
+                          onTouchStart={header.getResizeHandler()}
+                          className={cn(
+                            "absolute top-0 right-0 h-full w-1 cursor-col-resize select-none touch-none bg-border/50 hover:bg-primary/70 transition-colors duration-150",
+                            header.column.getIsResizing() && "bg-primary shadow-sm"
+                          )}
+                        />
+                      )}
                     </TableHead>
                   ))}
                 </TableRow>
@@ -262,12 +282,19 @@ export function DataTable({
                     {row.getVisibleCells().map((cell) => (
                       <TableCell
                         key={cell.id}
-                        className="truncate px-2 py-2 text-sm"
+                        className="px-2 py-2 text-sm"
+                        style={{
+                          width: cell.column.getSize(),
+                          minWidth: cell.column.columnDef.minSize,
+                          maxWidth: cell.column.columnDef.maxSize,
+                        }}
                       >
-                        {flexRender(
-                          cell.column.columnDef.cell,
-                          cell.getContext(),
-                        )}
+                        <div className="truncate">
+                          {flexRender(
+                            cell.column.columnDef.cell,
+                            cell.getContext(),
+                          )}
+                        </div>
                       </TableCell>
                     ))}
                   </TableRow>
@@ -284,7 +311,6 @@ export function DataTable({
               )}
             </TableBody>
           </Table>
-        </div>
       </div>
 
       <div className="mt-2 flex items-center justify-between">

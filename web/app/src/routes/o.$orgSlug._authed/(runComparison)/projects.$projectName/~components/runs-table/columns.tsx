@@ -7,6 +7,11 @@ import { StatusIndicator } from "@/components/layout/dashboard/sidebar";
 import type { Run } from "../../~queries/list-runs";
 import { Badge } from "@/components/ui/badge";
 import { TagsCell } from "./tags-cell";
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+} from "@/components/ui/tooltip";
 
 type RunId = string;
 type RunColor = string;
@@ -62,7 +67,10 @@ export const columns = ({
   return [
     {
       id: "select",
-      size: 48,
+      size: 40,
+      minSize: 40,
+      maxSize: 40,
+      enableResizing: false,
       header: ({ table }) => {
         const totalSelected = table.getSelectedRowModel().rows.length;
         const isAllSelected = table.getIsAllPageRowsSelected();
@@ -140,6 +148,8 @@ export const columns = ({
     {
       header: "Name",
       accessorKey: "name",
+      size: 140,
+      minSize: 100,
       cell: ({ row }) => {
         const runId = row.original.id;
         const name = row.original.name;
@@ -152,19 +162,23 @@ export const columns = ({
               onChange={(newColor) => onColorChange(runId, newColor)}
               className="h-5 w-5 flex-shrink-0"
             />
-            <Link
-              to="/o/$orgSlug/projects/$projectName/$runId"
-              preload="intent"
-              className="group flex min-w-0 flex-1 items-center rounded-md transition-colors hover:bg-accent/50"
-              params={{ orgSlug, projectName, runId }}
-            >
-              <span className="truncate text-sm font-medium group-hover:underline">
-                {name}
-              </span>
-            </Link>
-            <div className="flex-shrink-0">
-              <StatusIndicator status={row.original.status} />
-            </div>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Link
+                  to="/o/$orgSlug/projects/$projectName/$runId"
+                  preload="intent"
+                  className="group flex min-w-0 flex-1 items-center rounded-md transition-colors hover:bg-accent/50"
+                  params={{ orgSlug, projectName, runId }}
+                >
+                  <span className="truncate text-sm font-medium group-hover:underline">
+                    {name}
+                  </span>
+                </Link>
+              </TooltipTrigger>
+              <TooltipContent side="top" sideOffset={4}>
+                <p className="max-w-xs">{name}</p>
+              </TooltipContent>
+            </Tooltip>
           </div>
         );
       },
@@ -172,7 +186,8 @@ export const columns = ({
     {
       header: "Tags",
       accessorKey: "tags",
-      size: 200,
+      size: 110,
+      minSize: 80,
       cell: ({ row }) => {
         const runId = row.original.id;
         const tags = row.original.tags || [];
@@ -183,6 +198,21 @@ export const columns = ({
             allTags={allTags}
             onTagsUpdate={(newTags) => onTagsUpdate(runId, newTags)}
           />
+        );
+      },
+    },
+    {
+      id: "status",
+      header: "",
+      size: 36,
+      minSize: 36,
+      maxSize: 36,
+      enableResizing: false,
+      cell: ({ row }) => {
+        return (
+          <div className="flex items-center justify-end pr-1">
+            <StatusIndicator status={row.original.status} />
+          </div>
         );
       },
     },
