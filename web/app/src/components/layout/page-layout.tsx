@@ -20,6 +20,7 @@ interface PageLayoutProps {
   headerRight?: React.ReactNode;
   secondaryBar?: React.ReactNode;
   showSidebarTrigger?: boolean;
+  disableScroll?: boolean;
 }
 
 const WarningBar = () => {
@@ -98,6 +99,7 @@ const PageLayout = ({
   headerRight,
   secondaryBar,
   showSidebarTrigger = true,
+  disableScroll = false,
 }: PageLayoutProps) => {
   return (
     <Page>
@@ -119,7 +121,7 @@ const PageLayout = ({
         </PagePrimaryBar>
         {secondaryBar && <PageSecondaryBar>{secondaryBar}</PageSecondaryBar>}
       </PageHeader>
-      <PageBody>{children}</PageBody>
+      <PageBody disableScroll={disableScroll}>{children}</PageBody>
     </Page>
   );
 };

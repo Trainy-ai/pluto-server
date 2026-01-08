@@ -88,7 +88,7 @@ export function MetricsDisplay({
   }, [sortedGroups, searchState]);
 
   return (
-    <div className="flex-1 space-y-4 overflow-y-auto">
+    <div className="flex-1 space-y-4">
       <div className="sticky top-0 z-10 flex items-center justify-between gap-4 bg-background pb-2">
         <div className="flex-1">
           <LogSearch

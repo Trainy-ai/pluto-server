@@ -145,6 +145,7 @@ function RouteComponent() {
     <RunComparisonLayout>
       <PageLayout
         showSidebarTrigger={false}
+        disableScroll={true}
         headerLeft={
           <OrganizationPageTitle
             breadcrumbs={[
@@ -166,8 +167,9 @@ function RouteComponent() {
           <ResizablePanel
             id="runs-list"
             order={1}
+            minSize={15}
           >
-            <div className="flex h-full flex-col pr-2">
+            <div className="flex h-full flex-col pr-2 overflow-y-auto overscroll-y-contain">
               <DataTable
                 runs={runs}
                 orgSlug={organizationSlug}
@@ -194,7 +196,7 @@ function RouteComponent() {
             id="metrics-display"
             order={2}
           >
-            <div className="flex h-full flex-col pl-2">
+            <div className="flex h-full flex-col overflow-y-auto overscroll-y-contain pl-2">
               {isLoading || runCountLoading ? (
                 <Skeleton className="h-full w-full" />
               ) : (

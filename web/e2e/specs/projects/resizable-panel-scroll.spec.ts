@@ -40,8 +40,8 @@ test.describe("Resizable Panel Scroll", () => {
     // Wait for the page to fully load with metrics
     await page.waitForLoadState("networkidle");
 
-    // Find the metrics display container (has overflow-y-auto and flex-1 classes)
-    const metricsContainer = page.locator(".overflow-y-auto.flex-1");
+    // Find the metrics display container (has overflow-y-auto and overscroll-y-contain classes)
+    const metricsContainer = page.locator(".overflow-y-auto.overscroll-y-contain").last();
     await expect(metricsContainer).toBeVisible({ timeout: 10000 });
 
     // Get scroll properties
@@ -149,7 +149,7 @@ test.describe("Resizable Panel Scroll", () => {
     await page.waitForTimeout(500);
 
     // Verify metrics container still has correct scroll setup
-    const metricsContainer = page.locator(".overflow-y-auto.flex-1");
+    const metricsContainer = page.locator(".overflow-y-auto.overscroll-y-contain").last();
     const scrollInfo = await metricsContainer.evaluate((el) => ({
       scrollHeight: el.scrollHeight,
       clientHeight: el.clientHeight,
@@ -197,27 +197,25 @@ test.describe("Resizable Panel Scroll", () => {
     await waitForTRPC(page);
     await page.waitForLoadState("networkidle");
 
-    // Find the metrics display container
-    const metricsContainer = page.locator(".overflow-y-auto.flex-1");
+    // Find the metrics display container (the panel wrapper with scroll classes)
+    const metricsContainer = page.locator(".overflow-y-auto.overscroll-y-contain").last();
     await expect(metricsContainer).toBeVisible({ timeout: 10000 });
 
-    // Get the parent element's classes by evaluating within the metrics container context
-    const parentClasses = await metricsContainer.evaluate((el) => {
-      if (!el.parentElement) return [];
-      return Array.from(el.parentElement.classList);
+    // Get the container's own classes to verify flex layout
+    const containerClasses = await metricsContainer.evaluate((el) => {
+      return Array.from(el.classList);
     });
 
-    console.log("Parent element classes:", parentClasses);
+    console.log("Container element classes:", containerClasses);
 
-    // Check for flex layout classes
-    expect(parentClasses).toContain("flex");
-    expect(parentClasses).toContain("flex-col");
-    expect(parentClasses).toContain("h-full");
+    // Check for flex layout classes on the scroll container itself
+    expect(containerClasses).toContain("flex");
+    expect(containerClasses).toContain("flex-col");
+    expect(containerClasses).toContain("h-full");
 
-    // Verify computed styles
-    const parentStyles = await metricsContainer.evaluate((el) => {
-      if (!el.parentElement) return {};
-      const computed = window.getComputedStyle(el.parentElement);
+    // Verify computed styles on the container
+    const containerStyles = await metricsContainer.evaluate((el) => {
+      const computed = window.getComputedStyle(el);
       return {
         display: computed.display,
         flexDirection: computed.flexDirection,
@@ -225,9 +223,9 @@ test.describe("Resizable Panel Scroll", () => {
       };
     });
 
-    console.log("Parent computed styles:", parentStyles);
+    console.log("Container computed styles:", containerStyles);
 
-    expect(parentStyles.display).toBe("flex");
-    expect(parentStyles.flexDirection).toBe("column");
+    expect(containerStyles.display).toBe("flex");
+    expect(containerStyles.flexDirection).toBe("column");
   });
 });

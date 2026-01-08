@@ -2,6 +2,7 @@ import { Card, CardTitle, CardHeader, CardContent } from "@/components/ui/card";
 import { createFileRoute } from "@tanstack/react-router";
 import { RunNotFound } from "@/components/layout/run/not-found";
 import { JsonViewer } from "@/components/ui/json-tree-viewer";
+import { Badge } from "@/components/ui/badge";
 import {
   ChevronDown,
   Bug,
@@ -118,7 +119,7 @@ function RouteComponent() {
             </div>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
+            <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
               <div className="space-y-2 rounded-lg bg-muted/50 p-4">
                 <p className="text-sm font-medium text-muted-foreground">
                   Run Name
@@ -161,6 +162,22 @@ function RouteComponent() {
                   </p>
                 </div>
                 <p className="text-lg font-semibold">{formattedDuration}</p>
+              </div>
+              <div className="space-y-2 rounded-lg bg-muted/50 p-4">
+                <p className="text-sm font-medium text-muted-foreground">
+                  Tags
+                </p>
+                <div className="flex flex-wrap gap-1 min-h-[28px]">
+                  {currentRun.tags && currentRun.tags.length > 0 ? (
+                    currentRun.tags.map((tag) => (
+                      <Badge key={tag} variant="secondary" className="text-xs">
+                        {tag}
+                      </Badge>
+                    ))
+                  ) : (
+                    <span className="text-sm text-muted-foreground">No tags</span>
+                  )}
+                </div>
               </div>
             </div>
           </CardContent>
