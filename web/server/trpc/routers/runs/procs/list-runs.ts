@@ -6,6 +6,7 @@ export const listRunsProcedure = protectedOrgProcedure
   .input(
     z.object({
       projectName: z.string(),
+      tags: z.array(z.string()).optional(),
       limit: z.number().min(1).max(200).default(10),
       cursor: z.number().optional(),
       direction: z.enum(["forward", "backward"]).default("forward"),
@@ -21,6 +22,9 @@ export const listRunsProcedure = protectedOrgProcedure
           name: input.projectName,
         },
         organizationId: input.organizationId,
+        ...(input.tags && input.tags.length > 0
+          ? { tags: { hasSome: input.tags } }
+          : {}),
       },
       orderBy: {
         createdAt: input.direction === "forward" ? "desc" : "asc",

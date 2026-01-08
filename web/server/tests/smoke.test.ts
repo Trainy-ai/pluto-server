@@ -353,4 +353,131 @@ describe('SDK API Endpoints (with API Key)', () => {
       expect(data.success).toBe(true);
     });
   });
+
+  describe('Test Suite 7: Tags Management', () => {
+    const hasApiKey = TEST_API_KEY.length > 0;
+
+    describe.skipIf(!hasApiKey)('Create Run with Tags', () => {
+      it('Test 7.1: Create Run with Tags via SDK', async () => {
+        const response = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `tagged-run-${Date.now()}`,
+            tags: ['experiment', 'baseline', 'v1.0'],
+          }),
+        });
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.runId).toBeDefined();
+      });
+
+      it('Test 7.2: Create Run without Tags (defaults to empty array)', async () => {
+        const response = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `no-tags-run-${Date.now()}`,
+            // tags omitted
+          }),
+        });
+
+        expect(response.status).toBe(200);
+      });
+    });
+
+    describe.skipIf(!hasApiKey)('Update Tags via HTTP API', () => {
+      it('Test 7.3: Update tags on existing run', async () => {
+        // Create a run first
+        const createResponse = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `update-tags-http-${Date.now()}`,
+            tags: ['initial-tag'],
+          }),
+        });
+
+        expect(createResponse.status).toBe(200);
+        const { runId } = await createResponse.json();
+
+        // Update tags via HTTP API
+        const updateResponse = await makeRequest('/api/runs/tags/update', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            runId: runId,
+            tags: ['updated-tag-1', 'updated-tag-2'],
+          }),
+        });
+
+        expect(updateResponse.status).toBe(200);
+        const data = await updateResponse.json();
+        expect(data.success).toBe(true);
+      });
+
+      it('Test 7.4: Clear tags (set to empty array)', async () => {
+        // Create a run with tags
+        const createResponse = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `clear-tags-http-${Date.now()}`,
+            tags: ['tag-to-remove', 'another-tag'],
+          }),
+        });
+
+        expect(createResponse.status).toBe(200);
+        const { runId } = await createResponse.json();
+
+        // Clear all tags
+        const updateResponse = await makeRequest('/api/runs/tags/update', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            runId: runId,
+            tags: [],
+          }),
+        });
+
+        expect(updateResponse.status).toBe(200);
+        const data = await updateResponse.json();
+        expect(data.success).toBe(true);
+      });
+
+      it('Test 7.5: Reject update for non-existent run', async () => {
+        const updateResponse = await makeRequest('/api/runs/tags/update', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            runId: 999999999,
+            tags: ['should-fail'],
+          }),
+        });
+
+        expect(updateResponse.status).toBe(404);
+        const data = await updateResponse.json();
+        expect(data.error).toBe('Run not found');
+      });
+    });
+  });
 });
