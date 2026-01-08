@@ -278,6 +278,57 @@ router.post(
   }
 );
 
+router.post(
+  "/config/update",
+  withApiKey,
+  zValidator(
+    "json",
+    z.object({
+      runId: z.number(),
+      config: z.string(),
+    })
+  ),
+  async (c) => {
+    const apiKey = c.get("apiKey");
+    const { runId, config } = c.req.valid("json");
+
+    const run = await c.get("prisma").runs.findUnique({
+      where: {
+        id: runId,
+        organizationId: apiKey.organization.id,
+      },
+    });
+
+    if (!run) {
+      return c.json({ error: "Run not found" }, 404);
+    }
+
+    // Merge new config with existing config
+    let updatedConfig = (run.config || {}) as Record<string, any>;
+    if (config && config !== "null") {
+      try {
+        const newConfig = JSON.parse(config) as Record<string, any>;
+        updatedConfig = {
+          ...updatedConfig,
+          ...newConfig,
+        };
+      } catch (error) {
+        return c.json({ error: "Invalid config JSON" }, 400);
+      }
+    }
+
+    await c.get("prisma").runs.update({
+      where: { id: runId, organizationId: apiKey.organization.id },
+      data: {
+        config:
+          Object.keys(updatedConfig).length > 0 ? updatedConfig : Prisma.DbNull,
+      },
+    });
+
+    return c.json({ success: true });
+  }
+);
+
 router.get("/:runId", async (c) => {
   const { runId } = c.req.param();
   const decodedRunId = sqidDecode(runId);

@@ -45,3 +45,4 @@ web/e2e/.auth/
 web/app/test-results/
 web/app/playwright-report/
 web/server/test-results/
+*.tsbuildinfo
