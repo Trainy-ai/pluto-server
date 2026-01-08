@@ -246,6 +246,38 @@ router.post(
   }
 );
 
+router.post(
+  "/tags/update",
+  withApiKey,
+  zValidator(
+    "json",
+    z.object({
+      runId: z.number(),
+      tags: z.array(z.string()),
+    })
+  ),
+  async (c) => {
+    const apiKey = c.get("apiKey");
+    const { runId, tags } = c.req.valid("json");
+
+    // Perform authorization check and update in a single atomic operation
+    // to avoid TOCTOU vulnerability
+    const result = await c.get("prisma").runs.updateMany({
+      where: {
+        id: runId,
+        organizationId: apiKey.organization.id,
+      },
+      data: { tags },
+    });
+
+    if (result.count === 0) {
+      return c.json({ error: "Run not found" }, 404);
+    }
+
+    return c.json({ success: true });
+  }
+);
+
 router.get("/:runId", async (c) => {
   const { runId } = c.req.param();
   const decodedRunId = sqidDecode(runId);

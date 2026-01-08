@@ -12,9 +12,11 @@ interface RunsTableContainerProps {
   projectName: string;
   onColorChange: (runId: string, color: string) => void;
   onSelectionChange: (runId: string, isSelected: boolean) => void;
+  onTagsUpdate: (runId: string, tags: string[]) => void;
   selectedRunsWithColors: Record<string, { run: Run; color: string }>;
   runColors: Record<string, string>;
   defaultRowSelection: Record<number, boolean>;
+  allTags: string[];
 }
 
 /**
@@ -27,9 +29,11 @@ export function RunsTableContainer({
   projectName,
   onColorChange,
   onSelectionChange,
+  onTagsUpdate,
   selectedRunsWithColors,
   runColors,
   defaultRowSelection,
+  allTags,
 }: RunsTableContainerProps) {
   // Calculate current row selection based on actual selectedRunsWithColors
   // This ensures the table checkboxes stay in sync with the actual selected runs
@@ -57,7 +61,9 @@ export function RunsTableContainer({
           projectName,
           onColorChange,
           onSelectionChange,
+          onTagsUpdate,
           runColors,
+          allTags,
         })}
         data={runs ?? []}
         defaultRowSelection={currentRowSelection}
@@ -68,8 +74,10 @@ export function RunsTableContainer({
       projectName,
       onColorChange,
       onSelectionChange,
+      onTagsUpdate,
       selectedRunsWithColors,
       runColors,
+      allTags,
       runs,
       currentRowSelection,
     ],

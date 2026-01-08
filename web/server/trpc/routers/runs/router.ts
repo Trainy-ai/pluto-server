@@ -6,6 +6,7 @@ import { latestRunsProcedure } from "./procs/latest-runs";
 import { dataRouter } from "./routers/data/router";
 import { triggerRouter } from "./routers/trigger/router";
 import { countRunsProcedure } from "./procs/runs-count";
+import { updateTagsProcedure } from "./procs/update-tags";
 
 export const runsRouter = router({
   // Procedures
@@ -13,6 +14,7 @@ export const runsRouter = router({
   get: getRunProcedure,
   latest: latestRunsProcedure,
   count: countRunsProcedure,
+  updateTags: updateTagsProcedure,
   // Routers
   data: dataRouter,
   trigger: triggerRouter,

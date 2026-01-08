@@ -3,9 +3,10 @@ import { createFileRoute } from "@tanstack/react-router";
 import RunComparisonLayout from "@/components/layout/runComparison/layout";
 import PageLayout from "@/components/layout/page-layout";
 import { OrganizationPageTitle } from "@/components/layout/page-title";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useSelectedRuns } from "./~hooks/use-selected-runs";
 import { prefetchListRuns, useListRuns, type Run } from "./~queries/list-runs";
+import { useUpdateTags } from "./~queries/update-tags";
 import { groupMetrics } from "./~lib/metrics-utils";
 import { MetricsDisplay } from "./~components/metrics-display";
 import { DataTable } from "./~components/runs-table/data-table";
@@ -48,6 +49,9 @@ function RouteComponent() {
   const { organizationId, projectName, organizationSlug } =
     Route.useRouteContext();
 
+  // Tag filter state
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+
   const { refresh, lastRefreshed } = useRefresh({
     queries: [
       {
@@ -73,9 +77,10 @@ function RouteComponent() {
     isLoading,
     isError,
     error,
-  } = useListRuns(organizationId, projectName);
+  } = useListRuns(organizationId, projectName, selectedTags);
 
-  console.log("data", data);
+  // Mutation for updating tags
+  const updateTagsMutation = useUpdateTags(organizationId, projectName);
 
   // Flatten the pages to get all runs
   const runs = useMemo(() => {
@@ -97,6 +102,30 @@ function RouteComponent() {
 
     return Array.from(uniqueRuns.values());
   }, [data]);
+
+  // Extract all unique tags from runs for the filter dropdown
+  const allTags = useMemo(() => {
+    const tagSet = new Set<string>();
+    runs.forEach((run) => {
+      if (run.tags) {
+        run.tags.forEach((tag: string) => tagSet.add(tag));
+      }
+    });
+    return Array.from(tagSet).sort();
+  }, [runs]);
+
+  // Handler for updating tags on a run
+  const handleTagsUpdate = useCallback(
+    (runId: string, tags: string[]) => {
+      updateTagsMutation.mutate({
+        organizationId,
+        runId,
+        projectName,
+        tags,
+      });
+    },
+    [organizationId, projectName, updateTagsMutation]
+  );
 
   const {
     runColors,
@@ -145,6 +174,7 @@ function RouteComponent() {
                 projectName={projectName}
                 onColorChange={handleColorChange}
                 onSelectionChange={handleRunSelection}
+                onTagsUpdate={handleTagsUpdate}
                 selectedRunsWithColors={selectedRunsWithColors}
                 runColors={runColors}
                 defaultRowSelection={defaultRowSelection}
@@ -153,6 +183,9 @@ function RouteComponent() {
                 fetchNextPage={fetchNextPage}
                 hasNextPage={hasNextPage}
                 isFetchingNextPage={isFetchingNextPage}
+                allTags={allTags}
+                selectedTags={selectedTags}
+                onTagFilterChange={setSelectedTags}
               />
             </div>
           </ResizablePanel>

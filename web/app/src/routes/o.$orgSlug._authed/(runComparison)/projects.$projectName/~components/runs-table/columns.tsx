@@ -5,6 +5,8 @@ import { ColorPicker } from "@/components/ui/color-picker";
 import { SELECTED_RUNS_LIMIT } from "./config";
 import { StatusIndicator } from "@/components/layout/dashboard/sidebar";
 import type { Run } from "../../~queries/list-runs";
+import { Badge } from "@/components/ui/badge";
+import { TagsCell } from "./tags-cell";
 
 type RunId = string;
 type RunColor = string;
@@ -14,7 +16,9 @@ interface ColumnsProps {
   projectName: string;
   onSelectionChange: (runId: RunId, isSelected: boolean) => void;
   onColorChange: (runId: RunId, color: RunColor) => void;
+  onTagsUpdate: (runId: RunId, tags: string[]) => void;
   runColors: Record<RunId, RunColor>;
+  allTags: string[];
 }
 
 function getRowRange<T>(rows: Array<Row<T>>, idA: string, idB: string) {
@@ -50,7 +54,9 @@ export const columns = ({
   projectName,
   onSelectionChange,
   onColorChange,
+  onTagsUpdate,
   runColors,
+  allTags,
 }: ColumnsProps): ColumnDef<Run>[] => {
   let lastSelectedId: string = "";
   return [
@@ -160,6 +166,23 @@ export const columns = ({
               <StatusIndicator status={row.original.status} />
             </div>
           </div>
+        );
+      },
+    },
+    {
+      header: "Tags",
+      accessorKey: "tags",
+      size: 200,
+      cell: ({ row }) => {
+        const runId = row.original.id;
+        const tags = row.original.tags || [];
+
+        return (
+          <TagsCell
+            tags={tags}
+            allTags={allTags}
+            onTagsUpdate={(newTags) => onTagsUpdate(runId, newTags)}
+          />
         );
       },
     },

@@ -32,6 +32,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { columns } from "./columns";
 import type { Run } from "../../~queries/list-runs";
 import { DEFAULT_PAGE_SIZE } from "./config";
+import { TagsFilter } from "./tags-filter";
 
 interface DataTableProps {
   runs: Run[];
@@ -39,6 +40,7 @@ interface DataTableProps {
   projectName: string;
   onColorChange: (runId: string, color: string) => void;
   onSelectionChange: (runId: string, isSelected: boolean) => void;
+  onTagsUpdate: (runId: string, tags: string[]) => void;
   selectedRunsWithColors: Record<string, { run: Run; color: string }>;
   runColors: Record<string, string>;
   defaultRowSelection?: Record<number, boolean>;
@@ -47,6 +49,9 @@ interface DataTableProps {
   fetchNextPage?: () => void;
   hasNextPage?: boolean;
   isFetchingNextPage?: boolean;
+  allTags: string[];
+  selectedTags: string[];
+  onTagFilterChange: (tags: string[]) => void;
 }
 
 export function DataTable({
@@ -55,6 +60,7 @@ export function DataTable({
   projectName,
   onColorChange,
   onSelectionChange,
+  onTagsUpdate,
   selectedRunsWithColors,
   runColors,
   defaultRowSelection = {},
@@ -63,6 +69,9 @@ export function DataTable({
   fetchNextPage,
   hasNextPage,
   isFetchingNextPage,
+  allTags,
+  selectedTags,
+  onTagFilterChange,
 }: DataTableProps) {
   // Internal pagination state
   const [{ pageIndex, pageSize }, setPagination] = useState<PaginationState>({
@@ -103,9 +112,11 @@ export function DataTable({
         projectName,
         onColorChange,
         onSelectionChange,
+        onTagsUpdate,
         runColors,
+        allTags,
       }),
-    [orgSlug, projectName, onColorChange, onSelectionChange, runColors],
+    [orgSlug, projectName, onColorChange, onSelectionChange, onTagsUpdate, runColors, allTags],
   );
 
   // Initialize rowSelection with defaultRowSelection but keep it synced with incoming props
@@ -197,14 +208,21 @@ export function DataTable({
           <span className="font-medium">{runCount}</span>
           <span>runs selected</span>
         </div>
-        <div className="relative">
-          <Search className="absolute top-2.5 left-2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Search runs..."
-            value={globalFilter}
-            onChange={(e) => setGlobalFilter(e.target.value)}
-            onKeyDown={handleKeyDown}
-            className="pl-8"
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1">
+            <Search className="absolute top-2.5 left-2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search runs..."
+              value={globalFilter}
+              onChange={(e) => setGlobalFilter(e.target.value)}
+              onKeyDown={handleKeyDown}
+              className="pl-8"
+            />
+          </div>
+          <TagsFilter
+            allTags={allTags}
+            selectedTags={selectedTags}
+            onTagFilterChange={onTagFilterChange}
           />
         </div>
       </div>

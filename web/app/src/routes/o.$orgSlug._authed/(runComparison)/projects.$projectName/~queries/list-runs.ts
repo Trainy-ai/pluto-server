@@ -16,23 +16,25 @@ const runsCache = new LocalCache<InfiniteData<ListRunResponse>>(
   100 * 60 * 1000,
 ); // Adjust table name as needed
 
-export const useListRuns = (orgId: string, projectName: string) => {
+export const useListRuns = (orgId: string, projectName: string, tags?: string[]) => {
   const queryOptions = trpc.runs.list.infiniteQueryOptions({
     organizationId: orgId,
     projectName: projectName,
     limit: RUNS_FETCH_LIMIT,
+    tags: tags && tags.length > 0 ? tags : undefined,
   });
 
   // return useInfiniteQuery(queryOptions);
 
   return useInfiniteQuery({
-    queryKey: queryOptions.queryKey,
+    queryKey: [...queryOptions.queryKey, { tags }],
     queryFn: async ({ pageParam }) => {
       const result = await trpcClient.runs.list.query({
         organizationId: orgId,
         projectName: projectName,
         limit: RUNS_FETCH_LIMIT,
         cursor: pageParam ? Number(pageParam) : undefined,
+        tags: tags && tags.length > 0 ? tags : undefined,
       });
       return result;
     },
