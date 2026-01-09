@@ -1,5 +1,6 @@
 import { trpcServer } from "@hono/trpc-server";
-import { Hono } from "hono";
+import { swaggerUI } from "@hono/swagger-ui";
+import { OpenAPIHono } from "@hono/zod-openapi";
 import { cors } from "hono/cors";
 
 import { createContext } from "./lib/context";
@@ -8,11 +9,11 @@ import { prisma } from "./lib/prisma";
 import { env } from "./lib/env";
 
 import healthRoutes from "./routes/health";
-import runRoutes from "./routes/runs";
+import runRoutes from "./routes/runs-openapi";
 import authRoutes from "./routes/auth";
 import { withApiKey } from "./routes/middleware";
 
-const app = new Hono();
+const app = new OpenAPIHono();
 
 // Add prisma to Hono context type
 declare module "hono" {
@@ -73,5 +74,30 @@ app.post("/api/slug", withApiKey, async (c) => {
     },
   });
 });
+
+// OpenAPI documentation
+app.doc("/api/openapi.json", {
+  openapi: "3.0.0",
+  info: {
+    title: "mlop API",
+    version: "1.0.0",
+    description: "API for mlop - ML experiment tracking platform",
+  },
+  servers: [
+    { url: env.PUBLIC_URL, description: "API Server" },
+  ],
+  security: [{ bearerAuth: [] }],
+});
+
+// Register security scheme
+app.openAPIRegistry.registerComponent("securitySchemes", "bearerAuth", {
+  type: "http",
+  scheme: "bearer",
+  bearerFormat: "API Key",
+  description: "API key obtained from the mlop dashboard",
+});
+
+// Swagger UI
+app.get("/api/docs", swaggerUI({ url: "/api/openapi.json" }));
 
 export default app;
