@@ -1,11 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Pencil } from "lucide-react";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { TagsEditorPopover } from "@/components/tags-editor-popover";
 
 interface TagsCellProps {
@@ -39,21 +34,15 @@ export function TagsCell({ tags, allTags, onTagsUpdate }: TagsCellProps) {
         onTagsUpdate={onTagsUpdate}
         stopPropagation
         trigger={
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-6 w-6 shrink-0"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <Pencil className="h-3 w-3" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="top" sideOffset={4}>
-              Edit tags
-            </TooltipContent>
-          </Tooltip>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6 shrink-0"
+            onClick={(e) => e.stopPropagation()}
+            title="Edit tags"
+          >
+            <Pencil className="h-3 w-3" />
+          </Button>
         }
       />
     </div>
