@@ -69,6 +69,8 @@ function RouteComponent() {
   const { data: runCount, isLoading: runCountLoading } = useRunCount(
     organizationId,
     projectName,
+    selectedTags,
+    selectedStatuses,
   );
 
   // Load runs using infinite query with standard TanStack/tRPC v11 approach
