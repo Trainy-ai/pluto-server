@@ -53,7 +53,7 @@ def get_last_update_times(ch_client, run_ids):
         return None
 
 
-def process_runs(session, ch_client, smtp_config, grace=120):
+def process_runs(session, ch_client, smtp_config, grace=600):
     runs = session.query(Run).filter(Run.status == "RUNNING").all()
     print(f"Processing {len(runs)} runs")
 
