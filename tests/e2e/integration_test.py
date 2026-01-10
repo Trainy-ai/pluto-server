@@ -59,18 +59,20 @@ def create_colored_square(color: tuple[int, int, int], size: int = 50) -> "Image
 def main():
     # Configure mlop to use local self-hosted instance
     settings = mlop.Settings()
-    settings.update({
-        'url_app': 'https://trakkur-dev.trainy.ai',
-        'url_api': 'https://trakkur-api-dev.trainy.ai',
-        'url_ingest': 'https://trakkur-ingest-dev.trainy.ai',
-        'url_py': 'https://trakkur-py-dev.trainy.ai'
-    })
     # settings.update({
-    #     'url_app': 'http://localhost:3000',
-    #     'url_api': 'http://localhost:3001',
-    #     'url_ingest': 'http://localhost:3003',
-    #     'url_py': 'http://localhost:3004',
+    #     'url_app': 'https://trakkur-dev.trainy.ai',
+    #     'url_api': 'https://trakkur-api-dev.trainy.ai',
+    #     'url_ingest': 'https://trakkur-ingest-dev.trainy.ai',
+    #     'url_py': 'https://trakkur-py-dev.trainy.ai'
     # })
+    settings.update({
+        'url_app': 'http://localhost:3000',
+        'url_api': 'http://localhost:3001',
+        'url_ingest': 'http://localhost:3003',
+        'url_py': 'http://localhost:3004',
+    })
+
+    
 
 
     print("Starting integration test...")
@@ -131,6 +133,7 @@ def main():
         print("\nSkipping image logging (set TEST_IMAGE_LOGGING=true to enable)")
 
     print("\nFinishing run...")
+    time.sleep(10000000)
     run.finish()
 
     print("Integration test completed successfully!")

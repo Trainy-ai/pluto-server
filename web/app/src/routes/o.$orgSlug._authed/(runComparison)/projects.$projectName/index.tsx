@@ -13,6 +13,7 @@ import { DataTable } from "./~components/runs-table/data-table";
 import { useRefresh } from "./~hooks/use-refresh";
 import { useRunCount } from "./~queries/run-count";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -51,6 +52,8 @@ function RouteComponent() {
 
   // Tag filter state
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  // Status filter state
+  const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
 
   const { refresh, lastRefreshed } = useRefresh({
     queries: [
@@ -75,9 +78,10 @@ function RouteComponent() {
     hasNextPage,
     isFetchingNextPage,
     isLoading,
+    isFetching,
     isError,
     error,
-  } = useListRuns(organizationId, projectName, selectedTags);
+  } = useListRuns(organizationId, projectName, selectedTags, selectedStatuses);
 
   // Mutation for updating tags
   const updateTagsMutation = useUpdateTags(organizationId, projectName);
@@ -181,6 +185,7 @@ function RouteComponent() {
                 runColors={runColors}
                 defaultRowSelection={defaultRowSelection}
                 isLoading={isLoading || runCountLoading}
+                isFetching={isFetching}
                 runCount={runCount || 0}
                 fetchNextPage={fetchNextPage}
                 hasNextPage={hasNextPage}
@@ -188,6 +193,8 @@ function RouteComponent() {
                 allTags={allTags}
                 selectedTags={selectedTags}
                 onTagFilterChange={setSelectedTags}
+                selectedStatuses={selectedStatuses}
+                onStatusFilterChange={setSelectedStatuses}
               />
             </div>
           </ResizablePanel>
@@ -197,16 +204,23 @@ function RouteComponent() {
             order={2}
           >
             <div className="flex h-full flex-col overflow-y-auto overscroll-y-contain pl-2">
-              {isLoading || runCountLoading ? (
+              {(isLoading || runCountLoading) && runs.length === 0 ? (
                 <Skeleton className="h-full w-full" />
               ) : (
-                <MetricsDisplay
-                  groupedMetrics={groupedMetrics}
-                  onRefresh={refresh}
-                  organizationId={organizationId}
-                  projectName={projectName}
-                  lastRefreshed={lastRefreshed}
-                />
+                <div className="relative h-full">
+                  <MetricsDisplay
+                    groupedMetrics={groupedMetrics}
+                    onRefresh={refresh}
+                    organizationId={organizationId}
+                    projectName={projectName}
+                    lastRefreshed={lastRefreshed}
+                  />
+                  {isFetching && runs.length > 0 && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-background/50">
+                      <Spinner size="large" />
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           </ResizablePanel>
