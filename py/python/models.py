@@ -29,6 +29,15 @@ class RunStatus(enum.Enum):
     CANCELLED = "CANCELLED"
 
 
+class NotificationType(enum.Enum):
+    RUN_CANCELLED = "RUN_CANCELLED"
+    RUN_FAILED = "RUN_FAILED"
+    INFO = "INFO"
+    WARNING = "WARNING"
+    ERROR = "ERROR"
+    DEBUG = "DEBUG"
+
+
 class Project(Base):
     __tablename__ = "projects"
     id = Column(Integer, primary_key=True)
@@ -67,7 +76,7 @@ class Notification(Base):
     runId = Column(Integer, ForeignKey("runs.id"))
     organizationId = Column(String)
     createdAt = Column(DateTime(timezone=True), server_default=func.now())
-    type = Column(String)
+    type = Column(Enum(NotificationType, name="NotificationType", create_type=False))
     content = Column(String)
 
     run = relationship("Run", backref="notifications")

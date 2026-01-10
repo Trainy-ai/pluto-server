@@ -51,7 +51,7 @@ if __name__ == "__main__":
         engine, session, ch_client = start()
         while True:
             process_runs(session, ch_client, smtp_config=SMTP_CONFIG)
-            time.sleep(10)
+            time.sleep(60)  # Check every 60 seconds (reduced from 10s to lower ClickHouse load)
     except Exception as err:
         print("Processing failed:", err)
     finally:
