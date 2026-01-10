@@ -173,6 +173,16 @@ export function DataTable({
     prevDataLengthRef.current = runs.length;
   }, [pageSize, runs.length]);
 
+  // Reset to page 0 when filters change to avoid showing empty pages
+  useEffect(() => {
+    setPagination((prev) => ({
+      ...prev,
+      pageIndex: 0,
+    }));
+    prevDataLengthRef.current = 0;
+    lastPageIndexRef.current = 0;
+  }, [selectedTags, selectedStatuses]);
+
   const table = useReactTable({
     data: runs,
     columns: memoizedColumns,
