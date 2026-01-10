@@ -7,11 +7,12 @@ export const latestRunsProcedure = protectedOrgProcedure
     z.object({
       projectName: z.string().optional(),
       tags: z.array(z.string()).optional(),
+      status: z.array(z.enum(["RUNNING", "COMPLETED", "FAILED", "TERMINATED", "CANCELLED"])).optional(),
       limit: z.number().min(1).max(100).default(10),
     })
   )
   .query(async ({ ctx, input }) => {
-    const { projectName, tags, organizationId, limit } = input;
+    const { projectName, tags, status, organizationId, limit } = input;
 
     const runs = await ctx.prisma.runs.findMany({
       select: {
@@ -34,6 +35,7 @@ export const latestRunsProcedure = protectedOrgProcedure
           organizationId: organizationId,
         },
         ...(tags && tags.length > 0 ? { tags: { hasSome: tags } } : {}),
+        ...(status && status.length > 0 ? { status: { in: status } } : {}),
       },
       orderBy: {
         createdAt: "desc",

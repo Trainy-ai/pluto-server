@@ -1,5 +1,5 @@
 import { trpc, trpcClient } from "@/utils/trpc";
-import { useInfiniteQuery, type InfiniteData } from "@tanstack/react-query";
+import { useInfiniteQuery, type InfiniteData, keepPreviousData } from "@tanstack/react-query";
 import type { inferOutput } from "@trpc/tanstack-react-query";
 import { RUNS_FETCH_LIMIT } from "../~components/runs-table/config";
 import { useLocalInfiniteQuery } from "@/lib/hooks/use-local-query";
@@ -16,18 +16,19 @@ const runsCache = new LocalCache<InfiniteData<ListRunResponse>>(
   100 * 60 * 1000,
 ); // Adjust table name as needed
 
-export const useListRuns = (orgId: string, projectName: string, tags?: string[]) => {
+export const useListRuns = (orgId: string, projectName: string, tags?: string[], status?: string[]) => {
   const queryOptions = trpc.runs.list.infiniteQueryOptions({
     organizationId: orgId,
     projectName: projectName,
     limit: RUNS_FETCH_LIMIT,
     tags: tags && tags.length > 0 ? tags : undefined,
+    status: status && status.length > 0 ? status as ("RUNNING" | "COMPLETED" | "FAILED" | "TERMINATED" | "CANCELLED")[] : undefined,
   });
 
   // return useInfiniteQuery(queryOptions);
 
   return useInfiniteQuery({
-    queryKey: [...queryOptions.queryKey, { tags }],
+    queryKey: [...queryOptions.queryKey, { tags, status }],
     queryFn: async ({ pageParam }) => {
       const result = await trpcClient.runs.list.query({
         organizationId: orgId,
@@ -35,6 +36,7 @@ export const useListRuns = (orgId: string, projectName: string, tags?: string[])
         limit: RUNS_FETCH_LIMIT,
         cursor: pageParam ? Number(pageParam) : undefined,
         tags: tags && tags.length > 0 ? tags : undefined,
+        status: status && status.length > 0 ? status as ("RUNNING" | "COMPLETED" | "FAILED" | "TERMINATED" | "CANCELLED")[] : undefined,
       });
       return result;
     },
@@ -44,6 +46,7 @@ export const useListRuns = (orgId: string, projectName: string, tags?: string[])
     },
     staleTime: 5 * 1000 * 60,
     initialPageParam: undefined,
+    placeholderData: keepPreviousData, // Keep previous data visible while new query loads
     // localCache: runsCache,
   });
 };

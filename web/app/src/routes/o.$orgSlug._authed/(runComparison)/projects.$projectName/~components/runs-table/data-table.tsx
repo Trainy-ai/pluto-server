@@ -30,11 +30,13 @@ import {
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import { columns } from "./columns";
 import type { Run } from "../../~queries/list-runs";
 import { DEFAULT_PAGE_SIZE } from "./config";
 import { TagsFilter } from "./tags-filter";
+import { StatusFilter } from "./status-filter";
 
 interface DataTableProps {
   runs: Run[];
@@ -48,12 +50,15 @@ interface DataTableProps {
   defaultRowSelection?: Record<number, boolean>;
   runCount: number;
   isLoading: boolean;
+  isFetching?: boolean;
   fetchNextPage?: () => void;
   hasNextPage?: boolean;
   isFetchingNextPage?: boolean;
   allTags: string[];
   selectedTags: string[];
   onTagFilterChange: (tags: string[]) => void;
+  selectedStatuses: string[];
+  onStatusFilterChange: (statuses: string[]) => void;
 }
 
 export function DataTable({
@@ -68,12 +73,15 @@ export function DataTable({
   defaultRowSelection = {},
   runCount,
   isLoading,
+  isFetching,
   fetchNextPage,
   hasNextPage,
   isFetchingNextPage,
   allTags,
   selectedTags,
   onTagFilterChange,
+  selectedStatuses,
+  onStatusFilterChange,
 }: DataTableProps) {
   // Internal pagination state
   const [{ pageIndex, pageSize }, setPagination] = useState<PaginationState>({
@@ -202,12 +210,19 @@ export function DataTable({
     }
   };
 
-  if (isLoading) {
+  // Only show skeleton on initial load (no data yet)
+  if (isLoading && runs.length === 0) {
     return <LoadingSkeleton />;
   }
 
   return (
-    <div className="flex w-full min-w-[200px] flex-col">
+    <div className="relative flex w-full min-w-[200px] flex-col">
+      {/* Overlay spinner when refetching with existing data */}
+      {isFetching && runs.length > 0 && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-background/50">
+          <Spinner size="medium" />
+        </div>
+      )}
       <div className="mb-2 space-y-2">
         <div className="mt-2 flex items-center gap-1 pl-1 text-sm text-muted-foreground">
           <span className="font-medium">
@@ -232,6 +247,10 @@ export function DataTable({
             allTags={allTags}
             selectedTags={selectedTags}
             onTagFilterChange={onTagFilterChange}
+          />
+          <StatusFilter
+            selectedStatuses={selectedStatuses}
+            onStatusFilterChange={onStatusFilterChange}
           />
         </div>
       </div>

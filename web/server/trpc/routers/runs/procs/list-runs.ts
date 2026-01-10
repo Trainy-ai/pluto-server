@@ -7,6 +7,7 @@ export const listRunsProcedure = protectedOrgProcedure
     z.object({
       projectName: z.string(),
       tags: z.array(z.string()).optional(),
+      status: z.array(z.enum(["RUNNING", "COMPLETED", "FAILED", "TERMINATED", "CANCELLED"])).optional(),
       limit: z.number().min(1).max(200).default(10),
       cursor: z.number().optional(),
       direction: z.enum(["forward", "backward"]).default("forward"),
@@ -24,6 +25,9 @@ export const listRunsProcedure = protectedOrgProcedure
         organizationId: input.organizationId,
         ...(input.tags && input.tags.length > 0
           ? { tags: { hasSome: input.tags } }
+          : {}),
+        ...(input.status && input.status.length > 0
+          ? { status: { in: input.status } }
           : {}),
       },
       orderBy: {
