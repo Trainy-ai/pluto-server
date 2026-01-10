@@ -10,6 +10,7 @@ from python.models import (
     ApiKey,
     Member,
     Notification,
+    NotificationType,
     Organization,
     Run,
     RunStatus,
@@ -19,15 +20,90 @@ from python.templates import process_run_email
 from python.utils import get_run_url
 
 
+def get_last_update_times(ch_client, run_ids):
+    """Get last update times for all runs in a single batch query."""
+    if not run_ids:
+        return {}
+
+    # Single query for all runs - much more efficient than N individual queries
+    ch_query = """
+        SELECT runId, MAX(time) AS last_update_time
+        FROM mlop_metrics
+        WHERE runId IN %(run_ids)s
+        GROUP BY runId
+    """
+
+    try:
+        result = ch_client.query(ch_query, parameters={"run_ids": tuple(run_ids)})
+        last_updates = {}
+        for row in result.result_rows:
+            run_id, last_update_time = row[0], row[1]
+            if last_update_time is not None:
+                if isinstance(last_update_time, str):
+                    try:
+                        last_update_time = datetime.fromisoformat(last_update_time)
+                    except ValueError:
+                        continue
+                if last_update_time.tzinfo is None:
+                    last_update_time = last_update_time.replace(tzinfo=timezone.utc)
+                last_updates[run_id] = last_update_time
+        return last_updates
+    except Exception as e:
+        print(f"Error querying ClickHouse for batch: {e}")
+        return None
+
+
 def process_runs(session, ch_client, smtp_config, grace=120):
     runs = session.query(Run).filter(Run.status == "RUNNING").all()
     print(f"Processing {len(runs)} runs")
-    for run in runs:
-        if not run.project:
-            print(f"Run {run.id} has no associated project.")
-            continue
-        check_run_time(session, ch_client, smtp_config, run, grace)
-        if run.loggerSettings.get("trigger"):  # TODO: clean before parsing
+
+    if not runs:
+        print("No running runs to process.")
+        return
+
+    # Filter runs with valid projects
+    valid_runs = [run for run in runs if run.project]
+    if len(valid_runs) != len(runs):
+        print(f"Skipping {len(runs) - len(valid_runs)} runs without associated projects.")
+
+    # Single batch query for all runs (instead of N individual queries)
+    run_ids = [run.id for run in valid_runs]
+    last_updates = get_last_update_times(ch_client, run_ids)
+
+    if last_updates is None:
+        print("Failed to get last update times from ClickHouse, skipping this cycle.")
+        return
+
+    now_utc = datetime.now(timezone.utc)
+    updated_count = 0
+
+    for run in valid_runs:
+        last_update_time = last_updates.get(run.id)
+
+        # Fallback to updatedAt if no metrics found
+        if last_update_time is None:
+            last_update_time = run.updatedAt.replace(tzinfo=timezone.utc)
+
+        time_diff = now_utc - last_update_time
+        if timedelta(seconds=grace) < time_diff < timedelta(days=16384):
+            print(
+                f"Run {run.id} (Project: {run.project.name}) last update at {last_update_time} is older than {grace} seconds."
+            )
+            run.status = "FAILED"
+            send_alert(
+                session,
+                run,
+                smtp_config,
+                last_update_time,
+                title="Status Update",
+                body=f"The run may have stalled and requires attention - last update exceeded {grace} seconds",
+                level=NotificationType.RUN_FAILED,
+                email=False,
+            )
+            updated_count += 1
+
+        # Check thresholds (still per-run, only for runs with triggers configured)
+        if run.loggerSettings.get("trigger"):
             for k, v in run.loggerSettings["trigger"].items():
                 if v.get("operator") and isinstance(k, str):
                     check_threshold(
@@ -40,8 +116,15 @@ def process_runs(session, ch_client, smtp_config, grace=120):
                         operator=v.get("operator"),
                     )
 
-    session.commit()
-    print("All updates saved to the database.")
+    try:
+        session.commit()
+        if updated_count > 0:
+            print(f"Updated {updated_count} runs to FAILED status.")
+        else:
+            print("No stale runs found.")
+    except Exception as e:
+        print(f"Error committing updates: {e}")
+        session.rollback()
 
 
 def get_emails(session, organization_id):
@@ -122,7 +205,7 @@ def check_threshold(
         last_update_time,
         f"Threshold Exceeded on {log_name}",
         f"Threshold exceeded for {log_name}: {violation_value} {operator} {threshold}",
-        "RUN_FAILED",
+        NotificationType.RUN_FAILED,
         email=True,
     )
 
@@ -184,7 +267,7 @@ def check_run_time(session, ch_client, smtp_config, run, grace):
             last_update_time,
             title="Status Update",
             body=f"The run may have stalled and requires attention - last update exceeded {grace} seconds",
-            level="RUN_FAILED",
+            level=NotificationType.RUN_FAILED,
             email=False,
         )
     else:
@@ -195,7 +278,7 @@ def check_run_time(session, ch_client, smtp_config, run, grace):
 
 
 def send_alert(
-    session, run, smtp_config, last_update_time, title, body, level="INFO", email=True
+    session, run, smtp_config, last_update_time, title, body, level=NotificationType.INFO, email=True
 ):
     session.add(
         Notification(
