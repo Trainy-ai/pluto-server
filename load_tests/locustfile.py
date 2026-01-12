@@ -4,14 +4,14 @@ import os
 import random
 import time
 
-import mlop  # trainy-mlop-nightly SDK
+import pluto  # pluto-ml-nightly SDK
 from locust import User, between, events, task
 
 from config import config
 
 
 class IngestUser(User):
-    """Load test user that uses the official mlop SDK"""
+    """Load test user that uses the official pluto SDK"""
 
     wait_time = between(0.1, 0.5)
 
@@ -21,7 +21,7 @@ class IngestUser(User):
 
         try:
             # Configure SDK to use local services by setting URL attributes directly
-            settings = mlop.Settings()
+            settings = pluto.Settings()
             settings.url_api = "http://server:3001"
             settings.url_ingest = "http://ingest:3003"
             settings.url_app = "http://server:3001"
@@ -32,11 +32,11 @@ class IngestUser(User):
             settings.update({})
 
             # Login with custom settings (non-interactive)
-            mlop.login(settings=settings)
+            pluto.login(settings=settings)
             logging.info("Logged in with API key")
 
             # Initialize a run for this simulated user
-            self.run = mlop.init(
+            self.run = pluto.init(
                 project="load-test-project",
                 name=f"load-test-run-{id(self)}",
                 config={

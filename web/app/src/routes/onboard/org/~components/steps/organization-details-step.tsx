@@ -287,14 +287,14 @@ export default function OrganizationDetailsStep({
           </div>
           <div className="flex items-center space-x-2">
             <div className="flex h-11 items-center rounded-md px-3 text-sm font-medium text-muted-foreground/80">
-              trakkur.trainy.ai/o/
+              pluto.trainy.ai/o/
             </div>
             <Input
               id="slug"
               name="slug"
               value={formData.slug}
               onChange={handleChange}
-              placeholder="mlop"
+              placeholder="pluto"
               className={`h-11 flex-1 text-base font-medium transition-colors placeholder:text-muted-foreground/50 focus:bg-black/10 ${
                 errors.slug ? "border-destructive" : ""
               }`}

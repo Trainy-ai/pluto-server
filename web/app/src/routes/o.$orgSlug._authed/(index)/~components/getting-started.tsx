@@ -18,7 +18,7 @@ interface GettingStartedProps {
 const getStorageKey = (orgSlug: string) => `getting-started-hidden`;
 
 // Code snippets
-const LOGIN_CODE = `import mlop\nmlop.login()`;
+const LOGIN_CODE = `import pluto\npluto.login()`;
 
 const LOGGER_SETUP_CODE = `config = {
   "learning_rate": 0.02,
@@ -28,7 +28,7 @@ const LOGGER_SETUP_CODE = `config = {
 }
 
 # 1. initialize a run
-logger = mlop.init(
+logger = pluto.init(
   project="example",
   name="simulation-standard", # will be auto-generated if left unspecified
   config=config,
@@ -40,7 +40,7 @@ for epoch in range(1, epochs+1):
   acc = 1 - 2**-epoch - random.random() / epoch - offset
   loss = 2**-epoch + random.random() / epoch + offset
 
-  # record metrics from the script to mlop
+  # record metrics from the script to pluto
   logger.log({"acc": acc, "loss": loss})
   print(f"Epoch {epoch}/{epochs}")
 
@@ -151,7 +151,7 @@ export function GettingStarted({ orgSlug }: GettingStartedProps) {
               <p>
                 Call the{" "}
                 <code className="rounded bg-muted px-1.5 py-0.5 text-xs sm:text-sm">
-                  mlop.login
+                  pluto.login
                 </code>{" "}
                 function with your API key to login and enter your API key
               </p>
@@ -198,7 +198,7 @@ export function GettingStarted({ orgSlug }: GettingStartedProps) {
               Train Your Model
             </CardTitle>
             <CardDescription className="mt-2 text-sm sm:text-base">
-              Train your model as usual, and log metrics to mlop
+              Train your model as usual, and log metrics to pluto
             </CardDescription>
             <div className="mt-2">
               <CodeBlock

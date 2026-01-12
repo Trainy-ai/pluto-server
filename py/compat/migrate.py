@@ -6,12 +6,12 @@ import os
 import shutil
 import uuid
 
-import mlop
+import pluto
 import requests
 import urllib3
 from gql import Client, gql
 from gql.transport.requests import RequestsHTTPTransport
-from mlop.api import make_compat_message_v1
+from pluto.api import make_compat_message_v1
 from requests.auth import HTTPBasicAuth
 
 from .w import _WClient
@@ -98,7 +98,7 @@ def parse_type(c, f, v, entity, project_name, run_name):
             )
             local = download_file(f"{tmp}/{path}", url)
             if local:
-                e = mlop.Image(data=local, caption=v.get("caption"))
+                e = pluto.Image(data=local, caption=v.get("caption"))
         elif type == "images/separated":
             e = []
             for i in range(len(v.get("filenames"))):
@@ -113,7 +113,7 @@ def parse_type(c, f, v, entity, project_name, run_name):
                 )
                 local = download_file(f"{tmp}/{path}", url)
                 if local:
-                    e.append(mlop.Image(data=local, caption=v.get("captions")[i]))
+                    e.append(pluto.Image(data=local, caption=v.get("captions")[i]))
         elif type == "audio-file":
             path = v.get("path")
             url = get_file_url(
@@ -126,7 +126,7 @@ def parse_type(c, f, v, entity, project_name, run_name):
             )
             local = download_file(f"{tmp}/{path}", url)
             if local:
-                e = mlop.Audio(data=local, caption=v.get("caption"))
+                e = pluto.Audio(data=local, caption=v.get("caption"))
         elif type == "audio":
             e = []
             for i in range(len(v.get("audio"))):
@@ -145,7 +145,7 @@ def parse_type(c, f, v, entity, project_name, run_name):
             )
             local = download_file(f"{tmp}/{path}", url)
             if local:
-                e = mlop.Video(data=local, caption=v.get("caption"))
+                e = pluto.Video(data=local, caption=v.get("caption"))
         elif type == "videos":
             e = []
             for i in range(len(v.get("videos"))):
@@ -163,7 +163,7 @@ def parse_type(c, f, v, entity, project_name, run_name):
                 list(v.get("values")),
                 bins,
             ]
-            e = mlop.Histogram(data=data)
+            e = pluto.Histogram(data=data)
         else:
             print("Unknown type:", v)
             return None
@@ -173,8 +173,8 @@ def parse_type(c, f, v, entity, project_name, run_name):
 
 
 def get_settings(auth, c, r):
-    settings = mlop.Settings()
-    settings._sys = mlop.System(settings)
+    settings = pluto.Settings()
+    settings._sys = pluto.System(settings)
     settings._sys.monitor = lambda: {}
     settings._auth = auth
 
@@ -250,7 +250,7 @@ def migrate_run_v1(auth, c, entity, project_name, run_name):
 
     settings, config, name = get_settings(auth, c, r)
 
-    op = mlop.init(
+    op = pluto.init(
         dir=tmp,
         project=project_name,
         name=name,
@@ -345,7 +345,7 @@ def migrate_all(auth, key, entity, domain=None):
 
 
 if __name__ == "__main__":
-    auth = input("Enter mlop auth: ")
+    auth = input("Enter pluto auth: ")
     key = input("Enter w api key: ")
     entity = input("Enter w entity: ")
     migrate_all(auth, key, entity, os.getenv("W_DOMAIN"))
@@ -374,7 +374,7 @@ def migrate_run_v0(auth, c, entity, project_name, run_name):
     ]["run"]
     settings, config, name = get_settings(auth, c, r)
 
-    op = mlop.init(
+    op = pluto.init(
         dir=tmp,
         project=project_name,
         name=name,

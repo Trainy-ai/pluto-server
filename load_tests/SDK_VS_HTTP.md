@@ -28,7 +28,7 @@ Both tests provide complementary coverage:
 The SDK can be configured to use local endpoints by setting URL attributes directly:
 
 ```python
-settings = mlop.Settings()
+settings = pluto.Settings()
 settings.url_api = "http://server:3001"
 settings.url_ingest = "http://ingest:3003"
 settings.url_app = "http://server:3001"
@@ -38,10 +38,10 @@ settings._auth = api_key  # Set API key on settings
 settings.update({})  # Trigger update_host() and update_url()
 
 # Login with custom settings
-mlop.login(settings=settings)
+pluto.login(settings=settings)
 
 # Initialize run
-run = mlop.init(project="...", name="...", settings=settings)
+run = pluto.init(project="...", name="...", settings=settings)
 ```
 
 ## HTTP Load Test: Full Stack Coverage
@@ -140,14 +140,14 @@ docker compose -f .buildkite/docker-compose.loadtest.yml up -d --wait
 docker compose -f .buildkite/docker-compose.loadtest.yml run --rm setup
 
 # Build test image
-docker build -t mlop-loadtest:latest ./load_tests
+docker build -t pluto-loadtest:latest ./load_tests
 
 # Run HTTP test
 docker run --rm --network buildkite_default \
   -v "$PWD/load_tests/reports:/mnt/locust/reports" \
   -e INGEST_URL=http://ingest:3003 \
   -e TEST_API_KEY=mlps_loadtest_deterministic_key_for_ci_load_tests_12345678 \
-  mlop-loadtest:latest \
+  pluto-loadtest:latest \
   -f /mnt/locust/locustfile_http.py \
   --headless \
   --users 10 \
@@ -160,7 +160,7 @@ docker run --rm --network buildkite_default \
   -v "$PWD/load_tests/reports:/mnt/locust/reports" \
   -e INGEST_URL=http://ingest:3003 \
   -e TEST_API_KEY=mlps_loadtest_deterministic_key_for_ci_load_tests_12345678 \
-  mlop-loadtest:latest \
+  pluto-loadtest:latest \
   -f /mnt/locust/locustfile.py \
   --headless \
   --users 5 \

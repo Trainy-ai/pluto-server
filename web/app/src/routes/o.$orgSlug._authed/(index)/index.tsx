@@ -61,7 +61,7 @@ function RouteComponent() {
                         className="font-medium shadow-sm transition-shadow hover:shadow-md"
                       >
                         <a
-                          href="https://docs.trainy.ai/trakkur/quickstart"
+                          href="https://docs.trainy.ai/pluto/quickstart"
                           target="_blank"
                           rel="noopener noreferrer"
                           className="flex items-center gap-2"

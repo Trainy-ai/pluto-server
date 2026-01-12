@@ -145,7 +145,7 @@ export function Feedback({
           </DialogHeader>
           <div className="space-y-4 py-4">
             <Textarea
-              placeholder="Tell us what you think, e.g one thing that I do not like about mlop..."
+              placeholder="Tell us what you think, e.g one thing that I do not like about pluto..."
               value={feedback}
               onChange={(e) => setFeedback(e.target.value)}
               className="min-h-[100px]"

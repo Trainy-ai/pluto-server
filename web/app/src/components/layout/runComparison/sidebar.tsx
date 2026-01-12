@@ -31,7 +31,7 @@ const mainNavItems = [
     matchPattern: /^projects\/[^/]+$/,
     icon: RiBubbleChartFill,
     // TODO: Add link
-    link: "https://docs.trainy.ai/trakkur/visualizations",
+    link: "https://docs.trainy.ai/pluto/visualizations",
     description:
       "Overview of the run, you can view the configs and metadata and also shut down the run remotely",
   },
@@ -41,7 +41,7 @@ const mainNavItems = [
     matchPattern: /^projects\/[^/]+\/table$/,
     icon: RiTableFill,
     // TODO: Add link
-    link: "https://docs.trainy.ai/trakkur/visualizations",
+    link: "https://docs.trainy.ai/pluto/visualizations",
     description: "Data logged during the training",
   },
 ];

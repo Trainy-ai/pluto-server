@@ -1,8 +1,8 @@
 """
-End-to-end integration test for mlop platform.
+End-to-end integration test for pluto platform.
 
 This test validates the full stack deployment by:
-1. Configuring mlop to use local services
+1. Configuring pluto to use local services
 2. Initializing a run with configuration
 3. Logging metrics over multiple epochs
 4. Finishing the run successfully
@@ -13,7 +13,7 @@ import subprocess
 import time
 from pathlib import Path
 
-import mlop
+import pluto
 
 try:
     from PIL import Image
@@ -57,20 +57,20 @@ def create_colored_square(color: tuple[int, int, int], size: int = 50) -> "Image
 
 
 def main():
-    # Configure mlop to use local self-hosted instance
-    settings = mlop.Settings()
-    # settings.update({
-    #     'url_app': 'https://trakkur-dev.trainy.ai',
-    #     'url_api': 'https://trakkur-api-dev.trainy.ai',
-    #     'url_ingest': 'https://trakkur-ingest-dev.trainy.ai',
-    #     'url_py': 'https://trakkur-py-dev.trainy.ai'
-    # })
+    # Configure pluto to use local self-hosted instance
+    settings = pluto.Settings()
     settings.update({
-        'url_app': 'http://localhost:3000',
-        'url_api': 'http://localhost:3001',
-        'url_ingest': 'http://localhost:3003',
-        'url_py': 'http://localhost:3004',
+        'url_app': 'https://pluto-dev.trainy.ai',
+        'url_api': 'https://pluto-api-dev.trainy.ai',
+        'url_ingest': 'https://pluto-ingest-dev.trainy.ai',
+        'url_py': 'https://pluto-py-dev.trainy.ai'
     })
+    # settings.update({
+    #     'url_app': 'http://localhost:3000',
+    #     'url_api': 'http://localhost:3001',
+    #     'url_ingest': 'http://localhost:3003',
+    #     'url_py': 'http://localhost:3004',
+    # })
 
     
 
@@ -93,7 +93,7 @@ def main():
         'test': f'test-ci-commit-{commit_hash}'
     }
 
-    run = mlop.init(
+    run = pluto.init(
         project='test-ci',
         name=f'integration-test-commit-{commit_hash}',
         config=config,
@@ -125,7 +125,7 @@ def main():
             ]
             for name, rgb, step in colors_and_steps:
                 square = create_colored_square(rgb, size=50)
-                run.log({"test/square": mlop.Image(square)}, step=step)
+                run.log({"test/square": pluto.Image(square)}, step=step)
                 print(f"  Step {step}: Logged {name} square")
         else:
             print("\nWarning: PIL/Pillow not available, skipping image logging")
