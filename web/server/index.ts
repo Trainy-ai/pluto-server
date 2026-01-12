@@ -22,11 +22,17 @@ declare module "hono" {
   }
 }
 
+// Build allowed origins list for CORS
+const allowedOrigins = [env.PUBLIC_URL, env.BETTER_AUTH_URL];
+if (env.ADDITIONAL_ORIGINS) {
+  allowedOrigins.push(...env.ADDITIONAL_ORIGINS.split(",").map((s) => s.trim()));
+}
+
 // Apply CORS middleware first
 app.use(
   "/*",
   cors({
-    origin: [env.PUBLIC_URL, env.BETTER_AUTH_URL],
+    origin: allowedOrigins,
     allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowHeaders: [
       "Content-Type",
