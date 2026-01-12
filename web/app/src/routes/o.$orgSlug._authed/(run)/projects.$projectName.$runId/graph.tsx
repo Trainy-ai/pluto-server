@@ -118,7 +118,7 @@ function ModelGraphHelpDialog() {
 }
 
 function ModelGraphMissingInfo() {
-  const codeExample = `mlop.watch(model)`;
+  const codeExample = `pluto.watch(model)`;
 
   return (
     <div className="flex h-full w-full items-center justify-center p-8">

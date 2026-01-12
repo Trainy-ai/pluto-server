@@ -11,6 +11,8 @@ load_tests/baseline
 load_tests/reports
 load_tests/__pycache__
 
+.vscode
+
 web/.turbo
 web/.DS_Store
 web/*.local

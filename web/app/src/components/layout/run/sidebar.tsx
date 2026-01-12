@@ -29,7 +29,7 @@ const mainNavItems = [
     href: "/projects/$projectName/$runId/summary",
     matchPattern: /^projects\/[^/]+\/[^/]+\/summary$/,
     icon: RiInformationFill,
-    link: "https://docs.trainy.ai/trakkur/experiments",
+    link: "https://docs.trainy.ai/pluto/experiments",
     description:
       "Overview of the run, you can view the configs and metadata and also shut down the run remotely",
   },
@@ -38,7 +38,7 @@ const mainNavItems = [
     href: "/projects/$projectName/$runId",
     matchPattern: /^projects\/[^/]+\/[^/]+$/,
     icon: RiLineChartFill,
-    link: "https://docs.trainy.ai/trakkur/visualizations",
+    link: "https://docs.trainy.ai/pluto/visualizations",
     description: "Data logged during the training",
   },
   {
@@ -46,7 +46,7 @@ const mainNavItems = [
     href: "/projects/$projectName/$runId/logs",
     matchPattern: /^projects\/[^/]+\/[^/]+\/logs$/,
     icon: RiTerminalFill,
-    link: "https://docs.trainy.ai/trakkur/logs",
+    link: "https://docs.trainy.ai/pluto/logs",
     description: "Terminal logs from the training",
   },
   {
@@ -54,7 +54,7 @@ const mainNavItems = [
     href: "/projects/$projectName/$runId/system",
     matchPattern: /^projects\/[^/]+\/[^/]+\/system$/,
     icon: RiCpuLine,
-    link: "https://docs.trainy.ai/trakkur/sys",
+    link: "https://docs.trainy.ai/pluto/sys",
     description: "System metrics from the training",
   },
   {

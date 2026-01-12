@@ -45,7 +45,7 @@ export default function SummaryStep({
                 Organization URL
               </div>
               <div className="text-sm font-medium break-all sm:text-base">
-                <span className="text-muted-foreground">trakkur.trainy.ai/o/</span>
+                <span className="text-muted-foreground">pluto.trainy.ai/o/</span>
                 {formData.slug}
               </div>
             </div>

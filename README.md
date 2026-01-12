@@ -1,8 +1,8 @@
-## mlop server
+## pluto server
 
-This is the collection of services that allow any individual to self-host their own instance of the **mlop** server. It can be used to store, analyze, visualize, and share any data recorded by the latest **mlop** clients or other platforms. It's super easy to get started and we welcome you to try it yourself! All you need is a containerized environment and a minute to spare.
+This is the collection of services that allow any individual to self-host their own instance of the **pluto** server. It can be used to store, analyze, visualize, and share any data recorded by the latest **pluto** clients or other platforms. It's super easy to get started and we welcome you to try it yourself! All you need is a containerized environment and a minute to spare.
 
-For a managed instance with better scalability, stability and support, please visit [trakkur.trainy.ai](https://trakkur.trainy.ai) or contact us at [founders@trainy.ai](mailto:founders@trainy.ai).
+For a managed instance with better scalability, stability and support, please visit [pluto.trainy.ai](https://pluto.trainy.ai) or contact us at [founders@trainy.ai](mailto:founders@trainy.ai).
 
 ### 🚀 Getting Started
 
@@ -45,7 +45,7 @@ The server will be swiftly available at `http://localhost:3000`.
 To use the self-hosted server with the client, simply initialize the client with
 
 ```python
-mlop.init(settings={"host": "localhost"}) # or a specified host matching the CORS policy of the server set by .env
+pluto.init(settings={"host": "localhost"}) # or a specified host matching the CORS policy of the server set by .env
 ```
 
 ### 📲 What's Inside?
@@ -60,7 +60,7 @@ mlop.init(settings={"host": "localhost"}) # or a specified host matching the COR
 
 ### 📦 Moving Servers
 
-You should be aware of all your data stored on the server. That's why the contents of the databases are mapped to directories on the host by default. When you need to migrate the server to a different host, simply make sure you take the `.mlop` folder and `.env` file with you.
+You should be aware of all your data stored on the server. That's why the contents of the databases are mapped to directories on the host by default. When you need to migrate the server to a different host, simply make sure you take the `.pluto` folder and `.env` file with you.
 
 ### 🤝 Contributing
 

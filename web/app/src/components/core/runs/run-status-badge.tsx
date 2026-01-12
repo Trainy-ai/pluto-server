@@ -88,7 +88,7 @@ export function RunStatusBadge({ run }: { run: BaseRun }) {
             }
             iconComponent={<InfoIcon className="size-4" />}
             description={config.description}
-            link={`https://docs.trainy.ai/trakkur`}
+            link={`https://docs.trainy.ai/pluto`}
           />
         </UnstyledTooltipContent>
       </Tooltip>

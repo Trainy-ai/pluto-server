@@ -21,7 +21,7 @@ export function SidebarLinks({ className }: SidebarLinksProps) {
         <SidebarMenuItem>
           <SidebarMenuButton asChild tooltip="Documentation">
             <a
-              href="https://docs.trainy.ai/trakkur/"
+              href="https://docs.trainy.ai/pluto/"
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-2"

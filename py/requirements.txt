@@ -7,4 +7,4 @@ sqlalchemy
 uvicorn
 gql
 requests-toolbelt
-mlop[full] @ git+https://github.com/mlop-ai/mlop.git
+pluto-ml-nightly[full]

@@ -106,7 +106,7 @@ export function StatusIndicator({
             }
             iconComponent={<InfoIcon className="size-4" />}
             description={statusConfig[status].description}
-            link={`https://docs.trainy.ai/trakkur`}
+            link={`https://docs.trainy.ai/pluto`}
           />
         </UnstyledTooltipContent>
       </Tooltip>
@@ -197,7 +197,7 @@ const mainNavItems = [
     title: "Projects",
     href: "/projects",
     description: "Projects that are associated with your organization",
-    link: "https://docs.trainy.ai/trakkur/projects",
+    link: "https://docs.trainy.ai/pluto/projects",
     icon: RiFolderFill,
   },
   {
