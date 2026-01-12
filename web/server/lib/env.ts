@@ -27,6 +27,7 @@ const envSchema = z.object({
   PUBLIC_URL: z.string().url(), // URL of server
   BETTER_AUTH_URL: z.string().url(), // URL of web app
   BETTER_AUTH_SECRET: z.string().min(1),
+  ADDITIONAL_ORIGINS: z.string().optional(), // Comma-separated list of additional allowed origins for CORS/auth
 
   // SAML/SSO (test/dev only)
   DUMMYIDP_ENTRY_POINT: z.string().url().optional(),

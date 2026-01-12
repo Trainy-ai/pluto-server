@@ -7,6 +7,12 @@ import { sso } from "@better-auth/sso";
 import { prisma } from "../lib/prisma";
 import { env } from "./env";
 
+// Build trusted origins list for auth
+const trustedOrigins = [env.PUBLIC_URL];
+if (env.ADDITIONAL_ORIGINS) {
+  trustedOrigins.push(...env.ADDITIONAL_ORIGINS.split(",").map((s) => s.trim()));
+}
+
 export const auth = betterAuth({
   database: prismaAdapter(prisma, {
     provider: "postgresql",
@@ -40,7 +46,7 @@ export const auth = betterAuth({
           : "http://localhost:3001/api/auth/callback/google",
     },
   },
-  trustedOrigins: [env.PUBLIC_URL],
+  trustedOrigins,
   user: {
     additionalFields: {
       finishedOnboarding: {
