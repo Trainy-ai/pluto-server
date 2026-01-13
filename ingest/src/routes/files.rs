@@ -342,7 +342,7 @@ pub async fn generate_presigned_urls(
     // Setup S3/R2 client configuration using credentials from app config
     let region_provider =
         RegionProviderChain::first_try(Region::new(state.config.storage_region.clone()));
-    let shared_config = aws_config::from_env()
+    let mut config_builder = aws_config::from_env()
         .region(region_provider)
         .credentials_provider(Credentials::new(
             state.config.storage_access_key_id.as_str(),
@@ -350,10 +350,16 @@ pub async fn generate_presigned_urls(
             None,
             None,
             "storage_config",
-        ))
-        .endpoint_url(state.config.storage_endpoint.as_str())
-        .load()
-        .await;
+        ));
+
+    // Only set endpoint_url for non-AWS S3 (MinIO, R2, etc.)
+    // AWS S3 handles virtual-hosted style automatically; setting endpoint_url
+    // causes signature mismatch between path-style and virtual-hosted URLs
+    if !state.config.storage_endpoint.to_lowercase().contains("amazonaws.com") {
+        config_builder = config_builder.endpoint_url(state.config.storage_endpoint.as_str());
+    }
+
+    let shared_config = config_builder.load().await;
 
     let s3_client: Arc<Client> = Arc::new(Client::new(&shared_config));
 
