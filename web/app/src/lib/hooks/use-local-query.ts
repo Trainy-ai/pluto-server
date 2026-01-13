@@ -242,6 +242,7 @@ export async function ensureLocalQuery<T>(
 
   const cachedQueryFn = async () => {
     // Re-read the local cache in case it has been updated meanwhile
+    // (getData returns undefined if IndexedDB is unavailable)
     const cached = await options.localCache.getData(storageKey);
     // If the cache is either marked finished or has been synced recently, return it.
     if (onlyUseCache) {
@@ -257,16 +258,16 @@ export async function ensureLocalQuery<T>(
       return cached.data;
     }
 
-    // Otherwise, call the fresh fetch function.
+    // Fetch fresh data from the API
     const data = await options.queryFn();
     if (data) {
-      // Store the new data in the local cache.
+      // Store in local cache (silently fails if IndexedDB is unavailable)
       await options.localCache.setData(storageKey, data);
     }
     return data;
   };
 
-  // Use prefetchQuery to fetch fresh data and update both caches.
+  // Use fetchQuery to get data, with fallback to direct API call
   return queryClient.fetchQuery({
     queryKey: options.queryKey,
     staleTime: options.staleTime,

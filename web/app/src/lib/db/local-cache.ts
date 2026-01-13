@@ -11,19 +11,48 @@ export interface CacheData<T> {
 }
 
 export class LocalCache<T> extends Dexie {
-  store: EntityTable<CacheData<T>, string>;
+  store!: EntityTable<CacheData<T>, string>;
   maxSize: number;
+  private _isAvailable: boolean = true;
+  private _initPromise: Promise<boolean>;
+
   constructor(dbName: string, storeName: string, maxSize: number, version = 1) {
     super(dbName);
+    this.maxSize = maxSize;
+
+    // Initialize the database schema
     this.version(version).stores({
       [storeName]: "id, syncedAt, finishedAt",
     });
-    // Explicitly set the table type.
     this.store = this.table<CacheData<T>, string>(storeName);
-    this.maxSize = maxSize;
+
+    // Test if IndexedDB is actually available by attempting to open
+    this._initPromise = this.open()
+      .then(() => {
+        this._isAvailable = true;
+        return true;
+      })
+      .catch((err) => {
+        console.warn(
+          `IndexedDB not available for ${dbName}, falling back to memory-only mode:`,
+          err.message,
+        );
+        this._isAvailable = false;
+        return false;
+      });
+  }
+
+  get isAvailable(): boolean {
+    return this._isAvailable;
+  }
+
+  async waitForInit(): Promise<boolean> {
+    return this._initPromise;
   }
 
   async checkAndClearIfNeeded() {
+    await this._initPromise;
+    if (!this._isAvailable) return;
     try {
       const estimate = await navigator.storage.estimate();
       if (estimate.usage && estimate.usage > this.maxSize) {
@@ -36,7 +65,16 @@ export class LocalCache<T> extends Dexie {
   }
 
   async getData(id: string): Promise<CacheData<T> | undefined> {
-    return this.store.get(id);
+    await this._initPromise;
+    if (!this._isAvailable) return undefined;
+    try {
+      return await this.store.get(id);
+    } catch (error) {
+      // If we get a DatabaseClosedError or similar, mark as unavailable
+      console.warn("IndexedDB read failed, disabling cache:", error);
+      this._isAvailable = false;
+      return undefined;
+    }
   }
 
   async setData(
@@ -44,14 +82,21 @@ export class LocalCache<T> extends Dexie {
     data: T,
     finishedAt: Date | null = null,
   ): Promise<void> {
-    const record: CacheData<T> = {
-      id,
-      syncedAt: new Date(),
-      data,
-      finishedAt,
-    };
-
-    await this.store.put(record as CacheData<T>);
+    await this._initPromise;
+    if (!this._isAvailable) return;
+    try {
+      const record: CacheData<T> = {
+        id,
+        syncedAt: new Date(),
+        data,
+        finishedAt,
+      };
+      await this.store.put(record as CacheData<T>);
+    } catch (error) {
+      // If we get a DatabaseClosedError or similar, mark as unavailable
+      console.warn("IndexedDB write failed, disabling cache:", error);
+      this._isAvailable = false;
+    }
   }
 }
 
