@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { toast } from "@/components/ui/sonner";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TRPCClientError } from "@trpc/client";
+import { bustAuthCache } from "@/lib/auth/check";
 
 interface InvitesListProps {
   titleStyle?: string;
@@ -27,8 +28,10 @@ const InvitesList = ({ titleStyle, redirect }: InvitesListProps) => {
 
   const acceptInviteMutation = useMutation(
     trpc.organization.invite.acceptInvite.mutationOptions({
-      onSuccess: () => {
+      onSuccess: async () => {
         toast.success("Invitation accepted");
+        // Bust the auth cache to ensure fresh data on redirect
+        await bustAuthCache();
         // invalidate the query to refetch the data
         queryClient.invalidateQueries();
         if (redirect) {
@@ -51,8 +54,10 @@ const InvitesList = ({ titleStyle, redirect }: InvitesListProps) => {
 
   const rejectInviteMutation = useMutation(
     trpc.organization.invite.rejectInvite.mutationOptions({
-      onSuccess: () => {
+      onSuccess: async () => {
         toast.success("Invitation rejected");
+        // Bust the auth cache to ensure fresh data on redirect
+        await bustAuthCache();
         // invalidate the query to refetch the data
         queryClient.invalidateQueries();
         if (redirect) {

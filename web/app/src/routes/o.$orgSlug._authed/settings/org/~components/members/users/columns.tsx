@@ -9,18 +9,13 @@ import {
 } from "@/components/ui/dialog";
 import { type ColumnDef } from "@tanstack/react-table";
 import {
-  Copy,
-  Eye,
-  EyeOff,
   MoreHorizontal,
   Trash2,
   Info,
-  CheckCircle,
-  Clock,
-  XCircle,
   Shield,
   UserCog,
   User,
+  Loader2,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -43,6 +38,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
+type OrganizationRole = "OWNER" | "ADMIN" | "MEMBER";
+
 type Member = inferOutput<typeof trpc.organization.listMembers>[0];
 
 const formatDate = (date: Date | null) => {
@@ -64,35 +61,31 @@ const copyToClipboard = async (text: string) => {
   }
 };
 
-function RoleBadge({ role }: { role: string }) {
+function RoleBadge({ role }: { role: OrganizationRole }) {
   const roleConfig: Record<
-    string,
+    OrganizationRole,
     { icon: React.ReactNode; className: string; description: string }
   > = {
-    ADMIN: {
+    OWNER: {
       icon: <Shield className="mr-1 h-3 w-3" />,
+      className:
+        "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-300",
+      description: "Full ownership of the organization",
+    },
+    ADMIN: {
+      icon: <UserCog className="mr-1 h-3 w-3" />,
       className: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300",
       description: "Full administrative access to the organization",
     },
     MEMBER: {
-      icon: <UserCog className="mr-1 h-3 w-3" />,
+      icon: <User className="mr-1 h-3 w-3" />,
       className:
         "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300",
       description: "Can view and modify organization resources",
     },
-    VIEWER: {
-      icon: <User className="mr-1 h-3 w-3" />,
-      className:
-        "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300",
-      description: "Can only view organization resources",
-    },
   };
 
-  const config = roleConfig[role] || {
-    icon: null,
-    className: "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300",
-    description: `Role: ${role}`,
-  };
+  const config = roleConfig[role];
 
   return (
     <Tooltip>
@@ -161,10 +154,94 @@ function MemberDetailsDialog({
   );
 }
 
-export const columns = ({
+function RemoveMemberDialog({
+  member,
+  open,
+  onOpenChange,
   organizationId,
 }: {
+  member: Member;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
   organizationId: string;
+}) {
+  const queryClient = useQueryClient();
+  const removeMutation = useMutation(
+    trpc.organization.removeMember.mutationOptions({
+      onSuccess: () => {
+        toast.success("Member removed successfully");
+        queryClient.invalidateQueries({
+          queryKey: trpc.organization.listMembers.queryKey({
+            organizationId,
+          }),
+        });
+        onOpenChange(false);
+      },
+      onError: (error) => {
+        toast.error("Failed to remove member", {
+          description: error.message || "Please try again",
+        });
+      },
+    })
+  );
+
+  const handleRemove = () => {
+    removeMutation.mutate({
+      organizationId,
+      memberId: member.id,
+    });
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-[400px]">
+        <DialogHeader>
+          <DialogTitle>Remove Member</DialogTitle>
+          <DialogDescription>
+            Are you sure you want to remove{" "}
+            <span className="font-semibold">
+              {member.user?.name || member.user?.email}
+            </span>{" "}
+            from this organization? This action cannot be undone.
+          </DialogDescription>
+        </DialogHeader>
+
+        <DialogFooter className="gap-2 sm:gap-0">
+          <Button
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            disabled={removeMutation.isPending}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="destructive"
+            onClick={handleRemove}
+            disabled={removeMutation.isPending}
+          >
+            {removeMutation.isPending ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Removing...
+              </>
+            ) : (
+              "Remove Member"
+            )}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+export const columns = ({
+  organizationId,
+  currentUserId,
+  currentUserRole,
+}: {
+  organizationId: string;
+  currentUserId: string;
+  currentUserRole: OrganizationRole;
 }): ColumnDef<Member>[] => [
   {
     header: "Name",
@@ -220,6 +297,29 @@ export const columns = ({
     cell: ({ row }) => {
       const member = row.original;
       const [showDetailsDialog, setShowDetailsDialog] = useState(false);
+      const [showRemoveDialog, setShowRemoveDialog] = useState(false);
+
+      // Determine if current user can remove this member
+      // Permission logic:
+      // - Can't remove yourself
+      // - Can't remove OWNER
+      // - MEMBER role can't remove anyone
+      // - ADMIN can only remove MEMBER (not other ADMINs)
+      // - OWNER can remove anyone except themselves and other OWNERs
+      const canRemove = (() => {
+        if (member.user?.id === currentUserId) return false;
+        if (member.role === "OWNER") return false;
+        switch (currentUserRole) {
+          case "OWNER":
+            return true;
+          case "ADMIN":
+            return member.role === "MEMBER";
+          case "MEMBER":
+            return false;
+          default:
+            return false;
+        }
+      })();
 
       return (
         <>
@@ -237,7 +337,18 @@ export const columns = ({
                   <Info className="mr-2 h-4 w-4" />
                   View Details
                 </DropdownMenuItem>
-                {/* Additional actions can be added here */}
+                {canRemove && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onClick={() => setShowRemoveDialog(true)}
+                      className="text-destructive focus:text-destructive"
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" />
+                      Remove from organization
+                    </DropdownMenuItem>
+                  </>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
@@ -247,6 +358,15 @@ export const columns = ({
               member={member}
               open={showDetailsDialog}
               onOpenChange={setShowDetailsDialog}
+            />
+          )}
+
+          {showRemoveDialog && (
+            <RemoveMemberDialog
+              member={member}
+              open={showRemoveDialog}
+              onOpenChange={setShowRemoveDialog}
+              organizationId={organizationId}
             />
           )}
         </>

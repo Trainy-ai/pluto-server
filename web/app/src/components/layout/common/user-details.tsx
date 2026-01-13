@@ -24,6 +24,7 @@ import {
 import { ThemeSwitcher } from "@/components/ui/theme-switcher";
 import { Skeleton } from "@/components/ui/skeleton";
 import { signOut } from "@/lib/auth/sign";
+import { bustAuthCache } from "@/lib/auth/check";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth/client";
 import { RiKeyFill, RiSettingsFill, RiUser3Fill } from "@remixicon/react";
@@ -133,7 +134,8 @@ export function UserDetails({ ...other }: UserDetailsProps): React.JSX.Element {
                 className="cursor-pointer text-red-600 focus:text-red-600 dark:text-red-400 dark:focus:text-red-400"
                 onClick={async () => {
                   await signOut(() => queryClient.invalidateQueries());
-                  window.location.href = "/";
+                  await bustAuthCache();
+                  window.location.href = "/auth/sign-in";
                 }}
               >
                 <LogOutIcon className="mr-2 h-4 w-4" />

@@ -29,6 +29,10 @@ const envSchema = z.object({
   BETTER_AUTH_SECRET: z.string().min(1),
   ADDITIONAL_ORIGINS: z.string().optional(), // Comma-separated list of additional allowed origins for CORS/auth
 
+  // Email (Resend)
+  RESEND_API_KEY: z.string().min(1).optional(), // Optional to allow development without email
+  RESEND_FROM_EMAIL: z.string().email().optional(), // Defaults to noreply@pluto.dev in email service
+
   // SAML/SSO (test/dev only)
   DUMMYIDP_ENTRY_POINT: z.string().url().optional(),
   DUMMYIDP_ENTITY_ID: z.string().url().optional(),

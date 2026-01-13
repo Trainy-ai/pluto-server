@@ -12,6 +12,7 @@ import { toast } from "sonner";
 import { queryClient, trpc } from "@/utils/trpc";
 import { useNavigate } from "@tanstack/react-router";
 import { useMutation } from "@tanstack/react-query";
+import { bustAuthCache } from "@/lib/auth/check";
 
 export type FormData = {
   location: string;
@@ -106,9 +107,10 @@ export default function UserDetailsForm() {
         agreeToMarketing: formData.allowMarketing,
       });
 
+      // Bust the IndexedDB auth cache to prevent stale finishedOnboarding state
+      await bustAuthCache();
       await queryClient.invalidateQueries();
 
-      // toast.success("Thank you for your submission!");
       navigate({ to: "/o", search: { onboarding: true } });
     } catch (error) {
       toast.error("Failed to submit onboarding details. Please try again.");

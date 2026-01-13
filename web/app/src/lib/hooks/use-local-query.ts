@@ -410,5 +410,8 @@ export const bustLocalCache = async (
   queryKey: TRPCQueryKey,
 ) => {
   const storageKey = stringifyQueryKey(queryKey);
-  await localCache.setData(storageKey, null);
+  // Delete the cache entry rather than setting to null
+  // Setting to null with a fresh syncedAt would cause ensureLocalQuery
+  // to consider the cache "fresh" and return null instead of fetching
+  await localCache.store.delete(storageKey);
 };

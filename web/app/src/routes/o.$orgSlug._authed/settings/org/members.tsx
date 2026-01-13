@@ -117,6 +117,8 @@ function RouteComponent() {
                   <MembersTable
                     columns={MembersColumns({
                       organizationId: auth.activeOrganization.id,
+                      currentUserId: auth.user.id,
+                      currentUserRole: auth.activeOrganization.membership.role,
                     })}
                     data={members ?? []}
                   />

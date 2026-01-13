@@ -9,9 +9,6 @@ import {
 } from "@/components/ui/dialog";
 import { type ColumnDef } from "@tanstack/react-table";
 import {
-  Copy,
-  Eye,
-  EyeOff,
   MoreHorizontal,
   Trash2,
   Info,
@@ -50,15 +47,6 @@ const formatDate = (date: Date | null) => {
     month: "long",
     day: "numeric",
   });
-};
-
-const copyToClipboard = async (text: string) => {
-  try {
-    await navigator.clipboard.writeText(text);
-    toast.success("API key copied to clipboard");
-  } catch (err) {
-    toast.error("Failed to copy API key");
-  }
 };
 
 function RoleBadge({ role }: { role: string }) {
@@ -164,21 +152,20 @@ function DeleteInviteDialog({
 }) {
   const queryClient = useQueryClient();
 
-  const { mutate: deleteInvite, isPending } = useMutation({
-    mutationFn: () => {
-      return Promise.resolve();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: [["organization", "invite", "listSentInvites"]],
-      });
-      toast.success("Invite deleted successfully");
-      onOpenChange(false);
-    },
-    onError: () => {
-      toast.error("Failed to delete invite");
-    },
-  });
+  const { mutate: deleteInvite, isPending } = useMutation(
+    trpc.organization.invite.deleteInvite.mutationOptions({
+      onSuccess: () => {
+        queryClient.invalidateQueries({
+          queryKey: [["organization", "invite", "listSentInvites"]],
+        });
+        toast.success("Invite deleted successfully");
+        onOpenChange(false);
+      },
+      onError: () => {
+        toast.error("Failed to delete invite");
+      },
+    }),
+  );
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -213,7 +200,12 @@ function DeleteInviteDialog({
           </Button>
           <Button
             variant="destructive"
-            onClick={() => deleteInvite()}
+            onClick={() =>
+              deleteInvite({
+                organizationId,
+                invitationId: invite.id,
+              })
+            }
             disabled={isPending}
           >
             {isPending ? "Deleting..." : "Delete Invite"}
@@ -401,15 +393,14 @@ export const columns = ({
                   <Info className="mr-2 h-4 w-4" />
                   View Details
                 </DropdownMenuItem>
-                {/* TODO: Add delete invite */}
                 <DropdownMenuSeparator />
-                {/* <DropdownMenuItem
+                <DropdownMenuItem
                   onClick={() => setShowDeleteDialog(true)}
                   className="text-red-600"
                 >
                   <Trash2 className="mr-2 h-4 w-4" />
                   Delete Invite
-                </DropdownMenuItem> */}
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
