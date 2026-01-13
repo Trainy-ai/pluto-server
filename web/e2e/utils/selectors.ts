@@ -53,3 +53,17 @@ export const graphSelectors = {
   helpButton: /help/i,
   emptyState: /no model graph/i,
 };
+
+/**
+ * Member management selectors
+ */
+export const memberSelectors = {
+  membersHeading: /members/i,
+  invitesHeading: /invites/i,
+  viewDetails: /view details/i,
+  removeFromOrg: /remove from organization/i,
+  removeMember: /remove member/i,
+  cancel: /cancel/i,
+  close: /close/i,
+  memberDetails: /member details/i,
+};

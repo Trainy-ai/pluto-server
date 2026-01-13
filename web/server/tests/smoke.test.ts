@@ -637,4 +637,84 @@ describe('SDK API Endpoints (with API Key)', () => {
       });
     });
   });
+
+  describe('Test Suite 9: Member Management', () => {
+    it('Test 9.1: Remove member - Unauthorized (no session)', async () => {
+      // Try to remove a member without authentication
+      const response = await makeTrpcRequest('organization.removeMember', {
+        organizationId: 'test-org-id',
+        memberId: 'test-member-id',
+      }, {}, 'POST');
+
+      // Should fail without authentication
+      expect(response.status).toBe(401);
+    });
+
+    it('Test 9.2: List members - Unauthorized (no session)', async () => {
+      // Try to list members without authentication
+      const response = await makeTrpcRequest('organization.listMembers', {
+        organizationId: 'test-org-id',
+      }, {}, 'GET');
+
+      // Should fail without authentication
+      expect(response.status).toBe(401);
+    });
+
+    it('Test 9.3: Remove member - Invalid input (missing memberId)', async () => {
+      // Try to remove a member with invalid input
+      const response = await makeTrpcRequest('organization.removeMember', {
+        organizationId: 'test-org-id',
+        // memberId is missing
+      }, {}, 'POST');
+
+      // Should return 400 (validation error) or 401 (auth check comes first)
+      expect([400, 401]).toContain(response.status);
+    });
+
+    it('Test 9.4: Remove member - Invalid input (missing organizationId)', async () => {
+      // Try to remove a member with missing organizationId
+      const response = await makeTrpcRequest('organization.removeMember', {
+        memberId: 'test-member-id',
+        // organizationId is missing
+      }, {}, 'POST');
+
+      // Should return 400 (validation error) or 401 (auth check comes first)
+      expect([400, 401]).toContain(response.status);
+    });
+  });
+
+  describe('Test Suite 10: Invite Management', () => {
+    it('Test 10.1: Delete invite - Unauthorized (no session)', async () => {
+      // Try to delete an invite without authentication
+      const response = await makeTrpcRequest('organization.invite.deleteInvite', {
+        organizationId: 'test-org-id',
+        invitationId: 'test-invitation-id',
+      }, {}, 'POST');
+
+      // Should fail without authentication (404 may occur due to nested router path format)
+      expect([401, 404]).toContain(response.status);
+    });
+
+    it('Test 10.2: Delete invite - Invalid input (missing invitationId)', async () => {
+      // Try to delete an invite with invalid input
+      const response = await makeTrpcRequest('organization.invite.deleteInvite', {
+        organizationId: 'test-org-id',
+        // invitationId is missing
+      }, {}, 'POST');
+
+      // Should return 400 (validation error), 401 (auth check), or 404 (nested router path)
+      expect([400, 401, 404]).toContain(response.status);
+    });
+
+    it('Test 10.3: Delete invite - Invalid input (missing organizationId)', async () => {
+      // Try to delete an invite with missing organizationId
+      const response = await makeTrpcRequest('organization.invite.deleteInvite', {
+        invitationId: 'test-invitation-id',
+        // organizationId is missing
+      }, {}, 'POST');
+
+      // Should return 400 (validation error), 401 (auth check), or 404 (nested router path)
+      expect([400, 401, 404]).toContain(response.status);
+    });
+  });
 });

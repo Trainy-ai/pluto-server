@@ -3,6 +3,8 @@ import { nanoid } from "nanoid";
 import { z } from "zod";
 import { protectedOrgProcedure } from "../../../../../../lib/trpc";
 import { TRPCError } from "@trpc/server";
+import { sendEmail } from "../../../../../../lib/email";
+import { generateInvitationEmail } from "../../../../../../lib/email-templates/invitation";
 
 export const createInviteProcedure = protectedOrgProcedure
   .input(
@@ -56,6 +58,12 @@ export const createInviteProcedure = protectedOrgProcedure
       });
     }
 
+    // Get organization name for the email
+    const organization = await ctx.prisma.organization.findUnique({
+      where: { id: input.organizationId },
+      select: { name: true },
+    });
+
     const invitation = await ctx.prisma.invitation.create({
       data: {
         id: nanoid(),
@@ -68,8 +76,26 @@ export const createInviteProcedure = protectedOrgProcedure
       },
     });
 
-    // Mock email sending, TODO: Implement actual email sending
-    console.log(`Mock: Sending invitation email to ${input.email}`);
+    // Send invitation email (non-blocking - failures are logged but don't fail the invitation)
+    const emailData = generateInvitationEmail({
+      inviterName: ctx.user.name || "A team member",
+      inviterEmail: ctx.user.email,
+      organizationName: organization?.name || "the organization",
+      inviteeEmail: input.email,
+      role: input.role,
+      expiresAt: invitation.expiresAt,
+    });
+
+    const emailSent = await sendEmail({
+      to: input.email,
+      subject: emailData.subject,
+      html: emailData.html,
+      text: emailData.text,
+    });
+
+    if (!emailSent) {
+      console.warn(`Failed to send invitation email to ${input.email}`);
+    }
 
     return invitation;
   });

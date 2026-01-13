@@ -10,6 +10,7 @@ import SummaryStep from "./steps/summary-step";
 import StepIndicator from "./step-indicator";
 import { trpc } from "@/utils/trpc";
 import { TRPCClientError } from "@trpc/client";
+import { bustAuthCache } from "@/lib/auth/check";
 
 export type FormData = {
   name: string;
@@ -88,6 +89,9 @@ export default function OrganizationSetupForm() {
     try {
       setIsSubmitting(true);
       const res = await mutation.mutateAsync(formData);
+
+      // Bust the IndexedDB auth cache to prevent stale finishedOnboarding state
+      await bustAuthCache();
 
       toast.success("Organization created successfully!");
       window.location.href = `/o/${res.slug}`;

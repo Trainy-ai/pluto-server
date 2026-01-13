@@ -59,3 +59,11 @@ export async function waitForVisible(
 ) {
   await page.locator(selector).waitFor({ state: "visible", timeout });
 }
+
+/**
+ * Navigate to organization members settings page
+ */
+export async function navigateToMembersSettings(page: Page, orgSlug: string) {
+  await page.goto(`/o/${orgSlug}/settings/org/members`);
+  await waitForTRPC(page);
+}
