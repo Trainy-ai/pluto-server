@@ -392,15 +392,14 @@ pub async fn generate_presigned_urls(
                 tenant, project, run, file.log_name, file.file_name
             );
 
-            // Build the PutObject request, setting bucket, key, and content type
-            // Note: content_length is intentionally NOT included in the presigned URL signature
-            // because it causes SignatureDoesNotMatch errors if the actual upload size differs
-            // from the size reported when requesting the URL
+            // Build the PutObject request with just bucket and key
+            // Note: content_type and content_length are intentionally NOT included
+            // in the presigned URL signature because the client may send different
+            // values, causing SignatureDoesNotMatch errors
             let req = s3
                 .put_object()
                 .bucket(storage_bucket.as_str())
-                .key(key)
-                .content_type(file.file_type.mime_type()); // Set Content-Type based on FileType
+                .key(key);
 
             // Generate the presigned URL for the PutObject request
             let presigned = req
