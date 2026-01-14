@@ -154,8 +154,8 @@ impl FileType {
             FileType::SavedModel => "savedmodel".to_string(),
             FileType::Pt => "pt".to_string(),
             FileType::Ckpt => "ckpt".to_string(),
-            // Custom - extract extension from mime type or return empty
-            FileType::Custom(_) => String::new(),
+            // Custom - return the original extension
+            FileType::Custom(ext) => ext.clone(),
         }
     }
 

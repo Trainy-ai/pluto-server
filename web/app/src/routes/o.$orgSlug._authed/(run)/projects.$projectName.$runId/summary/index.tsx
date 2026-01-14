@@ -35,6 +35,7 @@ import { GitStatus } from "./~components/git-status";
 import { Process } from "./~components/process";
 import { SystemDisplay } from "./~components/system-display";
 import { useDuration } from "@/lib/hooks/use-duration";
+import { FilesSection } from "./~components/files-section";
 
 export const Route = createFileRoute(
   "/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/summary/",
@@ -219,6 +220,16 @@ function RouteComponent() {
 
         {/* Requirements Section */}
         <Requirements systemMetadata={currentRun.systemMetadata} />
+
+        {/* Files Section */}
+        {currentRun.logs && (
+          <FilesSection
+            logs={currentRun.logs}
+            tenantId={organizationId}
+            projectName={projectName}
+            runId={runId}
+          />
+        )}
 
         {/* System Metadata Section */}
         {currentRun.systemMetadata && (

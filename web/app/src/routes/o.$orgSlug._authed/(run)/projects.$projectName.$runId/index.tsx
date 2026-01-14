@@ -59,6 +59,14 @@ function RouteComponent() {
 
   const { filteredLogGroups, handleSearch } = useFilteredLogs({
     logs: runData?.logs || [],
+    groupFilter: (group) =>
+      // Exclude file-based logs from metrics view (they're shown on summary page)
+      !group.logs.every(
+        (log) =>
+          log.logType === "TEXT" ||
+          log.logType === "FILE" ||
+          log.logType === "ARTIFACT"
+      ),
   });
 
   // Memoize the rendered DataGroups to prevent recreation on every render
