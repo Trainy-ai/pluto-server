@@ -48,3 +48,7 @@ web/app/test-results/
 web/app/playwright-report/
 web/server/test-results/
 *.tsbuildinfo
+
+# Test artifacts
+tests/e2e/.pluto/
+tests/e2e/__pycache__/

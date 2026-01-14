@@ -9,6 +9,7 @@ import { AudioView } from "./audio";
 import { HistogramView } from "./histogram-view";
 import { VideoView } from "./video";
 import { TableView } from "./table";
+import { TextView } from "./text-view";
 
 interface DataGroupProps {
   group: LogGroup;
@@ -149,6 +150,21 @@ const LogView = memo(
     if (log.logType === "TABLE") {
       return (
         <TableView
+          log={log}
+          tenantId={tenantId}
+          projectName={projectName}
+          runId={runId}
+        />
+      );
+    }
+
+    if (
+      log.logType === "TEXT" ||
+      log.logType === "FILE" ||
+      log.logType === "ARTIFACT"
+    ) {
+      return (
+        <TextView
           log={log}
           tenantId={tenantId}
           projectName={projectName}
