@@ -47,6 +47,7 @@ pub enum FileType {
     Xls,
     Xlsx,
     Txt,
+    Log,
     // Data
     Json,
     Csv,
@@ -95,7 +96,7 @@ impl FileType {
             FileType::Xlsx => {
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".to_string()
             }
-            FileType::Txt => "text/plain".to_string(),
+            FileType::Txt | FileType::Log => "text/plain".to_string(),
             // Data
             FileType::Json => "application/json".to_string(),
             FileType::Csv => "text/csv".to_string(),
@@ -141,6 +142,7 @@ impl FileType {
             FileType::Xls => "xls".to_string(),
             FileType::Xlsx => "xlsx".to_string(),
             FileType::Txt => "txt".to_string(),
+            FileType::Log => "log".to_string(),
             // Data
             FileType::Json => "json".to_string(),
             FileType::Csv => "csv".to_string(),
@@ -185,6 +187,7 @@ impl FileType {
             "xls" => Some(FileType::Xls),
             "xlsx" => Some(FileType::Xlsx),
             "txt" => Some(FileType::Txt),
+            "log" => Some(FileType::Log),
             // Data
             "json" => Some(FileType::Json),
             "csv" => Some(FileType::Csv),
