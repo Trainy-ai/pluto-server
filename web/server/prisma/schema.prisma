@@ -131,18 +131,6 @@ model TwoFactor {
   @@map("twoFactor")
 }
 
-model SsoProvider {
-  id             String  @id @default(cuid())
-  issuer         String
-  oidcConfig     String? // JSON string for OIDC configuration
-  samlConfig     String? // JSON string for SAML configuration
-  userId         String?
-  providerId     String  @unique
-  organizationId String?
-  domain         String
-
-  @@map("ssoProvider")
-}
 
 model OrganizationSubscription {
   id                   String           @id @default(uuid())
@@ -294,6 +282,7 @@ model RunLogs {
 
 model Runs {
   id              BigInt    @id @default(autoincrement())
+  externalId      String?   @db.VarChar(255) // User-provided run ID for multi-node distributed training
   name            String    @db.VarChar(255)
   organizationId  String
   tags            String[]  @default([])
@@ -319,6 +308,8 @@ model Runs {
   RunGraphEdge RunGraphEdge[]
   ApiKey       ApiKey         @relation(fields: [creatorApiKeyId], references: [id])
 
+  // Unique constraint for external run ID within a project (allows multi-node to share same run)
+  @@unique([organizationId, projectId, externalId])
   // Add compound index on projectId and organizationId to efficiently find runs for a project
   @@index([projectId, organizationId])
   @@index([status])

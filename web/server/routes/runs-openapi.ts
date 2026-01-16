@@ -49,7 +49,7 @@ const createRunRoute = createRoute({
   path: "/create",
   tags: ["Runs"],
   summary: "Create a new run",
-  description: "Creates a new run in the specified project. If the project doesn't exist, it will be created.",
+  description: "Creates a new run in the specified project. If the project doesn't exist, it will be created. If externalId is provided and a run with that ID already exists, the existing run is returned (Neptune-style resume for multi-node distributed training).",
   security: [{ bearerAuth: [] }],
   request: {
     body: {
@@ -58,6 +58,7 @@ const createRunRoute = createRoute({
           schema: z.object({
             runName: z.string().openapi({ description: "Name of the run", example: "training-run-1" }),
             projectName: z.string().openapi({ description: "Name of the project", example: "my-project" }),
+            externalId: z.string().min(1).optional().nullable().openapi({ description: "User-provided run ID for multi-node distributed training. If provided and a run with this ID exists, the existing run is returned.", example: "my-ddp-run-2024" }),
             tags: z.array(z.string()).optional().nullable().openapi({ description: "Tags for the run", example: ["experiment", "v1"] }),
             loggerSettings: z.string().optional().nullable().openapi({ description: "Logger settings as JSON string" }),
             systemMetadata: z.string().optional().nullable().openapi({ description: "System metadata as JSON string" }),
@@ -79,6 +80,7 @@ const createRunRoute = createRoute({
             projectName: z.string().openapi({ description: "Name of the project" }),
             organizationSlug: z.string().openapi({ description: "Organization slug" }),
             url: z.string().openapi({ description: "URL to view the run" }),
+            resumed: z.boolean().openapi({ description: "Whether an existing run was resumed (true) or a new run was created (false)" }),
           }).openapi("CreateRunResponse"),
         },
       },
@@ -101,21 +103,11 @@ const createRunRoute = createRoute({
 router.use(createRunRoute.path, withApiKey);
 router.openapi(createRunRoute, async (c) => {
   const apiKey = c.get("apiKey");
-  const { runName, projectName, tags, loggerSettings, systemMetadata, config, createdAt, updatedAt } = c.req.valid("json");
+  const { runName, projectName, externalId, tags, loggerSettings, systemMetadata, config, createdAt, updatedAt } = c.req.valid("json");
 
   const ctx = await createContext({ hono: c });
-  const [tableUsage, fileUsage, orgLimits] = await Promise.all([
-    getDataUsageQuery(ctx, apiKey.organization.id),
-    getFileDataUsageQuery(ctx, apiKey.organization.id),
-    getOrgLimits(ctx, apiKey.organization.id),
-  ]);
 
-  const totalUsage = tableUsage.reduce((acc, curr) => acc + curr.estimated_size_gb, 0) + fileUsage;
-
-  if (totalUsage > orgLimits.dataUsageGB) {
-    return c.json({ error: "Organization is at limit" }, 400);
-  }
-
+  // Upsert project first (needed for both new and resumed runs)
   const project = await ctx.prisma.projects.upsert({
     where: {
       organizationId_name: {
@@ -132,42 +124,79 @@ router.openapi(createRunRoute, async (c) => {
     },
   });
 
-  try {
-    const parsedLoggerSettings = loggerSettings && loggerSettings !== "null" ? JSON.parse(loggerSettings) : Prisma.DbNull;
-    const parsedSystemMetadata = systemMetadata && systemMetadata !== "null" ? JSON.parse(systemMetadata) : Prisma.DbNull;
-    const parsedConfig = config && config !== "null" ? JSON.parse(config) : Prisma.DbNull;
+  let run: { id: bigint } | null = null;
+  let resumed = false;
 
-    const run = await ctx.prisma.runs.create({
-      data: {
-        name: runName,
-        projectId: project.id,
+  // If externalId is provided, check if a run with this ID already exists (Neptune-style resume)
+  if (externalId) {
+    const existingRun = await ctx.prisma.runs.findFirst({
+      where: {
+        externalId,
         organizationId: apiKey.organization.id,
-        tags: tags || [],
-        status: RunStatus.RUNNING,
-        loggerSettings: parsedLoggerSettings,
-        systemMetadata: parsedSystemMetadata,
-        config: parsedConfig,
-        createdById: apiKey.user.id,
-        creatorApiKeyId: apiKey.id,
+        projectId: project.id,
       },
     });
 
-    const encodedRunId = sqidEncode(run.id);
-    const runUrl = `${env.BETTER_AUTH_URL}/o/${apiKey.organization.slug}/projects/${project.name}/${encodedRunId}`;
-
-    return c.json({
-      runId: Number(run.id),
-      projectName: project.name,
-      organizationSlug: apiKey.organization.slug,
-      url: runUrl,
-    }, 200);
-  } catch (error) {
-    if (error instanceof SyntaxError) {
-      return c.json({ error: "Invalid JSON format in request body" }, 400);
+    if (existingRun) {
+      run = existingRun;
+      resumed = true;
     }
-    console.error("Failed to create run:", error);
-    return c.json({ error: "Failed to create run" }, 500);
   }
+
+  // Create new run if not resuming
+  if (!run) {
+    // Check usage limits only when creating a new run
+    const [tableUsage, fileUsage, orgLimits] = await Promise.all([
+      getDataUsageQuery(ctx, apiKey.organization.id),
+      getFileDataUsageQuery(ctx, apiKey.organization.id),
+      getOrgLimits(ctx, apiKey.organization.id),
+    ]);
+
+    const totalUsage = tableUsage.reduce((acc, curr) => acc + curr.estimated_size_gb, 0) + fileUsage;
+
+    if (totalUsage > orgLimits.dataUsageGB) {
+      return c.json({ error: "Organization is at limit" }, 400);
+    }
+
+    try {
+      const parsedLoggerSettings = loggerSettings && loggerSettings !== "null" ? JSON.parse(loggerSettings) : Prisma.DbNull;
+      const parsedSystemMetadata = systemMetadata && systemMetadata !== "null" ? JSON.parse(systemMetadata) : Prisma.DbNull;
+      const parsedConfig = config && config !== "null" ? JSON.parse(config) : Prisma.DbNull;
+
+      run = await ctx.prisma.runs.create({
+        data: {
+          name: runName,
+          externalId: externalId || null,
+          projectId: project.id,
+          organizationId: apiKey.organization.id,
+          tags: tags || [],
+          status: RunStatus.RUNNING,
+          loggerSettings: parsedLoggerSettings,
+          systemMetadata: parsedSystemMetadata,
+          config: parsedConfig,
+          createdById: apiKey.user.id,
+          creatorApiKeyId: apiKey.id,
+        },
+      });
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        return c.json({ error: "Invalid JSON format in request body" }, 400);
+      }
+      console.error("Failed to create run:", error);
+      return c.json({ error: "Failed to create run" }, 500);
+    }
+  }
+
+  const encodedRunId = sqidEncode(run.id);
+  const runUrl = `${env.BETTER_AUTH_URL}/o/${apiKey.organization.slug}/projects/${project.name}/${encodedRunId}`;
+
+  return c.json({
+    runId: Number(run.id),
+    projectName: project.name,
+    organizationSlug: apiKey.organization.slug,
+    url: runUrl,
+    resumed,
+  }, 200);
 });
 
 // ============= Update Status =============
