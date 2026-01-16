@@ -717,4 +717,255 @@ describe('SDK API Endpoints (with API Key)', () => {
       expect([400, 401, 404]).toContain(response.status);
     });
   });
+
+  describe('Test Suite 11: Multi-Node Distributed Training (externalId)', () => {
+    const hasApiKey = TEST_API_KEY.length > 0;
+
+    describe.skipIf(!hasApiKey)('Create Run with externalId', () => {
+      it('Test 11.1: Create run with externalId returns resumed: false', async () => {
+        const externalId = `multi-node-test-${Date.now()}`;
+
+        const response = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `ddp-run-node-0`,
+            externalId: externalId,
+          }),
+        });
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.runId).toBeDefined();
+        expect(data.resumed).toBe(false);
+        expect(data.url).toBeDefined();
+      });
+
+      it('Test 11.2: Second call with same externalId returns existing run with resumed: true', async () => {
+        const externalId = `multi-node-resume-${Date.now()}`;
+
+        // First call - creates the run
+        const firstResponse = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `ddp-run-node-0`,
+            externalId: externalId,
+          }),
+        });
+
+        expect(firstResponse.status).toBe(200);
+        const firstData = await firstResponse.json();
+        expect(firstData.resumed).toBe(false);
+        const originalRunId = firstData.runId;
+
+        // Second call - should resume existing run
+        const secondResponse = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `ddp-run-node-1`, // Different run name
+            externalId: externalId,    // Same externalId
+          }),
+        });
+
+        expect(secondResponse.status).toBe(200);
+        const secondData = await secondResponse.json();
+        expect(secondData.resumed).toBe(true);
+        expect(secondData.runId).toBe(originalRunId); // Same run ID
+      });
+
+      it('Test 11.3: Different externalIds create separate runs', async () => {
+        const timestamp = Date.now();
+        const externalId1 = `multi-node-a-${timestamp}`;
+        const externalId2 = `multi-node-b-${timestamp}`;
+
+        // Create first run
+        const response1 = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `run-a`,
+            externalId: externalId1,
+          }),
+        });
+
+        expect(response1.status).toBe(200);
+        const data1 = await response1.json();
+        expect(data1.resumed).toBe(false);
+
+        // Create second run with different externalId
+        const response2 = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `run-b`,
+            externalId: externalId2,
+          }),
+        });
+
+        expect(response2.status).toBe(200);
+        const data2 = await response2.json();
+        expect(data2.resumed).toBe(false);
+        expect(data2.runId).not.toBe(data1.runId); // Different run IDs
+      });
+
+      it('Test 11.4: Creating run without externalId still works (backward compatibility)', async () => {
+        const response = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `no-external-id-${Date.now()}`,
+            // externalId omitted
+          }),
+        });
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.runId).toBeDefined();
+        expect(data.resumed).toBe(false);
+      });
+
+      it('Test 11.5: Multiple runs without externalId are created separately', async () => {
+        // Create first run without externalId
+        const response1 = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `no-ext-1-${Date.now()}`,
+          }),
+        });
+
+        expect(response1.status).toBe(200);
+        const data1 = await response1.json();
+
+        // Create second run without externalId
+        const response2 = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `no-ext-2-${Date.now()}`,
+          }),
+        });
+
+        expect(response2.status).toBe(200);
+        const data2 = await response2.json();
+
+        // Both should be new runs with different IDs
+        expect(data1.resumed).toBe(false);
+        expect(data2.resumed).toBe(false);
+        expect(data2.runId).not.toBe(data1.runId);
+      });
+
+      it('Test 11.6: externalId is scoped to project (same externalId in different projects)', async () => {
+        const externalId = `scoped-test-${Date.now()}`;
+        const projectA = `${TEST_PROJECT_NAME}-a-${Date.now()}`;
+        const projectB = `${TEST_PROJECT_NAME}-b-${Date.now()}`;
+
+        // Create run in project A
+        const responseA = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: projectA,
+            runName: `run-in-project-a`,
+            externalId: externalId,
+          }),
+        });
+
+        expect(responseA.status).toBe(200);
+        const dataA = await responseA.json();
+        expect(dataA.resumed).toBe(false);
+
+        // Create run in project B with same externalId - should create new run
+        const responseB = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: projectB,
+            runName: `run-in-project-b`,
+            externalId: externalId,
+          }),
+        });
+
+        expect(responseB.status).toBe(200);
+        const dataB = await responseB.json();
+        expect(dataB.resumed).toBe(false);
+        expect(dataB.runId).not.toBe(dataA.runId); // Different runs in different projects
+      });
+
+      it('Test 11.7: Resumed run returns correct project and org info', async () => {
+        const externalId = `verify-info-${Date.now()}`;
+
+        // Create the run
+        const createResponse = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `original-run`,
+            externalId: externalId,
+            tags: ['original'],
+          }),
+        });
+
+        expect(createResponse.status).toBe(200);
+        const createData = await createResponse.json();
+
+        // Resume the run
+        const resumeResponse = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `different-name`, // Different name shouldn't matter
+            externalId: externalId,
+            tags: ['different'], // Different tags shouldn't matter
+          }),
+        });
+
+        expect(resumeResponse.status).toBe(200);
+        const resumeData = await resumeResponse.json();
+
+        // Verify all info matches
+        expect(resumeData.resumed).toBe(true);
+        expect(resumeData.runId).toBe(createData.runId);
+        expect(resumeData.projectName).toBe(createData.projectName);
+        expect(resumeData.organizationSlug).toBe(createData.organizationSlug);
+        expect(resumeData.url).toBe(createData.url);
+      });
+    });
+  });
 });
