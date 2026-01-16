@@ -182,8 +182,36 @@ router.openapi(createRunRoute, async (c) => {
       if (error instanceof SyntaxError) {
         return c.json({ error: "Invalid JSON format in request body" }, 400);
       }
-      console.error("Failed to create run:", error);
-      return c.json({ error: "Failed to create run" }, 500);
+
+      // Handle race condition: another process created the run with same externalId first
+      // This can happen in multi-node distributed training when multiple processes
+      // call init() simultaneously with the same run_id
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === "P2002" &&
+        externalId
+      ) {
+        try {
+          const existingRun = await ctx.prisma.runs.findFirst({
+            where: {
+              externalId,
+              organizationId: apiKey.organization.id,
+              projectId: project.id,
+            },
+          });
+          if (existingRun) {
+            run = existingRun;
+            resumed = true;
+          }
+        } catch (retryError) {
+          console.error("Failed to fetch existing run after P2002 error:", retryError);
+        }
+      }
+
+      if (!run) {
+        console.error("Failed to create run:", error);
+        return c.json({ error: "Failed to create run" }, 500);
+      }
     }
   }
 
