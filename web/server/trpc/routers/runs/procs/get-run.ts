@@ -10,6 +10,7 @@ export const getRunProcedure = protectedOrgProcedure
     const runId = sqidDecode(encodedRunId);
     const run = await ctx.prisma.runs.findUnique({
       include: {
+        // eslint-disable-next-line @mlop/no-unbounded-prisma-include -- Single run fetch, logs needed for UI
         logs: true,
       },
       where: {

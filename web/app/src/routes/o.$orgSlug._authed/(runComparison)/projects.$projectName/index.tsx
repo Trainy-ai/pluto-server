@@ -163,7 +163,7 @@ function RouteComponent() {
         }
       >
         <ResizablePanelGroup
-          direction="horizontal"
+          orientation="horizontal"
           className="h-[calc(100vh-4rem)] w-full p-2"
           defaultLayout={{
             "runs-list": 30,
@@ -172,7 +172,6 @@ function RouteComponent() {
         >
           <ResizablePanel
             id="runs-list"
-            order={1}
             minSize={15}
           >
             <div className="flex h-full flex-col pr-2 overflow-y-auto overscroll-y-contain">
@@ -203,7 +202,6 @@ function RouteComponent() {
           <ResizableHandle withHandle />
           <ResizablePanel
             id="metrics-display"
-            order={2}
           >
             <div className="flex h-full flex-col overflow-y-auto overscroll-y-contain pl-2">
               {(isLoading || runCountLoading) && runs.length === 0 ? (

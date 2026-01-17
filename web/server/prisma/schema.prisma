@@ -276,6 +276,7 @@ model RunLogs {
   run       Runs       @relation(fields: [runId], references: [id], onDelete: Cascade)
   createdAt DateTime   @default(now())
 
+  @@unique([runId, logName]) // Required for skipDuplicates to work in addLogName
   @@index([runId])
   @@map("run_logs")
 }

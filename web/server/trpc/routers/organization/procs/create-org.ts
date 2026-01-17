@@ -36,6 +36,7 @@ export const createOrgProcedure = protectedProcedure
         },
       },
       include: {
+        // eslint-disable-next-line @mlop/no-unbounded-prisma-include -- 1:1 relation
         OrganizationSubscription: true,
       },
     });
@@ -77,6 +78,7 @@ export const createOrgProcedure = protectedProcedure
           },
         },
         include: {
+          // eslint-disable-next-line @mlop/no-unbounded-prisma-include -- Newly created org, only 1 member
           members: true,
         },
       });
@@ -112,8 +114,10 @@ export const createOrgProcedure = protectedProcedure
     const finalOrganization = await ctx.prisma.organization.findUnique({
       where: { id: newOrgId },
       include: {
+        // eslint-disable-next-line @mlop/no-unbounded-prisma-include -- Newly created org, only 1 member
         members: true,
-        OrganizationSubscription: true, // Now include the subscription
+        // eslint-disable-next-line @mlop/no-unbounded-prisma-include -- 1:1 relation
+        OrganizationSubscription: true,
       },
     });
 

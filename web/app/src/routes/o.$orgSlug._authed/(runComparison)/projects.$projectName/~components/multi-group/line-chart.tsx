@@ -10,8 +10,6 @@ import { trpc, trpcClient } from "@/utils/trpc";
 import { useCheckDatabaseSize } from "@/lib/db/local-cache";
 import { metricsCache, type MetricDataPoint } from "@/lib/db/index";
 import { useLocalQueries } from "@/lib/hooks/use-local-query";
-import { BYTES_LOGS } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/group/line-chart";
-
 const SYNC_REFRESH_INTERVAL = 5 * 1000; // 5 seconds
 const GC_TIME = 0; // Immediate garbage collection when query is inactive
 
@@ -127,10 +125,6 @@ export const MultiLineChart = memo(
           };
         });
 
-      const isBytesLog = BYTES_LOGS.some((bytesLog) =>
-        title.includes(bytesLog),
-      );
-
       return (
         <LineChart
           lines={chartData}
@@ -140,7 +134,6 @@ export const MultiLineChart = memo(
           ref={ref}
           showLegend={true}
           isDateTime={true}
-          isBytes={isBytesLog}
         />
       );
     }

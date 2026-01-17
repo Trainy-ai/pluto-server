@@ -318,6 +318,76 @@ describe('SDK API Endpoints (with API Key)', () => {
       expect(data.success).toBe(true);
     });
 
+    it('Test 6.6.1: Add Log Names - High Volume Load Test', async () => {
+      // This test simulates real ML training with many unique metric names
+      // (e.g., per-layer losses, per-head attention weights, etc.)
+      // Previously, this would cause OOM as the endpoint loaded ALL existing
+      // log names into memory on each request.
+
+      // Create a dedicated run for this load test
+      const createResponse = await makeRequest('/api/runs/create', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${TEST_API_KEY}`,
+        },
+        body: JSON.stringify({
+          projectName: TEST_PROJECT_NAME,
+          runName: `load-test-lognames-${Date.now()}`,
+          config: JSON.stringify({}),
+        }),
+      });
+
+      expect(createResponse.status).toBe(200);
+      const { runId: loadTestRunId } = await createResponse.json();
+
+      // Generate 500 unique metric names (simulates transformer with many layers/heads)
+      const allLogNames: string[] = [];
+      for (let layer = 0; layer < 10; layer++) {
+        for (let head = 0; head < 10; head++) {
+          for (let metric = 0; metric < 5; metric++) {
+            allLogNames.push(`train/layer_${layer}/head_${head}/metric_${metric}`);
+          }
+        }
+      }
+
+      // Add log names in batches (like the SDK does)
+      const BATCH_SIZE = 50;
+      for (let i = 0; i < allLogNames.length; i += BATCH_SIZE) {
+        const batch = allLogNames.slice(i, i + BATCH_SIZE);
+        const response = await makeRequest('/api/runs/logName/add', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            runId: loadTestRunId,
+            logName: batch,
+            logType: 'METRIC',
+          }),
+        });
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.success).toBe(true);
+      }
+
+      // Verify we can still add more log names after the initial batch
+      // (this would fail with OOM if we loaded all 500 into memory)
+      const finalResponse = await makeRequest('/api/runs/logName/add', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${TEST_API_KEY}`,
+        },
+        body: JSON.stringify({
+          runId: loadTestRunId,
+          logName: ['final/validation_loss', 'final/validation_accuracy'],
+          logType: 'METRIC',
+        }),
+      });
+
+      expect(finalResponse.status).toBe(200);
+    }, 30000); // 30 second timeout for load test
+
     it('Test 6.7: Update Run Status to FAILED', async () => {
       // Create a new run to test FAILED status
       const createResponse = await makeRequest('/api/runs/create', {
