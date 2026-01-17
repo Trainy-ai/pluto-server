@@ -13,7 +13,7 @@ import {
   Volume2,
   VolumeX,
 } from "lucide-react";
-import { useRef, useEffect, useMemo } from "react";
+import { useRef, useEffect, useMemo, useState } from "react";
 import { Slider } from "@/components/ui/slider";
 import { StepNavigator } from "../../../../(run)/projects.$projectName.$runId/~components/shared/step-navigator";
 import { useStepNavigation } from "../../../../(run)/projects.$projectName.$runId/~hooks/use-step-navigation";

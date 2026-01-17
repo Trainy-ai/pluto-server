@@ -1,6 +1,6 @@
 const RECENT_AUTH_METHOD_KEY = "recent_auth_method";
 
-export type AuthMethod = "google" | "github" | "email";
+export type AuthMethod = "google" | "github" | "email" | "sso";
 
 export function getRecentAuthMethod(): AuthMethod | null {
   if (typeof window === "undefined") return null;

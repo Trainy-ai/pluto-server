@@ -191,20 +191,16 @@ router.openapi(createRunRoute, async (c) => {
         error.code === "P2002" &&
         externalId
       ) {
-        try {
-          const existingRun = await ctx.prisma.runs.findFirst({
-            where: {
-              externalId,
-              organizationId: apiKey.organization.id,
-              projectId: project.id,
-            },
-          });
-          if (existingRun) {
-            run = existingRun;
-            resumed = true;
-          }
-        } catch (retryError) {
-          console.error("Failed to fetch existing run after P2002 error:", retryError);
+        const existingRun = await ctx.prisma.runs.findFirst({
+          where: {
+            externalId,
+            organizationId: apiKey.organization.id,
+            projectId: project.id,
+          },
+        });
+        if (existingRun) {
+          run = existingRun;
+          resumed = true;
         }
       }
 
@@ -348,8 +344,9 @@ router.openapi(addLogNameRoute, async (c) => {
   const apiKey = c.get("apiKey");
   const { runId, logName, logType } = c.req.valid("json");
 
+  // First verify the run exists and belongs to this organization
   const run = await c.get("prisma").runs.findUnique({
-    include: { logs: true },
+    select: { id: true },
     where: { id: runId, organizationId: apiKey.organization.id },
   });
 
@@ -357,17 +354,30 @@ router.openapi(addLogNameRoute, async (c) => {
     return c.json({ error: "Run not found" }, 404);
   }
 
-  const existingLogNames = run.logs.map((log) => log.logName);
-  const logNamesToAdd = logName.filter((name) => !existingLogNames.includes(name));
-
-  await c.get("prisma").runLogs.createMany({
-    data: logNamesToAdd.map((name) => ({
-      logName: name,
+  // Query only the log names we're checking (not ALL logs for the run)
+  // This prevents loading thousands of log records into memory
+  const existingLogs = await c.get("prisma").runLogs.findMany({
+    select: { logName: true },
+    where: {
       runId: runId,
-      logType: logType,
-      logGroup: getLogGroupName(name),
-    })),
+      logName: { in: logName },
+    },
   });
+
+  const existingLogNames = new Set(existingLogs.map((log) => log.logName));
+  const logNamesToAdd = logName.filter((name) => !existingLogNames.has(name));
+
+  if (logNamesToAdd.length > 0) {
+    await c.get("prisma").runLogs.createMany({
+      data: logNamesToAdd.map((name) => ({
+        logName: name,
+        runId: runId,
+        logType: logType,
+        logGroup: getLogGroupName(name),
+      })),
+      skipDuplicates: true, // Handle race conditions from concurrent requests
+    });
+  }
 
   return c.json({ success: true }, 200);
 });
