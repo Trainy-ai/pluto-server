@@ -1,4 +1,5 @@
 import { authClient } from "./client";
+import { resetPostHogUser } from "@/lib/analytics/posthog";
 
 export const signInEmail = async (
   options: Parameters<typeof authClient.signIn.email>[0],
@@ -44,6 +45,7 @@ export const signOut = async (invalidateQueries: () => void) => {
   if (res.error) {
     throw new Error(res.error.message);
   } else {
+    resetPostHogUser();
     invalidateQueries();
   }
   return res.data;

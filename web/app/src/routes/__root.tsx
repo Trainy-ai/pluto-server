@@ -9,10 +9,12 @@ import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 import { TanStackRouterDevtools } from "@tanstack/react-router-devtools";
 import "../index.css";
 import type { QueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { trpc } from "@/utils/trpc";
 import type { inferOutput } from "@trpc/tanstack-react-query";
 import { env } from "@/lib/env";
 import { PostHogProvider } from "posthog-js/react";
+import { PostHogAnalytics } from "@/components/posthog-analytics";
 
 type Auth = inferOutput<typeof trpc.auth>;
 export interface RouterAppContext {
@@ -58,7 +60,12 @@ const PostHogProviderWrapper = ({
   return (
     <PostHogProvider
       apiKey={hasPostHogKey!}
-      options={{ api_host: hasPostHogHost }}
+      options={{
+        api_host: hasPostHogHost,
+        capture_pageview: false, // We handle this manually in PostHogAnalytics
+        capture_pageleave: true,
+        persistence: "localStorage",
+      }}
     >
       {children}
     </PostHogProvider>
@@ -66,10 +73,14 @@ const PostHogProviderWrapper = ({
 };
 
 function RootComponent() {
+  // Use the auth query directly to get auth state for analytics
+  const { data: auth } = useQuery(trpc.auth.queryOptions());
+
   return (
     <>
       <ThemeProvider defaultTheme="dark" storageKey="vite-ui-theme">
         <PostHogProviderWrapper>
+          <PostHogAnalytics auth={auth ?? null} />
           <HeadContent />
           <Outlet />
           <Toaster richColors />
