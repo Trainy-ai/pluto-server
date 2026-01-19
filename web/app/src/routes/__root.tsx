@@ -27,12 +27,12 @@ export const Route = createRootRouteWithContext<RouterAppContext>()({
   head: () => ({
     meta: [
       {
-        name: "mlop",
+        name: "Pluto",
         content:
-          "mlop is a next-gen experiment tracking app for machine learning",
+          "Pluto is a next-gen experiment tracking app for machine learning",
       },
       {
-        title: "mlop",
+        title: "Pluto",
       },
     ],
     links: [

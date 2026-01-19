@@ -264,7 +264,7 @@ export default function OrganizationDetailsStep({
             name="name"
             value={formData.name}
             onChange={handleChange}
-            placeholder="mlop Inc."
+            placeholder="Trainy Inc."
             className={`h-11 text-base placeholder:text-muted-foreground/50 ${
               errors.name ? "border-destructive" : ""
             }`}
