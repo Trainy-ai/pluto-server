@@ -41,7 +41,7 @@ function RouteComponent() {
       <main className="px-4">
         <div className="mx-auto w-full max-w-sm min-w-[320px] space-y-6 py-12">
           <Link to="/" className="mx-auto block w-fit text-2xl font-semibold">
-            m:lop
+            🪐 Pluto
           </Link>
           <SignInCard redirect={redirect} />
         </div>

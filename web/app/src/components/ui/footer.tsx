@@ -14,14 +14,14 @@ export function Footer({ className = "" }: FooterProps) {
             © {new Date().getFullYear()} trainy.ai
           </span>
           <span className="text-xs">
-            Trainy's fork of{" "}
+            Powered by{" "}
             <a
-              href="https://github.com/Trainy-ai/mlop"
+              href="https://github.com/Trainy-ai/pluto"
               className="transition-colors hover:text-foreground hover:underline"
               rel="noopener noreferrer"
               target="_blank"
             >
-              MLOP
+              Trainy's fork of MLOP - 🪐 Pluto
             </a>
           </span>
           <div className="flex items-center gap-4">
