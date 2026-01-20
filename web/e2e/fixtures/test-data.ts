@@ -15,6 +15,11 @@ export const TEST_ORG = {
   slug: "smoke-test-org",
 };
 
+export const TEST_ORG_2 = {
+  name: "smoke-test-org-2",
+  slug: "smoke-test-org-2",
+};
+
 export const TEST_PROJECT = {
   name: "smoke-test-project",
 };

@@ -6,6 +6,7 @@ import {
   useQueryClient,
   useSuspenseQuery,
   type InfiniteData,
+  type QueryKey,
   type UseQueryOptions,
   type UseQueryResult,
 } from "@tanstack/react-query";
@@ -14,14 +15,16 @@ import type { TRPCQueryKey } from "@trpc/tanstack-react-query";
 import { LocalCache } from "@/lib/db/local-cache";
 import { useCallback, useEffect, useMemo } from "react";
 
+type LocalQueryKey = TRPCQueryKey | QueryKey;
+
 interface LocalQueryOptions<T> extends UseQueryOptions<T> {
-  queryKey: TRPCQueryKey;
+  queryKey: LocalQueryKey;
   queryFn: () => Promise<T>;
   staleTime: number;
   localCache: LocalCache<T>;
 }
 
-const stringifyQueryKey = (queryKey: TRPCQueryKey) => {
+export const stringifyQueryKey = (queryKey: LocalQueryKey) => {
   const stringified = JSON.stringify(queryKey)
     .replace(/,/g, "_")
     .replace(/:/g, "_")
@@ -285,7 +288,7 @@ export async function ensureLocalQuery<T>(
  */
 
 interface LocalInfiniteQueryOptions<T> {
-  queryKey: TRPCQueryKey;
+  queryKey: LocalQueryKey;
   queryFn: ({ pageParam }: { pageParam?: unknown }) => Promise<T>;
   staleTime: number;
   localCache: LocalCache<InfiniteData<T>>;
@@ -337,7 +340,7 @@ export function useLocalInfiniteQuery<T>({
  * Options for prefetching an infinite query with local caching.
  */
 interface PrefetchLocalInfiniteQueryOptions<T> {
-  queryKey: TRPCQueryKey;
+  queryKey: LocalQueryKey;
   queryFn: ({ pageParam }: { pageParam?: unknown }) => Promise<T>;
   staleTime: number;
   localCache: LocalCache<InfiniteData<T>>;
@@ -407,7 +410,7 @@ export async function prefetchLocalInfiniteQuery<T>(
 
 export const bustLocalCache = async (
   localCache: LocalCache<unknown>,
-  queryKey: TRPCQueryKey,
+  queryKey: LocalQueryKey,
 ) => {
   const storageKey = stringifyQueryKey(queryKey);
   // Delete the cache entry rather than setting to null

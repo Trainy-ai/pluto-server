@@ -10,16 +10,17 @@ type Run = inferOutput<typeof trpc.runs.latest>[0];
 interface RecentRunsProps {
   runs: Run[];
   orgSlug: string;
+  orgId: string;
 }
 
-export function RecentRuns({ runs, orgSlug }: RecentRunsProps) {
+export function RecentRuns({ runs, orgSlug, orgId }: RecentRunsProps) {
   const [lastRefreshed, setLastRefreshed] = useState<Date | undefined>(
     undefined,
   );
 
   const refreshData = async () => {
     await queryClient.invalidateQueries({
-      queryKey: trpc.runs.latest.queryKey(),
+      queryKey: ["runs", "latest", orgId],
       refetchType: "all",
     });
     setLastRefreshed(new Date());

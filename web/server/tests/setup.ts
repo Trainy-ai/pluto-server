@@ -20,6 +20,8 @@ interface TestData {
   userId: string;
   organizationId: string;
   organizationSlug: string;
+  organization2Id: string;
+  organization2Slug: string;
   apiKey: string;
   apiKeyId: string;
   projectName: string;
@@ -176,6 +178,99 @@ async function setupTestData(): Promise<TestData> {
     console.log(`   ✓ Created organization subscription with usage limits`);
   }
 
+  // 2b. Create second test organization (for org switching tests)
+  console.log('\n2️⃣b Creating second test organization...');
+  const org2Slug = 'smoke-test-org-2';
+
+  let org2 = await prisma.organization.findUnique({
+    where: { slug: org2Slug },
+  });
+
+  if (!org2) {
+    org2 = await prisma.organization.create({
+      data: {
+        id: nanoid(),
+        name: 'Smoke Test Organization 2',
+        slug: org2Slug,
+        createdAt: new Date(),
+        members: {
+          create: {
+            id: nanoid(),
+            userId: user.id,
+            role: 'OWNER',
+            createdAt: new Date(),
+          },
+        },
+      },
+    });
+    console.log(`   ✓ Created organization 2: ${org2.name} (slug: ${org2.slug})`);
+  } else {
+    console.log(`   ✓ Organization 2 already exists: ${org2.name} (slug: ${org2.slug})`);
+
+    // Ensure user is a member
+    const membership2 = await prisma.member.findFirst({
+      where: {
+        userId: user.id,
+        organizationId: org2.id,
+      },
+    });
+
+    if (!membership2) {
+      await prisma.member.create({
+        data: {
+          id: nanoid(),
+          userId: user.id,
+          organizationId: org2.id,
+          role: 'OWNER',
+          createdAt: new Date(),
+        },
+      });
+      console.log(`   ✓ Added user as OWNER to org 2`);
+    }
+  }
+
+  // Ensure organization 2 has a subscription
+  const subscription2 = await prisma.organizationSubscription.findUnique({
+    where: { organizationId: org2.id },
+  });
+
+  if (!subscription2) {
+    await prisma.organizationSubscription.create({
+      data: {
+        organizationId: org2.id,
+        stripeCustomerId: 'cus_test_smoke_2_' + org2.id.substring(0, 8),
+        stripeSubscriptionId: 'sub_test_smoke_2_' + org2.id.substring(0, 8),
+        plan: 'PRO',
+        seats: 10,
+        usageLimits: {
+          dataUsageGB: 100,
+          trainingHoursPerMonth: 750,
+        },
+      },
+    });
+    console.log(`   ✓ Created organization 2 subscription with usage limits`);
+  }
+
+  // Create project and run in org 2 for org-switching tests
+  let project2 = await prisma.projects.findUnique({
+    where: {
+      organizationId_name: {
+        organizationId: org2.id,
+        name: 'org2-test-project',
+      },
+    },
+  });
+
+  if (!project2) {
+    project2 = await prisma.projects.create({
+      data: {
+        name: 'org2-test-project',
+        organizationId: org2.id,
+      },
+    });
+    console.log(`   ✓ Created project in org 2: ${project2.name}`);
+  }
+
   // 3. Create or get test API key
   console.log('\n3️⃣  Creating test API key...');
   const apiKeyPrefix = 'mlps_smoke_test_';
@@ -212,6 +307,43 @@ async function setupTestData(): Promise<TestData> {
       data: { key: hashedKey },
     });
     console.log(`   ✓ Updated existing API key: ${fullApiKey.substring(0, 20)}...`);
+  }
+
+  // 3b. Create or get test API key for org 2
+  console.log('\n3️⃣b Creating test API key for org 2...');
+  const apiKey2Prefix = 'mlps_smoke_test_org2_';
+  const apiKey2Secret = crypto.randomBytes(32).toString('hex');
+  const fullApiKey2 = `${apiKey2Prefix}${apiKey2Secret}`;
+  const hashedKey2 = await hashApiKey(fullApiKey2);
+
+  let apiKey2 = await prisma.apiKey.findFirst({
+    where: {
+      organizationId: org2.id,
+      name: 'Smoke Test Key Org 2',
+    },
+  });
+
+  if (!apiKey2) {
+    apiKey2 = await prisma.apiKey.create({
+      data: {
+        id: nanoid(),
+        name: 'Smoke Test Key Org 2',
+        key: hashedKey2,
+        keyString: apiKey2Prefix + '***',
+        isHashed: true,
+        userId: user.id,
+        organizationId: org2.id,
+        createdAt: new Date(),
+      },
+    });
+    console.log(`   ✓ Created API key for org 2: ${fullApiKey2.substring(0, 25)}...`);
+  } else {
+    // Update with new key
+    await prisma.apiKey.update({
+      where: { id: apiKey2.id },
+      data: { key: hashedKey2 },
+    });
+    console.log(`   ✓ Updated existing API key for org 2: ${fullApiKey2.substring(0, 25)}...`);
   }
 
   // 4. Create or get test projects (multiple for pagination tests)
@@ -365,10 +497,39 @@ async function setupTestData(): Promise<TestData> {
     console.log(`   ✓ Runs already exist (${existingRuns.length} runs found)`);
   }
 
+  // 6. Create a run in org 2 for org-switching tests
+  console.log('\n6️⃣  Creating test run in org 2...');
+  const existingOrg2Runs = await prisma.runs.findMany({
+    where: {
+      projectId: project2.id,
+      organizationId: org2.id,
+    },
+  });
+
+  if (existingOrg2Runs.length === 0) {
+    await prisma.runs.create({
+      data: {
+        name: 'org2-unique-run',
+        organizationId: org2.id,
+        projectId: project2.id,
+        createdById: user.id,
+        creatorApiKeyId: apiKey2.id,
+        status: 'COMPLETED',
+        config: { framework: 'tensorflow' },
+        systemMetadata: { hostname: 'test-host-2' },
+      },
+    });
+    console.log(`   ✓ Created test run in org 2 (with org2's API key)`);
+  } else {
+    console.log(`   ✓ Org 2 runs already exist (${existingOrg2Runs.length} runs found)`);
+  }
+
   const testData: TestData = {
     userId: user.id,
     organizationId: org.id,
     organizationSlug: org.slug,
+    organization2Id: org2.id,
+    organization2Slug: org2.slug,
     apiKey: fullApiKey,
     apiKeyId: apiKey.id,
     projectName: project.name,
@@ -413,20 +574,40 @@ TEST_PY_URL="http://localhost:3004"
 async function cleanupTestData() {
   console.log('🧹 Cleaning up test data...\n');
 
-  const orgSlug = 'smoke-test-org';
-  const org = await prisma.organization.findUnique({
-    where: { slug: orgSlug },
-  });
+  const orgSlugs = ['smoke-test-org', 'smoke-test-org-2'];
 
-  if (org) {
-    // Delete in correct order to respect foreign key constraints
-    await prisma.runs.deleteMany({ where: { organizationId: org.id } });
-    await prisma.apiKey.deleteMany({ where: { organizationId: org.id } });
-    await prisma.projects.deleteMany({ where: { organizationId: org.id } });
-    await prisma.organizationSubscription.deleteMany({ where: { organizationId: org.id } });
-    await prisma.member.deleteMany({ where: { organizationId: org.id } });
-    await prisma.organization.delete({ where: { id: org.id } });
-    console.log('   ✓ Deleted test organization and related data');
+  // First, collect all org IDs and delete ALL runs (to avoid FK constraint on apiKey)
+  const orgIds: string[] = [];
+  for (const orgSlug of orgSlugs) {
+    const org = await prisma.organization.findUnique({
+      where: { slug: orgSlug },
+    });
+    if (org) {
+      orgIds.push(org.id);
+    }
+  }
+
+  // Delete all runs first (they reference apiKeys via creatorApiKeyId)
+  if (orgIds.length > 0) {
+    await prisma.runs.deleteMany({ where: { organizationId: { in: orgIds } } });
+    console.log('   ✓ Deleted all test runs');
+  }
+
+  // Now delete the rest for each org
+  for (const orgSlug of orgSlugs) {
+    const org = await prisma.organization.findUnique({
+      where: { slug: orgSlug },
+    });
+
+    if (org) {
+      // Delete in correct order to respect foreign key constraints
+      await prisma.apiKey.deleteMany({ where: { organizationId: org.id } });
+      await prisma.projects.deleteMany({ where: { organizationId: org.id } });
+      await prisma.organizationSubscription.deleteMany({ where: { organizationId: org.id } });
+      await prisma.member.deleteMany({ where: { organizationId: org.id } });
+      await prisma.organization.delete({ where: { id: org.id } });
+      console.log(`   ✓ Deleted test organization ${orgSlug} and related data`);
+    }
   }
 
   const testEmail = 'test-smoke@mlop.local';

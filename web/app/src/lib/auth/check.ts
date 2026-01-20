@@ -37,13 +37,17 @@ interface AuthCheckOptions {
 export const userAuthCheck = async (options?: AuthCheckOptions) => {
   // Use ensureLocalQuery to leverage IndexedDB caching
 
-  const start = performance.now();
-  const auth = await ensureLocalQuery<AuthData>(queryClient, {
-    queryKey: trpc.auth.queryKey(),
-    queryFn: trpcClient.auth.query,
-    staleTime: 1000 * 60, // 1 minutes cache unless forced fresh
-    localCache: authCache,
-  });
+  const auth = await ensureLocalQuery<AuthData>(
+    queryClient,
+    {
+      queryKey: trpc.auth.queryKey(),
+      queryFn: trpcClient.auth.query,
+      staleTime: 1000 * 60, // 1 minute cache unless forced fresh
+      localCache: authCache,
+    },
+    false, // onlyUseCache
+    options?.forceFresh ?? false
+  );
 
   const search = options?.search;
 
@@ -96,7 +100,9 @@ export const orgAuthCheck = async (
   if (needsOrgUpdate) {
     // Set the sessions active org id to the current orgId
     await setActiveOrg(orgSlug);
-    // Invalidate the queries
+    // Bust the auth IndexedDB cache to ensure fresh data
+    await bustAuthCache();
+    // Invalidate the TanStack Query cache
     await queryClient.invalidateQueries();
 
     const auth = await userAuthCheck({ ...options, forceFresh: true });
