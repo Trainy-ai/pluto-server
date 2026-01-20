@@ -32,6 +32,92 @@ async function hashApiKey(key: string): Promise<string> {
   return crypto.createHash('sha256').update(key).digest('hex');
 }
 
+interface OrgSetupResult {
+  org: { id: string; name: string; slug: string; createdAt: Date };
+}
+
+/**
+ * Creates or retrieves a test organization with membership and subscription.
+ * Reduces code duplication for org setup.
+ */
+async function ensureTestOrg(
+  userId: string,
+  orgSlug: string,
+  orgName: string,
+  stripeIdSuffix: string = ''
+): Promise<OrgSetupResult> {
+  let org = await prisma.organization.findUnique({
+    where: { slug: orgSlug },
+  });
+
+  if (!org) {
+    org = await prisma.organization.create({
+      data: {
+        id: nanoid(),
+        name: orgName,
+        slug: orgSlug,
+        createdAt: new Date(),
+        members: {
+          create: {
+            id: nanoid(),
+            userId: userId,
+            role: 'OWNER',
+            createdAt: new Date(),
+          },
+        },
+      },
+    });
+    console.log(`   ✓ Created organization: ${org.name} (slug: ${org.slug})`);
+  } else {
+    console.log(`   ✓ Organization already exists: ${org.name} (slug: ${org.slug})`);
+
+    // Ensure user is a member
+    const membership = await prisma.member.findFirst({
+      where: {
+        userId: userId,
+        organizationId: org.id,
+      },
+    });
+
+    if (!membership) {
+      await prisma.member.create({
+        data: {
+          id: nanoid(),
+          userId: userId,
+          organizationId: org.id,
+          role: 'OWNER',
+          createdAt: new Date(),
+        },
+      });
+      console.log(`   ✓ Added user as OWNER`);
+    }
+  }
+
+  // Ensure organization has a subscription with usage limits
+  const subscription = await prisma.organizationSubscription.findUnique({
+    where: { organizationId: org.id },
+  });
+
+  if (!subscription) {
+    await prisma.organizationSubscription.create({
+      data: {
+        organizationId: org.id,
+        stripeCustomerId: `cus_test_smoke${stripeIdSuffix}_` + org.id.substring(0, 8),
+        stripeSubscriptionId: `sub_test_smoke${stripeIdSuffix}_` + org.id.substring(0, 8),
+        plan: 'PRO',
+        seats: 10,
+        usageLimits: {
+          dataUsageGB: 100,
+          trainingHoursPerMonth: 750,
+        },
+      },
+    });
+    console.log(`   ✓ Created organization subscription with usage limits`);
+  }
+
+  return { org };
+}
+
 async function setupTestData(): Promise<TestData> {
   console.log('🔧 Setting up test database...\n');
 
@@ -108,148 +194,12 @@ async function setupTestData(): Promise<TestData> {
   // 2. Create or get test organization
   console.log('\n2️⃣  Creating test organization...');
   const orgSlug = 'smoke-test-org';
-
-  let org = await prisma.organization.findUnique({
-    where: { slug: orgSlug },
-  });
-
-  if (!org) {
-    org = await prisma.organization.create({
-      data: {
-        id: nanoid(),
-        name: 'Smoke Test Organization',
-        slug: orgSlug,
-        createdAt: new Date(),
-        members: {
-          create: {
-            id: nanoid(),
-            userId: user.id,
-            role: 'OWNER',
-            createdAt: new Date(),
-          },
-        },
-      },
-    });
-    console.log(`   ✓ Created organization: ${org.name} (slug: ${org.slug})`);
-  } else {
-    console.log(`   ✓ Organization already exists: ${org.name} (slug: ${org.slug})`);
-
-    // Ensure user is a member
-    const membership = await prisma.member.findFirst({
-      where: {
-        userId: user.id,
-        organizationId: org.id,
-      },
-    });
-
-    if (!membership) {
-      await prisma.member.create({
-        data: {
-          id: nanoid(),
-          userId: user.id,
-          organizationId: org.id,
-          role: 'OWNER',
-          createdAt: new Date(),
-        },
-      });
-      console.log(`   ✓ Added user as OWNER`);
-    }
-  }
-
-  // Ensure organization has a subscription with usage limits
-  const subscription = await prisma.organizationSubscription.findUnique({
-    where: { organizationId: org.id },
-  });
-
-  if (!subscription) {
-    await prisma.organizationSubscription.create({
-      data: {
-        organizationId: org.id,
-        stripeCustomerId: 'cus_test_smoke_' + org.id.substring(0, 8),
-        stripeSubscriptionId: 'sub_test_smoke_' + org.id.substring(0, 8),
-        plan: 'PRO',
-        seats: 10,
-        usageLimits: {
-          dataUsageGB: 100,
-          trainingHoursPerMonth: 750,
-        },
-      },
-    });
-    console.log(`   ✓ Created organization subscription with usage limits`);
-  }
+  const { org } = await ensureTestOrg(user.id, orgSlug, 'Smoke Test Organization');
 
   // 2b. Create second test organization (for org switching tests)
   console.log('\n2️⃣b Creating second test organization...');
   const org2Slug = 'smoke-test-org-2';
-
-  let org2 = await prisma.organization.findUnique({
-    where: { slug: org2Slug },
-  });
-
-  if (!org2) {
-    org2 = await prisma.organization.create({
-      data: {
-        id: nanoid(),
-        name: 'Smoke Test Organization 2',
-        slug: org2Slug,
-        createdAt: new Date(),
-        members: {
-          create: {
-            id: nanoid(),
-            userId: user.id,
-            role: 'OWNER',
-            createdAt: new Date(),
-          },
-        },
-      },
-    });
-    console.log(`   ✓ Created organization 2: ${org2.name} (slug: ${org2.slug})`);
-  } else {
-    console.log(`   ✓ Organization 2 already exists: ${org2.name} (slug: ${org2.slug})`);
-
-    // Ensure user is a member
-    const membership2 = await prisma.member.findFirst({
-      where: {
-        userId: user.id,
-        organizationId: org2.id,
-      },
-    });
-
-    if (!membership2) {
-      await prisma.member.create({
-        data: {
-          id: nanoid(),
-          userId: user.id,
-          organizationId: org2.id,
-          role: 'OWNER',
-          createdAt: new Date(),
-        },
-      });
-      console.log(`   ✓ Added user as OWNER to org 2`);
-    }
-  }
-
-  // Ensure organization 2 has a subscription
-  const subscription2 = await prisma.organizationSubscription.findUnique({
-    where: { organizationId: org2.id },
-  });
-
-  if (!subscription2) {
-    await prisma.organizationSubscription.create({
-      data: {
-        organizationId: org2.id,
-        stripeCustomerId: 'cus_test_smoke_2_' + org2.id.substring(0, 8),
-        stripeSubscriptionId: 'sub_test_smoke_2_' + org2.id.substring(0, 8),
-        plan: 'PRO',
-        seats: 10,
-        usageLimits: {
-          dataUsageGB: 100,
-          trainingHoursPerMonth: 750,
-        },
-      },
-    });
-    console.log(`   ✓ Created organization 2 subscription with usage limits`);
-  }
+  const { org: org2 } = await ensureTestOrg(user.id, org2Slug, 'Smoke Test Organization 2', '_2');
 
   // Create project and run in org 2 for org-switching tests
   let project2 = await prisma.projects.findUnique({
