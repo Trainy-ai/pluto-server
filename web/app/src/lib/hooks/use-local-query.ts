@@ -13,7 +13,7 @@ import {
 import { useLiveQuery } from "dexie-react-hooks";
 import type { TRPCQueryKey } from "@trpc/tanstack-react-query";
 import { LocalCache } from "@/lib/db/local-cache";
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 
 type LocalQueryKey = TRPCQueryKey | QueryKey;
 
@@ -48,13 +48,27 @@ export function useLocalQuery<T>({
 }: LocalQueryOptions<T>) {
   // Get cached record synchronously using Dexie's live query.
   const storageKey = stringifyQueryKey(queryKey);
+
+  // Track the previous storage key to detect key changes
+  const prevStorageKeyRef = useRef(storageKey);
+
   const cachedRecord = useLiveQuery(
     () => localCache.getData(storageKey),
     [storageKey],
   );
-  // console.log(cachedRecord);
-  // Use cached data as placeholder (or initialData).
-  const placeholderData = cachedRecord ? cachedRecord.data : undefined;
+
+  // Only use placeholder data if the storage key hasn't changed since last render.
+  // This prevents showing stale data from a different org when switching contexts.
+  const isKeyStable = prevStorageKeyRef.current === storageKey;
+
+  // Update the ref for next render
+  useEffect(() => {
+    prevStorageKeyRef.current = storageKey;
+  }, [storageKey]);
+
+  // Use cached data as placeholder only if key is stable
+  const placeholderData =
+    isKeyStable && cachedRecord ? cachedRecord.data : undefined;
 
   const cachedQueryFn = async () => {
     // Re-read cached record (in case it was updated)
@@ -95,12 +109,27 @@ export function useSuspenseLocalQuery<T>({
 }: LocalQueryOptions<T>) {
   // Get cached record synchronously using Dexie's live query.
   const storageKey = stringifyQueryKey(queryKey);
+
+  // Track the previous storage key to detect key changes
+  const prevStorageKeyRef = useRef(storageKey);
+
   const cachedRecord = useLiveQuery(
     () => localCache.getData(storageKey),
     [storageKey],
   );
-  // Use cached data as placeholder (or initialData).
-  const placeholderData = cachedRecord ? cachedRecord.data : undefined;
+
+  // Only use placeholder data if the storage key hasn't changed since last render.
+  // This prevents showing stale data from a different org when switching contexts.
+  const isKeyStable = prevStorageKeyRef.current === storageKey;
+
+  // Update the ref for next render
+  useEffect(() => {
+    prevStorageKeyRef.current = storageKey;
+  }, [storageKey]);
+
+  // Use cached data as placeholder only if key is stable
+  const placeholderData =
+    isKeyStable && cachedRecord ? cachedRecord.data : undefined;
 
   const cachedQueryFn = useCallback(async () => {
     // Re-read cached record (in case it was updated)
@@ -141,6 +170,18 @@ export function useLocalQueries<T>(
     [queriesOptions],
   );
 
+  // Track the previous storage keys to detect key changes
+  const storageKeysString = storageKeys.join(",");
+  const prevStorageKeysRef = useRef(storageKeysString);
+
+  // Only use placeholder data if the storage keys haven't changed since last render
+  const isKeysStable = prevStorageKeysRef.current === storageKeysString;
+
+  // Update the ref for next render
+  useEffect(() => {
+    prevStorageKeysRef.current = storageKeysString;
+  }, [storageKeysString]);
+
   // Get all cached records using a single Dexie liveQuery
   const cachedRecords = useLiveQuery(async () => {
     const records = await Promise.all(
@@ -149,14 +190,16 @@ export function useLocalQueries<T>(
       ),
     );
     return records;
-  }, [storageKeys.join(",")]);
+  }, [storageKeysString]);
 
   // Prepare query options with cached data and wrapped queryFn
   const combinedQueryOptions = useMemo(() => {
     return queriesOptions.map((opt, index) => {
       const storageKey = storageKeys[index];
       const cachedRecord = cachedRecords?.[index];
-      const placeholderData = cachedRecord ? cachedRecord.data : undefined;
+      // Use cached data as placeholder only if keys are stable
+      const placeholderData =
+        isKeysStable && cachedRecord ? cachedRecord.data : undefined;
 
       const cachedQueryFn = async () => {
         // Re-read cached record (in case it was updated)
@@ -304,12 +347,23 @@ export function useLocalInfiniteQuery<T>({
 }: LocalInfiniteQueryOptions<T>) {
   const storageKey = stringifyQueryKey(queryKey);
 
+  // Track the previous storage key to detect key changes
+  const prevStorageKeyRef = useRef(storageKey);
+
   // Get cached record reactively using Dexie's useLiveQuery
   const cachedRecord = useLiveQuery(() => {
     return localCache.getData(storageKey);
   }, [storageKey]);
 
-  const initialData = cachedRecord?.data;
+  // Only use placeholder data if the storage key hasn't changed since last render
+  const isKeyStable = prevStorageKeyRef.current === storageKey;
+
+  // Update the ref for next render
+  useEffect(() => {
+    prevStorageKeyRef.current = storageKey;
+  }, [storageKey]);
+
+  const initialData = isKeyStable ? cachedRecord?.data : undefined;
 
   const placeholderData = initialData && {
     pages: initialData.pages,

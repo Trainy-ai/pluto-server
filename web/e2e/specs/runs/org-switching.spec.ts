@@ -48,8 +48,25 @@ test.describe("Organization Switching - Runs Display", () => {
     await page.goto(`/o/${org2Slug}`);
     await page.waitForLoadState("networkidle");
 
-    // Wait for potential loading states to complete
-    await page.waitForTimeout(1000);
+    // Wait for the UI to update - org1's runs should disappear when switching to org2
+    // This is the core test: the cache should not show stale data from org1
+    if (hasOrg1Runs) {
+      // Wait for org1 runs to disappear from the page
+      // This ensures the React component has re-rendered with org2's data
+      await page.waitForFunction(
+        (runName) => !document.body.innerText.includes(runName),
+        "test-run-1",
+        { timeout: 10000 }
+      );
+    }
+
+    // Also try to wait for org2's specific content
+    try {
+      await page.waitForSelector('text="org2-unique-run"', { timeout: 5000 });
+    } catch {
+      // If org2 run doesn't exist, just verify URL changed
+      expect(page.url()).toContain(org2Slug);
+    }
 
     // Get the content of the page for org 2
     const org2Content = await page.content();
@@ -61,11 +78,7 @@ test.describe("Organization Switching - Runs Display", () => {
     // If the bug exists, org 2 would show the cached org 1 runs
     if (hasOrg1Runs) {
       // Org 1 runs should not appear on org 2 page
-      const org2ShowsOrg1Runs =
-        org2Content.includes("test-run-1") &&
-        !org2Content.includes("org2-unique-run");
-
-      expect(org2ShowsOrg1Runs).toBe(false);
+      expect(org2Content).not.toContain("test-run-1");
     }
 
     // If org 2 has its unique run, verify it's showing
@@ -137,17 +150,37 @@ test.describe("Organization Switching - Runs Display", () => {
       return;
     }
 
-    // Get org 1's organization ID
-    const authUrl1 = `${serverUrl}/trpc/auth?batch=1&input=${encodeURIComponent(
+    // Get org IDs from allOrgs list (not activeOrganization to avoid race conditions)
+    const authUrl = `${serverUrl}/trpc/auth?batch=1&input=${encodeURIComponent(
       JSON.stringify({ "0": { json: null } })
     )}`;
 
-    const authResponse1 = await request.get(authUrl1, {
+    const authResponse = await request.get(authUrl, {
       headers: { Cookie: `${sessionCookie.name}=${sessionCookie.value}` },
     });
 
-    const authData1 = await authResponse1.json();
-    const org1Id = authData1[0]?.result?.data?.json?.activeOrganization?.id;
+    const authData = await authResponse.json();
+    const allOrgs = authData[0]?.result?.data?.json?.allOrgs || [];
+
+    // Find org IDs by slug from the allOrgs list (stable, doesn't depend on activeOrganization)
+    const org1Data = allOrgs.find(
+      (org: { slug: string }) => org.slug === org1Slug
+    );
+    const org2Data = allOrgs.find(
+      (org: { slug: string }) => org.slug === org2Slug
+    );
+
+    if (!org1Data || !org2Data) {
+      // Skip test if test orgs don't exist
+      test.skip();
+      return;
+    }
+
+    const org1Id = org1Data.id;
+    const org2Id = org2Data.id;
+
+    // Verify we have different org IDs
+    expect(org1Id).not.toBe(org2Id);
 
     // Fetch runs for org 1 via tRPC
     const runsUrl1 = `${serverUrl}/trpc/runs.latest?batch=1&input=${encodeURIComponent(
@@ -164,19 +197,7 @@ test.describe("Organization Switching - Runs Display", () => {
     const runsData1 = await runsResponse1.json();
     const runs1 = runsData1[0]?.result?.data?.json || [];
 
-    // Navigate to org 2
-    await page.goto(`/o/${org2Slug}`);
-    await page.waitForLoadState("networkidle");
-
-    // Get org 2's organization ID
-    const authResponse2 = await request.get(authUrl1, {
-      headers: { Cookie: `${sessionCookie.name}=${sessionCookie.value}` },
-    });
-
-    const authData2 = await authResponse2.json();
-    const org2Id = authData2[0]?.result?.data?.json?.activeOrganization?.id;
-
-    // Fetch runs for org 2 via tRPC
+    // Fetch runs for org 2 via tRPC (no need to navigate, we have the org ID)
     const runsUrl2 = `${serverUrl}/trpc/runs.latest?batch=1&input=${encodeURIComponent(
       JSON.stringify({
         "0": { json: { organizationId: org2Id, limit: 10 } },
