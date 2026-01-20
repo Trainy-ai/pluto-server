@@ -15,7 +15,7 @@ const LIMIT = 10;
 
 export const useLatestRuns = (orgId: string) =>
   useLocalQuery<LatestRunsData>({
-    queryKey: trpc.runs.latest.queryKey(),
+    queryKey: ["runs", "latest", orgId],
     queryFn: () =>
       trpcClient.runs.latest.query({
         organizationId: orgId,
@@ -27,7 +27,7 @@ export const useLatestRuns = (orgId: string) =>
 
 export const prefetchLatestRuns = (orgId: string) =>
   prefetchLocalQuery(queryClient, {
-    queryKey: trpc.runs.latest.queryKey(),
+    queryKey: ["runs", "latest", orgId],
     queryFn: () =>
       trpcClient.runs.latest.query({
         organizationId: orgId,

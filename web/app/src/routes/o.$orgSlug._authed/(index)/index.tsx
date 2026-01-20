@@ -38,6 +38,7 @@ function RouteComponent() {
                 <RecentRuns
                   runs={visibility === "visible" ? runs.slice(0, 4) : runs}
                   orgSlug={orgSlug}
+                  orgId={auth.activeOrganization.id}
                 />
               </>
             ) : (
