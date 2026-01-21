@@ -13,6 +13,13 @@
 import { PrismaClient } from '@prisma/client';
 import crypto from 'crypto';
 import { nanoid } from 'nanoid';
+import { createClient } from '@clickhouse/client-web';
+
+// Bulk run seeding configuration for server-side search testing
+// Frontend loads 150 runs at a time, so we need >150 to expose pagination issues
+const SEARCH_TEST_RUN_COUNT = 160;
+const METRICS_PER_RUN = 50;
+const DATAPOINTS_PER_METRIC = 1000;
 
 const prisma = new PrismaClient();
 
@@ -30,6 +37,86 @@ interface TestData {
 
 async function hashApiKey(key: string): Promise<string> {
   return crypto.createHash('sha256').update(key).digest('hex');
+}
+
+/**
+ * Seeds ClickHouse with metric datapoints for bulk test runs.
+ * Creates realistic training metrics (loss curves with exponential decay).
+ */
+async function seedClickHouseMetrics(
+  runs: { id: bigint; name: string }[],
+  tenantId: string,
+  projectName: string,
+  metricsPerRun: number,
+  datapointsPerMetric: number,
+): Promise<void> {
+  const clickhouseUrl = process.env.CLICKHOUSE_URL;
+  const clickhouseUser = process.env.CLICKHOUSE_USER || 'default';
+  const clickhousePassword = process.env.CLICKHOUSE_PASSWORD || '';
+
+  if (!clickhouseUrl) {
+    console.log('   ⚠ CLICKHOUSE_URL not set, skipping ClickHouse seeding');
+    return;
+  }
+
+  const clickhouse = createClient({
+    url: clickhouseUrl,
+    username: clickhouseUser,
+    password: clickhousePassword,
+  });
+
+  const totalRows = runs.length * metricsPerRun * datapointsPerMetric;
+  console.log(`   📊 Seeding ClickHouse with ${totalRows.toLocaleString()} metric datapoints...`);
+
+  // Batch insert for efficiency (insert in chunks to avoid memory issues)
+  const BATCH_SIZE = 50000;
+  let batch: Record<string, unknown>[] = [];
+  let insertedCount = 0;
+  const baseTime = Date.now() - datapointsPerMetric * 1000;
+
+  for (const run of runs) {
+    for (let m = 0; m < metricsPerRun; m++) {
+      const metricName = `train/metric_${String(m).padStart(2, '0')}`;
+
+      for (let step = 0; step < datapointsPerMetric; step++) {
+        batch.push({
+          tenantId,
+          projectName,
+          runId: Number(run.id),
+          logGroup: 'train',
+          logName: metricName,
+          time: new Date(baseTime + step * 1000).toISOString().replace('T', ' ').replace('Z', ''),
+          step,
+          // Realistic decaying loss curve with some noise
+          value: Math.random() * 0.1 + Math.exp(-step / 200) * 2,
+        });
+
+        if (batch.length >= BATCH_SIZE) {
+          await clickhouse.insert({
+            table: 'mlop_metrics',
+            values: batch,
+            format: 'JSONEachRow',
+          });
+          insertedCount += batch.length;
+          process.stdout.write(`\r   📊 Inserted ${insertedCount.toLocaleString()} / ${totalRows.toLocaleString()} rows...`);
+          batch = [];
+        }
+      }
+    }
+  }
+
+  // Flush remaining batch
+  if (batch.length > 0) {
+    await clickhouse.insert({
+      table: 'mlop_metrics',
+      values: batch,
+      format: 'JSONEachRow',
+    });
+    insertedCount += batch.length;
+  }
+
+  await clickhouse.close();
+  console.log(`\r   ✓ Seeded ClickHouse with ${insertedCount.toLocaleString()} metric datapoints`);
 }
 
 interface OrgSetupResult {
@@ -445,6 +532,107 @@ async function setupTestData(): Promise<TestData> {
     }
   } else {
     console.log(`   ✓ Runs already exist (${existingRuns.length} runs found)`);
+  }
+
+  // 5b. Create bulk runs for server-side search testing
+  console.log(`\n5️⃣b Creating ${SEARCH_TEST_RUN_COUNT + 1} bulk runs for search testing...`);
+
+  // Check if bulk runs already exist (check for the needle run)
+  const needleRun = await prisma.runs.findFirst({
+    where: {
+      projectId: project.id,
+      organizationId: org.id,
+      name: 'hidden-needle-experiment',
+    },
+  });
+
+  if (!needleRun) {
+    // Create bulk runs with sequential names
+    const bulkRunData = Array.from({ length: SEARCH_TEST_RUN_COUNT }, (_, i) => ({
+      name: `bulk-run-${String(i).padStart(3, '0')}`,
+      organizationId: org.id,
+      projectId: project.id,
+      createdById: user.id,
+      creatorApiKeyId: apiKey.id,
+      status: 'COMPLETED' as const,
+      config: { epochs: 100, lr: 0.001, batch_size: 32 },
+      systemMetadata: { hostname: 'test-host', python: '3.11' },
+      updatedAt: new Date(),
+    }));
+
+    // Add special "needle" run for search testing (hidden in pagination)
+    // Has 'needle-tag' for tag filtering test - verifies tag filter finds runs beyond first page
+    bulkRunData.push({
+      name: 'hidden-needle-experiment',
+      organizationId: org.id,
+      projectId: project.id,
+      createdById: user.id,
+      creatorApiKeyId: apiKey.id,
+      status: 'COMPLETED' as const,
+      tags: ['needle-tag'], // Unique tag for tag filtering test
+      config: { epochs: 50, lr: 0.01 },
+      systemMetadata: { hostname: 'needle-host', python: '3.11' },
+      updatedAt: new Date(),
+    });
+
+    // Bulk create all runs at once
+    await prisma.runs.createMany({
+      data: bulkRunData,
+      skipDuplicates: true,
+    });
+
+    // Fetch the created runs to get their IDs
+    const createdBulkRuns = await prisma.runs.findMany({
+      where: {
+        projectId: project.id,
+        organizationId: org.id,
+        name: { startsWith: 'bulk-run-' },
+      },
+      select: { id: true, name: true },
+    });
+
+    // Also fetch the needle run
+    const needleRunCreated = await prisma.runs.findFirst({
+      where: {
+        projectId: project.id,
+        organizationId: org.id,
+        name: 'hidden-needle-experiment',
+      },
+      select: { id: true, name: true },
+    });
+
+    if (needleRunCreated) {
+      createdBulkRuns.push(needleRunCreated);
+    }
+
+    console.log(`   ✓ Created ${createdBulkRuns.length} bulk runs`);
+
+    // Register metric names in PostgreSQL run_logs
+    console.log(`   📝 Registering ${METRICS_PER_RUN} metrics per run in run_logs...`);
+    const runLogData = createdBulkRuns.flatMap((run) =>
+      Array.from({ length: METRICS_PER_RUN }, (_, i) => ({
+        runId: run.id,
+        logName: `train/metric_${String(i).padStart(2, '0')}`,
+        logGroup: 'train',
+        logType: 'METRIC' as const,
+      }))
+    );
+    await prisma.runLogs.createMany({
+      data: runLogData,
+      skipDuplicates: true,
+    });
+    console.log(`   ✓ Registered ${runLogData.length} metric names in run_logs`);
+
+    // Seed ClickHouse with metric datapoints
+    await seedClickHouseMetrics(
+      createdBulkRuns,
+      org.id,
+      project.name,
+      METRICS_PER_RUN,
+      DATAPOINTS_PER_METRIC,
+    );
+  } else {
+    console.log(`   ✓ Bulk runs already exist (found needle run)`);
   }
 
   // 6. Create a run in org 2 for org-switching tests

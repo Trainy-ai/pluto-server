@@ -1038,4 +1038,152 @@ describe('SDK API Endpoints (with API Key)', () => {
       });
     });
   });
+
+  describe('Test Suite 12: Server-Side Search', () => {
+    const hasApiKey = TEST_API_KEY.length > 0;
+
+    describe.skipIf(!hasApiKey)('Search via HTTP API', () => {
+      it('Test 12.1: Find run beyond first page via search', async () => {
+        // The "hidden-needle-experiment" run is created beyond the first 150 runs
+        // Client-side search would miss it, but server-side search should find it
+        const response = await makeRequest(
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&search=hidden-needle&limit=50`,
+          {
+            headers: {
+              'Authorization': `Bearer ${TEST_API_KEY}`,
+            },
+          }
+        );
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.runs).toBeDefined();
+        expect(data.runs.some((r: { name: string }) => r.name === 'hidden-needle-experiment')).toBe(true);
+      });
+
+      it('Test 12.2: Empty results for non-matching search', async () => {
+        const response = await makeRequest(
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&search=zzz-nonexistent-xyz&limit=50`,
+          {
+            headers: {
+              'Authorization': `Bearer ${TEST_API_KEY}`,
+            },
+          }
+        );
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.runs).toBeDefined();
+        expect(data.runs.length).toBe(0);
+      });
+
+      it('Test 12.3: Verify bulk runs exist (pagination test)', async () => {
+        // Should have 160+ bulk runs + 2 original test runs + needle run
+        const response = await makeRequest(
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&limit=200`,
+          {
+            headers: {
+              'Authorization': `Bearer ${TEST_API_KEY}`,
+            },
+          }
+        );
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.runs).toBeDefined();
+        expect(data.total).toBeGreaterThan(150);
+      });
+
+      it('Test 12.4: Search with short term uses ILIKE', async () => {
+        // All search terms use ILIKE substring matching
+        const response = await makeRequest(
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&search=00&limit=50`,
+          {
+            headers: {
+              'Authorization': `Bearer ${TEST_API_KEY}`,
+            },
+          }
+        );
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.runs).toBeDefined();
+        // Should find bulk-run-000, bulk-run-001, etc.
+        expect(data.runs.some((r: { name: string }) => r.name.includes('00'))).toBe(true);
+      });
+
+      it('Test 12.5: Search returns correct total count', async () => {
+        const response = await makeRequest(
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&search=bulk-run&limit=10`,
+          {
+            headers: {
+              'Authorization': `Bearer ${TEST_API_KEY}`,
+            },
+          }
+        );
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.runs).toBeDefined();
+        expect(data.runs.length).toBeLessThanOrEqual(10); // Respects limit
+        expect(data.total).toBeGreaterThanOrEqual(160); // Total matches bulk-run count
+      });
+
+      it('Test 12.6: Tag filtering finds run beyond first page', async () => {
+        // The "hidden-needle-experiment" run has 'needle-tag' and is created at position 161+
+        // Without server-side tag filtering, client would need to paginate through all runs
+        const response = await makeRequest(
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&tags=needle-tag&limit=50`,
+          {
+            headers: {
+              'Authorization': `Bearer ${TEST_API_KEY}`,
+            },
+          }
+        );
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.runs).toBeDefined();
+        expect(data.runs.length).toBe(1); // Only one run has needle-tag
+        expect(data.runs[0].name).toBe('hidden-needle-experiment');
+        expect(data.runs[0].tags).toContain('needle-tag');
+        expect(data.total).toBe(1);
+      });
+
+      it('Test 12.7: Combined search and tag filtering', async () => {
+        // Test that search and tags can be combined
+        const response = await makeRequest(
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&search=needle&tags=needle-tag&limit=50`,
+          {
+            headers: {
+              'Authorization': `Bearer ${TEST_API_KEY}`,
+            },
+          }
+        );
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.runs).toBeDefined();
+        expect(data.runs.length).toBe(1);
+        expect(data.runs[0].name).toBe('hidden-needle-experiment');
+      });
+
+      it('Test 12.8: Tag filtering with no matches returns empty', async () => {
+        const response = await makeRequest(
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&tags=nonexistent-tag-xyz&limit=50`,
+          {
+            headers: {
+              'Authorization': `Bearer ${TEST_API_KEY}`,
+            },
+          }
+        );
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.runs).toBeDefined();
+        expect(data.runs.length).toBe(0);
+        expect(data.total).toBe(0);
+      });
+    });
+  });
 });

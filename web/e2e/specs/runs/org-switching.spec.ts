@@ -5,8 +5,19 @@ test.describe("Organization Switching - Runs Display", () => {
   const org1Slug = TEST_ORG.slug;
   const org2Slug = TEST_ORG_2.slug;
 
-  // These tests run in Docker Compose environment where services communicate via hostnames
-  const serverUrl = "http://server:3001";
+  // Server URL for direct API calls
+  // In Buildkite, the 'server' hostname is available via /etc/hosts
+  // In local dev, we use localhost:3001
+  const getServerUrl = () => {
+    const baseUrl = process.env.BASE_URL || "http://localhost:3000";
+    // If BASE_URL is an IP address (Buildkite), use the 'server' hostname
+    // because the app and server have different IPs in Docker
+    if (baseUrl.match(/^https?:\/\/\d+\.\d+\.\d+\.\d+:/)) {
+      return "http://server:3001";
+    }
+    // Otherwise (localhost), derive from BASE_URL by replacing port
+    return baseUrl.replace(":3000", ":3001");
+  };
 
   test.beforeEach(async ({ page }) => {
     // Navigate to org 1 to establish session
@@ -151,6 +162,7 @@ test.describe("Organization Switching - Runs Display", () => {
     }
 
     // Get org IDs from allOrgs list (not activeOrganization to avoid race conditions)
+    const serverUrl = getServerUrl();
     const authUrl = `${serverUrl}/trpc/auth?batch=1&input=${encodeURIComponent(
       JSON.stringify({ "0": { json: null } })
     )}`;

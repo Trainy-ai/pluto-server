@@ -5,7 +5,8 @@ export const useRunCount = (
   orgId: string,
   projectName: string,
   tags?: string[],
-  status?: string[]
+  status?: string[],
+  search?: string,
 ) => {
   return useQuery<number>({
     queryKey: trpc.runs.count.queryKey({
@@ -13,6 +14,7 @@ export const useRunCount = (
       projectName,
       tags: tags && tags.length > 0 ? tags : undefined,
       status: status && status.length > 0 ? status as ("RUNNING" | "COMPLETED" | "FAILED" | "TERMINATED" | "CANCELLED")[] : undefined,
+      search: search && search.trim() ? search.trim() : undefined,
     }),
     queryFn: () =>
       trpcClient.runs.count.query({
@@ -20,6 +22,7 @@ export const useRunCount = (
         projectName,
         tags: tags && tags.length > 0 ? tags : undefined,
         status: status && status.length > 0 ? status as ("RUNNING" | "COMPLETED" | "FAILED" | "TERMINATED" | "CANCELLED")[] : undefined,
+        search: search && search.trim() ? search.trim() : undefined,
       }),
   });
 };

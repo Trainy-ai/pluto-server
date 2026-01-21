@@ -16,19 +16,26 @@ const runsCache = new LocalCache<InfiniteData<ListRunResponse>>(
   100 * 60 * 1000,
 ); // Adjust table name as needed
 
-export const useListRuns = (orgId: string, projectName: string, tags?: string[], status?: string[]) => {
+export const useListRuns = (
+  orgId: string,
+  projectName: string,
+  tags?: string[],
+  status?: string[],
+  search?: string,
+) => {
   const queryOptions = trpc.runs.list.infiniteQueryOptions({
     organizationId: orgId,
     projectName: projectName,
     limit: RUNS_FETCH_LIMIT,
     tags: tags && tags.length > 0 ? tags : undefined,
     status: status && status.length > 0 ? status as ("RUNNING" | "COMPLETED" | "FAILED" | "TERMINATED" | "CANCELLED")[] : undefined,
+    search: search && search.trim() ? search.trim() : undefined,
   });
 
   // return useInfiniteQuery(queryOptions);
 
   return useInfiniteQuery({
-    queryKey: [...queryOptions.queryKey, { tags, status }],
+    queryKey: [...queryOptions.queryKey, { tags, status, search }],
     queryFn: async ({ pageParam }) => {
       const result = await trpcClient.runs.list.query({
         organizationId: orgId,
@@ -37,6 +44,7 @@ export const useListRuns = (orgId: string, projectName: string, tags?: string[],
         cursor: pageParam ? Number(pageParam) : undefined,
         tags: tags && tags.length > 0 ? tags : undefined,
         status: status && status.length > 0 ? status as ("RUNNING" | "COMPLETED" | "FAILED" | "TERMINATED" | "CANCELLED")[] : undefined,
+        search: search && search.trim() ? search.trim() : undefined,
       });
       return result;
     },

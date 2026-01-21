@@ -1,18 +1,39 @@
 import { z } from "zod";
 import { protectedOrgProcedure } from "../../../../lib/trpc";
 import { sqidEncode } from "../../../../lib/sqid";
+import { searchRunIds } from "../../../../lib/run-search";
 
 export const latestRunsProcedure = protectedOrgProcedure
   .input(
     z.object({
       projectName: z.string().optional(),
+      search: z.string().optional(),
       tags: z.array(z.string()).optional(),
       status: z.array(z.enum(["RUNNING", "COMPLETED", "FAILED", "TERMINATED", "CANCELLED"])).optional(),
       limit: z.number().min(1).max(100).default(10),
     })
   )
   .query(async ({ ctx, input }) => {
-    const { projectName, tags, status, organizationId, limit } = input;
+    const { projectName, search, tags, status, organizationId, limit } = input;
+
+    // If search is provided, get matching run IDs first via search
+    let searchMatchIds: bigint[] | null = null;
+
+    if (search && search.trim()) {
+      searchMatchIds = await searchRunIds(ctx.prisma, {
+        organizationId,
+        projectName,
+        search: search.trim(),
+        tags,
+        status,
+        limit,
+      });
+
+      // If no matches found, return empty
+      if (searchMatchIds.length === 0) {
+        return [];
+      }
+    }
 
     const runs = await ctx.prisma.runs.findMany({
       select: {
@@ -34,8 +55,11 @@ export const latestRunsProcedure = protectedOrgProcedure
           name: projectName,
           organizationId: organizationId,
         },
-        ...(tags && tags.length > 0 ? { tags: { hasSome: tags } } : {}),
-        ...(status && status.length > 0 ? { status: { in: status } } : {}),
+        // If search was provided, filter to only matching IDs
+        ...(searchMatchIds ? { id: { in: searchMatchIds } } : {}),
+        // Only apply tag/status filters if no search (search already includes them)
+        ...(!searchMatchIds && tags && tags.length > 0 ? { tags: { hasSome: tags } } : {}),
+        ...(!searchMatchIds && status && status.length > 0 ? { status: { in: status } } : {}),
       },
       orderBy: {
         createdAt: "desc",
