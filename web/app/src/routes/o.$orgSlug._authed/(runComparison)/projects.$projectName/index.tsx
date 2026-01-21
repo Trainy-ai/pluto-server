@@ -188,8 +188,9 @@ function RouteComponent() {
           <ResizablePanel
             id="runs-list"
             minSize={15}
+            className="overflow-hidden"
           >
-            <div className="flex h-full flex-col pr-2 overflow-y-auto overscroll-y-contain">
+            <div className="flex h-full min-h-0 flex-col overflow-hidden pr-2">
               <DataTable
                 runs={runs}
                 orgSlug={organizationSlug}

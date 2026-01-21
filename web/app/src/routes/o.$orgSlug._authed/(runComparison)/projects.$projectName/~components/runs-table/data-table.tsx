@@ -224,14 +224,15 @@ export function DataTable({
   }
 
   return (
-    <div className="relative flex w-full min-w-[200px] flex-col">
+    <div className="relative flex h-full min-h-0 w-full min-w-[200px] flex-col overflow-hidden">
       {/* Overlay spinner when refetching with existing data */}
       {isFetching && runs.length > 0 && (
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-background/50">
           <Spinner size="medium" />
         </div>
       )}
-      <div className="mb-2 space-y-2">
+      {/* Header section - shrink-0 prevents shrinking */}
+      <div className="mb-2 shrink-0 space-y-2">
         <div className="mt-2 flex items-center gap-1 pl-1 text-sm text-muted-foreground">
           <span className="font-medium">
             {table.getSelectedRowModel().rows.length}
@@ -263,7 +264,8 @@ export function DataTable({
         </div>
       </div>
 
-      <div className="rounded-md border overflow-x-auto">
+      {/* Table section - flex-1 takes remaining space, min-h-0 allows shrinking */}
+      <div className="min-h-0 flex-1 overflow-y-auto rounded-md border">
         <Table className="w-full">
           <TableHeader className="sticky top-0 z-10 bg-background">
               {table.getHeaderGroups().map((headerGroup) => (
@@ -340,7 +342,8 @@ export function DataTable({
           </Table>
       </div>
 
-      <div className="mt-2 flex items-center justify-between">
+      {/* Paginator section - shrink-0 prevents shrinking, stays at bottom */}
+      <div className="flex shrink-0 items-center justify-between pt-2">
         <Select
           value={`${table.getState().pagination.pageSize}`}
           onValueChange={(value) => table.setPageSize(Number(value))}
