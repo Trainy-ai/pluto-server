@@ -7,6 +7,7 @@ import { useState, useMemo, useCallback } from "react";
 import { useSelectedRuns } from "./~hooks/use-selected-runs";
 import { prefetchListRuns, useListRuns, type Run } from "./~queries/list-runs";
 import { useUpdateTags } from "./~queries/update-tags";
+import { useDistinctTags } from "./~queries/distinct-tags";
 import { groupMetrics } from "./~lib/metrics-utils";
 import { MetricsDisplay } from "./~components/metrics-display";
 import { DataTable } from "./~components/runs-table/data-table";
@@ -19,6 +20,7 @@ import {
   ResizablePanel,
   ResizableHandle,
 } from "@/components/ui/resizable";
+import { useDebouncedCallback } from "@/lib/hooks/use-debounced-callback";
 
 export const Route = createFileRoute(
   "/o/$orgSlug/_authed/(runComparison)/projects/$projectName/",
@@ -54,6 +56,24 @@ function RouteComponent() {
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   // Status filter state
   const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
+  // Search state - immediate value for input display
+  const [searchInput, setSearchInput] = useState<string>("");
+  // Debounced search value for server queries
+  const [debouncedSearch, setDebouncedSearch] = useState<string>("");
+
+  // Debounce search updates to avoid excessive API calls
+  const updateDebouncedSearch = useDebouncedCallback(
+    (value: string) => setDebouncedSearch(value),
+    300,
+  );
+
+  const handleSearchChange = useCallback(
+    (value: string) => {
+      setSearchInput(value);
+      updateDebouncedSearch(value);
+    },
+    [updateDebouncedSearch],
+  );
 
   const { refresh, lastRefreshed } = useRefresh({
     queries: [
@@ -71,6 +91,7 @@ function RouteComponent() {
     projectName,
     selectedTags,
     selectedStatuses,
+    debouncedSearch,
   );
 
   // Load runs using infinite query with standard TanStack/tRPC v11 approach
@@ -83,10 +104,15 @@ function RouteComponent() {
     isFetching,
     isError,
     error,
-  } = useListRuns(organizationId, projectName, selectedTags, selectedStatuses);
+  } = useListRuns(organizationId, projectName, selectedTags, selectedStatuses, debouncedSearch);
 
   // Mutation for updating tags
   const updateTagsMutation = useUpdateTags(organizationId, projectName);
+
+  // Fetch all distinct tags across all runs in the project
+  // This ensures the filter dropdown shows all available tags, not just those from loaded runs
+  const { data: distinctTagsData } = useDistinctTags(organizationId, projectName);
+  const allTags = distinctTagsData?.tags ?? [];
 
   // Flatten the pages to get all runs
   const runs = useMemo(() => {
@@ -108,17 +134,6 @@ function RouteComponent() {
 
     return Array.from(uniqueRuns.values());
   }, [data]);
-
-  // Extract all unique tags from runs for the filter dropdown
-  const allTags = useMemo(() => {
-    const tagSet = new Set<string>();
-    runs.forEach((run) => {
-      if (run.tags) {
-        run.tags.forEach((tag: string) => tagSet.add(tag));
-      }
-    });
-    return Array.from(tagSet).sort();
-  }, [runs]);
 
   // Handler for updating tags on a run
   const handleTagsUpdate = useCallback(
@@ -196,6 +211,8 @@ function RouteComponent() {
                 onTagFilterChange={setSelectedTags}
                 selectedStatuses={selectedStatuses}
                 onStatusFilterChange={setSelectedStatuses}
+                searchQuery={searchInput}
+                onSearchChange={handleSearchChange}
               />
             </div>
           </ResizablePanel>

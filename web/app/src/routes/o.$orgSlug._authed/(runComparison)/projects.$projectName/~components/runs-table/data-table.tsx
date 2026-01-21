@@ -6,7 +6,6 @@ import {
   getCoreRowModel,
   useReactTable,
   getPaginationRowModel,
-  getFilteredRowModel,
   type PaginationState,
   type ColumnSizingState,
 } from "@tanstack/react-table";
@@ -59,6 +58,8 @@ interface DataTableProps {
   onTagFilterChange: (tags: string[]) => void;
   selectedStatuses: string[];
   onStatusFilterChange: (statuses: string[]) => void;
+  searchQuery: string;
+  onSearchChange: (query: string) => void;
 }
 
 export function DataTable({
@@ -82,14 +83,14 @@ export function DataTable({
   onTagFilterChange,
   selectedStatuses,
   onStatusFilterChange,
+  searchQuery,
+  onSearchChange,
 }: DataTableProps) {
   // Internal pagination state
   const [{ pageIndex, pageSize }, setPagination] = useState<PaginationState>({
     pageIndex: 0,
     pageSize: DEFAULT_PAGE_SIZE,
   });
-
-  const [globalFilter, setGlobalFilter] = useState("");
 
   // Column sizing state for resizable columns
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
@@ -181,22 +182,19 @@ export function DataTable({
     }));
     prevDataLengthRef.current = 0;
     lastPageIndexRef.current = 0;
-  }, [selectedTags, selectedStatuses]);
+  }, [selectedTags, selectedStatuses, searchQuery]);
 
   const table = useReactTable({
     data: runs,
     columns: memoizedColumns,
     getCoreRowModel: getCoreRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
-    onGlobalFilterChange: setGlobalFilter,
     onRowSelectionChange: setRowSelection,
     onPaginationChange: setPagination,
     onColumnSizingChange: setColumnSizing,
     state: {
       rowSelection,
       pagination: { pageIndex, pageSize },
-      globalFilter,
       columnSizing,
     },
     enableRowSelection: true,
@@ -247,8 +245,8 @@ export function DataTable({
             <Search className="absolute top-2.5 left-2 h-4 w-4 text-muted-foreground" />
             <Input
               placeholder="Search runs..."
-              value={globalFilter}
-              onChange={(e) => setGlobalFilter(e.target.value)}
+              value={searchQuery}
+              onChange={(e) => onSearchChange(e.target.value)}
               onKeyDown={handleKeyDown}
               className="pl-8"
             />

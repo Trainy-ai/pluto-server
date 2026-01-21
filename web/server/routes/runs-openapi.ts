@@ -15,6 +15,7 @@ import {
   getFileDataUsageQuery,
 } from "../trpc/routers/organization/routers/usage/procs/data-usage";
 import { createContext } from "../lib/context";
+import { searchRunIds } from "../lib/run-search";
 import type { prisma } from "../lib/prisma";
 import type { ApiKey, Organization, User } from "@prisma/client";
 
@@ -498,6 +499,122 @@ router.openapi(updateConfigRoute, async (c) => {
   });
 
   return c.json({ success: true }, 200);
+});
+
+// ============= List Runs with Search =============
+const listRunsRoute = createRoute({
+  method: "get",
+  path: "/list",
+  tags: ["Runs"],
+  summary: "List runs with optional search and tag filtering",
+  description: "Lists runs in a project with optional search using ILIKE substring matching. Supports tag filtering with OR logic (returns runs with ANY of the specified tags).",
+  security: [{ bearerAuth: [] }],
+  request: {
+    query: z.object({
+      projectName: z.string().openapi({ description: "Project name", example: "my-project" }),
+      search: z.string().optional().openapi({ description: "Search term for run names (substring match)", example: "training" }),
+      tags: z.string().optional().openapi({ description: "Comma-separated list of tags to filter by (OR logic)", example: "baseline,experiment" }),
+      limit: z.coerce.number().min(1).max(200).default(50).openapi({ description: "Maximum number of runs to return", example: 50 }),
+    }),
+  },
+  responses: {
+    200: {
+      description: "List of runs",
+      content: {
+        "application/json": {
+          schema: z.object({
+            runs: z.array(z.object({
+              id: z.number().openapi({ description: "Numeric run ID" }),
+              name: z.string().openapi({ description: "Run name" }),
+              status: z.string().openapi({ description: "Run status" }),
+              tags: z.array(z.string()).openapi({ description: "Run tags" }),
+              createdAt: z.string().openapi({ description: "Creation timestamp" }),
+            })).openapi("RunListItem"),
+            total: z.number().openapi({ description: "Total count of matching runs" }),
+          }).openapi("ListRunsResponse"),
+        },
+      },
+    },
+    401: {
+      description: "Unauthorized",
+      content: { "application/json": { schema: ErrorSchema } },
+    },
+  },
+});
+
+router.use(listRunsRoute.path, withApiKey);
+router.openapi(listRunsRoute, async (c) => {
+  const apiKey = c.get("apiKey");
+  const { projectName, search, tags: tagsParam, limit } = c.req.valid("query");
+  const prisma = c.get("prisma");
+
+  // Parse tags from comma-separated string
+  const tags = tagsParam ? tagsParam.split(",").map((t) => t.trim()).filter(Boolean) : [];
+
+  // Get the project
+  const project = await prisma.projects.findFirst({
+    where: {
+      name: projectName,
+      organizationId: apiKey.organization.id,
+    },
+    select: { id: true },
+  });
+
+  if (!project) {
+    return c.json({ runs: [], total: 0 }, 200);
+  }
+
+  // If search is provided, get matching run IDs via search
+  let searchMatchIds: bigint[] | undefined;
+  if (search && search.trim()) {
+    const matchIds = await searchRunIds(prisma, {
+      organizationId: apiKey.organization.id,
+      projectId: project.id,
+      search: search.trim(),
+    });
+
+    if (matchIds.length === 0) {
+      return c.json({ runs: [], total: 0 }, 200);
+    }
+
+    searchMatchIds = matchIds;
+  }
+
+  // Build where clause with optional tag filtering
+  const whereClause = {
+    projectId: project.id,
+    organizationId: apiKey.organization.id,
+    ...(searchMatchIds ? { id: { in: searchMatchIds } } : {}),
+    ...(tags.length > 0 ? { tags: { hasSome: tags } } : {}),
+  };
+
+  // Get total count
+  const total = await prisma.runs.count({ where: whereClause });
+
+  // Fetch runs
+  const runs = await prisma.runs.findMany({
+    where: whereClause,
+    orderBy: { createdAt: "desc" },
+    take: limit,
+    select: {
+      id: true,
+      name: true,
+      status: true,
+      tags: true,
+      createdAt: true,
+    },
+  });
+
+  return c.json({
+    runs: runs.map((run) => ({
+      id: Number(run.id),
+      name: run.name,
+      status: run.status,
+      tags: run.tags,
+      createdAt: run.createdAt.toISOString(),
+    })),
+    total,
+  }, 200);
 });
 
 // ============= Get Run by ID =============
