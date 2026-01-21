@@ -113,7 +113,7 @@ const PageBody = React.forwardRef<PageBodyElement, PageBodyProps>(
     if (disableScroll) {
       return (
         <div
-          className={cn("flex h-full flex-col", className)}
+          className={cn("flex h-full min-h-0 flex-col overflow-hidden", className)}
           ref={ref}
           {...other}
         >
