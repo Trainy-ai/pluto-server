@@ -15,3 +15,4 @@ dist/
 
 *.env*
 !.env.example
+cache-perf-results.json

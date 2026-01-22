@@ -1,7 +1,7 @@
 import { useMemo, useRef, useEffect, useState } from "react";
 import { RefreshButton } from "@/components/core/refresh-button";
 import { LogSearch } from "./run-comparison/search";
-import { MultiGroup } from "./multi-group/multi-group";
+import { MemoizedMultiGroup } from "./multi-group/multi-group";
 import { sortGroups } from "@/lib/grouping/index";
 import type { GroupedMetrics } from "@/lib/grouping/types";
 import {
@@ -111,7 +111,7 @@ export function MetricsDisplay({
         </div>
       </div>
       {filteredGroups.map(([group, data]) => (
-        <MultiGroup
+        <MemoizedMultiGroup
           key={group}
           title={data.groupName}
           groupId={`${projectName}-${group}`}

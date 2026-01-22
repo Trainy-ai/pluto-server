@@ -2,6 +2,18 @@ import { z } from "zod";
 import { protectedOrgProcedure } from "../../../../../../lib/trpc";
 import { sqidDecode } from "../../../../../../lib/sqid";
 import { getLogGroupName } from "../../../../../../lib/utilts";
+import { withCache } from "../../../../../../lib/cache";
+
+// Maximum number of data points to return per query
+// ECharts applies LTTB sampling on the frontend for smooth visualization
+const MAX_POINTS = 2000;
+
+// Type for graph data returned by this procedure
+type GraphData = {
+  value: number;
+  time: string;
+  step: number;
+}[];
 
 export const graphProcedure = protectedOrgProcedure
   .input(
@@ -18,65 +30,45 @@ export const graphProcedure = protectedOrgProcedure
     const runId = sqidDecode(encodedRunId);
     const logGroup = getLogGroupName(logName);
 
-    // Fetch the total number of rows for the given metric
-    const totalRowsResult = await clickhouse.query(
-      `SELECT count(*) as total 
-    FROM mlop_metrics 
-    WHERE tenantId = {tenantId: String} 
-    AND projectName = {projectName: String} 
-    AND runId = {runId: UInt64}
-    AND logName = {logName: String}
-    AND logGroup = {logGroup: String}`,
-      {
-        tenantId: organizationId,
-        projectName: projectName,
-        runId: runId,
-        logName: logName,
-        logGroup: logGroup,
+    return withCache<GraphData>(
+      ctx,
+      "graph",
+      { runId, organizationId, projectName, logName, logGroup },
+      async () => {
+        // Single optimized query with reservoir sampling approach
+        // Uses ClickHouse window functions to count and sample in one pass
+        const query = `
+          WITH counted AS (
+            SELECT
+              value,
+              time,
+              step,
+              count() OVER () as total_rows,
+              row_number() OVER (ORDER BY step ASC) as rn
+            FROM mlop_metrics
+            WHERE tenantId = {tenantId: String}
+              AND projectName = {projectName: String}
+              AND runId = {runId: String}
+              AND logName = {logName: String}
+              AND logGroup = {logGroup: String}
+          )
+          SELECT value, time, step
+          FROM counted
+          WHERE total_rows <= ${MAX_POINTS}
+             OR rn % ceiling(total_rows / ${MAX_POINTS}) = 1
+             OR rn = total_rows  -- Always include last point
+          ORDER BY step ASC
+        `;
+
+        const metrics = await clickhouse.query(query, {
+          tenantId: organizationId,
+          projectName: projectName,
+          runId: runId,
+          logName: logName,
+          logGroup: logGroup,
+        });
+
+        return (await metrics.json()) as GraphData;
       }
     );
-
-    const totalRowsData = (await totalRowsResult.json()) as {
-      total: number;
-    }[];
-
-    const totalRows = totalRowsData[0]?.total || 0;
-
-    // Determine the subsampling rate, ensuring at least one row is selected
-    const subsampleRate = Math.max(1, Math.ceil(totalRows / 1000));
-    const samplingWhereClause =
-      subsampleRate > 1 ? `WHERE rn % ${subsampleRate} = 1` : "";
-
-    const query = `
-    SELECT value, time, step
-    FROM (
-      SELECT value, time, step, rowNumberInAllBlocks() AS rn 
-      FROM mlop_metrics
-      WHERE tenantId = {tenantId: String}
-      AND projectName = {projectName: String}
-      AND runId = {runId: String}
-      AND logName = {logName: String}
-      AND logGroup = {logGroup: String}
-    )
-    ${samplingWhereClause}
-    ORDER BY step ASC
-`;
-
-    const metrics = await clickhouse.query(query, {
-      tenantId: organizationId,
-      projectName: projectName,
-      runId: runId,
-      logName: logName,
-      logGroup: logGroup,
-    });
-
-    const metricsData = (await metrics.json()) as {
-      value: number;
-      time: string;
-      step: number;
-    }[];
-
-    console.log("length", metricsData.length);
-
-    return metricsData;
   });

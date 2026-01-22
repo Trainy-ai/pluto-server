@@ -14,9 +14,12 @@ import {
   useLineSettings,
   type SmoothingAlgorithm,
 } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/use-line-settings";
-import { smoothData } from "@/lib/math/smoothing";
+import { smoothData, downsampleLTTB } from "@/lib/math/smoothing";
 
-const SYNC_REFRESH_INTERVAL = 5 * 1000; // 5 seconds
+// For active runs, refresh every 30 seconds
+// For completed runs, data never changes so use Infinity
+const ACTIVE_RUN_STALE_TIME = 30 * 1000; // 30 seconds
+const COMPLETED_RUN_STALE_TIME = Infinity; // Never refetch completed runs
 const GC_TIME = 0; // Immediate garbage collection when query is inactive
 
 interface MultiLineChartProps {
@@ -31,6 +34,8 @@ interface MultiLineChartProps {
   onLoad: () => void;
   organizationId: string;
   projectName: string;
+  /** When true, all runs are in a terminal state and data won't change */
+  allRunsCompleted?: boolean;
 }
 
 // Helper to determine appropriate time unit based on max seconds
@@ -53,6 +58,29 @@ function getTimeUnitForDisplay(maxSeconds: number): {
   } else {
     return { divisor: 31556952, unit: "year" }; // years (approx)
   }
+}
+
+// Apply downsampling to reduce data points
+function applyDownsampling(
+  chartData: {
+    x: number[];
+    y: number[];
+    label: string;
+    color: string;
+  },
+  maxPoints: number,
+): {
+  x: number[];
+  y: number[];
+  label: string;
+  color: string;
+} {
+  if (maxPoints <= 0 || chartData.x.length <= maxPoints) {
+    return chartData;
+  }
+
+  const { x, y } = downsampleLTTB(chartData.x, chartData.y, maxPoints);
+  return { ...chartData, x, y };
 }
 
 // Apply smoothing to chart data
@@ -149,11 +177,15 @@ export const MultiLineChart = memo(
     onLoad,
     organizationId,
     projectName,
+    allRunsCompleted = false,
   }: MultiLineChartProps) => {
     useCheckDatabaseSize(metricsCache);
 
     // Use global chart settings with runId="full"
     const { settings } = useLineSettings(organizationId, projectName, "full");
+
+    // Use Infinity staleTime for completed runs since their data won't change
+    const staleTime = allRunsCompleted ? COMPLETED_RUN_STALE_TIME : ACTIVE_RUN_STALE_TIME;
 
     // Track loading state for custom chart data
     const [isLoadingCustomChart, setIsLoadingCustomChart] = useState(false);
@@ -173,7 +205,7 @@ export const MultiLineChart = memo(
         return {
           queryKey: queryOptions.queryKey,
           queryFn: () => trpcClient.runs.data.graph.query(opts),
-          staleTime: SYNC_REFRESH_INTERVAL,
+          staleTime,
           gcTime: GC_TIME,
           localCache: metricsCache,
           enabled: true,
@@ -200,7 +232,7 @@ export const MultiLineChart = memo(
             return {
               queryKey: queryOptions.queryKey,
               queryFn: () => trpcClient.runs.data.graph.query(opts),
-              staleTime: SYNC_REFRESH_INTERVAL,
+              staleTime,
               gcTime: GC_TIME,
               localCache: metricsCache,
               enabled: true,
@@ -321,7 +353,8 @@ export const MultiLineChart = memo(
             color: runInfo.color,
           };
 
-          return applySmoothing(baseData, settings.smoothing);
+          const downsampledData = applyDownsampling(baseData, settings.maxPointsPerSeries);
+          return applySmoothing(downsampledData, settings.smoothing);
         });
 
       return (
@@ -354,7 +387,8 @@ export const MultiLineChart = memo(
               label: runInfo.runName,
               color: runInfo.color,
             };
-            return applySmoothing(baseData, settings.smoothing);
+            const downsampledData = applyDownsampling(baseData, settings.maxPointsPerSeries);
+            return applySmoothing(downsampledData, settings.smoothing);
           });
 
         return (
@@ -397,7 +431,8 @@ export const MultiLineChart = memo(
               color: runInfo.color,
             };
 
-            return applySmoothing(baseData, settings.smoothing);
+            const downsampledData = applyDownsampling(baseData, settings.maxPointsPerSeries);
+            return applySmoothing(downsampledData, settings.smoothing);
           });
 
         // Determine time unit from the first dataset
@@ -437,7 +472,8 @@ export const MultiLineChart = memo(
               label: runInfo.runName,
               color: runInfo.color,
             };
-            return applySmoothing(baseData, settings.smoothing);
+            const downsampledData = applyDownsampling(baseData, settings.maxPointsPerSeries);
+            return applySmoothing(downsampledData, settings.smoothing);
           });
 
         return (
@@ -525,7 +561,8 @@ export const MultiLineChart = memo(
               label: runInfo.runName,
               color: runInfo.color,
             };
-            return applySmoothing(baseData, settings.smoothing);
+            const downsampledData = applyDownsampling(baseData, settings.maxPointsPerSeries);
+            return applySmoothing(downsampledData, settings.smoothing);
           });
 
         return (

@@ -10,6 +10,8 @@ export interface LogGroup {
   logs: RunLog[];
 }
 
+export type RunStatus = "RUNNING" | "COMPLETED" | "FAILED" | "TERMINATED" | "CANCELLED";
+
 export interface GroupedMetrics {
   [key: LogGroupName]: {
     metrics: Array<{
@@ -19,6 +21,7 @@ export interface GroupedMetrics {
         runId: string;
         runName: string;
         color: string;
+        status: RunStatus;
       }>;
     }>;
     groupName: LogGroupName;

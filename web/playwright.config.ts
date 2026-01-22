@@ -44,7 +44,7 @@ export default defineConfig({
     {
       name: "setup",
       testDir: "./e2e/fixtures",
-      testMatch: /.*\.setup\.ts/,
+      testMatch: "auth.setup.ts", // Only match auth.setup.ts, not perf-auth.setup.ts
       use: {
         launchOptions: {
           args: [
@@ -63,6 +63,7 @@ export default defineConfig({
     },
     {
       name: "chromium",
+      testIgnore: /performance\/.*\.spec\.ts/, // Exclude performance tests from regular E2E
       use: {
         ...devices["Desktop Chrome"],
         // Use prepared auth state
@@ -82,6 +83,54 @@ export default defineConfig({
         },
       },
       dependencies: ["setup"],
+    },
+    {
+      name: "perf-setup",
+      testDir: "./e2e/fixtures",
+      testMatch: /perf-auth\.setup\.ts/,
+      use: {
+        launchOptions: {
+          args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-web-security',
+            '--disable-features=IsolateOrigins,site-per-process',
+            '--ignore-certificate-errors',
+            '--disable-dev-shm-usage',
+            '--disable-http2',
+            '--disable-gpu',
+            '--disable-software-rasterizer',
+          ],
+        },
+      },
+    },
+    {
+      name: "performance",
+      testMatch: /performance\/.*\.spec\.ts/,
+      timeout: 60000, // Longer timeout for performance tests
+      use: {
+        ...devices["Desktop Chrome"],
+        // Larger viewport ensures more charts render initially (triggers IntersectionObserver)
+        viewport: { width: 1920, height: 1080 },
+        // Use auth state created by perf-setup
+        storageState: "e2e/.auth/perf-user.json",
+        launchOptions: {
+          args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-web-security',
+            '--disable-features=IsolateOrigins,site-per-process',
+            '--ignore-certificate-errors',
+            '--disable-dev-shm-usage',
+            '--disable-http2',
+            '--disable-gpu',
+            '--disable-software-rasterizer',
+          ],
+        },
+      },
+      dependencies: ["perf-setup"],
+      // Use single worker for consistent timing
+      fullyParallel: false,
     },
 
     // Uncomment to test on other browsers

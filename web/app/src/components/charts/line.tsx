@@ -84,19 +84,85 @@ function generateLogAxisLabels(
   }));
 }
 
+// Throttle interval for resize observer (ms)
+const RESIZE_THROTTLE_MS = 100;
+
 function useContainerSize(ref: React.RefObject<HTMLDivElement | null>) {
   const [size, setSize] = useState({ width: 0, height: 0 });
+  const lastUpdateRef = useRef<number>(0);
+  const pendingUpdateRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     if (!ref?.current) return;
+
+    const updateSize = (width: number, height: number) => {
+      setSize({ width, height });
+    };
+
+    // Do an initial measurement immediately - ResizeObserver may not fire
+    // synchronously, especially for elements that are lazy-loaded or
+    // use absolute positioning
+    const element = ref.current;
+    const measureElement = () => {
+      const rect = element.getBoundingClientRect();
+      // Account for padding
+      const computedStyle = getComputedStyle(element);
+      const paddingLeft = parseFloat(computedStyle.paddingLeft) || 0;
+      const paddingRight = parseFloat(computedStyle.paddingRight) || 0;
+      const paddingTop = parseFloat(computedStyle.paddingTop) || 0;
+      const paddingBottom = parseFloat(computedStyle.paddingBottom) || 0;
+      const width = rect.width - paddingLeft - paddingRight;
+      const height = rect.height - paddingTop - paddingBottom;
+      return { width, height };
+    };
+
+    const { width: initialWidth, height: initialHeight } = measureElement();
+    if (initialWidth > 0 && initialHeight > 0) {
+      updateSize(initialWidth, initialHeight);
+    } else {
+      // Layout may not be complete yet, retry after a frame
+      requestAnimationFrame(() => {
+        const { width, height } = measureElement();
+        if (width > 0 && height > 0) {
+          updateSize(width, height);
+        }
+      });
+    }
+
     const observer = new ResizeObserver((entries) => {
-      for (let entry of entries) {
-        const { width, height } = entry.contentRect;
-        setSize({ width, height });
+      const now = Date.now();
+      const entry = entries[0];
+      if (!entry) return;
+
+      const { width, height } = entry.contentRect;
+
+      // Ignore zero-size updates which can reset valid measurements
+      if (width === 0 || height === 0) return;
+
+      // Throttle updates to avoid excessive re-renders during resize
+      if (now - lastUpdateRef.current >= RESIZE_THROTTLE_MS) {
+        lastUpdateRef.current = now;
+        updateSize(width, height);
+      } else {
+        // Schedule update for end of throttle period
+        if (pendingUpdateRef.current) {
+          clearTimeout(pendingUpdateRef.current);
+        }
+        pendingUpdateRef.current = setTimeout(() => {
+          lastUpdateRef.current = Date.now();
+          updateSize(width, height);
+          pendingUpdateRef.current = null;
+        }, RESIZE_THROTTLE_MS - (now - lastUpdateRef.current));
       }
     });
+
     observer.observe(ref.current);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (pendingUpdateRef.current) {
+        clearTimeout(pendingUpdateRef.current);
+      }
+    };
   }, [ref]);
 
   return size;
@@ -524,6 +590,7 @@ function generateYAxisOption(
 function generateSeriesOptions(
   lines: LineData[],
   labelCounts: Record<string, number>,
+  seriesData: number[][][],
 ) {
   return lines.map((l, i) => ({
     name: l.label + (labelCounts[l.label] > 1 ? ` (${i + 1})` : ""),
@@ -555,7 +622,7 @@ function generateSeriesOptions(
     //     borderWidth: 1,
     //   },
     // },
-    data: l.x.map((x, idx) => [x, l.y[idx]]),
+    data: seriesData[i],
   }));
 }
 
@@ -633,6 +700,7 @@ function generateChartOptions(
   },
   theme: string,
   legendTop: number,
+  seriesData: number[][][], // Pre-computed [x, y] pairs for each line
 ): EChartsOption {
   const {
     lines,
@@ -675,7 +743,7 @@ function generateChartOptions(
     yInterval,
     theme,
   );
-  const seriesOptions = generateSeriesOptions(lines, labelCounts);
+  const seriesOptions = generateSeriesOptions(lines, labelCounts, seriesData);
   const legendConfig = generateLegendConfig(
     lines,
     labelCounts,
@@ -822,6 +890,13 @@ const LineChart = forwardRef<ReactECharts, LineChartProps>(
       return { cols, top };
     }, [processedLines.length]);
 
+    // Pre-compute series data arrays to avoid recreation on theme changes
+    // This is the most expensive data transformation (creates [x, y] pairs)
+    const seriesData = useMemo(
+      () => processedLines.map((l) => l.x.map((x, idx) => [x, l.y[idx]])),
+      [processedLines]
+    );
+
     // Generate chart options
     const option = useMemo(() => {
       return generateChartOptions(
@@ -840,6 +915,7 @@ const LineChart = forwardRef<ReactECharts, LineChartProps>(
         extents,
         theme,
         legendConfig.top,
+        seriesData,
       );
     }, [
       processedLines,
@@ -855,6 +931,7 @@ const LineChart = forwardRef<ReactECharts, LineChartProps>(
       showLegend,
       legendConfig.top,
       extents,
+      seriesData,
     ]);
 
     // Resize on window change
@@ -912,11 +989,10 @@ const LineChart = forwardRef<ReactECharts, LineChartProps>(
         ref={containerRef}
         className={cn("p-2 pt-4", className)}
         style={{
-          flexGrow: 1,
-          height: "100%",
-          width: "100%",
-          alignItems: "center",
+          position: "absolute",
+          inset: 0,
           display: "flex",
+          alignItems: "center",
         }}
         {...rest}
       >

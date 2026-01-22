@@ -30,11 +30,75 @@ const DEV_PROJECT = 'my-ml-project';
 
 // Seeding configuration - need 160+ runs to test pagination (frontend loads 150 at a time)
 const RUNS_COUNT = 170;
-const METRICS_PER_RUN = 10;
-const DATAPOINTS_PER_METRIC = 100;
+const METRICS_PER_RUN = 50; // 50 charts per run (tests lazy loading)
+
+// High-fidelity subset: first 5 runs get 100k datapoints (realistic training runs)
+// Remaining runs get 1k datapoints (sufficient for pagination testing)
+const HIGH_FIDELITY_RUNS = 5;
+const HIGH_FIDELITY_DATAPOINTS = 100_000; // 100k steps (realistic training run)
+const STANDARD_DATAPOINTS = 1_000; // 1k steps (pagination test data)
+
+// Metric groups and names for realistic variety
+const METRIC_GROUPS = ['train', 'eval', 'system', 'custom'];
+const METRIC_NAMES = [
+  'loss', 'accuracy', 'lr', 'grad_norm', 'epoch_time',
+  'precision', 'recall', 'f1', 'auc', 'perplexity',
+  'gpu_util', 'memory_used', 'throughput', 'latency',
+];
+
+/**
+ * Generates a metric name from group and name arrays.
+ */
+function getMetricName(metricIndex: number): { group: string; name: string } {
+  const groupIndex = Math.floor(metricIndex / METRIC_NAMES.length) % METRIC_GROUPS.length;
+  const nameIndex = metricIndex % METRIC_NAMES.length;
+  const suffix = Math.floor(metricIndex / (METRIC_GROUPS.length * METRIC_NAMES.length));
+  return {
+    group: METRIC_GROUPS[groupIndex],
+    name: `${METRIC_GROUPS[groupIndex]}/${METRIC_NAMES[nameIndex]}${suffix > 0 ? `_${suffix}` : ''}`,
+  };
+}
+
+/**
+ * Generates a realistic metric value based on metric type and step.
+ */
+function getMetricValue(metricIndex: number, step: number, totalSteps: number): number {
+  const nameIndex = metricIndex % METRIC_NAMES.length;
+  const metricName = METRIC_NAMES[nameIndex];
+  const progress = step / totalSteps;
+
+  switch (metricName) {
+    case 'loss':
+      return Math.exp(-step / (totalSteps / 3)) * 2 + Math.random() * 0.1;
+    case 'accuracy':
+    case 'precision':
+    case 'recall':
+    case 'f1':
+    case 'auc':
+      return 0.5 + progress * 0.45 + Math.random() * 0.02;
+    case 'perplexity':
+      return 100 * Math.exp(-step / (totalSteps / 2)) + 10 + Math.random() * 5;
+    case 'lr':
+      // Warmup then decay
+      return step < totalSteps * 0.1
+        ? 0.001 * (step / (totalSteps * 0.1))
+        : 0.001 * Math.exp(-(step - totalSteps * 0.1) / totalSteps);
+    case 'gpu_util':
+      return 80 + Math.random() * 15;
+    case 'memory_used':
+      return 0.7 + Math.random() * 0.2;
+    case 'throughput':
+      return 1000 + Math.random() * 200;
+    case 'latency':
+      return 10 + Math.random() * 5;
+    default:
+      return Math.random() * 0.01 + 0.001;
+  }
+}
 
 /**
  * Seeds ClickHouse with metric datapoints.
+ * Uses high-fidelity subset: first 5 runs get 100k datapoints, rest get 1k.
  */
 async function seedClickHouseMetrics(
   runs: { id: bigint; name: string }[],
@@ -56,33 +120,38 @@ async function seedClickHouseMetrics(
     password: clickhousePassword,
   });
 
-  const totalRows = runs.length * METRICS_PER_RUN * DATAPOINTS_PER_METRIC;
-  console.log(`   Seeding ClickHouse with ${totalRows.toLocaleString()} metric datapoints...`);
+  // Calculate total rows with high-fidelity subset
+  const highFidelityRows = Math.min(HIGH_FIDELITY_RUNS, runs.length) * METRICS_PER_RUN * HIGH_FIDELITY_DATAPOINTS;
+  const standardRows = Math.max(0, runs.length - HIGH_FIDELITY_RUNS) * METRICS_PER_RUN * STANDARD_DATAPOINTS;
+  const totalRows = highFidelityRows + standardRows;
 
-  const BATCH_SIZE = 10000;
+  console.log(`   Seeding ClickHouse with ${totalRows.toLocaleString()} metric datapoints...`);
+  console.log(`   - ${Math.min(HIGH_FIDELITY_RUNS, runs.length)} high-fidelity runs × ${METRICS_PER_RUN} metrics × ${HIGH_FIDELITY_DATAPOINTS.toLocaleString()} points`);
+  console.log(`   - ${Math.max(0, runs.length - HIGH_FIDELITY_RUNS)} standard runs × ${METRICS_PER_RUN} metrics × ${STANDARD_DATAPOINTS.toLocaleString()} points`);
+
+  const BATCH_SIZE = 50000; // Larger batch for faster inserts
   let batch: Record<string, unknown>[] = [];
   let insertedCount = 0;
-  const baseTime = Date.now() - DATAPOINTS_PER_METRIC * 1000;
+  const startTime = Date.now();
 
-  for (const run of runs) {
+  for (let runIndex = 0; runIndex < runs.length; runIndex++) {
+    const run = runs[runIndex];
+    const datapointsForRun = runIndex < HIGH_FIDELITY_RUNS ? HIGH_FIDELITY_DATAPOINTS : STANDARD_DATAPOINTS;
+    const baseTime = Date.now() - datapointsForRun * 1000;
+
     for (let m = 0; m < METRICS_PER_RUN; m++) {
-      const metricName = `train/${['loss', 'accuracy', 'lr', 'grad_norm', 'epoch_time'][m % 5]}_${Math.floor(m / 5)}`;
+      const { group, name } = getMetricName(m);
 
-      for (let step = 0; step < DATAPOINTS_PER_METRIC; step++) {
+      for (let step = 0; step < datapointsForRun; step++) {
         batch.push({
           tenantId,
           projectName,
           runId: Number(run.id),
-          logGroup: 'train',
-          logName: metricName,
+          logGroup: group,
+          logName: name,
           time: new Date(baseTime + step * 1000).toISOString().replace('T', ' ').replace('Z', ''),
           step,
-          // Realistic metric values
-          value: m % 5 === 0
-            ? Math.exp(-step / 30) * 2 + Math.random() * 0.1 // loss - decaying
-            : m % 5 === 1
-              ? 0.5 + (step / DATAPOINTS_PER_METRIC) * 0.45 + Math.random() * 0.02 // accuracy - increasing
-              : Math.random() * 0.01 + 0.001, // other metrics
+          value: getMetricValue(m, step, datapointsForRun),
         });
 
         if (batch.length >= BATCH_SIZE) {
@@ -93,6 +162,12 @@ async function seedClickHouseMetrics(
           });
           insertedCount += batch.length;
           batch = [];
+
+          // Progress logging
+          const elapsed = (Date.now() - startTime) / 1000;
+          const rate = insertedCount / elapsed;
+          const remaining = (totalRows - insertedCount) / rate;
+          console.log(`   Progress: ${insertedCount.toLocaleString()}/${totalRows.toLocaleString()} (${Math.round(rate).toLocaleString()} rows/sec, ~${Math.round(remaining)}s remaining)`);
         }
       }
     }
@@ -108,7 +183,8 @@ async function seedClickHouseMetrics(
   }
 
   await clickhouse.close();
-  console.log(`   Seeded ${insertedCount.toLocaleString()} metric datapoints`);
+  const totalTime = (Date.now() - startTime) / 1000;
+  console.log(`   Seeded ${insertedCount.toLocaleString()} metric datapoints in ${totalTime.toFixed(1)}s`);
 }
 
 async function main() {
@@ -381,12 +457,15 @@ async function main() {
 
   // Register metric names (skipDuplicates handles existing ones)
   const runLogData = allRuns.flatMap((run) =>
-    Array.from({ length: METRICS_PER_RUN }, (_, i) => ({
-      runId: run.id,
-      logName: `train/${['loss', 'accuracy', 'lr', 'grad_norm', 'epoch_time'][i % 5]}_${Math.floor(i / 5)}`,
-      logGroup: 'train',
-      logType: 'METRIC' as const,
-    }))
+    Array.from({ length: METRICS_PER_RUN }, (_, i) => {
+      const { group, name } = getMetricName(i);
+      return {
+        runId: run.id,
+        logName: name,
+        logGroup: group,
+        logType: 'METRIC' as const,
+      };
+    })
   );
 
   await prisma.runLogs.createMany({

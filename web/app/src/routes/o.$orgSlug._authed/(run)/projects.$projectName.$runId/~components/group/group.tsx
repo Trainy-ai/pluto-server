@@ -40,9 +40,10 @@ const DataGroupBase = ({
     });
   }, [group.logs]);
 
-  // Memoize children to prevent recreation on every render
+  // Return render functions instead of elements for lazy evaluation
+  // Components are only created when DropdownRegion calls the render function
   const children = useMemo(() => {
-    return sortedLogs.map((log, index) => (
+    return sortedLogs.map((log, index) => () => (
       <LogView
         key={log.id}
         log={log}
