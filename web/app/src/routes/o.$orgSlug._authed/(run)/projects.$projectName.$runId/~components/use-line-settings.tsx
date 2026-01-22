@@ -18,6 +18,8 @@ export interface LineChartSettings {
     parameter: number;
     showOriginalData: boolean;
   };
+  /** Maximum points to display per series. 0 = no limit (show all points) */
+  maxPointsPerSeries: number;
 }
 
 export const DEFAULT_SETTINGS: LineChartSettings = {
@@ -30,6 +32,9 @@ export const DEFAULT_SETTINGS: LineChartSettings = {
     parameter: 2,
     showOriginalData: true,
   },
+  // Default to 1000 points per series for better performance
+  // 0 = no limit (show all points)
+  maxPointsPerSeries: 1000,
 };
 
 const lineSettingsDb = new LocalCache<LineChartSettings>(

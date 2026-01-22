@@ -2,10 +2,11 @@
   "name": "mlop",
   "private": true,
   "scripts": {
-    "test:e2e": "playwright test",
+    "test:e2e": "playwright test --project=setup --project=chromium",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:headed": "playwright test --headed",
-    "test:e2e:debug": "playwright test --debug"
+    "test:e2e:debug": "playwright test --debug",
+    "test:e2e:perf": "playwright test --project=performance"
   },
   "dependencies": {
     "turbo": "^2.4.4"

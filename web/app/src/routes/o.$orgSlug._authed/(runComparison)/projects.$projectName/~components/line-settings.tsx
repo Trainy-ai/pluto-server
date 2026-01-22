@@ -446,6 +446,54 @@ const LineSettings = ({
               </div>
             </SettingsSection>
 
+            <SettingsSection
+              title="Performance"
+              description="Settings to improve chart rendering performance"
+            >
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Label
+                      htmlFor="max-points"
+                      className="flex items-center gap-1.5 text-sm"
+                    >
+                      Max points per series
+                      <InfoTooltip
+                        title="Downsampling"
+                        description="Limits the number of data points displayed per series using the LTTB algorithm. Lower values improve performance but may lose detail. Set to 0 for no limit."
+                        link={{
+                          url: "https://skemman.is/bitstream/1946/15343/3/SS_MSthesis.pdf",
+                          label: "Learn about LTTB algorithm",
+                        }}
+                      />
+                    </Label>
+                  </div>
+                  <span className="rounded bg-muted px-2 py-0.5 text-sm font-medium">
+                    {settings.maxPointsPerSeries === 0
+                      ? "No limit"
+                      : settings.maxPointsPerSeries}
+                  </span>
+                </div>
+                <Select
+                  value={String(settings.maxPointsPerSeries)}
+                  onValueChange={(value) =>
+                    updateSettings("maxPointsPerSeries", Number(value))
+                  }
+                >
+                  <SelectTrigger className="h-9 rounded-md border border-input text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="rounded-md border border-input">
+                    <SelectItem value="500">500 points (fastest)</SelectItem>
+                    <SelectItem value="1000">1,000 points (default)</SelectItem>
+                    <SelectItem value="2000">2,000 points</SelectItem>
+                    <SelectItem value="5000">5,000 points</SelectItem>
+                    <SelectItem value="0">No limit (may be slow)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </SettingsSection>
+
             <Card
               className={cn(
                 "rounded-lg border p-4 transition-all duration-200",

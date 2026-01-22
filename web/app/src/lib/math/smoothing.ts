@@ -122,3 +122,102 @@ function smoothGaussian(y: number[], sigma: number): number[] {
   }
   return result;
 }
+
+/**
+ * Downsample data using the Largest-Triangle-Three-Buckets (LTTB) algorithm.
+ * Preserves visual features of the data while reducing point count.
+ *
+ * @param xData - Array of x-values
+ * @param yData - Array of y-values
+ * @param targetPoints - Target number of points after downsampling
+ * @returns Object with downsampled x and y arrays
+ */
+export function downsampleLTTB(
+  xData: number[],
+  yData: number[],
+  targetPoints: number,
+): { x: number[]; y: number[] } {
+  const dataLength = xData.length;
+
+  // If we have fewer points than target, or target is 0 (no limit), return original
+  if (targetPoints <= 0 || dataLength <= targetPoints) {
+    return { x: xData, y: yData };
+  }
+
+  // Need at least 3 points for LTTB
+  if (targetPoints < 3) {
+    return {
+      x: [xData[0], xData[dataLength - 1]],
+      y: [yData[0], yData[dataLength - 1]],
+    };
+  }
+
+  const sampledX: number[] = [];
+  const sampledY: number[] = [];
+
+  // Always include first point
+  sampledX.push(xData[0]);
+  sampledY.push(yData[0]);
+
+  // Bucket size
+  const bucketSize = (dataLength - 2) / (targetPoints - 2);
+
+  let a = 0; // Index of previously selected point
+  let nextBucketStart = 1;
+
+  for (let i = 0; i < targetPoints - 2; i++) {
+    // Calculate bucket boundaries
+    const bucketStart = Math.floor(nextBucketStart);
+    const bucketEnd = Math.floor(nextBucketStart + bucketSize);
+    const nextBucketEnd = Math.min(
+      Math.floor(nextBucketStart + 2 * bucketSize),
+      dataLength - 1,
+    );
+
+    // Calculate average of next bucket (for triangle calculation)
+    let avgX = 0;
+    let avgY = 0;
+    let avgCount = 0;
+    for (let j = bucketEnd; j < nextBucketEnd; j++) {
+      avgX += xData[j];
+      avgY += yData[j];
+      avgCount++;
+    }
+    if (avgCount > 0) {
+      avgX /= avgCount;
+      avgY /= avgCount;
+    }
+
+    // Find point in current bucket with largest triangle area
+    let maxArea = -1;
+    let maxAreaIndex = bucketStart;
+
+    const pointAX = xData[a];
+    const pointAY = yData[a];
+
+    for (let j = bucketStart; j < bucketEnd && j < dataLength - 1; j++) {
+      // Calculate triangle area using cross product
+      const area = Math.abs(
+        (pointAX - avgX) * (yData[j] - pointAY) -
+          (pointAX - xData[j]) * (avgY - pointAY),
+      );
+
+      if (area > maxArea) {
+        maxArea = area;
+        maxAreaIndex = j;
+      }
+    }
+
+    sampledX.push(xData[maxAreaIndex]);
+    sampledY.push(yData[maxAreaIndex]);
+
+    a = maxAreaIndex;
+    nextBucketStart += bucketSize;
+  }
+
+  // Always include last point
+  sampledX.push(xData[dataLength - 1]);
+  sampledY.push(yData[dataLength - 1]);
+
+  return { x: sampledX, y: sampledY };
+}

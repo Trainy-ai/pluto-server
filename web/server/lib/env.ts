@@ -40,6 +40,9 @@ const envSchema = z.object({
   DUMMYIDP_CERTIFICATE: z.string().optional(),
   SAML_ISSUER: z.string().url().optional(),
 
+  // Redis (optional - graceful degradation if not available)
+  REDIS_URL: z.string().url().optional(),
+
   // Deployment/Environment Specific
   NODE_ENV: z.enum(["development", "production", "test"]).optional(),
   IS_DOCKER: z.string().optional(), // Could refine if specific values like "true" are expected

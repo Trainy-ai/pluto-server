@@ -23,6 +23,7 @@ import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import styles from "./dropdown-region.module.css";
 import { Slider } from "@/components/ui/slider";
+import { VirtualizedChart } from "@/components/core/virtualized-chart";
 
 // Constants
 const MIN_COLUMNS = 1;
@@ -57,7 +58,12 @@ interface DropdownSettings {
 
 interface DropdownRegionProps {
   title: string;
-  components: React.ReactNode[];
+  /**
+   * Array of render functions that return React nodes.
+   * Using render functions enables lazy evaluation - components are only
+   * created when they need to be displayed (on the current page).
+   */
+  components: (() => React.ReactNode)[];
   groupId: string;
 }
 
@@ -414,14 +420,15 @@ export function DropdownRegion({
     [containerWidth],
   );
 
-  // Pagination logic
-  const sortedComponents = [...components].sort((_, b) => {
-    const indexB = components.indexOf(b);
-    return settings.pinnedIndices.includes(indexB) ? 1 : -1;
-  });
+  // Pagination logic - work with indices to support lazy render functions
+  const allIndices = components.map((_, i) => i);
 
-  const unpinnedComponents = sortedComponents.filter(
-    (_, index) => !settings.pinnedIndices.includes(index),
+  // Separate pinned and unpinned indices
+  const pinnedIndices = allIndices.filter((i) =>
+    settings.pinnedIndices.includes(i)
+  );
+  const unpinnedIndices = allIndices.filter(
+    (i) => !settings.pinnedIndices.includes(i)
   );
 
   const currentPageStart = Math.max(
@@ -429,21 +436,17 @@ export function DropdownRegion({
     (settings.currentPage - 1) * itemsPerPage,
   );
   const currentPageEnd = Math.min(
-    unpinnedComponents.length,
+    unpinnedIndices.length,
     currentPageStart + itemsPerPage,
   );
 
-  const currentPageComponents = unpinnedComponents.slice(
+  const currentPageIndices = unpinnedIndices.slice(
     currentPageStart,
     currentPageEnd,
   );
 
-  const displayComponents = [
-    ...sortedComponents.filter((_, index) =>
-      settings.pinnedIndices.includes(index),
-    ),
-    ...currentPageComponents,
-  ];
+  // Display indices: pinned first, then current page
+  const displayIndices = [...pinnedIndices, ...currentPageIndices];
 
   const totalPages = Math.max(
     1,
@@ -452,9 +455,12 @@ export function DropdownRegion({
     ),
   );
 
-  const cardStyle: React.CSSProperties = settings.globalCardHeight
-    ? { height: `${settings.globalCardHeight}px` }
-    : {};
+  // Explicit height is required for children using height: 100% to work.
+  // Without an explicit height, min-height alone doesn't establish a height for percentage calculations.
+  const DEFAULT_CARD_HEIGHT = 384; // matches min-height in CSS
+  const cardStyle: React.CSSProperties = {
+    height: `${settings.globalCardHeight ?? DEFAULT_CARD_HEIGHT}px`,
+  };
 
   return (
     <div className="w-full rounded-lg border shadow-sm">
@@ -636,9 +642,9 @@ export function DropdownRegion({
               } as React.CSSProperties
             }
           >
-            {displayComponents.map((component) => {
-              const originalIndex = components.indexOf(component);
+            {displayIndices.map((originalIndex) => {
               const isPinned = settings.pinnedIndices.includes(originalIndex);
+              const renderComponent = components[originalIndex];
 
               return (
                 <div
@@ -648,10 +654,12 @@ export function DropdownRegion({
                       cardRefs.current[originalIndex] = el;
                     }
                   }}
-                  className={cn(styles.card, "group", "w-full bg-red-500")}
+                  className={cn(styles.card, "group", "w-full")}
                   style={cardStyle}
                 >
-                  {component}
+                  <VirtualizedChart minHeight={cardStyle.height?.toString() || "384px"}>
+                    {renderComponent()}
+                  </VirtualizedChart>
                   <button
                     onMouseDown={(e) => handleResizeMouseDown(originalIndex, e)}
                     className={cn(

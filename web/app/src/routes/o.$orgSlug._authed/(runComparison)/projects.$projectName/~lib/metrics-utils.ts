@@ -55,6 +55,7 @@ export const groupMetrics = (
         runId: run.id,
         runName: run.name,
         color,
+        status: run.status,
       });
     });
   });

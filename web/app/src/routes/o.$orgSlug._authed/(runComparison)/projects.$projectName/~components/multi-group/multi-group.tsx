@@ -12,7 +12,7 @@ import { useMemo, useState, useCallback, memo } from "react";
 import { useChartSync } from "@/components/charts/hooks/use-chart-sync";
 import ReactECharts from "echarts-for-react";
 import { cn } from "@/lib/utils";
-import type { RunLogType } from "@/lib/grouping/types";
+import type { RunLogType, RunStatus } from "@/lib/grouping/types";
 import { trpc } from "@/utils/trpc";
 import { useQuery } from "@tanstack/react-query";
 
@@ -26,6 +26,7 @@ interface MultiGroupProps {
       runId: string;
       runName: string;
       color: string;
+      status: RunStatus;
     }[];
   }[];
   className?: string;
@@ -59,6 +60,8 @@ export const MultiGroup = ({
     setLoadedCharts((prev: number) => prev + 1);
   }, []);
 
+  // Return render functions instead of elements for lazy evaluation
+  // Components are only created when DropdownRegion calls the render function
   const components = useMemo(
     () =>
       metrics.map((metric, index) => {
@@ -68,8 +71,12 @@ export const MultiGroup = ({
             runName: line.runName,
             color: line.color,
           }));
+          // Check if all runs are in a terminal state (not actively running)
+          const allRunsCompleted = metric.data.every(
+            (line) => line.status !== "RUNNING"
+          );
 
-          return (
+          return () => (
             <MultiLineChart
               lines={lines}
               title={metric.name}
@@ -78,12 +85,13 @@ export const MultiGroup = ({
               onLoad={handleChartLoad}
               organizationId={organizationId}
               projectName={projectName}
+              allRunsCompleted={allRunsCompleted}
             />
           );
         }
 
         if (metric.type === "HISTOGRAM") {
-          return (
+          return () => (
             <MultiHistogramView
               logName={metric.name}
               tenantId={organizationId}
@@ -94,7 +102,7 @@ export const MultiGroup = ({
         }
 
         if (metric.type === "AUDIO") {
-          return (
+          return () => (
             <MultiGroupAudio
               logName={metric.name}
               organizationId={organizationId}
@@ -106,7 +114,7 @@ export const MultiGroup = ({
         }
 
         if (metric.type === "IMAGE") {
-          return (
+          return () => (
             <MultiGroupImage
               logName={metric.name}
               organizationId={organizationId}
@@ -118,7 +126,7 @@ export const MultiGroup = ({
         }
 
         if (metric.type === "VIDEO") {
-          return (
+          return () => (
             <MultiGroupVideo
               logName={metric.name}
               organizationId={organizationId}
@@ -129,7 +137,7 @@ export const MultiGroup = ({
           );
         }
 
-        return null;
+        return () => null;
       }),
     [
       metrics,

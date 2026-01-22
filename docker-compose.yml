@@ -133,6 +133,7 @@ services:
       - clickhouse
       - db
       - minio
+      - redis
     entrypoint: [ "/bin/sh", "-c", "corepack enable pnpm && pnpm exec prisma migrate deploy && node ./.next/standalone/server.js" ]
     # entrypoint: [ "/bin/sh", "-c", "bun ./.next/standalone/server.js" ]
     restart: unless-stopped
@@ -176,6 +177,21 @@ services:
       - "traefik.http.routers.py_secure.tls.certresolver=myresolver"
       - "traefik.http.services.py_svc.loadbalancer.server.port=3004"
       - "traefik.http.services.py_svc.loadbalancer.server.scheme=http"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - mlop_network
+    volumes:
+      - ./.mlop/redis:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
 networks:
   mlop_network:

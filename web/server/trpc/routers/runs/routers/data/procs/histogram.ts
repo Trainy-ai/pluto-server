@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { protectedOrgProcedure } from "../../../../../../lib/trpc";
 import { sqidDecode } from "../../../../../../lib/sqid";
+import { withCache } from "../../../../../../lib/cache";
 
 const histogramSchema = z.object({
   freq: z.array(z.number().int()),
@@ -24,6 +25,8 @@ const histogramDataRow = z.object({
   }),
 });
 
+type HistogramData = z.infer<typeof histogramDataRow>[];
+
 export const histogramProcedure = protectedOrgProcedure
   .input(
     z.object({
@@ -36,25 +39,30 @@ export const histogramProcedure = protectedOrgProcedure
     const { runId: encodedRunId, projectName, organizationId, logName } = input;
     const runId = sqidDecode(encodedRunId);
 
-    const query = `
-    SELECT logName, time, step, data as histogramData FROM mlop_data
-    WHERE tenantId = {tenantId: String}
-    AND projectName = {projectName: String}
-    AND runId = {runId: UInt64}
-    AND logName = {logName: String}
-    AND dataType = 'HISTOGRAM'
-  `;
+    return withCache<HistogramData>(
+      ctx,
+      "histogram",
+      { runId, organizationId, projectName, logName },
+      async () => {
+        const query = `
+          SELECT logName, time, step, data as histogramData FROM mlop_data
+          WHERE tenantId = {tenantId: String}
+          AND projectName = {projectName: String}
+          AND runId = {runId: UInt64}
+          AND logName = {logName: String}
+          AND dataType = 'HISTOGRAM'
+        `;
 
-    const result = (await ctx.clickhouse
-      .query(query, {
-        tenantId: organizationId,
-        projectName,
-        runId,
-        logName,
-      })
-      .then((result) => result.json())) as unknown[];
+        const result = (await ctx.clickhouse
+          .query(query, {
+            tenantId: organizationId,
+            projectName,
+            runId,
+            logName,
+          })
+          .then((result) => result.json())) as unknown[];
 
-    const data = result.map((row) => histogramDataRow.parse(row));
-
-    return data;
+        return result.map((row) => histogramDataRow.parse(row));
+      }
+    );
   });
