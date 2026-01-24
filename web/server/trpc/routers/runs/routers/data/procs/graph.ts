@@ -48,7 +48,7 @@ export const graphProcedure = protectedOrgProcedure
             FROM mlop_metrics
             WHERE tenantId = {tenantId: String}
               AND projectName = {projectName: String}
-              AND runId = {runId: String}
+              AND runId = {runId: UInt64}
               AND logName = {logName: String}
               AND logGroup = {logGroup: String}
           )

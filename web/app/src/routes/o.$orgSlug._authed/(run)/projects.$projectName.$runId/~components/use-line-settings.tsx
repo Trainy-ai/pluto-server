@@ -32,9 +32,9 @@ export const DEFAULT_SETTINGS: LineChartSettings = {
     parameter: 2,
     showOriginalData: true,
   },
-  // Default to 1000 points per series for better performance
-  // 0 = no limit (show all points)
-  maxPointsPerSeries: 1000,
+  // 0 = no limit (show all points, no downsampling)
+  // Set to 1000+ for better performance with large datasets
+  maxPointsPerSeries: 0,
 };
 
 const lineSettingsDb = new LocalCache<LineChartSettings>(

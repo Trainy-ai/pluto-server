@@ -285,9 +285,44 @@ export const MultiLineChart = memo(
     const isInitialLoading =
       !hasAnyData && (!allQueriesDone || isLoadingCustomLogData);
 
-    // Initial loading state - only show when we have no data and queries are still loading
+    // Initial loading state - show metric title and series names while loading
     if (isInitialLoading) {
-      return <Skeleton className="h-full w-full flex-grow" />;
+      return (
+        <div className="relative flex h-full w-full flex-grow flex-col bg-accent/50">
+          {/* Title */}
+          <div className="p-3 text-center">
+            <h3 className="text-lg font-semibold text-foreground">{title}</h3>
+          </div>
+          {/* Series/run names being loaded */}
+          <div className="flex-1 overflow-hidden px-4 pb-4">
+            <div className="flex flex-wrap gap-2">
+              {lines.slice(0, 10).map((line) => (
+                <div
+                  key={line.runId}
+                  className="flex items-center gap-1.5 rounded-md bg-muted/50 px-2 py-1 text-xs"
+                >
+                  <span
+                    className="h-2 w-2 rounded-full"
+                    style={{ backgroundColor: line.color }}
+                  />
+                  <span className="max-w-[120px] truncate text-muted-foreground">
+                    {line.runName}
+                  </span>
+                </div>
+              ))}
+              {lines.length > 10 && (
+                <div className="rounded-md bg-muted/50 px-2 py-1 text-xs text-muted-foreground">
+                  +{lines.length - 10} more
+                </div>
+              )}
+            </div>
+          </div>
+          {/* Loading spinner overlay */}
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="h-6 w-6 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-primary" />
+          </div>
+        </div>
+      );
     }
 
     // Empty state - only if we have no data and all queries are done loading

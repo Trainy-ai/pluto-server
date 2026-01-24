@@ -39,31 +39,73 @@ const HIGH_FIDELITY_DATAPOINTS = 100_000; // 100k steps (realistic training run)
 const STANDARD_DATAPOINTS = 1_000; // 1k steps (pagination test data)
 
 // Metric groups and names for realistic variety
-const METRIC_GROUPS = ['train', 'eval', 'system', 'custom'];
+const METRIC_GROUPS = ['train', 'eval', 'system', 'custom', 'test'];
 const METRIC_NAMES = [
   'loss', 'accuracy', 'lr', 'grad_norm', 'epoch_time',
   'precision', 'recall', 'f1', 'auc', 'perplexity',
   'gpu_util', 'memory_used', 'throughput', 'latency',
 ];
 
+// Test metrics: parallel horizontal and slanted lines for visual debugging
+const TEST_METRIC_NAMES = ['horizontal', 'slanted_up', 'slanted_down'];
+
 /**
  * Generates a metric name from group and name arrays.
+ * First few metrics are "test" group with parallel lines for visual debugging.
  */
-function getMetricName(metricIndex: number): { group: string; name: string } {
-  const groupIndex = Math.floor(metricIndex / METRIC_NAMES.length) % METRIC_GROUPS.length;
-  const nameIndex = metricIndex % METRIC_NAMES.length;
-  const suffix = Math.floor(metricIndex / (METRIC_GROUPS.length * METRIC_NAMES.length));
+function getMetricName(metricIndex: number): { group: string; name: string; isTestMetric: boolean } {
+  // First 3 metrics are test metrics (parallel lines)
+  if (metricIndex < TEST_METRIC_NAMES.length) {
+    return {
+      group: 'test',
+      name: `test/${TEST_METRIC_NAMES[metricIndex]}`,
+      isTestMetric: true,
+    };
+  }
+
+  // Rest are normal metrics
+  const adjustedIndex = metricIndex - TEST_METRIC_NAMES.length;
+  const nonTestGroups = METRIC_GROUPS.filter(g => g !== 'test');
+  const groupIndex = Math.floor(adjustedIndex / METRIC_NAMES.length) % nonTestGroups.length;
+  const nameIndex = adjustedIndex % METRIC_NAMES.length;
+  const suffix = Math.floor(adjustedIndex / (nonTestGroups.length * METRIC_NAMES.length));
   return {
-    group: METRIC_GROUPS[groupIndex],
-    name: `${METRIC_GROUPS[groupIndex]}/${METRIC_NAMES[nameIndex]}${suffix > 0 ? `_${suffix}` : ''}`,
+    group: nonTestGroups[groupIndex],
+    name: `${nonTestGroups[groupIndex]}/${METRIC_NAMES[nameIndex]}${suffix > 0 ? `_${suffix}` : ''}`,
+    isTestMetric: false,
   };
 }
 
 /**
  * Generates a realistic metric value based on metric type and step.
+ * For test metrics, generates parallel lines at different y-intercepts for each run.
  */
-function getMetricValue(metricIndex: number, step: number, totalSteps: number): number {
-  const nameIndex = metricIndex % METRIC_NAMES.length;
+function getMetricValue(metricIndex: number, step: number, totalSteps: number, runIndex: number = 0): number {
+  // Test metrics: parallel lines for visual debugging
+  if (metricIndex < TEST_METRIC_NAMES.length) {
+    const testMetricName = TEST_METRIC_NAMES[metricIndex];
+    const progress = step / totalSteps;
+    // Each run gets a different y-intercept (spacing of 0.1)
+    const yIntercept = runIndex * 0.1;
+
+    switch (testMetricName) {
+      case 'horizontal':
+        // Perfectly horizontal lines at different y levels
+        return yIntercept + 0.5;
+      case 'slanted_up':
+        // Parallel slanted lines going up
+        return yIntercept + progress * 0.5;
+      case 'slanted_down':
+        // Parallel slanted lines going down
+        return yIntercept + 1 - progress * 0.5;
+      default:
+        return yIntercept;
+    }
+  }
+
+  // Normal metrics
+  const adjustedIndex = metricIndex - TEST_METRIC_NAMES.length;
+  const nameIndex = adjustedIndex % METRIC_NAMES.length;
   const metricName = METRIC_NAMES[nameIndex];
   const progress = step / totalSteps;
 
@@ -151,7 +193,7 @@ async function seedClickHouseMetrics(
           logName: name,
           time: new Date(baseTime + step * 1000).toISOString().replace('T', ' ').replace('Z', ''),
           step,
-          value: getMetricValue(m, step, datapointsForRun),
+          value: getMetricValue(m, step, datapointsForRun, runIndex),
         });
 
         if (batch.length >= BATCH_SIZE) {

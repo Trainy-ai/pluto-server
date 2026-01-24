@@ -15,6 +15,10 @@ import { cn } from "@/lib/utils";
 import type { RunLogType, RunStatus } from "@/lib/grouping/types";
 import { trpc } from "@/utils/trpc";
 import { useQuery } from "@tanstack/react-query";
+import { arePropsEqual } from "./props-comparison";
+
+// Re-export for backwards compatibility
+export { arePropsEqual } from "./props-comparison";
 
 interface MultiGroupProps {
   title: string;
@@ -154,5 +158,6 @@ export const MultiGroup = ({
   );
 };
 
+
 // Memoized version of MultiGroup to prevent unnecessary re-renders
-export const MemoizedMultiGroup = memo(MultiGroup);
+export const MemoizedMultiGroup = memo(MultiGroup, arePropsEqual);
