@@ -5,11 +5,22 @@ import React, {
   useCallback,
   forwardRef,
   useState,
+  memo,
+  useId,
 } from "react";
 import ReactECharts from "echarts-for-react";
 import type { EChartsOption } from "echarts";
 import { useTheme } from "@/lib/hooks/use-theme";
 import { cn } from "@/lib/utils";
+
+// Extend window interface for chart highlighting functions
+declare global {
+  interface Window {
+    __chartInstances?: Map<string, React.RefObject<ReactECharts | null>>;
+    __chartHighlight?: (chartId: string, seriesIndex: number) => void;
+    __chartDownplay?: (chartId: string) => void;
+  }
+}
 
 export interface LineData {
   x: number[];
@@ -85,7 +96,7 @@ function generateLogAxisLabels(
 }
 
 // Throttle interval for resize observer (ms)
-const RESIZE_THROTTLE_MS = 100;
+const RESIZE_THROTTLE_MS = 200;
 
 function useContainerSize(ref: React.RefObject<HTMLDivElement | null>) {
   const [size, setSize] = useState({ width: 0, height: 0 });
@@ -201,7 +212,8 @@ function calculateAxisInterval(
 }
 
 // Numeric label formatter
-const formatAxisLabel = (value: number): string => {
+// Exported for testing
+export const formatAxisLabel = (value: number): string => {
   if (value === 0) return "0";
   if (Math.abs(value) < 0.0001)
     return value.toExponential(2).replace(/\.?0+e/, "e");
@@ -311,9 +323,23 @@ const useChartRef = (
   enabled: boolean = true,
 ) => {
   const internalChartRef = useRef<ReactECharts | null>(null);
+  // Track dblclick handler for cleanup to prevent memory leaks
+  const dblclickHandlerRef = useRef<(() => void) | null>(null);
+  const zrInstanceRef = useRef<ReturnType<ReturnType<ReactECharts["getEchartsInstance"]>["getZr"]> | null>(null);
 
   const setChartRef = useCallback(
     (ref: ReactECharts | null) => {
+      // Clean up previous dblclick handler before setting new ref
+      if (zrInstanceRef.current && dblclickHandlerRef.current) {
+        try {
+          zrInstanceRef.current.off("dblclick", dblclickHandlerRef.current);
+        } catch {
+          // Ignore errors if instance is already disposed
+        }
+        dblclickHandlerRef.current = null;
+        zrInstanceRef.current = null;
+      }
+
       if (ref && enabled) {
         internalChartRef.current = ref;
         const chart = ref.getEchartsInstance();
@@ -324,12 +350,23 @@ const useChartRef = (
             dataZoomSelectActive: true,
           });
           const zr = chart.getZr();
-          if (zr)
-            zr.on("dblclick", () =>
-              chart.dispatchAction({ type: "dataZoom", start: 0, end: 100 }),
-            );
+          if (zr) {
+            zrInstanceRef.current = zr;
+            // Create named handler so we can remove it later
+            const dblclickHandler = () => {
+              try {
+                chart.dispatchAction({ type: "dataZoom", start: 0, end: 100 });
+              } catch {
+                // Ignore errors from disposed chart
+              }
+            };
+            dblclickHandlerRef.current = dblclickHandler;
+            zr.on("dblclick", dblclickHandler);
+          }
         }
-      } else internalChartRef.current = null;
+      } else {
+        internalChartRef.current = null;
+      }
 
       if (externalRef && enabled) {
         if (typeof externalRef === "function") externalRef(ref);
@@ -340,6 +377,21 @@ const useChartRef = (
     },
     [externalRef, enabled, ...deps],
   );
+
+  // Cleanup effect for unmount
+  useEffect(() => {
+    return () => {
+      if (zrInstanceRef.current && dblclickHandlerRef.current) {
+        try {
+          zrInstanceRef.current.off("dblclick", dblclickHandlerRef.current);
+        } catch {
+          // Instance may already be disposed
+        }
+      }
+      dblclickHandlerRef.current = null;
+      zrInstanceRef.current = null;
+    };
+  }, []);
 
   return { setChartRef, internalChartRef };
 };
@@ -592,86 +644,132 @@ function generateSeriesOptions(
   labelCounts: Record<string, number>,
   seriesData: number[][][],
 ) {
+  // Performance tiers based on series count
+  const seriesCount = lines.length;
+  const isManySeries = seriesCount > 20;
+  const hasLargeDataset = lines.some((l) => l.x.length > 1000);
+
   return lines.map((l, i) => ({
     name: l.label + (labelCounts[l.label] > 1 ? ` (${i + 1})` : ""),
     type: "line" as const,
     smooth: false,
-    symbol: "circle" as const,
-    symbolSize: 6,
-    // sampling: "average",
-    // large: true,
-    showSymbol: l.x.length === 1 || (l.x.length < 100 && lines.length === 1),
+    symbol: "circle" as const, // Show dots at cursor intersection points
+    symbolSize: 6, // Visible dot size when hovering
+    showSymbol: false, // Only show symbols on hover, not all the time
     sampling: "lttb" as const,
+    // Enable large mode for many series or big datasets
+    large: isManySeries || hasLargeDataset,
+    largeThreshold: isManySeries ? 500 : 2000,
+    // Aggressive progressive rendering for many series
+    progressive: isManySeries ? 200 : 400,
+    progressiveThreshold: isManySeries ? 1000 : 3000,
+    progressiveChunkMode: "mod" as const,
+    // Enable line hover events so mouseover works even without symbols
+    triggerLineEvent: true,
     lineStyle: {
       color: l.color,
       type: l.dashed ? ("dashed" as const) : ("solid" as const),
-      width: 2,
-      opacity: l.opacity !== undefined ? l.opacity : lines.length > 1 ? 0.8 : 1,
+      width: 2, // Full width for all series
+      opacity: l.opacity !== undefined ? l.opacity : 0.85,
     },
     itemStyle: {
       color: l.color,
-      opacity: l.opacity !== undefined ? l.opacity : lines.length > 1 ? 0.8 : 1,
-      borderWidth: 2,
+      opacity: l.opacity !== undefined ? l.opacity : 0.85,
+      borderWidth: 0, // No border for performance
     },
-    // emphasis: {
-    //   focus: "series" as const,
-    //   lineStyle: {
-    //     width: 2,
-    //   },
-    //   itemStyle: {
-    //     borderWidth: 1,
-    //   },
-    // },
+    // Always enable emphasis for hover highlighting
+    emphasis: {
+      focus: "series" as const,
+      lineStyle: {
+        width: 3,
+      },
+    },
+    // Always enable blur for non-hovered series
+    blur: {
+      lineStyle: {
+        opacity: 0.15,
+      },
+    },
     data: seriesData[i],
   }));
 }
 
-function generateTooltipFormatter(
+// Maximum number of series to show in tooltip to prevent performance issues
+// Exported for testing
+export const MAX_TOOLTIP_SERIES = 50;
+
+// Exported for testing
+export function generateTooltipFormatter(
   theme: string,
   isDateTime: boolean,
   timeRange: number,
   lines: LineData[],
 ) {
+  // Pre-compute formatters once
+  const formatX = isDateTime
+    ? (x: number) => smartDateFormatter(x, timeRange)
+    : formatAxisLabel;
+
+  const textColor = theme === "dark" ? "#fff" : "#000";
+
   return (params: any | any[]) => {
-    const paramArray = Array.isArray(params) ? params : [params];
-    const x = paramArray[0].value[0];
+    try {
+      const paramArray = Array.isArray(params) ? params : [params];
+      if (!paramArray[0]?.value) return "";
 
-    // Handle log scale for tooltip display
-    let displayX: string;
-    if (isDateTime) {
-      displayX = smartDateFormatter(x, timeRange);
-    } else {
-      displayX = formatAxisLabel(x);
+      const x = paramArray[0].value[0];
+      const displayX = formatX(x);
+
+      // Filter out hidden series and sort by Y value descending for better UX
+      const validParams = paramArray
+        .filter((param) => {
+          if (param.seriesIndex === undefined || param.seriesIndex === null) return true;
+          if (!lines[param.seriesIndex]) return true;
+          return !lines[param.seriesIndex].hideFromLegend;
+        })
+        .sort((a, b) => (b.value?.[1] ?? 0) - (a.value?.[1] ?? 0));
+
+      // Limit to top N series for performance
+      const totalCount = validParams.length;
+      const displayParams = validParams.slice(0, MAX_TOOLTIP_SERIES);
+      const hiddenCount = totalCount - displayParams.length;
+
+      // Use Set for O(1) duplicate checking
+      const seen = new Set<string>();
+      const seriesItems: string[] = [];
+
+      for (const param of displayParams) {
+        const y = param.value[1];
+        const key = `${param.seriesName}-${y}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          const formattedY = formatAxisLabel(y);
+          // Simplified row without inline event handlers for better performance
+          seriesItems.push(
+            `<div style="padding: 2px 4px;">${param.marker} <span style="color: ${textColor}">${param.seriesName}: ${formattedY}</span></div>`
+          );
+        }
+      }
+
+      // Show count of hidden series
+      const hiddenNote = hiddenCount > 0
+        ? `<div style="padding: 2px 4px; color: ${theme === "dark" ? "#888" : "#666"}; font-style: italic;">+${hiddenCount} more series</div>`
+        : "";
+
+      return `
+        <div style="font-family: monospace; font-size: 11px;">
+          <div style="font-weight: bold; color: ${textColor}; padding: 4px; border-bottom: 1px solid ${theme === "dark" ? "#333" : "#eee"}; margin-bottom: 2px;">
+            ${displayX}
+          </div>
+          <div style="max-height: 300px; overflow-y: auto;">
+            ${seriesItems.join("")}
+            ${hiddenNote}
+          </div>
+        </div>
+      `;
+    } catch (e) {
+      return "";
     }
-
-    const uniqueValues = new Map();
-    const linesTooltip = [
-      `<span style=\"font-weight: bold; color: ${theme === "dark" ? "#fff" : `#000`}\">${displayX}</span>`,
-    ];
-
-    paramArray.forEach((param) => {
-      // Skip series that are hidden from legend
-      if (
-        param.seriesIndex !== undefined &&
-        lines[param.seriesIndex] &&
-        lines[param.seriesIndex].hideFromLegend
-      ) {
-        return;
-      }
-
-      const y = param.value[1];
-      const formattedY = formatAxisLabel(y);
-
-      const key = `${param.seriesName}-${y}`;
-      if (!uniqueValues.has(key)) {
-        uniqueValues.set(key, true);
-        linesTooltip.push(
-          `<span style=\"color: ${theme === "dark" ? `#fff` : `#000`}\">${param.marker} ${param.seriesName}: ${formattedY}</span>`,
-        );
-      }
-    });
-
-    return linesTooltip.join("<br/>");
   };
 }
 
@@ -761,6 +859,71 @@ function generateChartOptions(
   const shouldRotateLabels = isDateTime && timeRange < 86400000;
   const xAxisNameGap = shouldRotateLabels ? 55 : 35;
 
+  // Always use native tooltip - optimized formatter handles all series counts
+  const tooltipConfig = {
+    trigger: "axis" as const,
+    enterable: true, // Allow hovering over tooltip for scrolling
+    confine: false, // Allow tooltip to overflow chart boundaries
+    showDelay: 0,
+    hideDelay: 100, // Shorter delay to feel more responsive
+    transitionDuration: 0.05,
+    position: (point: number[], _params: any, _dom: any, rect: any, size: { viewSize: number[]; contentSize: number[] }) => {
+      // Use actual tooltip size, with fallback minimum for first render
+      const tooltipWidth = Math.max(size.contentSize[0], 200);
+      const tooltipHeight = size.contentSize[1];
+
+      const offsetX = 30;
+      const offsetY = 80;
+
+      const rectY = rect?.y ?? 0;
+      // Use chart container width, not viewport width
+      const chartWidth = size.viewSize[0];
+
+      // Check if tooltip would go off right edge of chart container
+      const rightX = point[0] + offsetX;
+      const wouldOverflowRight = rightX + tooltipWidth > chartWidth;
+
+      // Position on left side if it would overflow right, otherwise right side
+      let x = wouldOverflowRight
+        ? point[0] - offsetX - tooltipWidth  // Left of cursor
+        : rightX;                             // Right of cursor
+
+      let y = point[1] - offsetY - tooltipHeight; // Above cursor
+
+      // If tooltip would go off top of viewport, shift down
+      const viewportY = rectY + y;
+      if (viewportY < 10) {
+        y = 10 - rectY;
+      }
+
+      return [x, y];
+    },
+    axisPointer: {
+      type: "line" as const,
+      snap: false, // Don't snap to nearest data point - keeps series list consistent when curves are close
+      animation: false,
+      lineStyle: {
+        color:
+          theme === "dark"
+            ? "rgba(255, 255, 255, 0.3)"
+            : "rgba(0, 0, 0, 0.3)",
+      },
+    },
+    backgroundColor: theme === "dark" ? "#161619" : "#fff",
+    borderColor: theme === "dark" ? "#333" : "#e0e0e0",
+    borderWidth: 1,
+    order: "valueDesc" as const,
+    textStyle: {
+      color: theme === "dark" ? "#fff" : "#333",
+      fontFamily: "Monospace",
+      fontWeight: "normal" as const,
+      fontSize: 11,
+    },
+    shadowColor: "transparent",
+    formatter: tooltipFormatter,
+    extraCssText: "max-width: 350px; max-height: 50vh; border-radius: 4px; padding: 4px; overflow-y: auto;",
+  };
+
   return {
     backgroundColor: "transparent",
     title: title
@@ -775,28 +938,7 @@ function generateChartOptions(
           },
         }
       : undefined,
-    tooltip: {
-      trigger: "axis",
-      axisPointer: {
-        type: "line",
-        lineStyle: {
-          color:
-            theme === "dark"
-              ? "rgba(255, 255, 255, 0.4)"
-              : "rgba(0, 0, 0, 0.4)",
-        },
-      },
-      backgroundColor: theme === "dark" ? "#161619" : "#fff",
-      borderColor: theme === "dark" ? "#161619" : "#e0e0e0",
-      order: "valueDesc",
-      textStyle: {
-        color: theme === "dark" ? "#fff" : "#e0e0e0",
-        fontFamily: "Monospace",
-        fontWeight: "normal",
-      },
-      shadowColor: "transparent",
-      formatter: tooltipFormatter,
-    },
+    tooltip: tooltipConfig,
     legend: legendConfig,
     grid: {
       left: "5%",
@@ -829,6 +971,17 @@ function generateChartOptions(
     },
     series: seriesOptions,
     animation: false,
+    // Internal dataZoom for programmatic zoom control
+    dataZoom: [
+      {
+        type: "inside",
+        xAxisIndex: 0,
+        filterMode: "none",
+        zoomOnMouseWheel: true,
+        moveOnMouseMove: false,
+        moveOnMouseWheel: false,
+      },
+    ],
     toolbox: {
       feature: {
         dataZoom: {
@@ -847,7 +1000,7 @@ function generateChartOptions(
 // Main Component
 // ============================
 
-const LineChart = forwardRef<ReactECharts, LineChartProps>(
+const LineChartInner = forwardRef<ReactECharts, LineChartProps>(
   (
     {
       lines,
@@ -869,6 +1022,59 @@ const LineChart = forwardRef<ReactECharts, LineChartProps>(
     const chartRef = useRef<ReactECharts>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const { width, height } = useContainerSize(containerRef);
+
+    // Generate unique chart ID for cross-chart highlighting
+    // useId() guarantees uniqueness across the React tree, unlike Math.random()
+    const chartId = useId();
+
+    // Expose highlight/downplay functions on window for tooltip hover interaction
+    useEffect(() => {
+      // Create global registry if it doesn't exist
+      if (!window.__chartInstances) {
+        window.__chartInstances = new Map();
+      }
+
+      // Register this chart instance
+      window.__chartInstances.set(chartId, chartRef);
+
+      // Create global highlight function if it doesn't exist
+      if (!window.__chartHighlight) {
+        window.__chartHighlight = (targetChartId: string, seriesIndex: number) => {
+          try {
+            const ref = window.__chartInstances?.get(targetChartId);
+            const chart = ref?.current?.getEchartsInstance();
+            if (chart && !chart.isDisposed?.()) {
+              chart.dispatchAction({
+                type: "highlight",
+                seriesIndex,
+              });
+            }
+          } catch (e) {
+            // Silently ignore errors during highlight (chart may be unmounting)
+          }
+        };
+      }
+
+      if (!window.__chartDownplay) {
+        window.__chartDownplay = (targetChartId: string) => {
+          try {
+            const ref = window.__chartInstances?.get(targetChartId);
+            const chart = ref?.current?.getEchartsInstance();
+            if (chart && !chart.isDisposed?.()) {
+              chart.dispatchAction({
+                type: "downplay",
+              });
+            }
+          } catch (e) {
+            // Silently ignore errors during downplay (chart may be unmounting)
+          }
+        };
+      }
+
+      return () => {
+        window.__chartInstances?.delete(chartId);
+      };
+    }, [chartId]);
 
     // Process the data for log scales
     const processedLines = useMemo(
@@ -934,17 +1140,150 @@ const LineChart = forwardRef<ReactECharts, LineChartProps>(
       seriesData,
     ]);
 
-    // Resize on window change
+    // Cache ECharts instance to avoid repeated getEchartsInstance() calls
+    // which trigger forced reflows by accessing DOM properties
+    const cachedChartInstanceRef = useRef<ReturnType<ReactECharts["getEchartsInstance"]> | null>(null);
+
+    // Track event handlers for cleanup to prevent memory leaks
+    const dataZoomHandlerRef = useRef<(() => void) | null>(null);
+
+    // Click-to-pin tooltip state
+    const [isPinned, setIsPinned] = useState(false);
+    const pinnedDataIndexRef = useRef<number | null>(null);
+
+    // Resize on window change - use RAF to batch DOM operations
     useEffect(() => {
-      const chart = chartRef.current?.getEchartsInstance();
-      if (chart) chart.resize();
+      requestAnimationFrame(() => {
+        const chart = cachedChartInstanceRef.current ?? chartRef.current?.getEchartsInstance();
+        if (chart && !chart.isDisposed?.()) {
+          cachedChartInstanceRef.current = chart;
+          chart.resize();
+        }
+      });
     }, [width, height]);
 
     useEffect(() => {
-      const resize = () => chartRef.current?.getEchartsInstance().resize();
+      let rafId: number | null = null;
+      const resize = () => {
+        if (rafId !== null) return; // Debounce RAF
+        rafId = requestAnimationFrame(() => {
+          rafId = null;
+          const chart = cachedChartInstanceRef.current ?? chartRef.current?.getEchartsInstance();
+          if (chart && !chart.isDisposed?.()) {
+            cachedChartInstanceRef.current = chart;
+            chart.resize();
+          }
+        });
+      };
       window.addEventListener("resize", resize);
-      return () => window.removeEventListener("resize", resize);
+      return () => {
+        window.removeEventListener("resize", resize);
+        if (rafId !== null) cancelAnimationFrame(rafId);
+      };
     }, []);
+
+    // Track click handler for cleanup
+    const clickHandlerRef = useRef<((params: any) => void) | null>(null);
+    // Track mouseover/mouseout handlers for cleanup (memory leak fix)
+    const mouseoverHandlerRef = useRef<((params: any) => void) | null>(null);
+    const mouseoutHandlerRef = useRef<((params: any) => void) | null>(null);
+
+    // Cleanup ECharts event listeners on unmount to prevent memory leaks
+    useEffect(() => {
+      return () => {
+        if (cachedChartInstanceRef.current) {
+          // Remove datazoom listener
+          if (dataZoomHandlerRef.current) {
+            try {
+              cachedChartInstanceRef.current.off("datazoom", dataZoomHandlerRef.current);
+            } catch {
+              // Instance may already be disposed
+            }
+          }
+          // Remove click listener
+          if (clickHandlerRef.current) {
+            try {
+              cachedChartInstanceRef.current.off("click", clickHandlerRef.current);
+            } catch {
+              // Instance may already be disposed
+            }
+          }
+          // Remove mouseover listener
+          if (mouseoverHandlerRef.current) {
+            try {
+              cachedChartInstanceRef.current.off("mouseover", mouseoverHandlerRef.current);
+            } catch {
+              // Instance may already be disposed
+            }
+          }
+          // Remove mouseout listener
+          if (mouseoutHandlerRef.current) {
+            try {
+              cachedChartInstanceRef.current.off("mouseout", mouseoutHandlerRef.current);
+            } catch {
+              // Instance may already be disposed
+            }
+          }
+        }
+        // Clear refs
+        cachedChartInstanceRef.current = null;
+        dataZoomHandlerRef.current = null;
+        clickHandlerRef.current = null;
+        mouseoverHandlerRef.current = null;
+        mouseoutHandlerRef.current = null;
+      };
+    }, []);
+
+    // Handle Escape key to unpin tooltip
+    useEffect(() => {
+      if (!isPinned) return;
+
+      const handleKeyDown = (e: KeyboardEvent) => {
+        if (e.key === "Escape") {
+          setIsPinned(false);
+          pinnedDataIndexRef.current = null;
+          // Hide tooltip
+          const chart = cachedChartInstanceRef.current;
+          if (chart && !chart.isDisposed?.()) {
+            chart.dispatchAction({ type: "hideTip" });
+          }
+        }
+      };
+
+      window.addEventListener("keydown", handleKeyDown);
+      return () => window.removeEventListener("keydown", handleKeyDown);
+    }, [isPinned]);
+
+    // Handle click outside to unpin tooltip
+    useEffect(() => {
+      if (!isPinned) return;
+
+      const handleClickOutside = (e: MouseEvent) => {
+        // Check if click is inside the chart container
+        if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+          setIsPinned(false);
+          pinnedDataIndexRef.current = null;
+          const chart = cachedChartInstanceRef.current;
+          if (chart && !chart.isDisposed?.()) {
+            chart.dispatchAction({ type: "hideTip" });
+          }
+        }
+      };
+
+      // Delay adding listener to avoid immediate trigger from the pin click
+      const timer = setTimeout(() => {
+        window.addEventListener("click", handleClickOutside);
+      }, 100);
+
+      return () => {
+        clearTimeout(timer);
+        window.removeEventListener("click", handleClickOutside);
+      };
+    }, [isPinned]);
+
+    // Note: Removed mousemove handler for pinned tooltip as it interferes with datazoom
+    // The click-to-pin now works by clicking to show tooltip, clicking again to hide
+    // Without the continuous re-show, the tooltip will follow mouse movement naturally
 
     const isTouchScreen = isTouchScreenDevice();
 
@@ -956,24 +1295,141 @@ const LineChart = forwardRef<ReactECharts, LineChartProps>(
 
     const handleRef = useCallback(
       (chart: ReactECharts | null) => {
+        // Clean up previous instance's event listeners before setting new ref
+        if (cachedChartInstanceRef.current) {
+          if (dataZoomHandlerRef.current) {
+            try {
+              cachedChartInstanceRef.current.off("datazoom", dataZoomHandlerRef.current);
+            } catch {
+              // Ignore errors if instance is already disposed
+            }
+            dataZoomHandlerRef.current = null;
+          }
+          if (clickHandlerRef.current) {
+            try {
+              cachedChartInstanceRef.current.off("click", clickHandlerRef.current);
+            } catch {
+              // Ignore errors if instance is already disposed
+            }
+            clickHandlerRef.current = null;
+          }
+          if (mouseoverHandlerRef.current) {
+            try {
+              cachedChartInstanceRef.current.off("mouseover", mouseoverHandlerRef.current);
+            } catch {
+              // Ignore errors if instance is already disposed
+            }
+            mouseoverHandlerRef.current = null;
+          }
+          if (mouseoutHandlerRef.current) {
+            try {
+              cachedChartInstanceRef.current.off("mouseout", mouseoutHandlerRef.current);
+            } catch {
+              // Ignore errors if instance is already disposed
+            }
+            mouseoutHandlerRef.current = null;
+          }
+        }
+
         chartRef.current = chart;
 
-        // Add event listener for datazoom event
         if (chart) {
           const echartsInstance = chart.getEchartsInstance();
-          echartsInstance.on("datazoom", () => {
-            // Get the current data zoom range in percentage
-            const dataZoomComponent = echartsInstance
-              // @ts-ignore
-              .getModel()
-              .getComponent("xAxis", 0);
+          // Cache the instance for future use to avoid forced reflows
+          cachedChartInstanceRef.current = echartsInstance;
 
-            const xExtent = dataZoomComponent.axis.scale.getExtent() as [
-              number,
-              number,
-            ];
-            console.log("xExtent", xExtent);
-          });
+          // Create named handler so we can remove it later
+          const dataZoomHandler = () => {
+            // Get the current data zoom range in percentage
+            try {
+              const dataZoomComponent = echartsInstance
+                // @ts-ignore
+                .getModel()
+                .getComponent("xAxis", 0);
+
+              const xExtent = dataZoomComponent.axis.scale.getExtent() as [
+                number,
+                number,
+              ];
+              console.log("xExtent", xExtent);
+            } catch {
+              // Ignore errors from disposed chart
+            }
+          };
+          dataZoomHandlerRef.current = dataZoomHandler;
+          echartsInstance.on("datazoom", dataZoomHandler);
+
+          // Click handler to pin/unpin tooltip
+          const clickHandler = (params: any) => {
+            if (params.componentType === "series") {
+              // Toggle pin state
+              setIsPinned((prev) => {
+                if (prev) {
+                  // Unpin - hide tooltip
+                  pinnedDataIndexRef.current = null;
+                  echartsInstance.dispatchAction({ type: "hideTip" });
+                  return false;
+                } else {
+                  // Pin - show tooltip at this data index
+                  pinnedDataIndexRef.current = params.dataIndex;
+                  echartsInstance.dispatchAction({
+                    type: "showTip",
+                    seriesIndex: 0,
+                    dataIndex: params.dataIndex,
+                  });
+                  return true;
+                }
+              });
+            }
+          };
+          clickHandlerRef.current = clickHandler;
+          echartsInstance.on("click", clickHandler);
+
+          // Cross-chart emphasis: propagate highlight/downplay to all connected charts
+          const mouseoverHandler = (params: any) => {
+            if (params.componentType === "series" && params.seriesName) {
+              // Find all charts and highlight the same series by name
+              window.__chartInstances?.forEach((ref, id) => {
+                if (id === chartId) return; // Skip self
+                try {
+                  const otherChart = ref?.current?.getEchartsInstance();
+                  if (otherChart && !otherChart.isDisposed?.()) {
+                    otherChart.dispatchAction({
+                      type: "highlight",
+                      seriesName: params.seriesName,
+                    });
+                  }
+                } catch {
+                  // Ignore errors
+                }
+              });
+            }
+          };
+          mouseoverHandlerRef.current = mouseoverHandler;
+          echartsInstance.on("mouseover", mouseoverHandler);
+
+          const mouseoutHandler = (params: any) => {
+            if (params.componentType === "series") {
+              // Downplay all series on all other charts
+              window.__chartInstances?.forEach((ref, id) => {
+                if (id === chartId) return; // Skip self
+                try {
+                  const otherChart = ref?.current?.getEchartsInstance();
+                  if (otherChart && !otherChart.isDisposed?.()) {
+                    otherChart.dispatchAction({
+                      type: "downplay",
+                    });
+                  }
+                } catch {
+                  // Ignore errors
+                }
+              });
+            }
+          };
+          mouseoutHandlerRef.current = mouseoutHandler;
+          echartsInstance.on("mouseout", mouseoutHandler);
+        } else {
+          cachedChartInstanceRef.current = null;
         }
 
         setChartRef(chart);
@@ -1000,14 +1456,71 @@ const LineChart = forwardRef<ReactECharts, LineChartProps>(
           ref={handleRef}
           option={option}
           style={{ width: width, height: height }}
-          // opts={{ renderer: "svg" }}
-          notMerge={true}
-          lazyUpdate={false}
+          opts={
+            {
+              renderer: "canvas",
+              // Use separate canvas layer for hover effects when >5 series
+              // This avoids redrawing the entire chart on every mousemove
+              hoverLayerThreshold: 5,
+              // Enable partial canvas redraws for better performance
+              useDirtyRect: true,
+            } as { renderer: "canvas"; hoverLayerThreshold: number; useDirtyRect: boolean }
+          }
+          notMerge={false}
+          lazyUpdate={true}
           theme={theme}
         />
       </div>
     );
   },
 );
+
+// Custom comparison function to prevent unnecessary re-renders
+// Only re-render when data or display settings actually change
+const LineChart = memo(LineChartInner, (prevProps, nextProps) => {
+  // Check array length first (fast check)
+  if (prevProps.lines.length !== nextProps.lines.length) return false;
+
+  // Check each line's key properties
+  for (let i = 0; i < prevProps.lines.length; i++) {
+    const prev = prevProps.lines[i];
+    const next = nextProps.lines[i];
+    if (
+      prev.label !== next.label ||
+      prev.color !== next.color ||
+      prev.x.length !== next.x.length ||
+      prev.y.length !== next.y.length ||
+      prev.dashed !== next.dashed ||
+      prev.opacity !== next.opacity
+    ) {
+      return false;
+    }
+    // Quick check of first and last data points
+    if (prev.x.length > 0) {
+      if (
+        prev.x[0] !== next.x[0] ||
+        prev.x[prev.x.length - 1] !== next.x[next.x.length - 1] ||
+        prev.y[0] !== next.y[0] ||
+        prev.y[prev.y.length - 1] !== next.y[next.y.length - 1]
+      ) {
+        return false;
+      }
+    }
+  }
+
+  // Compare other props
+  return (
+    prevProps.isDateTime === nextProps.isDateTime &&
+    prevProps.logXAxis === nextProps.logXAxis &&
+    prevProps.logYAxis === nextProps.logYAxis &&
+    prevProps.xlabel === nextProps.xlabel &&
+    prevProps.ylabel === nextProps.ylabel &&
+    prevProps.title === nextProps.title &&
+    prevProps.showXAxis === nextProps.showXAxis &&
+    prevProps.showYAxis === nextProps.showYAxis &&
+    prevProps.showLegend === nextProps.showLegend &&
+    prevProps.className === nextProps.className
+  );
+});
 
 export default LineChart;

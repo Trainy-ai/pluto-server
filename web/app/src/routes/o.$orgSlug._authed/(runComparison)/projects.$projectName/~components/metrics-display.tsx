@@ -1,4 +1,4 @@
-import { useMemo, useRef, useEffect, useState } from "react";
+import { useMemo, useRef, useEffect, useState, memo } from "react";
 import { RefreshButton } from "@/components/core/refresh-button";
 import { LogSearch } from "./run-comparison/search";
 import { MemoizedMultiGroup } from "./multi-group/multi-group";
@@ -87,6 +87,24 @@ export function MetricsDisplay({
     return filtered;
   }, [sortedGroups, searchState]);
 
+  // Pre-compute filtered metrics for each group to avoid inline computation
+  // This ensures MemoizedMultiGroup receives stable references when metrics haven't changed
+  const filteredMetricsPerGroup = useMemo(() => {
+    const metricsMap = new Map<string, typeof filteredGroups[0][1]["metrics"]>();
+    filteredGroups.forEach(([group, data]) => {
+      metricsMap.set(
+        group,
+        searchUtils.filterMetrics(
+          group,
+          data.metrics,
+          searchIndexRef.current,
+          searchState,
+        ),
+      );
+    });
+    return metricsMap;
+  }, [filteredGroups, searchState]);
+
   return (
     <div className="flex-1 space-y-4">
       <div className="sticky top-0 z-10 flex items-center justify-between gap-4 bg-background pb-2">
@@ -115,12 +133,7 @@ export function MetricsDisplay({
           key={group}
           title={data.groupName}
           groupId={`${projectName}-${group}`}
-          metrics={searchUtils.filterMetrics(
-            group,
-            data.metrics,
-            searchIndexRef.current,
-            searchState,
-          )}
+          metrics={filteredMetricsPerGroup.get(group) ?? data.metrics}
           organizationId={organizationId}
           projectName={projectName}
         />
