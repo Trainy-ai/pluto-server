@@ -9,6 +9,7 @@ import { prisma } from "./lib/prisma";
 import { env } from "./lib/env";
 
 import healthRoutes from "./routes/health";
+import versionRoutes from "./routes/version";
 import runRoutes from "./routes/runs-openapi";
 import authRoutes from "./routes/auth";
 import { withApiKey } from "./routes/middleware";
@@ -57,6 +58,7 @@ app.use("*", async (c, next) => {
 
 // Mount routes
 app.route("/api", healthRoutes);
+app.route("/api", versionRoutes);
 app.route("/api/runs", runRoutes);
 app.route("/api/auth", authRoutes);
 

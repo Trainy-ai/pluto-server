@@ -6,6 +6,12 @@ RUN apt-get update && apt-get install -y libc6-dev curl && rm -rf /var/lib/apt/l
 
 WORKDIR /app
 
+# Build-time version info
+ARG GIT_COMMIT="unknown"
+ARG GIT_BRANCH="unknown"
+ARG BUILD_TIME="unknown"
+ARG SERVICE_VERSION="unknown"
+
 # Dummy environment variables for build-time validation
 # Real values will be provided at runtime via docker-compose env_file
 ARG IS_DOCKER="true"
@@ -58,6 +64,12 @@ RUN mkdir -p .next/standalone/prisma && \
 ENV NODE_ENV=production
 ENV PORT=3001
 ENV HOSTNAME="0.0.0.0"
+
+# Version info (baked in at build time)
+ENV GIT_COMMIT=${GIT_COMMIT}
+ENV GIT_BRANCH=${GIT_BRANCH}
+ENV BUILD_TIME=${BUILD_TIME}
+ENV SERVICE_VERSION=${SERVICE_VERSION}
 
 CMD ["node", "./.next/standalone/server.js"]
 EXPOSE 3001

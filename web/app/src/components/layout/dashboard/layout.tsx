@@ -16,6 +16,7 @@ import { parseCookies } from "@/utils/cookie";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SidebarLinks } from "@/components/layout/common/sidebar-links";
 import { Feedback } from "@/components/layout/common/feedback";
+import { VersionIndicator } from "@/components/layout/common/version-indicator";
 import { useAuth } from "@/lib/auth/client";
 
 interface DashboardLayoutProps extends PropsWithChildren {}
@@ -58,6 +59,7 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
               <div className="mt-auto">
                 <Feedback variant="sidebar" />
                 <SidebarLinks />
+                <VersionIndicator />
               </div>
             </ScrollArea>
           </SidebarContent>

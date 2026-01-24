@@ -121,7 +121,7 @@ export function buildRunCountQuery(params: Omit<RunSearchParams, "limit">): Quer
  * Executes a run search query and returns matching run IDs.
  */
 export async function searchRunIds(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   prisma: any,
   params: RunSearchParams,
 ): Promise<bigint[]> {
@@ -134,7 +134,7 @@ export async function searchRunIds(
  * Executes a run count query and returns the count.
  */
 export async function countRunsWithSearch(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   prisma: any,
   params: Omit<RunSearchParams, "limit">,
 ): Promise<number> {

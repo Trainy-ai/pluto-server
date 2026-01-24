@@ -1,5 +1,11 @@
 ARG RUST_VERSION=1.86.0
 
+# Build-time version info
+ARG GIT_COMMIT="unknown"
+ARG GIT_BRANCH="unknown"
+ARG BUILD_TIME="unknown"
+ARG SERVICE_VERSION="unknown"
+
 # Builder Stage
 FROM rust:${RUST_VERSION}-slim-bookworm AS builder
 WORKDIR /app
@@ -18,6 +24,12 @@ RUN cargo build --release && \
 
 # Final Stage
 FROM debian:bookworm-slim AS final
+
+# Re-declare ARGs for final stage
+ARG GIT_COMMIT="unknown"
+ARG GIT_BRANCH="unknown"
+ARG BUILD_TIME="unknown"
+ARG SERVICE_VERSION="unknown"
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
@@ -43,6 +55,12 @@ RUN chown appuser /usr/local/bin/server-rs
 # Set permissions and environment
 USER appuser
 ENV RUST_LOG="info"
+
+# Version info (baked in at build time)
+ENV GIT_COMMIT=${GIT_COMMIT}
+ENV GIT_BRANCH=${GIT_BRANCH}
+ENV BUILD_TIME=${BUILD_TIME}
+ENV SERVICE_VERSION=${SERVICE_VERSION}
 
 # Set working directory and entry point
 WORKDIR /opt/server-rs
