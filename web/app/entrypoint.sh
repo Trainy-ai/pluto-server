@@ -10,6 +10,10 @@ window.__APP_ENV__ = {
   VITE_IS_DOCKER: "${VITE_IS_DOCKER:-false}",
   VITE_POSTHOG_KEY: "${VITE_POSTHOG_KEY:-}",
   VITE_POSTHOG_HOST: "${VITE_POSTHOG_HOST:-}",
+  SERVICE_VERSION: "${SERVICE_VERSION:-unknown}",
+  GIT_COMMIT: "${GIT_COMMIT:-unknown}",
+  GIT_BRANCH: "${GIT_BRANCH:-unknown}",
+  BUILD_TIME: "${BUILD_TIME:-unknown}",
 };
 EOF
 

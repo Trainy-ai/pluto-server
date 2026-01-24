@@ -1,14 +1,26 @@
 use axum::{extract::State, routing::get, Json, Router};
+use serde::Serialize;
 use std::sync::Arc;
 
 use crate::dlq;
 use crate::routes::AppState;
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VersionInfo {
+    service: &'static str,
+    version: String,
+    git_commit: String,
+    git_branch: String,
+    build_time: String,
+}
 
 // Defines the router for the /health endpoint
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/health", get(health_check))
         .route("/health/dlq", get(dlq_health))
+        .route("/version", get(version_info))
 }
 
 // Simple health check handler that returns "OK"
@@ -54,4 +66,15 @@ async fn dlq_health(State(state): State<Arc<AppState>>) -> Json<dlq::types::DlqH
     // For now, we'll skip this calculation to keep the endpoint fast
 
     Json(stats)
+}
+
+// Version info handler that returns build information
+async fn version_info() -> Json<VersionInfo> {
+    Json(VersionInfo {
+        service: "ingest",
+        version: std::env::var("SERVICE_VERSION").unwrap_or_else(|_| "unknown".to_string()),
+        git_commit: std::env::var("GIT_COMMIT").unwrap_or_else(|_| "unknown".to_string()),
+        git_branch: std::env::var("GIT_BRANCH").unwrap_or_else(|_| "unknown".to_string()),
+        build_time: std::env::var("BUILD_TIME").unwrap_or_else(|_| "unknown".to_string()),
+    })
 }

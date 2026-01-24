@@ -9,6 +9,10 @@ const envSchema = z.object({
   ),
   VITE_POSTHOG_KEY: z.string().optional(),
   VITE_POSTHOG_HOST: z.string().optional(),
+  SERVICE_VERSION: z.string().default("unknown"),
+  GIT_COMMIT: z.string().default("unknown"),
+  GIT_BRANCH: z.string().default("unknown"),
+  BUILD_TIME: z.string().default("unknown"),
 });
 
 const runtimeEnv =

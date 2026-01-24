@@ -39,6 +39,17 @@ async def healthz():
     return {"status": "ok"}
 
 
+@app.get("/version")
+async def version():
+    return {
+        "service": "py",
+        "version": os.getenv("SERVICE_VERSION", "unknown"),
+        "gitCommit": os.getenv("GIT_COMMIT", "unknown"),
+        "gitBranch": os.getenv("GIT_BRANCH", "unknown"),
+        "buildTime": os.getenv("BUILD_TIME", "unknown"),
+    }
+
+
 @app.post("/api/runs/trigger")
 async def get_run_triggers(
     runId: int = Body(..., embed=True),
