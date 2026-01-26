@@ -9,6 +9,7 @@
     "test:setup": "dotenv -e .env.test -- tsx tests/setup.ts",
     "test:setup:cleanup": "dotenv -e .env.test -- tsx tests/setup.ts cleanup",
     "test:smoke": "dotenv -e .env.test -- vitest run --reporter=verbose",
+    "test:smoke:coverage": "dotenv -e .env.test -- vitest run --reporter=verbose --coverage",
     "test:smoke:watch": "dotenv -e .env.test -- vitest",
     "test:smoke:local": "dotenv -e .env.locals -- vitest run",
     "test:smoke:dev": "dotenv -e .env.dev -- vitest run",
@@ -75,6 +76,7 @@
   },
   "devDependencies": {
     "@better-auth/sso": "^1.4.10",
+    "@vitest/coverage-v8": "^2.1.8",
     "@noble/hashes": "^2.0.1",
     "@types/bcrypt": "^6.0.0",
     "@types/node": "^22.14.1",
