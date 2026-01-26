@@ -41,7 +41,7 @@ interface UseSelectedRunsReturn {
  * @param runId - The ID of the run to generate a color for
  * @returns A color from the predefined palette
  */
-const getColorForRun = (runId: string): Color => {
+export const getColorForRun = (runId: string): Color => {
   // Simple hash function to convert string to number
   const hash = runId.split("").reduce((acc, char, index) => {
     // Add positional weighting to create more variation
