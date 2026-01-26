@@ -60,6 +60,11 @@ interface DataTableProps {
   onStatusFilterChange: (statuses: string[]) => void;
   searchQuery: string;
   onSearchChange: (query: string) => void;
+  // Visibility options
+  onSelectFirstN: (n: number) => void;
+  onSelectAllByIds: (runIds: string[]) => void;
+  onDeselectAll: () => void;
+  onShuffleColors: () => void;
 }
 
 export function DataTable({
@@ -85,6 +90,10 @@ export function DataTable({
   onStatusFilterChange,
   searchQuery,
   onSearchChange,
+  onSelectFirstN,
+  onSelectAllByIds,
+  onDeselectAll,
+  onShuffleColors,
 }: DataTableProps) {
   // Internal pagination state
   const [{ pageIndex, pageSize }, setPagination] = useState<PaginationState>({
@@ -94,6 +103,18 @@ export function DataTable({
 
   // Column sizing state for resizable columns
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
+
+  // Visibility options state
+  const [showOnlySelected, setShowOnlySelected] = useState(false);
+
+  // Filter runs based on showOnlySelected
+  const displayedRuns = useMemo(() => {
+    if (!showOnlySelected) return runs;
+    return runs.filter((run) => selectedRunsWithColors[run.id]);
+  }, [runs, showOnlySelected, selectedRunsWithColors]);
+
+  // Check if any filters are active
+  const hasActiveFilters = selectedTags.length > 0 || selectedStatuses.length > 0 || searchQuery.length > 0;
 
   // Keep track of previous data length to maintain pagination position
   const prevDataLengthRef = useRef(runs.length);
@@ -129,8 +150,34 @@ export function DataTable({
         onTagsUpdate,
         runColors,
         allTags,
+        // Visibility options props
+        runs,
+        selectedRunsWithColors,
+        onSelectFirstN,
+        onSelectAllByIds,
+        onDeselectAll,
+        onShuffleColors,
+        showOnlySelected,
+        onShowOnlySelectedChange: setShowOnlySelected,
+        totalRunCount: runCount,
       }),
-    [orgSlug, projectName, onColorChange, onSelectionChange, onTagsUpdate, runColors, allTags],
+    [
+      orgSlug,
+      projectName,
+      onColorChange,
+      onSelectionChange,
+      onTagsUpdate,
+      runColors,
+      allTags,
+      runs,
+      selectedRunsWithColors,
+      onSelectFirstN,
+      onSelectAllByIds,
+      onDeselectAll,
+      onShuffleColors,
+      showOnlySelected,
+      runCount,
+    ],
   );
 
   // Initialize rowSelection with defaultRowSelection but keep it synced with incoming props
@@ -185,7 +232,7 @@ export function DataTable({
   }, [selectedTags, selectedStatuses, searchQuery]);
 
   const table = useReactTable({
-    data: runs,
+    data: displayedRuns,
     columns: memoizedColumns,
     getCoreRowModel: getCoreRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
@@ -235,11 +282,19 @@ export function DataTable({
       <div className="mb-2 shrink-0 space-y-2">
         <div className="mt-2 flex items-center gap-1 pl-1 text-sm text-muted-foreground">
           <span className="font-medium">
-            {table.getSelectedRowModel().rows.length}
+            {Object.keys(selectedRunsWithColors).length}
           </span>
           <span>of</span>
           <span className="font-medium">{runCount}</span>
           <span>runs selected</span>
+          {(hasActiveFilters || showOnlySelected) && (
+            <>
+              <span className="text-muted-foreground/50">·</span>
+              <span className="text-muted-foreground/80">
+                Showing {displayedRuns.length} runs
+              </span>
+            </>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <div className="relative flex-1">

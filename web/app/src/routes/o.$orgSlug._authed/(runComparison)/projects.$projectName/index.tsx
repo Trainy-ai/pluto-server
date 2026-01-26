@@ -154,6 +154,10 @@ function RouteComponent() {
     handleRunSelection,
     handleColorChange,
     defaultRowSelection,
+    selectFirstN,
+    selectAllByIds,
+    deselectAll,
+    shuffleColors,
   } = useSelectedRuns(runs);
 
   // Process metrics data from selected runs
@@ -214,6 +218,10 @@ function RouteComponent() {
                 onStatusFilterChange={setSelectedStatuses}
                 searchQuery={searchInput}
                 onSearchChange={handleSearchChange}
+                onSelectFirstN={selectFirstN}
+                onSelectAllByIds={selectAllByIds}
+                onDeselectAll={deselectAll}
+                onShuffleColors={shuffleColors}
               />
             </div>
           </ResizablePanel>
