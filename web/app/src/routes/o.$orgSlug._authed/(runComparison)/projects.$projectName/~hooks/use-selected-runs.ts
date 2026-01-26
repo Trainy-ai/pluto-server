@@ -34,6 +34,14 @@ interface UseSelectedRunsReturn {
    * mapped to a boolean value indicating if the run is selected
    */
   defaultRowSelection: Record<number, boolean>;
+  /** Select the first N runs from the runs array */
+  selectFirstN: (n: number) => void;
+  /** Select all runs with the given IDs */
+  selectAllByIds: (runIds: RunId[]) => void;
+  /** Deselect all runs */
+  deselectAll: () => void;
+  /** Shuffle colors for all selected runs */
+  shuffleColors: () => void;
 }
 
 /**
@@ -267,11 +275,102 @@ export function useSelectedRuns(
     return selection;
   }, [runs, selectedRunsWithColors]);
 
+  // Select the first N runs
+  const selectFirstN = useCallback(
+    (n: number) => {
+      if (!runs?.length) return;
+
+      const firstNRuns = runs.slice(0, n);
+      const newSelectedRuns: Record<RunId, { run: Run; color: Color }> = {};
+
+      firstNRuns.forEach((run) => {
+        const color = runColors[run.id] || getColorForRun(run.id);
+        newSelectedRuns[run.id] = { run, color };
+      });
+
+      setSelectedRunsWithColors(newSelectedRuns);
+    },
+    [runs, runColors],
+  );
+
+  // Select all runs with given IDs
+  // Uses Map for O(N+M) instead of O(N*M) complexity
+  const selectAllByIds = useCallback(
+    (runIds: RunId[]) => {
+      if (!runs?.length) return;
+
+      // Pre-compute runs by ID for O(1) lookup instead of O(N) find() calls
+      const runsById = new Map(runs.map((r) => [r.id, r]));
+
+      setSelectedRunsWithColors((prev) => {
+        const newSelectedRuns = { ...prev };
+
+        runIds.forEach((runId) => {
+          if (!newSelectedRuns[runId]) {
+            const run = runsById.get(runId);
+            if (run) {
+              const color = runColors[runId] || getColorForRun(runId);
+              newSelectedRuns[runId] = { run, color };
+            }
+          }
+        });
+
+        return newSelectedRuns;
+      });
+    },
+    [runs, runColors],
+  );
+
+  // Deselect all runs
+  const deselectAll = useCallback(() => {
+    setSelectedRunsWithColors({});
+  }, []);
+
+  // Shuffle colors for all selected runs
+  const shuffleColors = useCallback(() => {
+    const selectedIds = Object.keys(selectedRunsWithColors);
+    if (selectedIds.length === 0) return;
+
+    // Get current colors and shuffle them
+    const currentColors = selectedIds.map(
+      (id) => selectedRunsWithColors[id].color,
+    );
+
+    // Fisher-Yates shuffle
+    const shuffledColors = [...currentColors];
+    for (let i = shuffledColors.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffledColors[i], shuffledColors[j]] = [
+        shuffledColors[j],
+        shuffledColors[i],
+      ];
+    }
+
+    // Apply shuffled colors
+    const newRunColors = { ...runColors };
+    const newSelectedRuns = { ...selectedRunsWithColors };
+
+    selectedIds.forEach((id, index) => {
+      newRunColors[id] = shuffledColors[index];
+      newSelectedRuns[id] = {
+        ...newSelectedRuns[id],
+        color: shuffledColors[index],
+      };
+    });
+
+    setRunColors(newRunColors);
+    setSelectedRunsWithColors(newSelectedRuns);
+  }, [selectedRunsWithColors, runColors]);
+
   return {
     runColors,
     selectedRunsWithColors,
     handleRunSelection,
     handleColorChange,
     defaultRowSelection,
+    selectFirstN,
+    selectAllByIds,
+    deselectAll,
+    shuffleColors,
   };
 }

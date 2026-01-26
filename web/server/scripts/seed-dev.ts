@@ -34,9 +34,12 @@ const METRICS_PER_RUN = 50; // 50 charts per run (tests lazy loading)
 
 // High-fidelity subset: first 5 runs get 100k datapoints (realistic training runs)
 // Remaining runs get 1k datapoints (sufficient for pagination testing)
+// Single-point test run gets 1 datapoint per metric (tests chart dot rendering)
 const HIGH_FIDELITY_RUNS = 5;
 const HIGH_FIDELITY_DATAPOINTS = 100_000; // 100k steps (realistic training run)
 const STANDARD_DATAPOINTS = 1_000; // 1k steps (pagination test data)
+const SINGLE_POINT_RUN_INDEX = 11; // 'single-point-test' run index
+const SINGLE_POINT_DATAPOINTS = 1; // 1 step (tests single-point chart rendering)
 
 // Metric groups and names for realistic variety
 const METRIC_GROUPS = ['train', 'eval', 'system', 'custom', 'test'];
@@ -162,14 +165,21 @@ async function seedClickHouseMetrics(
     password: clickhousePassword,
   });
 
-  // Calculate total rows with high-fidelity subset
+  // Calculate total rows with high-fidelity subset and single-point test run
   const highFidelityRows = Math.min(HIGH_FIDELITY_RUNS, runs.length) * METRICS_PER_RUN * HIGH_FIDELITY_DATAPOINTS;
-  const standardRows = Math.max(0, runs.length - HIGH_FIDELITY_RUNS) * METRICS_PER_RUN * STANDARD_DATAPOINTS;
-  const totalRows = highFidelityRows + standardRows;
+  const hasSinglePointRun = runs.length > SINGLE_POINT_RUN_INDEX;
+  const singlePointRows = hasSinglePointRun ? METRICS_PER_RUN * SINGLE_POINT_DATAPOINTS : 0;
+  // Standard runs exclude high-fidelity runs AND the single-point test run
+  const standardRunCount = Math.max(0, runs.length - HIGH_FIDELITY_RUNS - (hasSinglePointRun ? 1 : 0));
+  const standardRows = standardRunCount * METRICS_PER_RUN * STANDARD_DATAPOINTS;
+  const totalRows = highFidelityRows + standardRows + singlePointRows;
 
   console.log(`   Seeding ClickHouse with ${totalRows.toLocaleString()} metric datapoints...`);
   console.log(`   - ${Math.min(HIGH_FIDELITY_RUNS, runs.length)} high-fidelity runs × ${METRICS_PER_RUN} metrics × ${HIGH_FIDELITY_DATAPOINTS.toLocaleString()} points`);
-  console.log(`   - ${Math.max(0, runs.length - HIGH_FIDELITY_RUNS)} standard runs × ${METRICS_PER_RUN} metrics × ${STANDARD_DATAPOINTS.toLocaleString()} points`);
+  console.log(`   - ${standardRunCount} standard runs × ${METRICS_PER_RUN} metrics × ${STANDARD_DATAPOINTS.toLocaleString()} points`);
+  if (hasSinglePointRun) {
+    console.log(`   - 1 single-point test run × ${METRICS_PER_RUN} metrics × ${SINGLE_POINT_DATAPOINTS} point`);
+  }
 
   const BATCH_SIZE = 50000; // Larger batch for faster inserts
   let batch: Record<string, unknown>[] = [];
@@ -178,7 +188,12 @@ async function seedClickHouseMetrics(
 
   for (let runIndex = 0; runIndex < runs.length; runIndex++) {
     const run = runs[runIndex];
-    const datapointsForRun = runIndex < HIGH_FIDELITY_RUNS ? HIGH_FIDELITY_DATAPOINTS : STANDARD_DATAPOINTS;
+    // Special case: single-point test run gets 1 datapoint per metric
+    const datapointsForRun = runIndex === SINGLE_POINT_RUN_INDEX
+      ? SINGLE_POINT_DATAPOINTS
+      : runIndex < HIGH_FIDELITY_RUNS
+        ? HIGH_FIDELITY_DATAPOINTS
+        : STANDARD_DATAPOINTS;
     const baseTime = Date.now() - datapointsForRun * 1000;
 
     for (let m = 0; m < METRICS_PER_RUN; m++) {
@@ -408,6 +423,7 @@ async function main() {
 
   if (runsToCreate > 0) {
     // Named runs - hidden-needle at index 10 will be "old" (won't appear in first 150 results)
+    // single-point-test at index 11 tests chart rendering of single data points
     const runNames = [
       'baseline-experiment',
       'transformer-v1',
@@ -420,6 +436,7 @@ async function main() {
       'weight-decay-exp',
       'warmup-schedule',
       'hidden-needle-experiment', // Index 10 - OLD run for search testing (won't be in first 150)
+      'single-point-test', // Index 11 - Single datapoint per metric for chart dot rendering test
     ];
 
     // Unique tag per run for stress testing (170 unique tags)

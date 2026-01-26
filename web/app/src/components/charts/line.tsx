@@ -58,6 +58,19 @@ const findMinMax = (arr: number[]): { min: number; max: number } => {
   );
 };
 
+// Escape HTML to prevent XSS attacks in tooltips
+// Exported for testing
+export function escapeHtml(str: string): string {
+  const htmlEscapes: Record<string, string> = {
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  };
+  return str.replace(/[&<>"']/g, (char) => htmlEscapes[char]);
+}
+
 // Helper for custom log scale transformation
 const LOG_MIN = 1e-10; // Minimum value for log scale to avoid log(0) and log(negative)
 
@@ -639,7 +652,8 @@ function generateYAxisOption(
   }
 }
 
-function generateSeriesOptions(
+// Exported for testing
+export function generateSeriesOptions(
   lines: LineData[],
   labelCounts: Record<string, number>,
   seriesData: number[][][],
@@ -649,49 +663,54 @@ function generateSeriesOptions(
   const isManySeries = seriesCount > 20;
   const hasLargeDataset = lines.some((l) => l.x.length > 1000);
 
-  return lines.map((l, i) => ({
-    name: l.label + (labelCounts[l.label] > 1 ? ` (${i + 1})` : ""),
-    type: "line" as const,
-    smooth: false,
-    symbol: "circle" as const, // Show dots at cursor intersection points
-    symbolSize: 6, // Visible dot size when hovering
-    showSymbol: false, // Only show symbols on hover, not all the time
-    sampling: "lttb" as const,
-    // Enable large mode for many series or big datasets
-    large: isManySeries || hasLargeDataset,
-    largeThreshold: isManySeries ? 500 : 2000,
-    // Aggressive progressive rendering for many series
-    progressive: isManySeries ? 200 : 400,
-    progressiveThreshold: isManySeries ? 1000 : 3000,
-    progressiveChunkMode: "mod" as const,
-    // Enable line hover events so mouseover works even without symbols
-    triggerLineEvent: true,
-    lineStyle: {
-      color: l.color,
-      type: l.dashed ? ("dashed" as const) : ("solid" as const),
-      width: 2, // Full width for all series
-      opacity: l.opacity !== undefined ? l.opacity : 0.85,
-    },
-    itemStyle: {
-      color: l.color,
-      opacity: l.opacity !== undefined ? l.opacity : 0.85,
-      borderWidth: 0, // No border for performance
-    },
-    // Always enable emphasis for hover highlighting
-    emphasis: {
-      focus: "series" as const,
+  return lines.map((l, i) => {
+    // Show symbol for single data points since lines need at least 2 points to be visible
+    const isSinglePoint = seriesData[i].length === 1;
+
+    return {
+      name: l.label + (labelCounts[l.label] > 1 ? ` (${i + 1})` : ""),
+      type: "line" as const,
+      smooth: false,
+      symbol: "circle" as const, // Show dots at cursor intersection points
+      symbolSize: isSinglePoint ? 8 : 6, // Larger dot for single points to make them more visible
+      showSymbol: isSinglePoint, // Show symbol for single points, otherwise only on hover
+      sampling: "lttb" as const,
+      // Enable large mode for many series or big datasets
+      large: isManySeries || hasLargeDataset,
+      largeThreshold: isManySeries ? 500 : 2000,
+      // Aggressive progressive rendering for many series
+      progressive: isManySeries ? 200 : 400,
+      progressiveThreshold: isManySeries ? 1000 : 3000,
+      progressiveChunkMode: "mod" as const,
+      // Enable line hover events so mouseover works even without symbols
+      triggerLineEvent: true,
       lineStyle: {
-        width: 3,
+        color: l.color,
+        type: l.dashed ? ("dashed" as const) : ("solid" as const),
+        width: 2, // Full width for all series
+        opacity: l.opacity !== undefined ? l.opacity : 0.85,
       },
-    },
-    // Always enable blur for non-hovered series
-    blur: {
-      lineStyle: {
-        opacity: 0.15,
+      itemStyle: {
+        color: l.color,
+        opacity: l.opacity !== undefined ? l.opacity : 0.85,
+        borderWidth: 0, // No border for performance
       },
-    },
-    data: seriesData[i],
-  }));
+      // Always enable emphasis for hover highlighting
+      emphasis: {
+        focus: "series" as const,
+        lineStyle: {
+          width: 3,
+        },
+      },
+      // Always enable blur for non-hovered series
+      blur: {
+        lineStyle: {
+          opacity: 0.15,
+        },
+      },
+      data: seriesData[i],
+    };
+  });
 }
 
 // Maximum number of series to show in tooltip to prevent performance issues
@@ -746,7 +765,7 @@ export function generateTooltipFormatter(
           const formattedY = formatAxisLabel(y);
           // Simplified row without inline event handlers for better performance
           seriesItems.push(
-            `<div style="padding: 2px 4px;">${param.marker} <span style="color: ${textColor}">${param.seriesName}: ${formattedY}</span></div>`
+            `<div style="padding: 2px 4px;">${param.marker} <span style="color: ${textColor}">${escapeHtml(String(param.seriesName))}: ${formattedY}</span></div>`
           );
         }
       }
@@ -759,7 +778,7 @@ export function generateTooltipFormatter(
       return `
         <div style="font-family: monospace; font-size: 11px;">
           <div style="font-weight: bold; color: ${textColor}; padding: 4px; border-bottom: 1px solid ${theme === "dark" ? "#333" : "#eee"}; margin-bottom: 2px;">
-            ${displayX}
+            ${escapeHtml(String(displayX))}
           </div>
           <div style="max-height: 300px; overflow-y: auto;">
             ${seriesItems.join("")}

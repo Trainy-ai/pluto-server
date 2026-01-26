@@ -5,13 +5,13 @@ import { ColorPicker } from "@/components/ui/color-picker";
 import { SELECTED_RUNS_LIMIT } from "./config";
 import { StatusIndicator } from "@/components/layout/dashboard/sidebar";
 import type { Run } from "../../~queries/list-runs";
-import { Badge } from "@/components/ui/badge";
 import { TagsCell } from "./tags-cell";
 import {
   Tooltip,
   TooltipTrigger,
   TooltipContent,
 } from "@/components/ui/tooltip";
+import { VisibilityOptions } from "./visibility-options";
 
 type RunId = string;
 type RunColor = string;
@@ -24,6 +24,16 @@ interface ColumnsProps {
   onTagsUpdate: (runId: RunId, tags: string[]) => void;
   runColors: Record<RunId, RunColor>;
   allTags: string[];
+  // Visibility options props
+  runs: Run[];
+  selectedRunsWithColors: Record<string, { run: Run; color: string }>;
+  onSelectFirstN: (n: number) => void;
+  onSelectAllByIds: (runIds: string[]) => void;
+  onDeselectAll: () => void;
+  onShuffleColors: () => void;
+  showOnlySelected: boolean;
+  onShowOnlySelectedChange: (value: boolean) => void;
+  totalRunCount: number;
 }
 
 function getRowRange<T>(rows: Array<Row<T>>, idA: string, idB: string) {
@@ -62,6 +72,15 @@ export const columns = ({
   onTagsUpdate,
   runColors,
   allTags,
+  runs,
+  selectedRunsWithColors,
+  onSelectFirstN,
+  onSelectAllByIds,
+  onDeselectAll,
+  onShuffleColors,
+  showOnlySelected,
+  onShowOnlySelectedChange,
+  totalRunCount,
 }: ColumnsProps): ColumnDef<Run>[] => {
   let lastSelectedId: string = "";
   return [
@@ -72,32 +91,21 @@ export const columns = ({
       maxSize: 40,
       enableResizing: false,
       header: ({ table }) => {
-        const totalSelected = table.getSelectedRowModel().rows.length;
-        const isAllSelected = table.getIsAllPageRowsSelected();
-        const isDisabled =
-          totalSelected >= SELECTED_RUNS_LIMIT && !isAllSelected;
-
-        const handleToggle = () => {
-          const newValue = !isAllSelected;
-          table.toggleAllPageRowsSelected(newValue);
-          table.getRowModel().rows.forEach((row) => {
-            onSelectionChange(row.original.id, newValue);
-          });
-        };
+        const pageRunIds = table.getRowModel().rows.map((row) => row.original.id);
 
         return (
-          <button
-            onClick={handleToggle}
-            disabled={isDisabled}
-            aria-label="Toggle select all"
-            className="p-1"
-          >
-            {isAllSelected ? (
-              <Eye className="h-4 w-4" />
-            ) : (
-              <EyeOff className="h-4 w-4" />
-            )}
-          </button>
+          <VisibilityOptions
+            runs={runs}
+            selectedRunsWithColors={selectedRunsWithColors}
+            onSelectFirstN={onSelectFirstN}
+            onSelectAllOnPage={onSelectAllByIds}
+            onDeselectAll={onDeselectAll}
+            onShuffleColors={onShuffleColors}
+            showOnlySelected={showOnlySelected}
+            onShowOnlySelectedChange={onShowOnlySelectedChange}
+            pageRunIds={pageRunIds}
+            totalRunCount={totalRunCount}
+          />
         );
       },
       cell: ({ row, table }) => {
