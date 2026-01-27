@@ -213,7 +213,7 @@ router.openapi(createRunRoute, async (c) => {
   }
 
   const encodedRunId = sqidEncode(run.id);
-  const runUrl = `${env.BETTER_AUTH_URL}/o/${apiKey.organization.slug}/projects/${project.name}/${encodedRunId}`;
+  const runUrl = `${env.BETTER_AUTH_URL}/o/${apiKey.organization.slug}/projects/${encodeURIComponent(project.name)}/${encodedRunId}`;
 
   return c.json({
     runId: Number(run.id),
