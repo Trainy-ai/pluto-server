@@ -132,28 +132,30 @@ test.describe("Visibility Options Dropdown", () => {
       return;
     }
 
-    // First deselect all to start fresh
-    await visibilityButton.click();
-    await expect(page.getByRole("button", { name: "Deselect all" })).toBeVisible({
-      timeout: 5000,
-    });
-    await page.getByRole("button", { name: "Deselect all" }).click();
-    await page.waitForTimeout(300);
+    // First deselect all to start fresh - use retry pattern for stability
+    const deselectAllButton = page.getByRole("button", { name: "Deselect all" });
+    await expect(async () => {
+      await visibilityButton.click();
+      await expect(deselectAllButton).toBeVisible({ timeout: 2000 });
+      await deselectAllButton.click();
+    }).toPass({ timeout: 10000 });
+    // Ensure popover is closed
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(500);
 
-    // Re-open the dropdown
-    await visibilityButton.click();
-    await expect(page.getByRole("button", { name: /Select all on page/ })).toBeVisible({
-      timeout: 5000,
-    });
-
-    // Get the number in "Select all on page (X)"
+    // Re-open the dropdown and click Select all - use retry pattern
     const selectAllButton = page.getByRole("button", { name: /Select all on page/ });
-    const buttonText = await selectAllButton.textContent();
-    const pageCountMatch = buttonText?.match(/\((\d+)\)/);
-    const pageCount = pageCountMatch ? parseInt(pageCountMatch[1]) : 0;
-
-    // Click Select all on page
-    await selectAllButton.click();
+    let pageCount = 0;
+    await expect(async () => {
+      await visibilityButton.click();
+      await expect(selectAllButton).toBeVisible({ timeout: 2000 });
+      // Get the number in "Select all on page (X)"
+      const buttonText = await selectAllButton.textContent();
+      const pageCountMatch = buttonText?.match(/\((\d+)\)/);
+      pageCount = pageCountMatch ? parseInt(pageCountMatch[1]) : 0;
+      // Click Select all on page
+      await selectAllButton.click();
+    }).toPass({ timeout: 10000 });
 
     // Wait for the selection to update
     await page.waitForTimeout(500);
@@ -181,28 +183,29 @@ test.describe("Visibility Options Dropdown", () => {
     }
 
     // First ensure some runs are selected via auto-select first 3
-    await visibilityButton.click();
-    await expect(page.getByText("Auto-select first")).toBeVisible({
-      timeout: 5000,
-    });
+    // Use retry pattern for stability
+    const applyButton = page.locator('button:has-text("Apply")');
+    await expect(async () => {
+      await visibilityButton.click();
+      await expect(page.getByText("Auto-select first")).toBeVisible({ timeout: 2000 });
+      // Decrement to 3
+      const decrementButton = page.locator('button').filter({ has: page.locator('svg.lucide-minus') }).first();
+      await decrementButton.click(); // 4
+      await decrementButton.click(); // 3
+      await expect(applyButton).toBeVisible({ timeout: 2000 });
+      await applyButton.click();
+    }).toPass({ timeout: 10000 });
+    // Ensure popover is closed
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(500);
 
-    // Decrement to 3
-    const decrementButton = page.locator('button').filter({ has: page.locator('svg.lucide-minus') }).first();
-    await decrementButton.click(); // 4
-    await decrementButton.click(); // 3
-
-    await page.locator('button:has-text("Apply")').click();
-    await page.waitForTimeout(300);
-
-    // Re-open dropdown and enable "Display only selected"
-    await visibilityButton.click();
-    await expect(page.getByText(/Display only selected/)).toBeVisible({
-      timeout: 5000,
-    });
-
-    // Find and click the switch
+    // Re-open dropdown and enable "Display only selected" - use retry pattern
     const displayOnlySwitch = page.locator('button[role="switch"]#show-only-selected, [id="show-only-selected"]');
-    await displayOnlySwitch.click();
+    await expect(async () => {
+      await visibilityButton.click();
+      await expect(page.getByText(/Display only selected/)).toBeVisible({ timeout: 2000 });
+      await displayOnlySwitch.click();
+    }).toPass({ timeout: 10000 });
 
     // Close the popover by clicking elsewhere
     await page.keyboard.press("Escape");

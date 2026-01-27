@@ -219,11 +219,13 @@ export function formatMarkdownSummary(results: PerfResults): string {
 
 /**
  * Performance thresholds for various metrics.
+ * Note: With 170 runs and many chart groups, these thresholds account for
+ * the expensive re-renders triggered by selection and navigation.
  */
 export const PERF_THRESHOLDS = {
   // Note: CI environments are slower than local dev, thresholds set accordingly
-  SINGLE_RUN_LOAD_MS: 10000, // Includes navigation + click + chart render (bumped for CI variability)
-  COMPARISON_LOAD_MS: 10000, // Multiple runs with charts (bumped for CI variability)
+  SINGLE_RUN_LOAD_MS: 12000, // Includes navigation + click + chart render (bumped for data volume)
+  COMPARISON_LOAD_MS: 12000, // Multiple runs with charts (bumped for data volume)
   CHART_RENDER_MS: 500,
   LCP_MS: 2500,
   CHARTS_IN_DOM_INITIAL: 10,

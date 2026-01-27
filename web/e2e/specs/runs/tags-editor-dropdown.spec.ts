@@ -40,8 +40,11 @@ test.describe("Tags Editor Dropdown UI", () => {
     const searchInput = page.locator('[placeholder="Search or add tag..."]');
     await expect(searchInput).toBeVisible({ timeout: 5000 });
 
-    // Verify popover content structure
-    const popoverContent = page.locator('[data-radix-popper-content-wrapper]');
+    // Verify popover content structure (use more specific selector since multiple popovers may exist)
+    // Find the popover that contains the search input
+    const popoverContent = page.locator('[data-radix-popper-content-wrapper]').filter({
+      has: searchInput
+    });
     await expect(popoverContent).toBeVisible();
 
     // Close by clicking outside

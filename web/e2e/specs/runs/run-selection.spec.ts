@@ -37,16 +37,18 @@ test.describe("Run Selection", () => {
     const firstToggle = toggleButtons.first();
     await firstToggle.click();
 
-    // Wait for state update
-    await page.waitForTimeout(300);
-
-    // Get new selection count
-    const newText = await selectionContainer.textContent();
-    const newMatch = newText?.match(/(\d+)\s*of/);
-    const newCount = newMatch ? parseInt(newMatch[1]) : 0;
-
-    // Count should have changed
-    expect(newCount).not.toBe(initialCount);
+    // Wait for state update (useTransition defers updates, so we need to wait longer)
+    // Use polling to wait for the count to actually change
+    await expect
+      .poll(
+        async () => {
+          const text = await selectionContainer.textContent();
+          const match = text?.match(/(\d+)\s*of/);
+          return match ? parseInt(match[1]) : 0;
+        },
+        { timeout: 5000 }
+      )
+      .not.toBe(initialCount);
   });
 
   test("selection counter updates when runs are selected", async ({ page }) => {
@@ -64,31 +66,27 @@ test.describe("Run Selection", () => {
     // Deselect all to start fresh
     await visibilityButton.click();
     await page.locator('button:has-text("Deselect all")').click();
-    await page.waitForTimeout(300);
 
     // Get the selection container - text is split across spans
     const selectionContainer = page.locator('text=runs selected').locator('..');
 
-    // Verify counter shows 0
-    await expect(selectionContainer).toContainText("0");
+    // Verify counter shows 0 (useTransition defers updates, use longer timeout)
+    await expect(selectionContainer).toContainText("0", { timeout: 5000 });
 
     // Find toggle buttons and click first three
     const toggleButtons = page.locator('button[aria-label="Toggle select row"]');
 
-    // Select first run
+    // Select first run (useTransition defers updates)
     await toggleButtons.first().click();
-    await page.waitForTimeout(200);
-    await expect(selectionContainer).toContainText("1");
+    await expect(selectionContainer).toContainText("1", { timeout: 5000 });
 
     // Select second run
     await toggleButtons.nth(1).click();
-    await page.waitForTimeout(200);
-    await expect(selectionContainer).toContainText("2");
+    await expect(selectionContainer).toContainText("2", { timeout: 5000 });
 
     // Select third run
     await toggleButtons.nth(2).click();
-    await page.waitForTimeout(200);
-    await expect(selectionContainer).toContainText("3");
+    await expect(selectionContainer).toContainText("3", { timeout: 5000 });
   });
 
   test("selection counter updates when runs are deselected", async ({
@@ -108,27 +106,24 @@ test.describe("Run Selection", () => {
     // Auto-select first 5
     await visibilityButton.click();
     await page.locator('button:has-text("Apply")').click();
-    await page.waitForTimeout(300);
 
     // Get the selection container - text is split across spans
     const selectionContainer = page.locator('text=runs selected').locator('..');
 
-    // Verify counter shows 5
-    await expect(selectionContainer).toContainText("5");
+    // Verify counter shows 5 (useTransition defers updates, use longer timeout)
+    await expect(selectionContainer).toContainText("5", { timeout: 5000 });
 
     // Find toggle buttons for selected runs (they have Eye icon, not EyeOff)
     // Since runs are selected, clicking will deselect them
     const toggleButtons = page.locator('button[aria-label="Toggle select row"]');
 
-    // Deselect first run
+    // Deselect first run (useTransition defers updates)
     await toggleButtons.first().click();
-    await page.waitForTimeout(200);
-    await expect(selectionContainer).toContainText("4");
+    await expect(selectionContainer).toContainText("4", { timeout: 5000 });
 
     // Deselect second run
     await toggleButtons.nth(1).click();
-    await page.waitForTimeout(200);
-    await expect(selectionContainer).toContainText("3");
+    await expect(selectionContainer).toContainText("3", { timeout: 5000 });
   });
 
   test("selected runs appear in charts with correct colors", async ({
@@ -188,7 +183,10 @@ test.describe("Run Selection", () => {
 
     // First select 5 runs
     await visibilityButton.click();
+    await expect(page.locator('button:has-text("Apply")')).toBeVisible({ timeout: 5000 });
     await page.locator('button:has-text("Apply")').click();
+    // Wait for popover to close and state to settle
+    await page.keyboard.press("Escape");
     await page.waitForTimeout(500);
     await page.waitForLoadState("networkidle");
 
@@ -196,9 +194,16 @@ test.describe("Run Selection", () => {
     const charts = page.locator('canvas');
     const initialChartCount = await charts.count();
 
-    // Now deselect all runs
-    await visibilityButton.click();
-    await page.locator('button:has-text("Deselect all")').click();
+    // Now deselect all runs - use retry pattern for stability
+    const deselectAllButton = page.locator('button:has-text("Deselect all")');
+    await expect(async () => {
+      // Click visibility button to open popover
+      await visibilityButton.click();
+      // Wait for popover content to be visible
+      await expect(deselectAllButton).toBeVisible({ timeout: 2000 });
+      // Click the button
+      await deselectAllButton.click();
+    }).toPass({ timeout: 10000 });
     await page.waitForTimeout(500);
     await page.waitForLoadState("networkidle");
 
@@ -206,7 +211,7 @@ test.describe("Run Selection", () => {
     const selectionContainer = page.locator('text=runs selected').locator('..');
 
     // Verify selection shows 0
-    await expect(selectionContainer).toContainText("0");
+    await expect(selectionContainer).toContainText("0", { timeout: 5000 });
 
     // Charts might show "No data" state or be empty
     // The exact behavior depends on the chart component implementation

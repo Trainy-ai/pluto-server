@@ -18,7 +18,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { ChevronLeft, ChevronRight, Search } from "lucide-react";
 import {
@@ -36,6 +36,7 @@ import type { Run } from "../../~queries/list-runs";
 import { DEFAULT_PAGE_SIZE } from "./config";
 import { TagsFilter } from "./tags-filter";
 import { StatusFilter } from "./status-filter";
+import { VisibilityOptions } from "./visibility-options";
 
 interface DataTableProps {
   runs: Run[];
@@ -107,6 +108,7 @@ export function DataTable({
   // Visibility options state
   const [showOnlySelected, setShowOnlySelected] = useState(false);
 
+
   // Filter runs based on showOnlySelected
   const displayedRuns = useMemo(() => {
     if (!showOnlySelected) return runs;
@@ -120,26 +122,46 @@ export function DataTable({
   const prevDataLengthRef = useRef(runs.length);
   const lastPageIndexRef = useRef(pageIndex);
 
+  // Ref for stable color lookup - avoids column recreation on color changes
+  const runColorsRef = useRef(runColors);
+  useEffect(() => {
+    runColorsRef.current = runColors;
+  }, [runColors]);
+
+  // Stable getter function for colors - doesn't change reference
+  const getRunColor = useCallback((runId: string) => {
+    return runColorsRef.current[runId];
+  }, []);
+
   // Calculate current row selection based on actual selectedRunsWithColors
   // This ensures the table checkboxes stay in sync with the actual selected runs
+  // Optimized: only include selected rows (TanStack Table treats missing keys as false)
   const currentRowSelection = useMemo(() => {
     const selection: Record<number, boolean> = {};
 
-    // Map through the runs array to find indices of selected runs
+    // Only add entries for selected runs - much faster than iterating all runs
     if (runs && runs.length > 0) {
-      runs.forEach((run, index) => {
-        if (run && run.id && selectedRunsWithColors[run.id]) {
-          selection[index] = true;
-        } else {
-          selection[index] = false;
-        }
-      });
+      // Create a Set of selected IDs for O(1) lookup
+      const selectedIds = new Set(Object.keys(selectedRunsWithColors));
+
+      // Only iterate if there are selected runs
+      if (selectedIds.size > 0) {
+        runs.forEach((run, index) => {
+          if (run?.id && selectedIds.has(run.id)) {
+            selection[index] = true;
+          }
+        });
+      }
     }
 
     return selection;
   }, [runs, selectedRunsWithColors]);
 
   // Memoize the columns configuration to prevent unnecessary recalculations
+  // Note: getRunColor is a stable callback that uses a ref internally,
+  // so column definitions don't recreate when colors change
+  // Note: Visibility-related props (runs, selectedRunsWithColors, etc.) are NOT included
+  // because VisibilityOptions is now rendered separately in the toolbar for better performance
   const memoizedColumns = useMemo(
     () =>
       columns({
@@ -148,18 +170,8 @@ export function DataTable({
         onColorChange,
         onSelectionChange,
         onTagsUpdate,
-        runColors,
+        getRunColor,
         allTags,
-        // Visibility options props
-        runs,
-        selectedRunsWithColors,
-        onSelectFirstN,
-        onSelectAllByIds,
-        onDeselectAll,
-        onShuffleColors,
-        showOnlySelected,
-        onShowOnlySelectedChange: setShowOnlySelected,
-        totalRunCount: runCount,
       }),
     [
       orgSlug,
@@ -167,26 +179,20 @@ export function DataTable({
       onColorChange,
       onSelectionChange,
       onTagsUpdate,
-      runColors,
+      getRunColor,
       allTags,
-      runs,
-      selectedRunsWithColors,
-      onSelectFirstN,
-      onSelectAllByIds,
-      onDeselectAll,
-      onShuffleColors,
-      showOnlySelected,
-      runCount,
     ],
   );
 
-  // Initialize rowSelection with defaultRowSelection but keep it synced with incoming props
-  const [rowSelection, setRowSelection] = useState(currentRowSelection);
+  // Get current page run IDs for "Select all on page" functionality
+  const pageRunIds = useMemo(() => {
+    const startIndex = pageIndex * pageSize;
+    const endIndex = startIndex + pageSize;
+    return displayedRuns.slice(startIndex, endIndex).map((run) => run.id);
+  }, [displayedRuns, pageIndex, pageSize]);
 
-  // Update rowSelection when currentRowSelection changes
-  useEffect(() => {
-    setRowSelection(currentRowSelection);
-  }, [currentRowSelection]);
+  // Row selection is derived directly from currentRowSelection
+  // No separate state needed - this eliminates an extra render cycle on pagination
 
   // Handle fetching more data without resetting pagination
   const handleFetchNextPage = async () => {
@@ -236,11 +242,10 @@ export function DataTable({
     columns: memoizedColumns,
     getCoreRowModel: getCoreRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
-    onRowSelectionChange: setRowSelection,
     onPaginationChange: setPagination,
     onColumnSizingChange: setColumnSizing,
     state: {
-      rowSelection,
+      rowSelection: currentRowSelection,
       pagination: { pageIndex, pageSize },
       columnSizing,
     },
@@ -307,6 +312,17 @@ export function DataTable({
               className="pl-8"
             />
           </div>
+          <VisibilityOptions
+            selectedRunsWithColors={selectedRunsWithColors}
+            onSelectFirstN={onSelectFirstN}
+            onSelectAllOnPage={onSelectAllByIds}
+            onDeselectAll={onDeselectAll}
+            onShuffleColors={onShuffleColors}
+            showOnlySelected={showOnlySelected}
+            onShowOnlySelectedChange={setShowOnlySelected}
+            pageRunIds={pageRunIds}
+            totalRunCount={runCount}
+          />
           <TagsFilter
             allTags={allTags}
             selectedTags={selectedTags}
