@@ -19,9 +19,8 @@ sudo port install docker-compose
 #### 1. Get the repository
 
 ```bash
-git clone --recurse-submodules https://github.com/mlop-ai/server.git
-cd server
-git submodule update --rebase --remote
+git clone https://github.com/Trainy-ai/pluto-server.git
+cd pluto-server
 ```
 
 #### 2. Edit the `.env` file
