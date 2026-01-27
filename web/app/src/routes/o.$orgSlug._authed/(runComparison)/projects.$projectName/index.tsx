@@ -3,7 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import RunComparisonLayout from "@/components/layout/runComparison/layout";
 import PageLayout from "@/components/layout/page-layout";
 import { OrganizationPageTitle } from "@/components/layout/page-title";
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useDeferredValue, useTransition, useEffect, useRef } from "react";
 import { useSelectedRuns } from "./~hooks/use-selected-runs";
 import { prefetchListRuns, useListRuns, type Run } from "./~queries/list-runs";
 import { useUpdateTags } from "./~queries/update-tags";
@@ -158,13 +158,17 @@ function RouteComponent() {
     selectAllByIds,
     deselectAll,
     shuffleColors,
-  } = useSelectedRuns(runs);
+  } = useSelectedRuns(runs, organizationId, projectName);
 
-  // Process metrics data from selected runs
+  // Defer the selected runs for metrics computation to keep selection responsive
+  // This allows the checkbox to update immediately while metrics recompute in the background
+  const deferredSelectedRuns = useDeferredValue(selectedRunsWithColors);
+
+  // Process metrics data from selected runs (using deferred value)
   const groupedMetrics = useMemo(() => {
-    const metrics = groupMetrics(selectedRunsWithColors);
+    const metrics = groupMetrics(deferredSelectedRuns, organizationId, projectName);
     return metrics;
-  }, [selectedRunsWithColors]);
+  }, [deferredSelectedRuns, organizationId, projectName]);
 
   return (
     <RunComparisonLayout>

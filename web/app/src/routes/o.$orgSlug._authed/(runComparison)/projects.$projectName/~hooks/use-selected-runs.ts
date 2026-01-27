@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, useTransition } from "react";
 import { COLORS } from "@/components/ui/color-picker";
 import type { Run } from "../~queries/list-runs";
 import { LocalCache } from "@/lib/db/local-cache";
+import { useDebouncedCallback } from "@/lib/hooks/use-debounced-callback";
 
 // alias types for documentation purposes
 type Color = string;
@@ -17,8 +18,13 @@ const runCacheDb = new LocalCache<{
   10 * 1024 * 1024, // 10MB limit
 );
 
-// Unique key for storing in the cache
-const STORAGE_KEY = "run-selection-data";
+/**
+ * Generate a project-scoped cache key for run selections
+ * This ensures each org/project has its own isolated cache
+ */
+function getStorageKey(organizationId: string, projectName: string): string {
+  return `run-selection-data:${organizationId}:${projectName}`;
+}
 
 interface UseSelectedRunsReturn {
   /** Map of all run IDs to their assigned colors */
@@ -69,13 +75,17 @@ export const getColorForRun = (runId: string): Color => {
  * - Maintains color consistency across selections
  * - Automatically selects the 5 most recent runs initially
  * - Provides handlers for selection and color changes
- * - Persists selections and colors in local cache
+ * - Persists selections and colors in local cache (scoped per org/project)
  *
  * @param runs - Array of run objects from the API
+ * @param organizationId - The organization ID for cache scoping
+ * @param projectName - The project name for cache scoping
  * @returns Object containing state and handlers for run selection and colors
  */
 export function useSelectedRuns(
   runs: Run[] | undefined,
+  organizationId: string,
+  projectName: string,
 ): UseSelectedRunsReturn {
   // Store all run colors, whether selected or not
   const [runColors, setRunColors] = useState<Record<RunId, Color>>({});
@@ -83,11 +93,34 @@ export function useSelectedRuns(
     Record<RunId, { run: Run; color: Color }>
   >({});
 
-  // Load cached data on initial render
+  // Use transition for selection updates to keep UI responsive
+  // This allows React to interrupt expensive downstream renders
+  const [, startTransition] = useTransition();
+
+
+  // Ref for stable callback access to runs without dependency
+  const runsRef = useRef(runs);
+  useEffect(() => {
+    runsRef.current = runs;
+  }, [runs]);
+
+  // Ref for stable callback access to runColors without dependency
+  const runColorsRef = useRef(runColors);
+  useEffect(() => {
+    runColorsRef.current = runColors;
+  }, [runColors]);
+
+  // Generate the storage key for this org/project combination
+  const storageKey = useMemo(
+    () => getStorageKey(organizationId, projectName),
+    [organizationId, projectName],
+  );
+
+  // Load cached data on initial render or when org/project changes
   useEffect(() => {
     const loadCachedData = async () => {
       try {
-        const cachedData = await runCacheDb.getData(STORAGE_KEY);
+        const cachedData = await runCacheDb.getData(storageKey);
         if (cachedData?.data) {
           // Only set state if there's meaningful data to restore
           if (Object.keys(cachedData.data.colors).length > 0) {
@@ -103,29 +136,32 @@ export function useSelectedRuns(
     };
 
     loadCachedData();
-  }, []);
+  }, [storageKey]);
 
-  // Save to cache whenever state changes
-  useEffect(() => {
-    const saveToCache = async () => {
+  // Debounced save to cache - prevents main thread blocking on rapid changes
+  const debouncedSaveToCache = useDebouncedCallback(
+    async (colors: Record<RunId, Color>, selected: Record<RunId, { run: Run; color: Color }>, key: string) => {
       try {
-        // Only save if we have meaningful data
-        if (
-          Object.keys(runColors).length > 0 ||
-          Object.keys(selectedRunsWithColors).length > 0
-        ) {
-          await runCacheDb.setData(STORAGE_KEY, {
-            colors: runColors,
-            selectedRuns: selectedRunsWithColors,
-          });
-        }
+        await runCacheDb.setData(key, {
+          colors,
+          selectedRuns: selected,
+        });
       } catch (error) {
         console.error("Error saving run selections to cache:", error);
       }
-    };
+    },
+    500, // 500ms debounce
+  );
 
-    saveToCache();
-  }, [runColors, selectedRunsWithColors]);
+  // Save to cache whenever state changes (debounced)
+  useEffect(() => {
+    if (
+      Object.keys(runColors).length > 0 ||
+      Object.keys(selectedRunsWithColors).length > 0
+    ) {
+      debouncedSaveToCache(runColors, selectedRunsWithColors, storageKey);
+    }
+  }, [runColors, selectedRunsWithColors, debouncedSaveToCache, storageKey]);
 
   // Initialize or update colors when runs change
   useEffect(() => {
@@ -181,11 +217,15 @@ export function useSelectedRuns(
   }, [runs, runColors, selectedRunsWithColors]); // Include runColors and selectedRunsWithColors in dependencies
 
   // Memoize handlers to prevent unnecessary rerenders
+  // Uses refs to avoid dependency on runs/runColors which change frequently
   const handleRunSelection = useCallback(
     (runId: RunId, isSelected: boolean) => {
-      if (!runs) return;
+      const currentRuns = runsRef.current;
+      if (!currentRuns) return;
 
       // Use functional update to ensure we're working with latest state
+      // Note: State updates are synchronous to keep checkbox feedback instant
+      // Downstream metrics computation is deferred via useDeferredValue in parent
       setSelectedRunsWithColors((prev) => {
         // If already in desired state, don't update
         const isCurrentlySelected = !!prev[runId];
@@ -195,14 +235,15 @@ export function useSelectedRuns(
 
         if (isSelected) {
           // Find the run from the runs array
-          const run = runs.find((r) => r.id === runId);
+          const run = currentRuns.find((r) => r.id === runId);
           if (!run) return prev;
 
           // Ensure we have a color for this run - always use runId for consistency
-          const color = runColors[runId] || getColorForRun(runId);
+          const currentRunColors = runColorsRef.current;
+          const color = currentRunColors[runId] || getColorForRun(runId);
 
           // Update runColors if needed
-          if (!runColors[runId]) {
+          if (!currentRunColors[runId]) {
             setRunColors((prevColors) => ({
               ...prevColors,
               [runId]: color,
@@ -224,11 +265,13 @@ export function useSelectedRuns(
         return rest;
       });
     },
-    [runs, runColors],
+    [], // Stable - uses refs instead of direct dependencies
   );
 
   const handleColorChange = useCallback(
     (runId: RunId, color: Color) => {
+      const currentRuns = runsRef.current;
+
       // Update both states atomically
       setRunColors((prev) => ({
         ...prev,
@@ -236,7 +279,7 @@ export function useSelectedRuns(
       }));
 
       setSelectedRunsWithColors((prev) => {
-        const run = prev[runId]?.run || runs?.find((r) => r.id === runId);
+        const run = prev[runId]?.run || currentRuns?.find((r) => r.id === runId);
         if (!run) return prev;
 
         return {
@@ -248,7 +291,7 @@ export function useSelectedRuns(
         };
       });
     },
-    [runs],
+    [], // Stable - uses refs instead of direct dependencies
   );
 
   // Generate defaultRowSelection based on current selectedRunsWithColors

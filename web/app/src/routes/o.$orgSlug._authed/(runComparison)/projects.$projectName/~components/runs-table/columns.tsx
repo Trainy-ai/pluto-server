@@ -11,10 +11,103 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from "@/components/ui/tooltip";
-import { VisibilityOptions } from "./visibility-options";
+import { useState, useEffect, useCallback, memo, type MutableRefObject } from "react";
+import { flushSync } from "react-dom";
 
 type RunId = string;
 type RunColor = string;
+
+/**
+ * Selection cell component with optimistic UI updates
+ * Uses local state for immediate visual feedback while global state updates
+ */
+interface SelectionCellProps {
+  row: Row<Run>;
+  table: any;
+  totalSelected: number;
+  onSelectionChange: (runId: RunId, isSelected: boolean) => void;
+  lastSelectedIdRef: MutableRefObject<string>;
+}
+
+const SelectionCell = memo(function SelectionCell({
+  row,
+  table,
+  totalSelected,
+  onSelectionChange,
+  lastSelectedIdRef,
+}: SelectionCellProps) {
+  const isSelected = row.getIsSelected();
+  const isDisabled = totalSelected >= SELECTED_RUNS_LIMIT && !isSelected;
+  const runId = row.original.id;
+
+  // Local optimistic state for immediate visual feedback
+  const [optimisticSelected, setOptimisticSelected] = useState(isSelected);
+
+  // Sync with actual state when it catches up
+  useEffect(() => {
+    setOptimisticSelected(isSelected);
+  }, [isSelected]);
+
+  const handleClick = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    if (isDisabled) return;
+
+    if (!e.shiftKey) {
+      // Regular click: update optimistically then sync global state
+      const newValue = !optimisticSelected;
+
+      // Use flushSync to immediately commit the visual update before React batches
+      // This ensures the checkbox icon changes instantly
+      flushSync(() => {
+        setOptimisticSelected(newValue);
+      });
+
+      row.toggleSelected(newValue);
+
+      // Defer the global state update using requestIdleCallback for better timing
+      // This allows the browser to process other events during idle time
+      if ('requestIdleCallback' in window) {
+        requestIdleCallback(() => {
+          onSelectionChange(runId, newValue);
+        }, { timeout: 100 });
+      } else {
+        setTimeout(() => {
+          onSelectionChange(runId, newValue);
+        }, 16);
+      }
+    } else {
+      // Shift-click: range selection
+      try {
+        const { rows, rowsById } = table.getRowModel();
+        const rowsToToggle = getRowRange<Run>(rows, row.id, lastSelectedIdRef.current);
+        const isLastSelected = rowsById[lastSelectedIdRef.current].getIsSelected();
+        rowsToToggle.forEach((r) => {
+          r.toggleSelected(isLastSelected);
+          onSelectionChange(r.original.id, isLastSelected);
+        });
+      } catch (e) {
+        const newValue = !row.getIsSelected();
+        row.toggleSelected(newValue);
+        onSelectionChange(runId, newValue);
+      }
+    }
+    lastSelectedIdRef.current = row.id;
+  }, [optimisticSelected, isDisabled, runId, row, table, onSelectionChange, lastSelectedIdRef]);
+
+  return (
+    <button
+      onClick={handleClick}
+      disabled={isDisabled}
+      aria-label="Toggle select row"
+      className="p-1"
+    >
+      {optimisticSelected ? (
+        <Eye className="h-4 w-4" />
+      ) : (
+        <EyeOff className="h-4 w-4 text-muted-foreground transition-colors hover:text-primary/80" />
+      )}
+    </button>
+  );
+});
 
 interface ColumnsProps {
   orgSlug: string;
@@ -22,18 +115,9 @@ interface ColumnsProps {
   onSelectionChange: (runId: RunId, isSelected: boolean) => void;
   onColorChange: (runId: RunId, color: RunColor) => void;
   onTagsUpdate: (runId: RunId, tags: string[]) => void;
-  runColors: Record<RunId, RunColor>;
+  /** Getter function for run colors - avoids column recreation on color changes */
+  getRunColor: (runId: RunId) => RunColor | undefined;
   allTags: string[];
-  // Visibility options props
-  runs: Run[];
-  selectedRunsWithColors: Record<string, { run: Run; color: string }>;
-  onSelectFirstN: (n: number) => void;
-  onSelectAllByIds: (runIds: string[]) => void;
-  onDeselectAll: () => void;
-  onShuffleColors: () => void;
-  showOnlySelected: boolean;
-  onShowOnlySelectedChange: (value: boolean) => void;
-  totalRunCount: number;
 }
 
 function getRowRange<T>(rows: Array<Row<T>>, idA: string, idB: string) {
@@ -64,25 +148,18 @@ function getRowRange<T>(rows: Array<Row<T>>, idA: string, idB: string) {
   return range;
 }
 
+// Shared ref for tracking last selected row ID (for shift-click range selection)
+const lastSelectedIdRef = { current: "" };
+
 export const columns = ({
   orgSlug,
   projectName,
   onSelectionChange,
   onColorChange,
   onTagsUpdate,
-  runColors,
+  getRunColor,
   allTags,
-  runs,
-  selectedRunsWithColors,
-  onSelectFirstN,
-  onSelectAllByIds,
-  onDeselectAll,
-  onShuffleColors,
-  showOnlySelected,
-  onShowOnlySelectedChange,
-  totalRunCount,
 }: ColumnsProps): ColumnDef<Run>[] => {
-  let lastSelectedId: string = "";
   return [
     {
       id: "select",
@@ -90,64 +167,18 @@ export const columns = ({
       minSize: 40,
       maxSize: 40,
       enableResizing: false,
-      header: ({ table }) => {
-        const pageRunIds = table.getRowModel().rows.map((row) => row.original.id);
-
-        return (
-          <VisibilityOptions
-            runs={runs}
-            selectedRunsWithColors={selectedRunsWithColors}
-            onSelectFirstN={onSelectFirstN}
-            onSelectAllOnPage={onSelectAllByIds}
-            onDeselectAll={onDeselectAll}
-            onShuffleColors={onShuffleColors}
-            showOnlySelected={showOnlySelected}
-            onShowOnlySelectedChange={onShowOnlySelectedChange}
-            pageRunIds={pageRunIds}
-            totalRunCount={totalRunCount}
-          />
-        );
-      },
+      // Empty header - VisibilityOptions is now rendered in the toolbar for better performance
+      header: () => null,
       cell: ({ row, table }) => {
         const totalSelected = table.getSelectedRowModel().rows.length;
-        const isSelected = row.getIsSelected();
-        const isDisabled = totalSelected >= SELECTED_RUNS_LIMIT && !isSelected;
-
-        const handleClick = (e: React.MouseEvent<HTMLButtonElement>) => {
-          if (!e.shiftKey) {
-            const newValue = !isSelected;
-            row.toggleSelected(newValue);
-            onSelectionChange(row.original.id, newValue);
-          } else {
-            try {
-              const { rows, rowsById } = table.getRowModel();
-
-              const rowsToToggle = getRowRange(rows, row.id, lastSelectedId);
-              const isLastSelected = rowsById[lastSelectedId].getIsSelected();
-              rowsToToggle.forEach((row) => {
-                row.toggleSelected(isLastSelected);
-                onSelectionChange(row.original.id, isLastSelected);
-              });
-            } catch (e) {
-              row.toggleSelected(!row.getIsSelected());
-            }
-          }
-          lastSelectedId = row.id;
-        };
-
         return (
-          <button
-            onClick={handleClick}
-            disabled={isDisabled}
-            aria-label="Toggle select row"
-            className="p-1"
-          >
-            {isSelected ? (
-              <Eye className="h-4 w-4" />
-            ) : (
-              <EyeOff className="h-4 w-4 text-muted-foreground transition-colors hover:text-primary/80" />
-            )}
-          </button>
+          <SelectionCell
+            row={row}
+            table={table}
+            totalSelected={totalSelected}
+            onSelectionChange={onSelectionChange}
+            lastSelectedIdRef={lastSelectedIdRef}
+          />
         );
       },
       enableSorting: false,
@@ -161,7 +192,7 @@ export const columns = ({
       cell: ({ row }) => {
         const runId = row.original.id;
         const name = row.original.name;
-        const color = runColors[runId];
+        const color = getRunColor(runId);
 
         return (
           <div className="flex w-full items-center gap-2 overflow-hidden">
