@@ -1186,4 +1186,103 @@ describe('SDK API Endpoints (with API Key)', () => {
       });
     });
   });
+
+  describe('Test Suite 13: URL Encoding in Run URLs', () => {
+    const hasApiKey = TEST_API_KEY.length > 0;
+
+    describe.skipIf(!hasApiKey)('Project Names with Special Characters', () => {
+      it('Test 13.1: Project name with forward slash is URL-encoded', async () => {
+        const projectWithSlash = `org/subproject-${Date.now()}`;
+
+        const response = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: projectWithSlash,
+            runName: `test-run-slash`,
+          }),
+        });
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.url).toBeDefined();
+        // The URL should contain %2F (encoded slash) not a raw /
+        expect(data.url).toContain(encodeURIComponent(projectWithSlash));
+        expect(data.url).toContain('%2F');
+        // Should NOT have an unencoded path that looks like /org/subproject/
+        expect(data.url).not.toMatch(/\/projects\/org\/subproject-\d+\//);
+      });
+
+      it('Test 13.2: Project name with multiple slashes is fully encoded', async () => {
+        const projectWithSlashes = `team/category/experiment-${Date.now()}`;
+
+        const response = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: projectWithSlashes,
+            runName: `test-run-multi-slash`,
+          }),
+        });
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.url).toBeDefined();
+        // Should have two encoded slashes
+        const encodedProject = encodeURIComponent(projectWithSlashes);
+        expect(data.url).toContain(encodedProject);
+        // Count %2F occurrences - should be 2
+        const matches = data.url.match(/%2F/g);
+        expect(matches).not.toBeNull();
+        expect(matches!.length).toBe(2);
+      });
+
+      it('Test 13.3: Project name without special characters works normally', async () => {
+        const normalProject = `normal-project-${Date.now()}`;
+
+        const response = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: normalProject,
+            runName: `test-run-normal`,
+          }),
+        });
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.url).toBeDefined();
+        // Normal project names should appear as-is (no encoding needed)
+        expect(data.url).toContain(`/projects/${normalProject}/`);
+      });
+
+      it('Test 13.4: Project name with spaces is URL-encoded', async () => {
+        const projectWithSpaces = `my project ${Date.now()}`;
+
+        const response = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: projectWithSpaces,
+            runName: `test-run-spaces`,
+          }),
+        });
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.url).toBeDefined();
+        // Spaces should be encoded as %20
+        expect(data.url).toContain('%20');
+        expect(data.url).toContain(encodeURIComponent(projectWithSpaces));
+      });
+    });
+  });
 });
