@@ -10,6 +10,9 @@ import {
   type SearchIndex,
 } from "../~lib/search-utils";
 import LineSettings from "./line-settings";
+import { DashboardViewSelector, DashboardBuilder } from "./dashboard-builder";
+import { useDashboardView, type DashboardView } from "../~queries/dashboard-views";
+import type { SelectedRunWithColor } from "../~hooks/use-selected-runs";
 
 interface MetricsDisplayProps {
   groupedMetrics: GroupedMetrics;
@@ -18,6 +21,9 @@ interface MetricsDisplayProps {
   organizationId: string;
   projectName: string;
   lastRefreshed?: Date;
+  selectedRuns?: Record<string, SelectedRunWithColor>;
+  selectedViewId?: string | null;
+  onViewChange?: (viewId: string | null) => void;
 }
 
 /**
@@ -31,6 +37,9 @@ export function MetricsDisplay({
   organizationId,
   projectName,
   lastRefreshed,
+  selectedRuns = {},
+  selectedViewId: externalSelectedViewId,
+  onViewChange: externalOnViewChange,
 }: MetricsDisplayProps) {
   const [searchState, setSearchState] = useState<SearchState>({
     query: "",
@@ -38,6 +47,14 @@ export function MetricsDisplay({
     regex: null,
   });
   const searchIndexRef = useRef<Map<string, SearchIndex>>(new Map());
+
+  // Support both controlled (via props) and uncontrolled (internal state) modes
+  const [internalSelectedViewId, setInternalSelectedViewId] = useState<string | null>(null);
+  const selectedViewId = externalSelectedViewId !== undefined ? externalSelectedViewId : internalSelectedViewId;
+  const setSelectedViewId = externalOnViewChange ?? setInternalSelectedViewId;
+
+  // Fetch the selected dashboard view
+  const { data: selectedView } = useDashboardView(organizationId, selectedViewId);
 
   const uniqueLogNames = Object.keys(groupedMetrics)
     .map((group) =>
@@ -105,14 +122,54 @@ export function MetricsDisplay({
     return metricsMap;
   }, [filteredGroups, searchState]);
 
+  // If a custom view is selected, render the DashboardBuilder
+  if (selectedViewId && selectedView) {
+    return (
+      <div className="flex-1 space-y-4">
+        <div className="sticky top-0 z-10 flex items-center justify-between gap-4 bg-background pb-2">
+          <DashboardViewSelector
+            organizationId={organizationId}
+            projectName={projectName}
+            selectedViewId={selectedViewId}
+            onViewChange={setSelectedViewId}
+          />
+          <div className="flex items-center gap-2">
+            <RefreshButton
+              onRefresh={onRefresh}
+              lastRefreshed={lastRefreshed}
+              refreshInterval={10_000}
+              defaultAutoRefresh={false}
+            />
+          </div>
+        </div>
+        <DashboardBuilder
+          view={selectedView}
+          groupedMetrics={groupedMetrics}
+          selectedRuns={selectedRuns}
+          organizationId={organizationId}
+          projectName={projectName}
+        />
+      </div>
+    );
+  }
+
+  // Default "All Metrics" view
   return (
     <div className="flex-1 space-y-4">
       <div className="sticky top-0 z-10 flex items-center justify-between gap-4 bg-background pb-2">
-        <div className="flex-1">
-          <LogSearch
-            onSearch={handleSearch}
-            placeholder="Search groups and metrics..."
+        <div className="flex items-center gap-4">
+          <DashboardViewSelector
+            organizationId={organizationId}
+            projectName={projectName}
+            selectedViewId={selectedViewId}
+            onViewChange={setSelectedViewId}
           />
+          <div className="flex-1">
+            <LogSearch
+              onSearch={handleSearch}
+              placeholder="Search groups and metrics..."
+            />
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <RefreshButton

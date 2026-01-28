@@ -8,6 +8,12 @@ import { useDebouncedCallback } from "@/lib/hooks/use-debounced-callback";
 type Color = string;
 type RunId = string;
 
+// Exported type for selected runs with colors
+export interface SelectedRunWithColor {
+  run: Run;
+  color: Color;
+}
+
 // Create a single LocalCache for all run-related data
 const runCacheDb = new LocalCache<{
   colors: Record<RunId, Color>;

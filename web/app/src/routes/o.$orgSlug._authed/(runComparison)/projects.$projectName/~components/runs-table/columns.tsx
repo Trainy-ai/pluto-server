@@ -63,17 +63,9 @@ const SelectionCell = memo(function SelectionCell({
 
       row.toggleSelected(newValue);
 
-      // Defer the global state update using requestIdleCallback for better timing
-      // This allows the browser to process other events during idle time
-      if ('requestIdleCallback' in window) {
-        requestIdleCallback(() => {
-          onSelectionChange(runId, newValue);
-        }, { timeout: 100 });
-      } else {
-        setTimeout(() => {
-          onSelectionChange(runId, newValue);
-        }, 16);
-      }
+      // Call onSelectionChange directly - useDeferredValue in parent handles deferral
+      // Double-deferral (requestIdleCallback + useDeferredValue) was causing chart updates to be lost
+      onSelectionChange(runId, newValue);
     } else {
       // Shift-click: range selection
       try {

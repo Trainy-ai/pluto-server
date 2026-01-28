@@ -1,9 +1,9 @@
 import { queryClient, trpc } from "@/utils/trpc";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import RunComparisonLayout from "@/components/layout/runComparison/layout";
 import PageLayout from "@/components/layout/page-layout";
 import { OrganizationPageTitle } from "@/components/layout/page-title";
-import { useState, useMemo, useCallback, useDeferredValue, useTransition, useEffect, useRef } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { useSelectedRuns } from "./~hooks/use-selected-runs";
 import { prefetchListRuns, useListRuns, type Run } from "./~queries/list-runs";
 import { useUpdateTags } from "./~queries/update-tags";
@@ -26,6 +26,13 @@ export const Route = createFileRoute(
   "/o/$orgSlug/_authed/(runComparison)/projects/$projectName/",
 )({
   component: RouteComponent,
+  validateSearch: (search) => {
+    // Support ?chart=<viewId> to deep-link to a specific custom chart
+    if (typeof search.chart === "string" && search.chart.trim()) {
+      return { chart: search.chart.trim() };
+    }
+    return {};
+  },
   beforeLoad: async ({ context, params }) => {
     const auth = context.auth;
 
@@ -51,6 +58,20 @@ export const Route = createFileRoute(
 function RouteComponent() {
   const { organizationId, projectName, organizationSlug } =
     Route.useRouteContext();
+  const { chart } = Route.useSearch();
+  const navigate = useNavigate();
+
+  // Handler for changing the selected dashboard view (syncs with URL)
+  const handleViewChange = useCallback(
+    (viewId: string | null) => {
+      void navigate({
+        to: ".",
+        search: viewId ? { chart: viewId } : {},
+        replace: true,
+      });
+    },
+    [navigate],
+  );
 
   // Tag filter state
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
@@ -160,15 +181,12 @@ function RouteComponent() {
     shuffleColors,
   } = useSelectedRuns(runs, organizationId, projectName);
 
-  // Defer the selected runs for metrics computation to keep selection responsive
-  // This allows the checkbox to update immediately while metrics recompute in the background
-  const deferredSelectedRuns = useDeferredValue(selectedRunsWithColors);
-
-  // Process metrics data from selected runs (using deferred value)
+  // Process metrics data from selected runs
+  // Note: Removed useDeferredValue as it was preventing chart updates on deselection
   const groupedMetrics = useMemo(() => {
-    const metrics = groupMetrics(deferredSelectedRuns, organizationId, projectName);
+    const metrics = groupMetrics(selectedRunsWithColors, organizationId, projectName);
     return metrics;
-  }, [deferredSelectedRuns, organizationId, projectName]);
+  }, [selectedRunsWithColors, organizationId, projectName]);
 
   return (
     <RunComparisonLayout>
@@ -244,6 +262,9 @@ function RouteComponent() {
                     organizationId={organizationId}
                     projectName={projectName}
                     lastRefreshed={lastRefreshed}
+                    selectedRuns={selectedRunsWithColors}
+                    selectedViewId={chart ?? null}
+                    onViewChange={handleViewChange}
                   />
                   {isFetching && runs.length > 0 && (
                     <div className="absolute inset-0 flex items-center justify-center bg-background/50">

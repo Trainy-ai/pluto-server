@@ -1485,7 +1485,9 @@ const LineChartInner = forwardRef<ReactECharts, LineChartProps>(
               useDirtyRect: true,
             } as { renderer: "canvas"; hoverLayerThreshold: number; useDirtyRect: boolean }
           }
-          notMerge={false}
+          // notMerge=true ensures series are replaced, not merged
+          // This is critical for removing lines when runs are deselected
+          notMerge={true}
           lazyUpdate={true}
           theme={theme}
         />
