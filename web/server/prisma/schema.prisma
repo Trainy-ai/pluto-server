@@ -53,6 +53,7 @@ model User {
   ApiKey             ApiKey[]
   Feedback           Feedback[]
   Runs               Runs[]
+  DashboardView      DashboardView[]
 
   @@unique([email])
   @@map("user")
@@ -167,6 +168,7 @@ model Organization {
   Feedback                 Feedback[]
   Notification             Notification[]
   OrganizationSubscription OrganizationSubscription?
+  DashboardView            DashboardView[]
 
   @@unique([slug])
   @@map("organization")
@@ -232,14 +234,15 @@ model ApiKey {
 }
 
 model Projects {
-  id             BigInt       @id @default(autoincrement())
-  name           String       @db.VarChar(255)
+  id             BigInt          @id @default(autoincrement())
+  name           String          @db.VarChar(255)
   organizationId String
-  tags           String[]     @default([])
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  tags           String[]        @default([])
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   runs           Runs[]
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  DashboardView  DashboardView[]
 
   // This unique constraint ensures we can efficiently look up projects by name + orgId
   @@unique([organizationId, name])
@@ -401,4 +404,25 @@ model Notification {
   @@index([runId])
   @@index([organizationId])
   @@map("notifications")
+}
+
+// Dashboard Views for customizable run comparison dashboards
+model DashboardView {
+  id             BigInt       @id @default(autoincrement())
+  name           String       @db.VarChar(255)
+  organizationId String
+  projectId      BigInt
+  createdById    String
+  isDefault      Boolean      @default(false)
+  config         Json         // Sections, widgets, layout configuration
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project      Projects     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy    User         @relation(fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, projectId, name])
+  @@index([organizationId, projectId])
+  @@map("dashboard_views")
 }

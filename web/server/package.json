@@ -16,6 +16,8 @@
     "test:cache": "vitest run tests/cache.test.ts --reporter=verbose",
     "seed:dev": "dotenv -e .env.locals -- tsx scripts/seed-dev.ts",
     "seed:dev:docker": "dotenv -e .env -- tsx scripts/seed-dev.ts",
+    "seed:images": "dotenv -e .env.locals -- tsx scripts/seed-images.ts",
+    "seed:images:docker": "STORAGE_ENDPOINT=http://minio:9000 dotenv -e .env -- tsx scripts/seed-images.ts",
     "dev:local": "pnpm db:generate:local && dotenv -e .env.locals -- next dev -p 3001",
     "dev:dev": "pnpm db:generate:dev && dotenv -e .env.dev -- next dev -p 3001",
     "dev:prod": "pnpm db:generate:prod && dotenv -e .env.prod -- next dev -p 3001",

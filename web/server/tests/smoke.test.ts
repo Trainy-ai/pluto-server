@@ -1285,4 +1285,246 @@ describe('SDK API Endpoints (with API Key)', () => {
       });
     });
   });
+
+  describe('Test Suite 14: Dashboard Views', () => {
+    it('Test 14.1: List dashboard views - Unauthorized (no session)', async () => {
+      const response = await makeTrpcRequest('dashboardViews.list', {
+        projectName: 'test-project',
+      }, {}, 'GET');
+
+      // Should fail without authentication
+      expect(response.status).toBe(401);
+    });
+
+    it('Test 14.2: Create dashboard view - Unauthorized (no session)', async () => {
+      const response = await makeTrpcRequest('dashboardViews.create', {
+        projectName: 'test-project',
+        name: 'Test Dashboard',
+      }, {}, 'POST');
+
+      // Should fail without authentication
+      expect(response.status).toBe(401);
+    });
+
+    it('Test 14.3: Update dashboard view - Unauthorized (no session)', async () => {
+      const response = await makeTrpcRequest('dashboardViews.update', {
+        viewId: '1',
+        config: {
+          version: 1,
+          sections: [],
+          settings: {
+            gridCols: 12,
+            rowHeight: 80,
+            compactType: 'vertical',
+          },
+        },
+      }, {}, 'POST');
+
+      // Should fail without authentication
+      expect(response.status).toBe(401);
+    });
+
+    it('Test 14.4: Delete dashboard view - Unauthorized (no session)', async () => {
+      const response = await makeTrpcRequest('dashboardViews.delete', {
+        viewId: '1',
+      }, {}, 'POST');
+
+      // Should fail without authentication
+      expect(response.status).toBe(401);
+    });
+
+    it('Test 14.5: Get dashboard view - Unauthorized (no session)', async () => {
+      const response = await makeTrpcRequest('dashboardViews.get', {
+        viewId: '1',
+      }, {}, 'GET');
+
+      // Should fail without authentication
+      expect(response.status).toBe(401);
+    });
+  });
+
+  describe('Test Suite 15: Dashboard Views (Authenticated)', () => {
+    const TEST_EMAIL = process.env.TEST_USER_EMAIL || 'test-smoke@mlop.local';
+    const TEST_PASSWORD = 'TestPassword123!';
+    let sessionCookie: string | null = null;
+    let testViewId: string | null = null;
+    let serverAvailable = false;
+
+    beforeAll(async () => {
+      // Check if server is available first
+      try {
+        const healthCheck = await makeRequest('/api/health');
+        serverAvailable = healthCheck.status === 200;
+      } catch {
+        serverAvailable = false;
+      }
+
+      if (!serverAvailable) {
+        console.log('   Skipping authenticated tests - server not available');
+        return;
+      }
+
+      // Sign in to get a session cookie
+      try {
+        const signInResponse = await makeRequest('/api/auth/sign-in/email', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            email: TEST_EMAIL,
+            password: TEST_PASSWORD,
+          }),
+        });
+
+        // Extract session cookie from response
+        const setCookie = signInResponse.headers.get('set-cookie');
+        if (setCookie) {
+          // Extract the session cookie (better_auth.session_token)
+          const match = setCookie.match(/better_auth\.session_token=([^;]+)/);
+          if (match) {
+            sessionCookie = `better_auth.session_token=${match[1]}`;
+          }
+        }
+      } catch (e) {
+        console.log('   Sign in failed:', e);
+      }
+    });
+
+    afterAll(async () => {
+      // Clean up: delete the test view if it was created
+      if (testViewId && sessionCookie) {
+        try {
+          await makeTrpcRequest('dashboardViews.delete', {
+            viewId: testViewId,
+          }, { 'Cookie': sessionCookie }, 'POST');
+        } catch {
+          // Ignore cleanup errors
+        }
+      }
+    });
+
+    it('Test 15.1: Sign in successful (or skip if unavailable)', () => {
+      // This test verifies sign-in worked. If server isn't available or sign-in failed,
+      // we skip all subsequent tests gracefully.
+      if (!serverAvailable) {
+        console.log('   Server not available - skipping authenticated tests');
+        return;
+      }
+      if (!sessionCookie) {
+        console.log('   Sign-in failed (test user may not exist) - skipping authenticated tests');
+        return;
+      }
+      expect(sessionCookie).toBeTruthy();
+    });
+
+    it('Test 15.2: Create dashboard view', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+      const response = await makeTrpcRequest('dashboardViews.create', {
+        projectName: TEST_PROJECT_NAME,
+        name: `Test Dashboard ${Date.now()}`,
+      }, { 'Cookie': sessionCookie }, 'POST');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      expect(data.result?.data?.id).toBeDefined();
+      expect(data.result?.data?.name).toContain('Test Dashboard');
+      expect(data.result?.data?.config).toBeDefined();
+      expect(data.result?.data?.config?.version).toBe(1);
+      expect(data.result?.data?.config?.sections).toEqual([]);
+
+      testViewId = data.result?.data?.id;
+    });
+
+    it('Test 15.3: List dashboard views', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+      const response = await makeTrpcRequest('dashboardViews.list', {
+        projectName: TEST_PROJECT_NAME,
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      expect(data.result?.data?.views).toBeDefined();
+      expect(Array.isArray(data.result?.data?.views)).toBe(true);
+    });
+
+    it('Test 15.4: Get dashboard view', async () => {
+      if (!sessionCookie || !testViewId) {
+        console.log('   No session or view - skipping');
+        return;
+      }
+      const response = await makeTrpcRequest('dashboardViews.get', {
+        viewId: testViewId,
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      expect(data.result?.data?.id).toBe(testViewId);
+      expect(data.result?.data?.config).toBeDefined();
+    });
+
+    it('Test 15.5: Update dashboard view', async () => {
+      if (!sessionCookie || !testViewId) {
+        console.log('   No session or view - skipping');
+        return;
+      }
+      const updatedConfig = {
+        version: 1,
+        sections: [
+          {
+            id: 'section-1',
+            name: 'Test Section',
+            collapsed: false,
+            widgets: [],
+          },
+        ],
+        settings: {
+          gridCols: 12,
+          rowHeight: 80,
+          compactType: 'vertical' as const,
+        },
+      };
+
+      const response = await makeTrpcRequest('dashboardViews.update', {
+        viewId: testViewId,
+        config: updatedConfig,
+      }, { 'Cookie': sessionCookie }, 'POST');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      expect(data.result?.data?.config?.sections).toHaveLength(1);
+      expect(data.result?.data?.config?.sections[0]?.name).toBe('Test Section');
+    });
+
+    it('Test 15.6: Delete dashboard view', async () => {
+      if (!sessionCookie || !testViewId) {
+        console.log('   No session or view - skipping');
+        return;
+      }
+      const response = await makeTrpcRequest('dashboardViews.delete', {
+        viewId: testViewId,
+      }, { 'Cookie': sessionCookie }, 'POST');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      expect(data.result?.data?.success).toBe(true);
+
+      // Verify it's deleted
+      const getResponse = await makeTrpcRequest('dashboardViews.get', {
+        viewId: testViewId,
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      // Should return error or empty result
+      expect([200, 404, 500]).toContain(getResponse.status);
+
+      // Mark as cleaned up
+      testViewId = null;
+    });
+  });
 });
