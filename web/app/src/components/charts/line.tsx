@@ -22,6 +22,11 @@ declare global {
   }
 }
 
+// Flag to prevent infinite loop when dispatching highlight/downplay across charts
+// When we dispatch highlight to other charts, it can trigger mouseover events
+// which would then dispatch highlight again, causing infinite recursion
+let isDispatchingHighlight = false;
+
 export interface LineData {
   x: number[];
   y: number[];
@@ -1406,43 +1411,59 @@ const LineChartInner = forwardRef<ReactECharts, LineChartProps>(
 
           // Cross-chart emphasis: propagate highlight/downplay to all connected charts
           const mouseoverHandler = (params: any) => {
+            // Prevent infinite loop: don't re-dispatch if this event was triggered by a dispatch
+            if (isDispatchingHighlight) return;
+
             if (params.componentType === "series" && params.seriesName) {
-              // Find all charts and highlight the same series by name
-              window.__chartInstances?.forEach((ref, id) => {
-                if (id === chartId) return; // Skip self
-                try {
-                  const otherChart = ref?.current?.getEchartsInstance();
-                  if (otherChart && !otherChart.isDisposed?.()) {
-                    otherChart.dispatchAction({
-                      type: "highlight",
-                      seriesName: params.seriesName,
-                    });
+              isDispatchingHighlight = true;
+              try {
+                // Find all charts and highlight the same series by name
+                window.__chartInstances?.forEach((ref, id) => {
+                  if (id === chartId) return; // Skip self
+                  try {
+                    const otherChart = ref?.current?.getEchartsInstance();
+                    if (otherChart && !otherChart.isDisposed?.()) {
+                      otherChart.dispatchAction({
+                        type: "highlight",
+                        seriesName: params.seriesName,
+                      });
+                    }
+                  } catch {
+                    // Ignore errors
                   }
-                } catch {
-                  // Ignore errors
-                }
-              });
+                });
+              } finally {
+                isDispatchingHighlight = false;
+              }
             }
           };
           mouseoverHandlerRef.current = mouseoverHandler;
           echartsInstance.on("mouseover", mouseoverHandler);
 
           const mouseoutHandler = (params: any) => {
+            // Prevent infinite loop: don't re-dispatch if this event was triggered by a dispatch
+            if (isDispatchingHighlight) return;
+
             if (params.componentType === "series") {
-              // Downplay all series on all other charts
-              window.__chartInstances?.forEach((ref, id) => {
-                if (id === chartId) return; // Skip self
-                try {
-                  const otherChart = ref?.current?.getEchartsInstance();
-                  if (otherChart && !otherChart.isDisposed?.()) {
-                    otherChart.dispatchAction({
-                      type: "downplay",
-                    });
+              isDispatchingHighlight = true;
+              try {
+                // Downplay all series on all other charts
+                window.__chartInstances?.forEach((ref, id) => {
+                  if (id === chartId) return; // Skip self
+                  try {
+                    const otherChart = ref?.current?.getEchartsInstance();
+                    if (otherChart && !otherChart.isDisposed?.()) {
+                      otherChart.dispatchAction({
+                        type: "downplay",
+                      });
+                    }
+                  } catch {
+                    // Ignore errors
                   }
-                } catch {
-                  // Ignore errors
-                }
-              });
+                });
+              } finally {
+                isDispatchingHighlight = false;
+              }
             }
           };
           mouseoutHandlerRef.current = mouseoutHandler;
