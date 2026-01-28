@@ -399,11 +399,20 @@ function tooltipPlugin(opts: {
 
     tooltipEl.appendChild(content);
 
-    // Position tooltip
-    const { left: cursorLeft, top: cursorTop } = u.cursor;
+    // Position tooltip - works for both direct hover and synced cursors
+    // When cursor is synced from another chart, left/top might be undefined
+    // In that case, calculate position from the data index
+    let { left: cursorLeft, top: cursorTop } = u.cursor;
+
+    // If cursor position is not available (synced from another chart),
+    // calculate it from the data index
     if (cursorLeft == null || cursorTop == null) {
-      tooltipEl.style.display = "none";
-      return;
+      // Get x position from value
+      const xPos = u.valToPos(xVal, "x", true);
+      // Get y position from middle of chart
+      const chartHeight = u.over.clientHeight;
+      cursorLeft = xPos;
+      cursorTop = chartHeight / 2;
     }
 
     const tooltipWidth = tooltipEl.offsetWidth || 200;
@@ -429,6 +438,55 @@ function tooltipPlugin(opts: {
       destroy(u: uPlot) {
         if (tooltipEl && tooltipEl.parentNode) {
           tooltipEl.parentNode.removeChild(tooltipEl);
+        }
+      },
+    },
+  };
+}
+
+// ============================
+// Zoom Selection Plugin
+// ============================
+
+/**
+ * Plugin to show a visual selection rectangle when drag-zooming.
+ */
+function zoomSelectionPlugin(opts: { theme: string }): uPlot.Plugin {
+  const { theme } = opts;
+  let selectEl: HTMLDivElement | null = null;
+
+  return {
+    hooks: {
+      init(u: uPlot) {
+        selectEl = document.createElement("div");
+        selectEl.style.cssText = `
+          position: absolute;
+          display: none;
+          pointer-events: none;
+          background: ${theme === "dark" ? "rgba(59, 130, 246, 0.2)" : "rgba(59, 130, 246, 0.15)"};
+          border: 1px solid ${theme === "dark" ? "rgba(59, 130, 246, 0.6)" : "rgba(59, 130, 246, 0.5)"};
+          border-radius: 2px;
+        `;
+        u.over.appendChild(selectEl);
+      },
+      setSelect(u: uPlot) {
+        if (!selectEl) return;
+
+        const { left, top, width, height } = u.select;
+
+        if (width > 0 || height > 0) {
+          selectEl.style.left = `${left}px`;
+          selectEl.style.top = `${top}px`;
+          selectEl.style.width = `${width}px`;
+          selectEl.style.height = `${height}px`;
+          selectEl.style.display = "block";
+        } else {
+          selectEl.style.display = "none";
+        }
+      },
+      destroy(u: uPlot) {
+        if (selectEl && selectEl.parentNode) {
+          selectEl.parentNode.removeChild(selectEl);
         }
       },
     },
@@ -597,20 +655,23 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       ];
 
       // Cursor configuration for sync
+      // Enable sync by default so all charts show tooltips on vertical alignment
+      // and zoom is synchronized across charts
+      const defaultSyncKey = "uplot-global-sync";
       const cursor: uPlot.Cursor = {
-        sync: syncKey
-          ? {
-              key: syncKey,
-              setSeries: true,
-            }
-          : undefined,
+        sync: {
+          key: syncKey || defaultSyncKey,
+          setSeries: true,
+          scales: ["x", null], // Sync x-axis cursor and scales (zoom sync)
+        },
         focus: {
           prox: 30,
         },
         drag: {
           x: true,
-          y: false,
+          y: true, // Allow both x and y zoom
           setScale: true,
+          uni: 50, // Minimum drag distance in pixels to trigger zoom
         },
       };
 
@@ -635,6 +696,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             timeRange,
             lines: processedLines,
           }),
+          zoomSelectionPlugin({ theme }),
         ],
         hooks: {
           setSeries: [
