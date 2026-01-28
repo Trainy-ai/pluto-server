@@ -127,18 +127,31 @@ export function MetricsDisplay({
     return (
       <div className="flex-1 space-y-4">
         <div className="sticky top-0 z-10 flex items-center justify-between gap-4 bg-background pb-2">
-          <DashboardViewSelector
-            organizationId={organizationId}
-            projectName={projectName}
-            selectedViewId={selectedViewId}
-            onViewChange={setSelectedViewId}
-          />
+          <div className="flex items-center gap-4">
+            <DashboardViewSelector
+              organizationId={organizationId}
+              projectName={projectName}
+              selectedViewId={selectedViewId}
+              onViewChange={setSelectedViewId}
+            />
+            <div className="flex-1">
+              <LogSearch
+                onSearch={handleSearch}
+                placeholder="Search groups and metrics..."
+              />
+            </div>
+          </div>
           <div className="flex items-center gap-2">
             <RefreshButton
               onRefresh={onRefresh}
               lastRefreshed={lastRefreshed}
               refreshInterval={10_000}
               defaultAutoRefresh={false}
+            />
+            <LineSettings
+              organizationId={organizationId}
+              projectName={projectName}
+              logNames={uniqueLogNames}
             />
           </div>
         </div>
