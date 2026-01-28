@@ -52,19 +52,36 @@ function ChartLoadingFallback() {
  * Consumers should cast based on which chartEngine they're using.
  */
 const LineChartWrapper = forwardRef<unknown, LineChartWrapperProps>(
-  ({ chartEngine = "echarts", syncKey, ...props }, ref) => {
+  ({ chartEngine = "echarts", syncKey, className, ...props }, ref) => {
+    // uPlot uses position:absolute so needs a positioned parent with explicit dimensions
+    // flex: 1 ensures it fills flex containers (like in dashboard widgets)
+    if (chartEngine === "uplot") {
+      return (
+        <div
+          className={className}
+          style={{
+            position: "relative",
+            width: "100%",
+            height: "100%",
+            flex: 1,
+            minHeight: 0,
+          }}
+        >
+          <Suspense fallback={<ChartLoadingFallback />}>
+            <LineChartUPlot
+              ref={ref as React.Ref<LineChartUPlotRef>}
+              syncKey={syncKey}
+              {...props}
+            />
+          </Suspense>
+        </div>
+      );
+    }
+
     return (
       <Suspense fallback={<ChartLoadingFallback />}>
-        {chartEngine === "uplot" ? (
-          <LineChartUPlot
-            ref={ref as React.Ref<LineChartUPlotRef>}
-            syncKey={syncKey}
-            {...props}
-          />
-        ) : (
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          <LineChartECharts ref={ref as React.Ref<any>} {...props} />
-        )}
+        {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+        <LineChartECharts ref={ref as React.Ref<any>} className={className} {...props} />
       </Suspense>
     );
   }
