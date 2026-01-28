@@ -671,11 +671,20 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
     // Store cleanup function ref for proper cleanup on unmount
     const cleanupRef = useRef<(() => void) | null>(null);
 
-    // Create chart on mount or when critical options change
+    // Track if chart has been created - used to decide between create vs resize
+    const chartCreatedRef = useRef(false);
+
+    // Create chart when container has dimensions and data is ready
     useEffect(() => {
       if (!chartContainerRef.current || width === 0 || height === 0) return;
 
-      // Destroy existing chart if present
+      // If chart already exists and only size changed, don't recreate
+      // (size changes are handled by the resize effect below)
+      if (chartCreatedRef.current && chartRef.current) {
+        return;
+      }
+
+      // Destroy existing chart if present (shouldn't happen but be safe)
       if (chartRef.current) {
         chartRef.current.destroy();
         chartRef.current = null;
@@ -690,6 +699,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       const chartOptions = { ...options, width, height };
       const chart = new uPlot(chartOptions, uplotData, chartContainerRef.current);
       chartRef.current = chart;
+      chartCreatedRef.current = true;
 
       // Setup cross-chart highlighting
       const cleanupHighlight = setupCrossChartHighlighting(chartId, chart);
@@ -713,10 +723,9 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           chartRef.current.destroy();
           chartRef.current = null;
         }
+        chartCreatedRef.current = false;
       };
-      // Note: width/height excluded - size changes handled by setSize() effect
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [options, uplotData, chartId]);
+    }, [options, uplotData, chartId, width, height]);
 
     // Handle resize separately - uses setSize() instead of recreating chart
     useEffect(() => {
