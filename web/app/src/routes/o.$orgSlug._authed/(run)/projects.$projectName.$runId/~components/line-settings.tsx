@@ -46,7 +46,7 @@ import {
 } from "@/components/ui/tooltip";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { useLineSettings, DEFAULT_SETTINGS } from "./use-line-settings";
+import { useLineSettings, DEFAULT_SETTINGS, type ChartEngine } from "./use-line-settings";
 
 interface LineSettingsProps {
   organizationId: string;
@@ -439,6 +439,90 @@ const LineSettings = ({
                   }
                   className="transition-colors data-[state=checked]:bg-primary"
                 />
+              </div>
+            </SettingsSection>
+
+            <SettingsSection
+              title="Chart Engine"
+              description="Select the rendering engine for line charts"
+            >
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Label
+                      htmlFor="chart-engine"
+                      className="flex items-center gap-1.5 text-sm"
+                    >
+                      Rendering Engine
+                      <InfoTooltip
+                        title="Chart Rendering Engine"
+                        description={
+                          <>
+                            <strong>ECharts (Legacy)</strong>: Full-featured charting library with rich interactions and animations. Larger bundle size (~1MB).
+                            <br /><br />
+                            <strong>uPlot (Alpha)</strong>: Lightweight, high-performance charting focused on speed. Uses 7x less CPU and memory. Smaller bundle (~50KB). Some features may be experimental.
+                          </>
+                        }
+                        link={{
+                          url: "https://github.com/leeoniya/uPlot",
+                          label: "Learn more about uPlot",
+                        }}
+                      />
+                    </Label>
+                  </div>
+                </div>
+                <Select
+                  value={settings.chartEngine}
+                  onValueChange={(value: ChartEngine) =>
+                    updateSettings("chartEngine", value)
+                  }
+                >
+                  <SelectTrigger
+                    id="chart-engine"
+                    className="h-9 rounded-md border border-input text-sm"
+                  >
+                    <SelectValue placeholder="Select engine">
+                      {settings.chartEngine === "echarts" ? (
+                        <span className="flex items-center gap-2">
+                          ECharts
+                          <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                            Legacy
+                          </Badge>
+                        </span>
+                      ) : (
+                        <span className="flex items-center gap-2">
+                          uPlot
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-blue-500 text-blue-500">
+                            Alpha
+                          </Badge>
+                        </span>
+                      )}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent className="rounded-md border border-input">
+                    <SelectItem value="echarts" className="text-sm">
+                      <span className="flex items-center gap-2">
+                        ECharts
+                        <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                          Legacy
+                        </Badge>
+                      </span>
+                    </SelectItem>
+                    <SelectItem value="uplot" className="text-sm">
+                      <span className="flex items-center gap-2">
+                        uPlot
+                        <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-blue-500 text-blue-500">
+                          Alpha
+                        </Badge>
+                      </span>
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                {settings.chartEngine === "uplot" && (
+                  <p className="text-xs text-muted-foreground">
+                    uPlot is in alpha. Some features like click-to-pin tooltips may behave differently.
+                  </p>
+                )}
               </div>
             </SettingsSection>
 
