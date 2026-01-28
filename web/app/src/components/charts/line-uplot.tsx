@@ -284,16 +284,21 @@ function createTooltipRow(
   textColor: string
 ): HTMLDivElement {
   const row = document.createElement("div");
-  row.style.padding = "2px 4px";
+  row.style.cssText = "padding: 1px 4px; display: flex; align-items: center; gap: 4px; white-space: nowrap";
 
   const colorDot = document.createElement("span");
-  colorDot.style.cssText = `display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: ${color}`;
+  colorDot.style.cssText = `flex-shrink: 0; width: 6px; height: 6px; border-radius: 50%; background: ${color}`;
   row.appendChild(colorDot);
 
-  const text = document.createElement("span");
-  text.style.color = textColor;
-  text.textContent = `${name}: ${formatAxisLabel(value)}`;
-  row.appendChild(text);
+  const nameSpan = document.createElement("span");
+  nameSpan.style.cssText = `color: ${textColor}; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0`;
+  nameSpan.textContent = name;
+  row.appendChild(nameSpan);
+
+  const valueSpan = document.createElement("span");
+  valueSpan.style.cssText = `color: ${textColor}; font-weight: 500; flex-shrink: 0`;
+  valueSpan.textContent = formatAxisLabel(value);
+  row.appendChild(valueSpan);
 
   return row;
 }
@@ -314,17 +319,16 @@ function tooltipPlugin(opts: {
     tooltipEl.style.cssText = `
       position: absolute;
       display: none;
-      pointer-events: none;
+      pointer-events: auto;
       z-index: 100;
       font-family: ui-monospace, monospace;
-      font-size: 11px;
+      font-size: 10px;
       background: ${theme === "dark" ? "#161619" : "#fff"};
       border: 1px solid ${theme === "dark" ? "#333" : "#e0e0e0"};
       border-radius: 4px;
       padding: 4px;
-      max-width: 350px;
-      max-height: 50vh;
-      overflow-y: auto;
+      max-width: 300px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
     `;
     u.over.appendChild(tooltipEl);
   }
@@ -372,36 +376,25 @@ function tooltipPlugin(opts: {
     // Sort by value descending
     seriesItems.sort((a, b) => b.value - a.value);
 
-    // Filter out hidden series and limit
+    // Filter out hidden series - show ALL series with scrolling
     const visibleItems = seriesItems.filter((s) => !s.hidden);
-    const maxItems = 50;
-    const displayItems = visibleItems.slice(0, maxItems);
-    const hiddenCount = visibleItems.length - displayItems.length;
 
     // Clear tooltip content safely
     tooltipEl.textContent = "";
 
     // Create header using safe DOM APIs (prevents XSS)
     const header = document.createElement("div");
-    header.style.cssText = `font-weight: bold; color: ${textColor}; padding: 4px; border-bottom: 1px solid ${theme === "dark" ? "#333" : "#eee"}; margin-bottom: 2px`;
-    header.textContent = xFormatted;
+    header.style.cssText = `font-weight: bold; color: ${textColor}; padding: 2px 4px; border-bottom: 1px solid ${theme === "dark" ? "#333" : "#eee"}; margin-bottom: 2px; font-size: 10px`;
+    header.textContent = `${xFormatted} (${visibleItems.length} series)`;
     tooltipEl.appendChild(header);
 
-    // Create content container
+    // Create scrollable content container for all series
     const content = document.createElement("div");
-    content.style.cssText = "max-height: 300px; overflow-y: auto";
+    content.style.cssText = "max-height: 40vh; overflow-y: auto; scrollbar-width: thin";
 
-    // Add rows using safe DOM APIs
-    for (const s of displayItems) {
+    // Add ALL rows using safe DOM APIs - scrolling handles overflow
+    for (const s of visibleItems) {
       content.appendChild(createTooltipRow(s.name, s.value, s.color, textColor));
-    }
-
-    // Add hidden count note if needed
-    if (hiddenCount > 0) {
-      const note = document.createElement("div");
-      note.style.cssText = `padding: 2px 4px; color: ${theme === "dark" ? "#888" : "#666"}; font-style: italic`;
-      note.textContent = `+${hiddenCount} more series`;
-      content.appendChild(note);
     }
 
     tooltipEl.appendChild(content);
@@ -484,7 +477,8 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
     const containerRef = useRef<HTMLDivElement>(null);
     const chartRef = useRef<uPlot | null>(null);
     const chartContainerRef = useRef<HTMLDivElement>(null);
-    const { width, height } = useContainerSize(containerRef);
+    // Measure the chart container directly (not outer container) for accurate sizing
+    const { width, height } = useContainerSize(chartContainerRef);
     const chartId = useId();
 
     // Process data for log scales
@@ -568,37 +562,37 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         y: logYAxis ? { distr: 3 } : { auto: true },
       };
 
-      // Axes configuration
+      // Axes configuration - compact sizes to fit within container
       const axes: uPlot.Axis[] = [
         {
           // X axis
           show: showXAxis !== false,
           stroke: axisColor,
           grid: { stroke: gridColor, dash: [2, 2] },
-          ticks: { stroke: gridColor, size: 5 },
+          ticks: { stroke: gridColor, size: 3 },
           values: isDateTime
             ? (u, vals) => vals.map((v) => smartDateFormatter(v, timeRange))
             : (u, vals) => vals.map((v) => formatAxisLabel(v)),
           label: xlabel,
-          labelSize: xlabel ? 20 : 0,
-          labelFont: "12px ui-monospace, monospace",
-          font: "11px ui-monospace, monospace",
-          size: 40, // Height reserved for x-axis
-          gap: 5,
+          labelSize: xlabel ? 14 : 0,
+          labelFont: "10px ui-monospace, monospace",
+          font: "9px ui-monospace, monospace",
+          size: xlabel ? 32 : 24, // Compact height for x-axis
+          gap: 2,
         },
         {
           // Y axis
           show: showYAxis !== false,
           stroke: axisColor,
           grid: { stroke: gridColor, dash: [2, 2] },
-          ticks: { stroke: gridColor, size: 5 },
+          ticks: { stroke: gridColor, size: 3 },
           values: (u, vals) => vals.map((v) => formatAxisLabel(v)),
           label: ylabel,
-          labelSize: ylabel ? 20 : 0,
-          labelFont: "12px ui-monospace, monospace",
-          font: "11px ui-monospace, monospace",
-          size: 60, // Width reserved for y-axis
-          gap: 5,
+          labelSize: ylabel ? 14 : 0,
+          labelFont: "10px ui-monospace, monospace",
+          font: "9px ui-monospace, monospace",
+          size: ylabel ? 50 : 40, // Compact width for y-axis
+          gap: 2,
         },
       ];
 
@@ -749,19 +743,19 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
     return (
       <div
         ref={containerRef}
-        className={cn("p-2 pt-4", className)}
+        className={cn("p-1", className)}
         style={{
           position: "absolute",
           inset: 0,
           display: "flex",
           flexDirection: "column",
-          alignItems: "center",
+          overflow: "hidden",
         }}
         {...rest}
       >
         {title && (
           <div
-            className="mb-2 text-center font-mono text-base"
+            className="shrink-0 truncate text-center font-mono text-xs px-1"
             style={{ color: theme === "dark" ? "#fff" : "#000" }}
           >
             {title}
@@ -770,8 +764,10 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         <div
           ref={chartContainerRef}
           style={{
-            width: width || "100%",
-            height: title ? (height ? height - 30 : "calc(100% - 30px)") : height || "100%",
+            flex: 1,
+            minHeight: 0,
+            minWidth: 0,
+            overflow: "hidden",
           }}
         />
       </div>
