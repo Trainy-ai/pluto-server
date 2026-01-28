@@ -8,6 +8,9 @@ export type DisplayLogName =
 
 export type SmoothingAlgorithm = "twema" | "gaussian" | "running" | "ema";
 
+/** Chart rendering engine selection */
+export type ChartEngine = "echarts" | "uplot";
+
 export interface LineChartSettings {
   selectedLog: DisplayLogName;
   xAxisLogScale: boolean;
@@ -20,6 +23,8 @@ export interface LineChartSettings {
   };
   /** Maximum points to display per series. 0 = no limit (show all points) */
   maxPointsPerSeries: number;
+  /** Chart rendering engine: "echarts" (Legacy) or "uplot" (Alpha) */
+  chartEngine: ChartEngine;
 }
 
 export const DEFAULT_SETTINGS: LineChartSettings = {
@@ -35,6 +40,8 @@ export const DEFAULT_SETTINGS: LineChartSettings = {
   // 0 = no limit (show all points, no downsampling)
   // Set to 1000+ for better performance with large datasets
   maxPointsPerSeries: 0,
+  // Default to ECharts (Legacy) - uPlot is Alpha
+  chartEngine: "echarts",
 };
 
 const lineSettingsDb = new LocalCache<LineChartSettings>(

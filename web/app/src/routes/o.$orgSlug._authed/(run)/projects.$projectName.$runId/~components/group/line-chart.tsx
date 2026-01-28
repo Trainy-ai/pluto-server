@@ -3,7 +3,7 @@
 import { memo, useEffect, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import LineChart from "@/components/charts/line";
+import LineChart from "@/components/charts/line-wrapper";
 import ReactECharts from "echarts-for-react";
 import { ensureGetGraph, useGetGraph } from "../../~queries/get-graph";
 import { useCheckDatabaseSize } from "@/lib/db/local-cache";
@@ -453,6 +453,7 @@ export const LineChartWithFetch = memo(
       ref: setChartRef(index),
       logXAxis: settings.xAxisLogScale,
       logYAxis: settings.yAxisLogScale,
+      chartEngine: settings.chartEngine,
     };
 
     // Render appropriate chart based on configuration
@@ -463,6 +464,7 @@ export const LineChartWithFetch = memo(
         isDateTime={chartConfig.isDateTime}
         xlabel={chartConfig.xlabel}
         ref={setChartRef(index)}
+        chartEngine={settings.chartEngine}
       />
     ) : (
       <LineChart

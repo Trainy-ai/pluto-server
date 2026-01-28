@@ -1,6 +1,6 @@
 "use client";
 
-import { default as LineChart } from "@/components/charts/line";
+import { default as LineChart } from "@/components/charts/line-wrapper";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import ReactECharts from "echarts-for-react";
@@ -403,6 +403,7 @@ export const MultiLineChart = memo(
           isDateTime={false}
           logXAxis={settings.xAxisLogScale}
           logYAxis={settings.yAxisLogScale}
+          chartEngine={settings.chartEngine}
         />
       );
     }
@@ -437,6 +438,7 @@ export const MultiLineChart = memo(
             isDateTime={true}
             logXAxis={settings.xAxisLogScale}
             logYAxis={settings.yAxisLogScale}
+            chartEngine={settings.chartEngine}
           />
         );
 
@@ -493,6 +495,7 @@ export const MultiLineChart = memo(
             showLegend={true}
             logXAxis={settings.xAxisLogScale}
             logYAxis={settings.yAxisLogScale}
+            chartEngine={settings.chartEngine}
           />
         );
 
@@ -521,6 +524,7 @@ export const MultiLineChart = memo(
             showLegend={true}
             logXAxis={settings.xAxisLogScale}
             logYAxis={settings.yAxisLogScale}
+            chartEngine={settings.chartEngine}
           />
         );
 
@@ -610,6 +614,7 @@ export const MultiLineChart = memo(
             showLegend={true}
             logXAxis={settings.xAxisLogScale}
             logYAxis={settings.yAxisLogScale}
+            chartEngine={settings.chartEngine}
           />
         );
     }
