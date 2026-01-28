@@ -454,23 +454,19 @@ function tooltipPlugin(opts: {
 
     tooltipEl.appendChild(content);
 
-    // Position tooltip near cursor
+    // Position tooltip in top-right corner of chart to avoid interfering with interactions
     // cursorLeft/cursorTop can be undefined when cursor leaves the chart
     if (cursorLeft == null || cursorTop == null) {
       tooltipEl.style.display = "none";
       return;
     }
 
-    const tooltipWidth = tooltipEl.offsetWidth || 200;
     const chartWidth = u.over.clientWidth;
+    const tooltipWidth = tooltipEl.offsetWidth || 200;
 
-    let left = cursorLeft + 15;
-    if (left + tooltipWidth > chartWidth) {
-      left = cursorLeft - tooltipWidth - 15;
-    }
-
-    let top = cursorTop - 80;
-    if (top < 0) top = 10;
+    // Fixed position in top-right corner
+    const left = chartWidth - tooltipWidth - 10;
+    const top = 10;
 
     tooltipEl.style.left = `${left}px`;
     tooltipEl.style.top = `${top}px`;
@@ -705,7 +701,24 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
               }
             },
           ],
-          // Note: drag-to-zoom is handled automatically by cursor.drag.setScale: true
+          setSelect: [
+            (u) => {
+              // Debug: Log selection state
+              const { left, width } = u.select;
+              if (width > 0) {
+                // Get the x-axis range from the selection
+                const xMin = u.posToVal(left, "x");
+                const xMax = u.posToVal(left + width, "x");
+                console.log("[uPlot zoom] Selection:", { left, width, xMin, xMax });
+
+                // Manually set the scale if setScale: true isn't working
+                u.setScale("x", { min: xMin, max: xMax });
+
+                // Reset the selection box
+                u.setSelect({ left: 0, top: 0, width: 0, height: 0 }, false);
+              }
+            },
+          ],
         },
       };
       // Note: width/height excluded from deps - size changes handled by separate setSize() effect
