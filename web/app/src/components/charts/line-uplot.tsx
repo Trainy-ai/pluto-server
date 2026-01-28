@@ -4,8 +4,8 @@ import React, {
   useMemo,
   forwardRef,
   useImperativeHandle,
-  useState,
   useId,
+  useState,
 } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
@@ -48,14 +48,40 @@ export interface LineChartUPlotRef {
 }
 
 // ============================
-// Global Registry for Cross-Chart Highlighting
+// Module-level Registry for Cross-Chart Highlighting
 // ============================
 
-declare global {
-  interface Window {
-    __uplotInstances?: Map<string, uPlot>;
-    __uplotHighlightSeries?: (sourceChartId: string, seriesName: string | null) => void;
-  }
+/**
+ * Module-level registry for uPlot instances to enable cross-chart highlighting.
+ * This replaces window globals with a contained module scope.
+ * Charts register/unregister themselves on mount/unmount.
+ */
+const chartRegistry = new Map<string, uPlot>();
+
+/**
+ * Highlight or unhighlight a series across all registered charts.
+ * @param sourceChartId - The ID of the chart triggering the highlight
+ * @param seriesName - The series label to highlight, or null to reset all
+ */
+function highlightSeriesAcrossCharts(sourceChartId: string, seriesName: string | null): void {
+  chartRegistry.forEach((chart, chartId) => {
+    if (chartId === sourceChartId) return;
+
+    for (let i = 1; i < chart.series.length; i++) {
+      const series = chart.series[i];
+      const seriesLabel = typeof series.label === "string" ? series.label : null;
+      if (seriesName === null) {
+        // Reset all series
+        chart.setSeries(i, { focus: false });
+      } else if (seriesLabel === seriesName) {
+        // Highlight matching series
+        chart.setSeries(i, { focus: true });
+      } else {
+        // Keep non-matching series unfocused
+        chart.setSeries(i, { focus: false });
+      }
+    }
+  });
 }
 
 // ============================
@@ -221,6 +247,7 @@ function smartDateFormatter(value: number, range: number): string {
 }
 
 // Filter data for log scale (remove non-positive values)
+// Optimized to use single loop instead of multiple map/filter calls
 function filterDataForLogScale(
   lines: LineData[],
   logXAxis: boolean,
@@ -230,30 +257,17 @@ function filterDataForLogScale(
 
   return lines
     .map((line) => {
-      let validIndices: number[] = [];
-
-      if (logXAxis && logYAxis) {
-        validIndices = line.x
-          .map((x, idx) => ({ x, y: line.y[idx], idx }))
-          .filter(({ x, y }) => x > 0 && y > 0)
-          .map(({ idx }) => idx);
-      } else if (logXAxis) {
-        validIndices = line.x
-          .map((x, idx) => ({ x, idx }))
-          .filter(({ x }) => x > 0)
-          .map(({ idx }) => idx);
-      } else if (logYAxis) {
-        validIndices = line.y
-          .map((y, idx) => ({ y, idx }))
-          .filter(({ y }) => y > 0)
-          .map(({ idx }) => idx);
+      const x: number[] = [];
+      const y: number[] = [];
+      for (let i = 0; i < line.x.length; i++) {
+        const xVal = line.x[i];
+        const yVal = line.y[i];
+        if (logXAxis && xVal <= 0) continue;
+        if (logYAxis && yVal <= 0) continue;
+        x.push(xVal);
+        y.push(yVal);
       }
-
-      return {
-        ...line,
-        x: validIndices.map((idx) => line.x[idx]),
-        y: validIndices.map((idx) => line.y[idx]),
-      };
+      return { ...line, x, y };
     })
     .filter((line) => line.x.length > 0);
 }
@@ -261,6 +275,28 @@ function filterDataForLogScale(
 // ============================
 // Tooltip Plugin
 // ============================
+
+// Helper to safely create tooltip row using DOM APIs (prevents XSS)
+function createTooltipRow(
+  name: string,
+  value: number,
+  color: string,
+  textColor: string
+): HTMLDivElement {
+  const row = document.createElement("div");
+  row.style.padding = "2px 4px";
+
+  const colorDot = document.createElement("span");
+  colorDot.style.cssText = `display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: ${color}`;
+  row.appendChild(colorDot);
+
+  const text = document.createElement("span");
+  text.style.color = textColor;
+  text.textContent = `${name}: ${formatAxisLabel(value)}`;
+  row.appendChild(text);
+
+  return row;
+}
 
 function tooltipPlugin(opts: {
   theme: string;
@@ -271,7 +307,6 @@ function tooltipPlugin(opts: {
   const { theme, isDateTime, timeRange, lines } = opts;
 
   let tooltipEl: HTMLDivElement | null = null;
-  let isVisible = false;
 
   function init(u: uPlot) {
     tooltipEl = document.createElement("div");
@@ -300,14 +335,12 @@ function tooltipPlugin(opts: {
     const { idx } = u.cursor;
     if (idx == null) {
       tooltipEl.style.display = "none";
-      isVisible = false;
       return;
     }
 
     const xVal = u.data[0][idx];
     if (xVal == null) {
       tooltipEl.style.display = "none";
-      isVisible = false;
       return;
     }
 
@@ -345,30 +378,33 @@ function tooltipPlugin(opts: {
     const displayItems = visibleItems.slice(0, maxItems);
     const hiddenCount = visibleItems.length - displayItems.length;
 
-    const rows = displayItems
-      .map(
-        (s) =>
-          `<div style="padding: 2px 4px;">
-            <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: ${s.color}; margin-right: 6px;"></span>
-            <span style="color: ${textColor}">${s.name}: ${formatAxisLabel(s.value)}</span>
-          </div>`
-      )
-      .join("");
+    // Clear tooltip content safely
+    tooltipEl.textContent = "";
 
-    const hiddenNote =
-      hiddenCount > 0
-        ? `<div style="padding: 2px 4px; color: ${theme === "dark" ? "#888" : "#666"}; font-style: italic;">+${hiddenCount} more series</div>`
-        : "";
+    // Create header using safe DOM APIs (prevents XSS)
+    const header = document.createElement("div");
+    header.style.cssText = `font-weight: bold; color: ${textColor}; padding: 4px; border-bottom: 1px solid ${theme === "dark" ? "#333" : "#eee"}; margin-bottom: 2px`;
+    header.textContent = xFormatted;
+    tooltipEl.appendChild(header);
 
-    tooltipEl.innerHTML = `
-      <div style="font-weight: bold; color: ${textColor}; padding: 4px; border-bottom: 1px solid ${theme === "dark" ? "#333" : "#eee"}; margin-bottom: 2px;">
-        ${xFormatted}
-      </div>
-      <div style="max-height: 300px; overflow-y: auto;">
-        ${rows}
-        ${hiddenNote}
-      </div>
-    `;
+    // Create content container
+    const content = document.createElement("div");
+    content.style.cssText = "max-height: 300px; overflow-y: auto";
+
+    // Add rows using safe DOM APIs
+    for (const s of displayItems) {
+      content.appendChild(createTooltipRow(s.name, s.value, s.color, textColor));
+    }
+
+    // Add hidden count note if needed
+    if (hiddenCount > 0) {
+      const note = document.createElement("div");
+      note.style.cssText = `padding: 2px 4px; color: ${theme === "dark" ? "#888" : "#666"}; font-style: italic`;
+      note.textContent = `+${hiddenCount} more series`;
+      content.appendChild(note);
+    }
+
+    tooltipEl.appendChild(content);
 
     // Position tooltip
     const { left: cursorLeft, top: cursorTop } = u.cursor;
@@ -391,7 +427,6 @@ function tooltipPlugin(opts: {
     tooltipEl.style.left = `${left}px`;
     tooltipEl.style.top = `${top}px`;
     tooltipEl.style.display = "block";
-    isVisible = true;
   }
 
   return {
@@ -411,43 +446,14 @@ function tooltipPlugin(opts: {
 // Cross-Chart Highlighting
 // ============================
 
-function setupCrossChartHighlighting(chartId: string, chart: uPlot, lines: LineData[]) {
-  // Initialize global registry
-  if (!window.__uplotInstances) {
-    window.__uplotInstances = new Map();
-  }
-
-  window.__uplotInstances.set(chartId, chart);
-
-  // Initialize global highlight function
-  // Note: uPlot doesn't support alpha/opacity directly on series
-  // We use focus/blur approach via show property and width changes
-  if (!window.__uplotHighlightSeries) {
-    window.__uplotHighlightSeries = (sourceChartId: string, seriesName: string | null) => {
-      window.__uplotInstances?.forEach((otherChart, otherId) => {
-        if (otherId === sourceChartId) return;
-
-        // Update series based on highlight
-        for (let i = 1; i < otherChart.series.length; i++) {
-          const series = otherChart.series[i];
-          const seriesLabel = typeof series.label === "string" ? series.label : null;
-          if (seriesName === null) {
-            // Reset all series - redraw with default styles
-            otherChart.setSeries(i, { focus: false });
-          } else if (seriesLabel === seriesName) {
-            // Highlight matching series
-            otherChart.setSeries(i, { focus: true });
-          } else {
-            // Keep non-matching series unfocused
-            otherChart.setSeries(i, { focus: false });
-          }
-        }
-      });
-    };
-  }
+/**
+ * Register a chart for cross-chart highlighting and return cleanup function.
+ */
+function setupCrossChartHighlighting(chartId: string, chart: uPlot): () => void {
+  chartRegistry.set(chartId, chart);
 
   return () => {
-    window.__uplotInstances?.delete(chartId);
+    chartRegistry.delete(chartId);
   };
 }
 
@@ -480,9 +486,6 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
     const chartContainerRef = useRef<HTMLDivElement>(null);
     const { width, height } = useContainerSize(containerRef);
     const chartId = useId();
-
-    // Track highlighted series for cross-chart sync
-    const [highlightedSeries, setHighlightedSeries] = useState<string | null>(null);
 
     // Process data for log scales
     const processedLines = useMemo(
@@ -619,8 +622,9 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       };
 
       return {
-        width: width || 400,
-        height: height || 300,
+        // Initial size - will be updated via setSize() on resize
+        width: 400,
+        height: 300,
         series,
         scales,
         axes,
@@ -639,18 +643,17 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             (u, seriesIdx) => {
               // Handle series focus for cross-chart highlighting
               if (seriesIdx == null) {
-                setHighlightedSeries(null);
-                window.__uplotHighlightSeries?.(chartId, null);
+                highlightSeriesAcrossCharts(chartId, null);
               } else {
                 const series = u.series[seriesIdx];
                 const seriesLabel = typeof series?.label === "string" ? series.label : null;
-                setHighlightedSeries(seriesLabel);
-                window.__uplotHighlightSeries?.(chartId, seriesLabel);
+                highlightSeriesAcrossCharts(chartId, seriesLabel);
               }
             },
           ],
         },
       };
+      // Note: width/height excluded from deps - size changes handled by separate setSize() effect
     }, [
       processedLines,
       theme,
@@ -663,13 +666,11 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       showYAxis,
       showLegend,
       syncKey,
-      width,
-      height,
       timeRange,
       chartId,
     ]);
 
-    // Create/update chart
+    // Create/update chart when options or data change (not on resize)
     useEffect(() => {
       if (!chartContainerRef.current || width === 0 || height === 0) return;
 
@@ -679,15 +680,18 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         chartRef.current = null;
       }
 
-      // Clear container
-      chartContainerRef.current.innerHTML = "";
+      // Clear container using safe DOM method
+      while (chartContainerRef.current.firstChild) {
+        chartContainerRef.current.removeChild(chartContainerRef.current.firstChild);
+      }
 
-      // Create new chart
-      const chart = new uPlot(options, uplotData, chartContainerRef.current);
+      // Create new chart with current dimensions
+      const chartOptions = { ...options, width, height };
+      const chart = new uPlot(chartOptions, uplotData, chartContainerRef.current);
       chartRef.current = chart;
 
       // Setup cross-chart highlighting
-      const cleanup = setupCrossChartHighlighting(chartId, chart, processedLines);
+      const cleanup = setupCrossChartHighlighting(chartId, chart);
 
       // Double-click to reset zoom
       // Reset by re-setting data which recalculates auto bounds
@@ -704,9 +708,11 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           chartRef.current = null;
         }
       };
-    }, [options, uplotData, chartId, processedLines, width, height]);
+      // Note: width/height excluded from deps - size changes handled by setSize() effect below
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [options, uplotData, chartId, processedLines]);
 
-    // Handle resize
+    // Handle resize separately - uses setSize() instead of recreating chart
     useEffect(() => {
       if (chartRef.current && width > 0 && height > 0) {
         chartRef.current.setSize({ width, height });

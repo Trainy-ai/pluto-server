@@ -2,20 +2,15 @@
 
 import React, { forwardRef, lazy, Suspense } from "react";
 import type { ChartEngine } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/use-line-settings";
+// Import LineData type from uPlot component (canonical source)
+import type { LineData, LineChartUPlotRef } from "./line-uplot";
+
+// Re-export for external consumers
+export type { LineData, LineChartUPlotRef };
 
 // Lazy load chart implementations for code splitting
 const LineChartECharts = lazy(() => import("./line"));
 const LineChartUPlot = lazy(() => import("./line-uplot"));
-
-export interface LineData {
-  x: number[];
-  y: number[];
-  label: string;
-  color?: string;
-  dashed?: boolean;
-  hideFromLegend?: boolean;
-  opacity?: number;
-}
 
 interface LineChartWrapperProps extends React.HTMLAttributes<HTMLDivElement> {
   lines: LineData[];
@@ -50,14 +45,25 @@ function ChartLoadingFallback() {
  * - ECharts (Legacy): Full-featured, rich interactions, ~1MB bundle
  * - uPlot (Alpha): High-performance, lightweight, ~50KB bundle
  */
-const LineChartWrapper = forwardRef<any, LineChartWrapperProps>(
+/**
+ * Ref type is unknown because the underlying chart components have incompatible ref types:
+ * - ECharts: ReactECharts (class component instance)
+ * - uPlot: LineChartUPlotRef (imperative handle with getChart/resetZoom methods)
+ * Consumers should cast based on which chartEngine they're using.
+ */
+const LineChartWrapper = forwardRef<unknown, LineChartWrapperProps>(
   ({ chartEngine = "echarts", syncKey, ...props }, ref) => {
     return (
       <Suspense fallback={<ChartLoadingFallback />}>
         {chartEngine === "uplot" ? (
-          <LineChartUPlot ref={ref} syncKey={syncKey} {...props} />
+          <LineChartUPlot
+            ref={ref as React.Ref<LineChartUPlotRef>}
+            syncKey={syncKey}
+            {...props}
+          />
         ) : (
-          <LineChartECharts ref={ref} {...props} />
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          <LineChartECharts ref={ref as React.Ref<any>} {...props} />
         )}
       </Suspense>
     );
