@@ -52,11 +52,51 @@ export interface LineChartUPlotRef {
 // ============================
 
 /**
+ * Default sync key for all uPlot charts on the same page.
+ * This enables cursor synchronization across charts by default.
+ */
+const DEFAULT_SYNC_KEY = "uplot-global-sync";
+
+/**
  * Module-level registry for uPlot instances to enable cross-chart highlighting.
  * This replaces window globals with a contained module scope.
  * Charts register/unregister themselves on mount/unmount.
  */
 const chartRegistry = new Map<string, uPlot>();
+
+/**
+ * Track the current mouse position at the document level.
+ * This allows us to reliably determine which chart is being directly hovered
+ * vs which charts are just receiving synced cursor events.
+ */
+let globalMouseX = 0;
+let globalMouseY = 0;
+let globalMouseTrackerInitialized = false;
+
+function initGlobalMouseTracker() {
+  if (globalMouseTrackerInitialized) return;
+  globalMouseTrackerInitialized = true;
+
+  // Use capture phase so this fires BEFORE uPlot handles the event
+  // This ensures globalMouseX/Y are updated before setCursor is called
+  document.addEventListener("mousemove", (e) => {
+    globalMouseX = e.clientX;
+    globalMouseY = e.clientY;
+  }, { capture: true, passive: true });
+}
+
+/**
+ * Check if the current global mouse position is within an element's bounds.
+ */
+function isMouseOverElement(el: HTMLElement): boolean {
+  const rect = el.getBoundingClientRect();
+  return (
+    globalMouseX >= rect.left &&
+    globalMouseX <= rect.right &&
+    globalMouseY >= rect.top &&
+    globalMouseY <= rect.bottom
+  );
+}
 
 /**
  * Highlight or unhighlight a series across all registered charts.
@@ -71,14 +111,14 @@ function highlightSeriesAcrossCharts(sourceChartId: string, seriesName: string |
       const series = chart.series[i];
       const seriesLabel = typeof series.label === "string" ? series.label : null;
       if (seriesName === null) {
-        // Reset all series
-        chart.setSeries(i, { focus: false });
+        // Reset all series - pass false to prevent hook firing (avoids infinite loop)
+        chart.setSeries(i, { focus: false }, false);
       } else if (seriesLabel === seriesName) {
-        // Highlight matching series
-        chart.setSeries(i, { focus: true });
+        // Highlight matching series - pass false to prevent hook firing
+        chart.setSeries(i, { focus: true }, false);
       } else {
-        // Keep non-matching series unfocused
-        chart.setSeries(i, { focus: false });
+        // Keep non-matching series unfocused - pass false to prevent hook firing
+        chart.setSeries(i, { focus: false }, false);
       }
     }
   });
@@ -312,14 +352,19 @@ function tooltipPlugin(opts: {
   const { theme, isDateTime, timeRange, lines } = opts;
 
   let tooltipEl: HTMLDivElement | null = null;
+  let overEl: HTMLElement | null = null;
 
   function init(u: uPlot) {
+    // Initialize global mouse tracker on first chart
+    initGlobalMouseTracker();
+
+    overEl = u.over;
     tooltipEl = document.createElement("div");
     tooltipEl.className = "uplot-tooltip";
     tooltipEl.style.cssText = `
       position: absolute;
       display: none;
-      pointer-events: auto;
+      pointer-events: none;
       z-index: 100;
       font-family: ui-monospace, monospace;
       font-size: 10px;
@@ -334,9 +379,19 @@ function tooltipPlugin(opts: {
   }
 
   function setCursor(u: uPlot) {
-    if (!tooltipEl) return;
+    if (!tooltipEl || !overEl) return;
 
-    const { idx } = u.cursor;
+    // Only show tooltip on the chart that the mouse is actually over
+    // This correctly handles synced cursor events (where cursor moves on multiple charts
+    // but only one is actually being hovered)
+    if (!isMouseOverElement(overEl)) {
+      tooltipEl.style.display = "none";
+      return;
+    }
+
+    // Get cursor pixel position relative to the plot area
+    const { left: cursorLeft, top: cursorTop, idx } = u.cursor;
+
     if (idx == null) {
       tooltipEl.style.display = "none";
       return;
@@ -399,20 +454,11 @@ function tooltipPlugin(opts: {
 
     tooltipEl.appendChild(content);
 
-    // Position tooltip - works for both direct hover and synced cursors
-    // When cursor is synced from another chart, left/top might be undefined
-    // In that case, calculate position from the data index
-    let { left: cursorLeft, top: cursorTop } = u.cursor;
-
-    // If cursor position is not available (synced from another chart),
-    // calculate it from the data index
+    // Position tooltip near cursor
+    // cursorLeft/cursorTop can be undefined when cursor leaves the chart
     if (cursorLeft == null || cursorTop == null) {
-      // Get x position from value
-      const xPos = u.valToPos(xVal, "x", true);
-      // Get y position from middle of chart
-      const chartHeight = u.over.clientHeight;
-      cursorLeft = xPos;
-      cursorTop = chartHeight / 2;
+      tooltipEl.style.display = "none";
+      return;
     }
 
     const tooltipWidth = tooltipEl.offsetWidth || 200;
@@ -436,6 +482,7 @@ function tooltipPlugin(opts: {
       init,
       setCursor,
       destroy(u: uPlot) {
+        // Remove tooltip element
         if (tooltipEl && tooltipEl.parentNode) {
           tooltipEl.parentNode.removeChild(tooltipEl);
         }
@@ -444,54 +491,6 @@ function tooltipPlugin(opts: {
   };
 }
 
-// ============================
-// Zoom Selection Plugin
-// ============================
-
-/**
- * Plugin to show a visual selection rectangle when drag-zooming.
- */
-function zoomSelectionPlugin(opts: { theme: string }): uPlot.Plugin {
-  const { theme } = opts;
-  let selectEl: HTMLDivElement | null = null;
-
-  return {
-    hooks: {
-      init(u: uPlot) {
-        selectEl = document.createElement("div");
-        selectEl.style.cssText = `
-          position: absolute;
-          display: none;
-          pointer-events: none;
-          background: ${theme === "dark" ? "rgba(59, 130, 246, 0.2)" : "rgba(59, 130, 246, 0.15)"};
-          border: 1px solid ${theme === "dark" ? "rgba(59, 130, 246, 0.6)" : "rgba(59, 130, 246, 0.5)"};
-          border-radius: 2px;
-        `;
-        u.over.appendChild(selectEl);
-      },
-      setSelect(u: uPlot) {
-        if (!selectEl) return;
-
-        const { left, top, width, height } = u.select;
-
-        if (width > 0 || height > 0) {
-          selectEl.style.left = `${left}px`;
-          selectEl.style.top = `${top}px`;
-          selectEl.style.width = `${width}px`;
-          selectEl.style.height = `${height}px`;
-          selectEl.style.display = "block";
-        } else {
-          selectEl.style.display = "none";
-        }
-      },
-      destroy(u: uPlot) {
-        if (selectEl && selectEl.parentNode) {
-          selectEl.parentNode.removeChild(selectEl);
-        }
-      },
-    },
-  };
-}
 
 // ============================
 // Cross-Chart Highlighting
@@ -611,13 +610,14 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       ];
 
       // Scales configuration
+      // Note: Do NOT set auto: true as it overrides manual zoom changes
       const scales: uPlot.Scales = {
         x: logXAxis
-          ? { distr: 3 } // Log scale
+          ? { distr: 3 }
           : isDateTime
             ? { time: true }
-            : { auto: true },
-        y: logYAxis ? { distr: 3 } : { auto: true },
+            : {},
+        y: logYAxis ? { distr: 3 } : {},
       };
 
       // Axes configuration - compact sizes to fit within container
@@ -654,24 +654,19 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         },
       ];
 
-      // Cursor configuration for sync
-      // Enable sync by default so all charts show tooltips on vertical alignment
-      // and zoom is synchronized across charts
-      const defaultSyncKey = "uplot-global-sync";
+      // Cursor configuration
       const cursor: uPlot.Cursor = {
         sync: {
-          key: syncKey || defaultSyncKey,
+          key: syncKey ?? DEFAULT_SYNC_KEY,
           setSeries: true,
-          scales: ["x", null], // Sync x-axis cursor and scales (zoom sync)
         },
         focus: {
           prox: 30,
         },
         drag: {
           x: true,
-          y: true, // Allow both x and y zoom
+          y: false,
           setScale: true,
-          uni: 50, // Minimum drag distance in pixels to trigger zoom
         },
       };
 
@@ -696,7 +691,6 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             timeRange,
             lines: processedLines,
           }),
-          zoomSelectionPlugin({ theme }),
         ],
         hooks: {
           setSeries: [
@@ -711,6 +705,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
               }
             },
           ],
+          // Note: drag-to-zoom is handled automatically by cursor.drag.setScale: true
         },
       };
       // Note: width/height excluded from deps - size changes handled by separate setSize() effect
