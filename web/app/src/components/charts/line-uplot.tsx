@@ -471,8 +471,8 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       xlabel,
       ylabel,
       title,
-      showXAxis = false,
-      showYAxis = false,
+      showXAxis = true,
+      showYAxis = true,
       showLegend = false,
       syncKey,
       className,
@@ -575,26 +575,30 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           show: showXAxis !== false,
           stroke: axisColor,
           grid: { stroke: gridColor, dash: [2, 2] },
-          ticks: { stroke: gridColor },
+          ticks: { stroke: gridColor, size: 5 },
           values: isDateTime
             ? (u, vals) => vals.map((v) => smartDateFormatter(v, timeRange))
             : (u, vals) => vals.map((v) => formatAxisLabel(v)),
           label: xlabel,
-          labelSize: 20,
+          labelSize: xlabel ? 20 : 0,
           labelFont: "12px ui-monospace, monospace",
           font: "11px ui-monospace, monospace",
+          size: 40, // Height reserved for x-axis
+          gap: 5,
         },
         {
           // Y axis
           show: showYAxis !== false,
           stroke: axisColor,
           grid: { stroke: gridColor, dash: [2, 2] },
-          ticks: { stroke: gridColor },
+          ticks: { stroke: gridColor, size: 5 },
           values: (u, vals) => vals.map((v) => formatAxisLabel(v)),
           label: ylabel,
-          labelSize: 20,
+          labelSize: ylabel ? 20 : 0,
           labelFont: "12px ui-monospace, monospace",
           font: "11px ui-monospace, monospace",
+          size: 60, // Width reserved for y-axis
+          gap: 5,
         },
       ];
 
@@ -618,7 +622,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
 
       // Legend configuration
       const legend: uPlot.Legend = {
-        show: showLegend && processedLines.length > 1,
+        show: showLegend,
       };
 
       return {
@@ -670,11 +674,14 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       chartId,
     ]);
 
-    // Create/update chart when options or data change (not on resize)
+    // Store cleanup function ref for proper cleanup on unmount
+    const cleanupRef = useRef<(() => void) | null>(null);
+
+    // Create chart on mount or when critical options change
     useEffect(() => {
       if (!chartContainerRef.current || width === 0 || height === 0) return;
 
-      // Destroy existing chart
+      // Destroy existing chart if present
       if (chartRef.current) {
         chartRef.current.destroy();
         chartRef.current = null;
@@ -691,26 +698,31 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       chartRef.current = chart;
 
       // Setup cross-chart highlighting
-      const cleanup = setupCrossChartHighlighting(chartId, chart);
+      const cleanupHighlight = setupCrossChartHighlighting(chartId, chart);
 
       // Double-click to reset zoom
-      // Reset by re-setting data which recalculates auto bounds
       const handleDblClick = () => {
         chart.setData(chart.data);
       };
-      chartContainerRef.current.addEventListener("dblclick", handleDblClick);
+      const container = chartContainerRef.current;
+      container.addEventListener("dblclick", handleDblClick);
+
+      // Store cleanup function
+      cleanupRef.current = () => {
+        cleanupHighlight();
+        container?.removeEventListener("dblclick", handleDblClick);
+      };
 
       return () => {
-        cleanup();
-        chartContainerRef.current?.removeEventListener("dblclick", handleDblClick);
+        cleanupRef.current?.();
         if (chartRef.current) {
           chartRef.current.destroy();
           chartRef.current = null;
         }
       };
-      // Note: width/height excluded from deps - size changes handled by setSize() effect below
+      // Note: width/height excluded - size changes handled by setSize() effect
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [options, uplotData, chartId, processedLines]);
+    }, [options, uplotData, chartId]);
 
     // Handle resize separately - uses setSize() instead of recreating chart
     useEffect(() => {
