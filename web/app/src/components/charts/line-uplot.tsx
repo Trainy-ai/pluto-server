@@ -65,6 +65,13 @@ const DEFAULT_SYNC_KEY = "uplot-global-sync";
 const chartRegistry = new Map<string, uPlot>();
 
 /**
+ * Re-entry guard to prevent infinite loops when dispatching highlight events.
+ * When one chart triggers highlighting, we don't want the target charts'
+ * handlers to trigger highlighting back.
+ */
+let isDispatchingHighlight = false;
+
+/**
  * Track the current mouse position at the document level.
  * This allows us to reliably determine which chart is being directly hovered
  * vs which charts are just receiving synced cursor events.
@@ -734,7 +741,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       const cursor: uPlot.Cursor = {
         sync: {
           key: syncKey ?? DEFAULT_SYNC_KEY,
-          setSeries: true,
+          setSeries: false, // Disable uPlot's series visibility sync - we handle highlighting via alpha
         },
         focus: {
           prox: 30,
@@ -771,31 +778,40 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         hooks: {
           setSeries: [
             (u, seriesIdx) => {
-              // Handle series focus for cross-chart highlighting
-              if (seriesIdx == null) {
-                // No series focused - reset all series to normal alpha
-                for (let i = 1; i < u.series.length; i++) {
-                  const originalAlpha = processedLines[i - 1]?.opacity ?? 0.85;
-                  u.series[i].alpha = originalAlpha;
-                }
-                highlightSeriesAcrossCharts(chartId, null);
-              } else {
-                const series = u.series[seriesIdx];
-                const seriesLabel = typeof series?.label === "string" ? series.label : null;
+              // Re-entry guard: if we're already dispatching highlight events,
+              // don't trigger more (prevents infinite loops from synced charts)
+              if (isDispatchingHighlight) return;
 
-                // Update alpha on source chart: focused series = full opacity, others = faded
-                for (let i = 1; i < u.series.length; i++) {
-                  if (i === seriesIdx) {
-                    u.series[i].alpha = 1; // Full opacity for focused series
-                  } else {
-                    u.series[i].alpha = 0.2; // Fade unfocused series
+              isDispatchingHighlight = true;
+              try {
+                // Handle series focus for cross-chart highlighting
+                if (seriesIdx == null) {
+                  // No series focused - reset all series to normal alpha
+                  for (let i = 1; i < u.series.length; i++) {
+                    const originalAlpha = processedLines[i - 1]?.opacity ?? 0.85;
+                    u.series[i].alpha = originalAlpha;
                   }
-                }
+                  highlightSeriesAcrossCharts(chartId, null);
+                } else {
+                  const series = u.series[seriesIdx];
+                  const seriesLabel = typeof series?.label === "string" ? series.label : null;
 
-                highlightSeriesAcrossCharts(chartId, seriesLabel);
+                  // Update alpha on source chart: focused series = full opacity, others = faded
+                  for (let i = 1; i < u.series.length; i++) {
+                    if (i === seriesIdx) {
+                      u.series[i].alpha = 1; // Full opacity for focused series
+                    } else {
+                      u.series[i].alpha = 0.2; // Fade unfocused series
+                    }
+                  }
+
+                  highlightSeriesAcrossCharts(chartId, seriesLabel);
+                }
+                // Redraw to apply alpha changes
+                u.redraw();
+              } finally {
+                isDispatchingHighlight = false;
               }
-              // Redraw to apply alpha changes
-              u.redraw();
             },
           ],
           setSelect: [
