@@ -58,18 +58,11 @@ export interface LineChartUPlotRef {
 const DEFAULT_SYNC_KEY = "uplot-global-sync";
 
 /**
- * Module-level registry for uPlot instances to enable cross-chart highlighting.
- * This replaces window globals with a contained module scope.
- * Charts register/unregister themselves on mount/unmount.
+ * Module-level registry for uPlot instances.
+ * Used for cursor sync coordination. Charts register/unregister on mount/unmount.
+ * NOTE: Cross-chart highlighting is currently disabled to avoid rendering issues.
  */
 const chartRegistry = new Map<string, uPlot>();
-
-/**
- * Re-entry guard to prevent infinite loops when dispatching highlight events.
- * When one chart triggers highlighting, we don't want the target charts'
- * handlers to trigger highlighting back.
- */
-let isDispatchingHighlight = false;
 
 /**
  * Track the current mouse position at the document level.
@@ -109,34 +102,16 @@ function isMouseOverElement(el: HTMLElement): boolean {
  * Highlight or unhighlight a series across all registered charts.
  * @param sourceChartId - The ID of the chart triggering the highlight
  * @param seriesName - The series label to highlight, or null to reset all
+ *
+ * NOTE: Cross-chart highlighting is DISABLED due to causing rendering issues
+ * where some charts lose their visible lines. The cursor position sync still
+ * works via uPlot's built-in sync mechanism.
  */
 function highlightSeriesAcrossCharts(sourceChartId: string, seriesName: string | null): void {
-  chartRegistry.forEach((chart, chartId) => {
-    if (chartId === sourceChartId) return;
-
-    let needsRedraw = false;
-    for (let i = 1; i < chart.series.length; i++) {
-      const series = chart.series[i];
-      const seriesLabel = typeof series.label === "string" ? series.label : null;
-      if (seriesName === null) {
-        // Reset all series to normal alpha
-        series.alpha = 0.85;
-        needsRedraw = true;
-      } else if (seriesLabel === seriesName) {
-        // Highlight matching series - full opacity
-        series.alpha = 1;
-        needsRedraw = true;
-      } else {
-        // Fade non-matching series
-        series.alpha = 0.2;
-        needsRedraw = true;
-      }
-    }
-    // Redraw to apply alpha changes
-    if (needsRedraw) {
-      chart.redraw();
-    }
-  });
+  // DISABLED: Cross-chart highlighting was causing charts to lose their lines
+  // during initialization when multiple charts are created simultaneously.
+  // Cursor position sync still works via uPlot's built-in sync.cursor mechanism.
+  return;
 }
 
 // ============================
@@ -778,40 +753,26 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         hooks: {
           setSeries: [
             (u, seriesIdx) => {
-              // Re-entry guard: if we're already dispatching highlight events,
-              // don't trigger more (prevents infinite loops from synced charts)
-              if (isDispatchingHighlight) return;
-
-              isDispatchingHighlight = true;
-              try {
-                // Handle series focus for cross-chart highlighting
-                if (seriesIdx == null) {
-                  // No series focused - reset all series to normal alpha
-                  for (let i = 1; i < u.series.length; i++) {
-                    const originalAlpha = processedLines[i - 1]?.opacity ?? 0.85;
-                    u.series[i].alpha = originalAlpha;
-                  }
-                  highlightSeriesAcrossCharts(chartId, null);
-                } else {
-                  const series = u.series[seriesIdx];
-                  const seriesLabel = typeof series?.label === "string" ? series.label : null;
-
-                  // Update alpha on source chart: focused series = full opacity, others = faded
-                  for (let i = 1; i < u.series.length; i++) {
-                    if (i === seriesIdx) {
-                      u.series[i].alpha = 1; // Full opacity for focused series
-                    } else {
-                      u.series[i].alpha = 0.2; // Fade unfocused series
-                    }
-                  }
-
-                  highlightSeriesAcrossCharts(chartId, seriesLabel);
+              // Handle series focus for local chart highlighting only
+              // Cross-chart highlighting is disabled to avoid rendering issues
+              if (seriesIdx == null) {
+                // No series focused - reset all series to normal alpha
+                for (let i = 1; i < u.series.length; i++) {
+                  const originalAlpha = processedLines[i - 1]?.opacity ?? 0.85;
+                  u.series[i].alpha = originalAlpha;
                 }
-                // Redraw to apply alpha changes
-                u.redraw();
-              } finally {
-                isDispatchingHighlight = false;
+              } else {
+                // Highlight focused series, fade others (local chart only)
+                for (let i = 1; i < u.series.length; i++) {
+                  if (i === seriesIdx) {
+                    u.series[i].alpha = 1; // Full opacity for focused series
+                  } else {
+                    u.series[i].alpha = 0.2; // Fade unfocused series
+                  }
+                }
               }
+              // Redraw to apply alpha changes
+              u.redraw();
             },
           ],
           setSelect: [
