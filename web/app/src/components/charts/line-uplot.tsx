@@ -689,6 +689,31 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       return [yMin, yMax];
     }, [uplotData, logYAxis]);
 
+    // Pre-calculate x-axis range for single-point data
+    // Without this, single points appear at the edge of the chart
+    const xRange = useMemo<[number, number] | null>(() => {
+      // Skip for log scale or datetime (handled separately)
+      if (logXAxis || isDateTime) return null;
+
+      const xValues = uplotData[0] as number[];
+      if (xValues.length === 0) return null;
+
+      const dataMin = Math.min(...xValues);
+      const dataMax = Math.max(...xValues);
+
+      // Only apply custom range for single points or very small ranges
+      if (dataMin === dataMax) {
+        // Single point - create a symmetric range around it
+        // Use 10% of the value as padding, with a minimum padding
+        const value = dataMin;
+        const padding = Math.max(Math.abs(value) * 0.1, 1);
+        return [value - padding, value + padding];
+      }
+
+      // Multiple points - let uPlot auto-scale
+      return null;
+    }, [uplotData, logXAxis, isDateTime]);
+
     // Build uPlot options
     const options = useMemo<uPlot.Options>(() => {
       const isDark = theme === "dark";
@@ -732,12 +757,19 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         return yRange;
       };
 
+      // Use a range function for x-axis to center single points
+      const xRangeFn: uPlot.Range.Function | undefined = xRange
+        ? () => xRange
+        : undefined;
+
       const scales: uPlot.Scales = {
         x: logXAxis
           ? { distr: 3 }
           : isDateTime
             ? { time: true, auto: true }
-            : { auto: true },
+            : xRangeFn
+              ? { range: xRangeFn }
+              : { auto: true },
         y: logYAxis
           ? { distr: 3 }
           : { range: yRangeFn },
@@ -872,6 +904,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       timeRange,
       chartId,
       yRange,
+      xRange,
     ]);
 
     // Store cleanup function ref for proper cleanup on unmount
