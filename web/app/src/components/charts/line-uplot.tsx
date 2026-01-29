@@ -107,19 +107,27 @@ function highlightSeriesAcrossCharts(sourceChartId: string, seriesName: string |
   chartRegistry.forEach((chart, chartId) => {
     if (chartId === sourceChartId) return;
 
+    let needsRedraw = false;
     for (let i = 1; i < chart.series.length; i++) {
       const series = chart.series[i];
       const seriesLabel = typeof series.label === "string" ? series.label : null;
       if (seriesName === null) {
-        // Reset all series - pass false to prevent hook firing (avoids infinite loop)
-        chart.setSeries(i, { focus: false }, false);
+        // Reset all series to normal alpha
+        series.alpha = 0.85;
+        needsRedraw = true;
       } else if (seriesLabel === seriesName) {
-        // Highlight matching series - pass false to prevent hook firing
-        chart.setSeries(i, { focus: true }, false);
+        // Highlight matching series - full opacity
+        series.alpha = 1;
+        needsRedraw = true;
       } else {
-        // Keep non-matching series unfocused - pass false to prevent hook firing
-        chart.setSeries(i, { focus: false }, false);
+        // Fade non-matching series
+        series.alpha = 0.2;
+        needsRedraw = true;
       }
+    }
+    // Redraw to apply alpha changes
+    if (needsRedraw) {
+      chart.redraw();
     }
   });
 }
@@ -580,6 +588,67 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       return data;
     }, [processedLines]);
 
+    // Pre-calculate y-axis range from actual data
+    // This is done separately to avoid uPlot's yRangeFn timing issue where
+    // it gets called before all data is processed
+    const yRange = useMemo<[number, number]>(() => {
+      // Skip for log scale (handled by distr: 3)
+      if (logYAxis) return [0, 1];
+
+      // Collect all y values from uplotData
+      const allYValues: number[] = [];
+      for (let i = 1; i < uplotData.length; i++) {
+        const series = uplotData[i] as (number | null)[];
+        for (const v of series) {
+          if (v !== null && Number.isFinite(v)) {
+            allYValues.push(v);
+          }
+        }
+      }
+
+      // Default range if no valid data
+      if (allYValues.length === 0) {
+        return [0, 1];
+      }
+
+      const dataMin = Math.min(...allYValues);
+      const dataMax = Math.max(...allYValues);
+      const range = dataMax - dataMin;
+      const dataMagnitude = Math.max(Math.abs(dataMax), Math.abs(dataMin), 0.1);
+
+      // Ensure minimum visible range of 10% of data magnitude
+      // This prevents "super zoomed in" views for metrics with tiny variations
+      const minRange = dataMagnitude * 0.1;
+
+      let yMin: number, yMax: number;
+
+      // If actual range is less than minimum, expand symmetrically
+      if (range < minRange) {
+        const center = (dataMin + dataMax) / 2;
+        const halfRange = minRange / 2;
+        yMin = center - halfRange;
+        yMax = center + halfRange;
+
+        // Don't show negative values if all data is non-negative
+        if (dataMin >= 0 && yMin < 0) {
+          yMin = 0;
+          yMax = minRange;
+        }
+      } else {
+        // For normal ranges, add 5% padding
+        const padding = range * 0.05;
+        yMin = dataMin - padding;
+        yMax = dataMax + padding;
+
+        // Don't show negative values if all data is non-negative
+        if (dataMin >= 0 && yMin < 0) {
+          yMin = 0;
+        }
+      }
+
+      return [yMin, yMax];
+    }, [uplotData, logYAxis]);
+
     // Build uPlot options
     const options = useMemo<uPlot.Options>(() => {
       const isDark = theme === "dark";
@@ -602,18 +671,29 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           points: {
             show: false,
           },
+          // Focus styling - when this series is focused, make it bolder
+          focus: {
+            alpha: 1, // Full opacity when focused
+          },
         })),
       ];
 
       // Scales configuration
-      // Note: Do NOT set auto: true as it overrides manual zoom changes
+      // Use a range function for y-axis to ensure our minimum visible range is applied
+      const yRangeFn: uPlot.Range.Function = (u, dataMin, dataMax) => {
+        // Use our pre-calculated yRange which already has minimum range logic applied
+        return yRange;
+      };
+
       const scales: uPlot.Scales = {
         x: logXAxis
           ? { distr: 3 }
           : isDateTime
-            ? { time: true }
-            : {},
-        y: logYAxis ? { distr: 3 } : {},
+            ? { time: true, auto: true }
+            : { auto: true },
+        y: logYAxis
+          ? { distr: 3 }
+          : { range: yRangeFn },
       };
 
       // Axes configuration - compact sizes to fit within container
@@ -693,25 +773,38 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             (u, seriesIdx) => {
               // Handle series focus for cross-chart highlighting
               if (seriesIdx == null) {
+                // No series focused - reset all series to normal alpha
+                for (let i = 1; i < u.series.length; i++) {
+                  const originalAlpha = processedLines[i - 1]?.opacity ?? 0.85;
+                  u.series[i].alpha = originalAlpha;
+                }
                 highlightSeriesAcrossCharts(chartId, null);
               } else {
                 const series = u.series[seriesIdx];
                 const seriesLabel = typeof series?.label === "string" ? series.label : null;
+
+                // Update alpha on source chart: focused series = full opacity, others = faded
+                for (let i = 1; i < u.series.length; i++) {
+                  if (i === seriesIdx) {
+                    u.series[i].alpha = 1; // Full opacity for focused series
+                  } else {
+                    u.series[i].alpha = 0.2; // Fade unfocused series
+                  }
+                }
+
                 highlightSeriesAcrossCharts(chartId, seriesLabel);
               }
+              // Redraw to apply alpha changes
+              u.redraw();
             },
           ],
           setSelect: [
             (u) => {
-              // Debug: Log selection state
               const { left, width } = u.select;
               if (width > 0) {
-                // Get the x-axis range from the selection
+                // Get the x-axis range from the selection and apply zoom
                 const xMin = u.posToVal(left, "x");
                 const xMax = u.posToVal(left + width, "x");
-                console.log("[uPlot zoom] Selection:", { left, width, xMin, xMax });
-
-                // Manually set the scale if setScale: true isn't working
                 u.setScale("x", { min: xMin, max: xMax });
 
                 // Reset the selection box
@@ -736,6 +829,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       syncKey,
       timeRange,
       chartId,
+      yRange,
     ]);
 
     // Store cleanup function ref for proper cleanup on unmount
@@ -745,14 +839,11 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
     const chartCreatedRef = useRef(false);
 
     // Create chart when container has dimensions and data is ready
+    // Note: We intentionally recreate the chart when options change because
+    // uPlot doesn't support updating options after creation. The yRangeFn
+    // for auto-scaling is baked into the options at creation time.
     useEffect(() => {
       if (!chartContainerRef.current || width === 0 || height === 0) return;
-
-      // If chart already exists and only size changed, don't recreate
-      // (size changes are handled by the resize effect below)
-      if (chartCreatedRef.current && chartRef.current) {
-        return;
-      }
 
       // Destroy existing chart if present (shouldn't happen but be safe)
       if (chartRef.current) {
@@ -803,6 +894,11 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         chartRef.current.setSize({ width, height });
       }
     }, [width, height]);
+
+    // NOTE: Data updates are handled by the chart creation effect above,
+    // which already depends on uplotData. A separate setData effect was
+    // removed because it caused issues with scale calculation when both
+    // effects ran simultaneously.
 
     // Expose imperative handle
     useImperativeHandle(
@@ -856,52 +952,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
 
 LineChartUPlotInner.displayName = "LineChartUPlot";
 
-// Memoized version to prevent unnecessary re-renders
-const LineChartUPlot = React.memo(LineChartUPlotInner, (prevProps, nextProps) => {
-  // Check array length first
-  if (prevProps.lines.length !== nextProps.lines.length) return false;
-
-  // Check each line's key properties
-  for (let i = 0; i < prevProps.lines.length; i++) {
-    const prev = prevProps.lines[i];
-    const next = nextProps.lines[i];
-    if (
-      prev.label !== next.label ||
-      prev.color !== next.color ||
-      prev.x.length !== next.x.length ||
-      prev.y.length !== next.y.length ||
-      prev.dashed !== next.dashed ||
-      prev.opacity !== next.opacity
-    ) {
-      return false;
-    }
-    // Quick check of first and last data points
-    if (prev.x.length > 0) {
-      if (
-        prev.x[0] !== next.x[0] ||
-        prev.x[prev.x.length - 1] !== next.x[next.x.length - 1] ||
-        prev.y[0] !== next.y[0] ||
-        prev.y[prev.y.length - 1] !== next.y[next.y.length - 1]
-      ) {
-        return false;
-      }
-    }
-  }
-
-  // Compare other props
-  return (
-    prevProps.isDateTime === nextProps.isDateTime &&
-    prevProps.logXAxis === nextProps.logXAxis &&
-    prevProps.logYAxis === nextProps.logYAxis &&
-    prevProps.xlabel === nextProps.xlabel &&
-    prevProps.ylabel === nextProps.ylabel &&
-    prevProps.title === nextProps.title &&
-    prevProps.showXAxis === nextProps.showXAxis &&
-    prevProps.showYAxis === nextProps.showYAxis &&
-    prevProps.showLegend === nextProps.showLegend &&
-    prevProps.syncKey === nextProps.syncKey &&
-    prevProps.className === nextProps.className
-  );
-});
+// Memoize the component to prevent unnecessary re-renders
+const LineChartUPlot = React.memo(LineChartUPlotInner);
 
 export default LineChartUPlot;
