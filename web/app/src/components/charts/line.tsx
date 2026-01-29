@@ -9,7 +9,7 @@ import React, {
   useId,
 } from "react";
 import ReactECharts from "echarts-for-react";
-import type { EChartsOption } from "echarts";
+import type { EChartsOption, ScatterSeriesOption, LineSeriesOption } from "echarts";
 import { useTheme } from "@/lib/hooks/use-theme";
 import { cn } from "@/lib/utils";
 
@@ -662,7 +662,7 @@ export function generateSeriesOptions(
   lines: LineData[],
   labelCounts: Record<string, number>,
   seriesData: number[][][],
-) {
+): (LineSeriesOption | ScatterSeriesOption)[] {
   // Performance tiers based on series count
   const seriesCount = lines.length;
   const isManySeries = seriesCount > 20;
@@ -671,53 +671,77 @@ export function generateSeriesOptions(
   return lines.map((l, i) => {
     // Show symbol for single data points since lines need at least 2 points to be visible
     const isSinglePoint = seriesData[i].length === 1;
+    const seriesName = l.label + (labelCounts[l.label] > 1 ? ` (${i + 1})` : "");
+    const opacity = l.opacity !== undefined ? l.opacity : 0.85;
 
+    // Use scatter type for single points - line series don't render with only 1 point
+    if (isSinglePoint) {
+      return {
+        name: seriesName,
+        type: "scatter" as const,
+        symbol: "circle" as const,
+        symbolSize: 12, // Large visible dot
+        itemStyle: {
+          color: l.color,
+          opacity: opacity,
+          borderWidth: 0,
+        },
+        emphasis: {
+          focus: "series" as const,
+          scale: 1.5,
+        },
+        blur: {
+          itemStyle: {
+            opacity: 0.15,
+          },
+        },
+        data: seriesData[i],
+      } satisfies ScatterSeriesOption;
+    }
+
+    // Use line type for multiple points
+    // Note: some properties (large, progressive) exist in ECharts but not in type definitions
     return {
-      name: l.label + (labelCounts[l.label] > 1 ? ` (${i + 1})` : ""),
-      type: "line" as const,
+      name: seriesName,
+      type: "line",
       smooth: false,
-      symbol: "circle" as const, // Show dots at cursor intersection points
-      // Larger symbol for single points to make them visible (lines need 2+ points)
-      symbolSize: isSinglePoint ? 12 : 6,
-      // Always show symbol for single points since there's no line to display
-      showSymbol: isSinglePoint,
-      // Don't sample single points
-      sampling: isSinglePoint ? undefined : ("lttb" as const),
+      symbol: "circle",
+      symbolSize: 6,
+      showSymbol: false,
+      sampling: "lttb",
       // Enable large mode for many series or big datasets
       large: isManySeries || hasLargeDataset,
       largeThreshold: isManySeries ? 500 : 2000,
       // Aggressive progressive rendering for many series
       progressive: isManySeries ? 200 : 400,
       progressiveThreshold: isManySeries ? 1000 : 3000,
-      progressiveChunkMode: "mod" as const,
+      progressiveChunkMode: "mod",
       // Enable line hover events so mouseover works even without symbols
       triggerLineEvent: true,
       lineStyle: {
         color: l.color,
-        type: l.dashed ? ("dashed" as const) : ("solid" as const),
-        width: 2, // Full width for all series
-        opacity: l.opacity !== undefined ? l.opacity : 0.85,
+        type: l.dashed ? "dashed" : "solid",
+        width: 2,
+        opacity: opacity,
       },
       itemStyle: {
         color: l.color,
-        opacity: l.opacity !== undefined ? l.opacity : 0.85,
-        borderWidth: 0, // No border for performance
+        opacity: opacity,
+        borderWidth: 0,
       },
-      // Always enable emphasis for hover highlighting
       emphasis: {
-        focus: "series" as const,
+        focus: "series",
         lineStyle: {
           width: 3,
         },
       },
-      // Always enable blur for non-hovered series
       blur: {
         lineStyle: {
           opacity: 0.15,
         },
       },
       data: seriesData[i],
-    };
+    } as LineSeriesOption;
   });
 }
 
