@@ -343,6 +343,8 @@ function tooltipPlugin(opts: {
 
   let tooltipEl: HTMLDivElement | null = null;
   let overEl: HTMLElement | null = null;
+  let isHovering = false; // Track if mouse is over the chart
+  let lastIdx: number | null = null; // Store last valid cursor index
 
   function init(u: uPlot) {
     // Initialize global mouse tracker on first chart
@@ -366,26 +368,32 @@ function tooltipPlugin(opts: {
       box-shadow: 0 2px 8px rgba(0,0,0,0.15);
     `;
     u.over.appendChild(tooltipEl);
+
+    // Track hover state to persist tooltip
+    const handleMouseEnter = () => {
+      isHovering = true;
+    };
+
+    const handleMouseLeave = () => {
+      isHovering = false;
+      lastIdx = null;
+      if (tooltipEl) {
+        tooltipEl.style.display = "none";
+      }
+    };
+
+    overEl.addEventListener("mouseenter", handleMouseEnter);
+    overEl.addEventListener("mouseleave", handleMouseLeave);
+
+    // Store cleanup functions on the element for later removal
+    (overEl as HTMLElement & { _tooltipCleanup?: () => void })._tooltipCleanup = () => {
+      overEl?.removeEventListener("mouseenter", handleMouseEnter);
+      overEl?.removeEventListener("mouseleave", handleMouseLeave);
+    };
   }
 
-  function setCursor(u: uPlot) {
-    if (!tooltipEl || !overEl) return;
-
-    // Only show tooltip on the chart that the mouse is actually over
-    // This correctly handles synced cursor events (where cursor moves on multiple charts
-    // but only one is actually being hovered)
-    if (!isMouseOverElement(overEl)) {
-      tooltipEl.style.display = "none";
-      return;
-    }
-
-    // Get cursor pixel position relative to the plot area
-    const { left: cursorLeft, top: cursorTop, idx } = u.cursor;
-
-    if (idx == null) {
-      tooltipEl.style.display = "none";
-      return;
-    }
+  function updateTooltipContent(u: uPlot, idx: number) {
+    if (!tooltipEl) return;
 
     const xVal = u.data[0][idx];
     if (xVal == null) {
@@ -444,17 +452,9 @@ function tooltipPlugin(opts: {
 
     tooltipEl.appendChild(content);
 
-    // Position tooltip in top-right corner of chart to avoid interfering with interactions
-    // cursorLeft/cursorTop can be undefined when cursor leaves the chart
-    if (cursorLeft == null || cursorTop == null) {
-      tooltipEl.style.display = "none";
-      return;
-    }
-
+    // Position tooltip in top-right corner of chart
     const chartWidth = u.over.clientWidth;
     const tooltipWidth = tooltipEl.offsetWidth || 200;
-
-    // Fixed position in top-right corner
     const left = chartWidth - tooltipWidth - 10;
     const top = 10;
 
@@ -463,11 +463,44 @@ function tooltipPlugin(opts: {
     tooltipEl.style.display = "block";
   }
 
+  function setCursor(u: uPlot) {
+    if (!tooltipEl || !overEl) return;
+
+    // Only show tooltip on the chart that the mouse is actually over
+    // This correctly handles synced cursor events (where cursor moves on multiple charts
+    // but only one is actually being hovered)
+    if (!isMouseOverElement(overEl)) {
+      tooltipEl.style.display = "none";
+      return;
+    }
+
+    const { idx } = u.cursor;
+
+    // Store valid index for tooltip persistence
+    if (idx != null) {
+      lastIdx = idx;
+    }
+
+    // Use the last valid index if current is null but we're still hovering
+    const displayIdx = idx ?? lastIdx;
+
+    if (displayIdx == null) {
+      tooltipEl.style.display = "none";
+      return;
+    }
+
+    updateTooltipContent(u, displayIdx);
+  }
+
   return {
     hooks: {
       init,
       setCursor,
       destroy(u: uPlot) {
+        // Cleanup event listeners
+        const cleanup = (overEl as HTMLElement & { _tooltipCleanup?: () => void })?._tooltipCleanup;
+        cleanup?.();
+
         // Remove tooltip element
         if (tooltipEl && tooltipEl.parentNode) {
           tooltipEl.parentNode.removeChild(tooltipEl);
