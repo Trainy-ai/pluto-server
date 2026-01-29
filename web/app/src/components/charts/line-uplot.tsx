@@ -452,11 +452,36 @@ function tooltipPlugin(opts: {
 
     tooltipEl.appendChild(content);
 
-    // Position tooltip in top-right corner of chart
+    // Position tooltip following the cursor with offset to top-right
     const chartWidth = u.over.clientWidth;
+    const chartHeight = u.over.clientHeight;
     const tooltipWidth = tooltipEl.offsetWidth || 200;
-    const left = chartWidth - tooltipWidth - 10;
-    const top = 10;
+    const tooltipHeight = tooltipEl.offsetHeight || 100;
+
+    // Get cursor position from uPlot (relative to chart area)
+    const cursorLeft = u.cursor.left ?? 0;
+    const cursorTop = u.cursor.top ?? 0;
+
+    const offsetX = 15; // Offset to the right
+    const offsetY = 10; // Offset above
+
+    // Default position: to the right and above cursor
+    let left = cursorLeft + offsetX;
+    let top = cursorTop - tooltipHeight - offsetY;
+
+    // If tooltip would go off right edge, position to the left of cursor
+    if (left + tooltipWidth > chartWidth) {
+      left = cursorLeft - tooltipWidth - offsetX;
+    }
+
+    // If tooltip would go off top edge, position below cursor
+    if (top < 0) {
+      top = cursorTop + offsetY;
+    }
+
+    // Clamp to chart bounds
+    left = Math.max(0, Math.min(left, chartWidth - tooltipWidth));
+    top = Math.max(0, Math.min(top, chartHeight - tooltipHeight));
 
     tooltipEl.style.left = `${left}px`;
     tooltipEl.style.top = `${top}px`;
@@ -676,21 +701,28 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           // X axis
           label: xlabel || "x",
         },
-        ...processedLines.map((line, i) => ({
-          label: line.label,
-          stroke: line.color || `hsl(${(i * 137) % 360}, 70%, 50%)`,
-          width: 1.5,
-          alpha: line.opacity ?? 0.85,
-          dash: line.dashed ? [5, 5] : undefined,
-          spanGaps: true,
-          points: {
-            show: false,
-          },
-          // Focus styling - when this series is focused, make it bolder
-          focus: {
-            alpha: 1, // Full opacity when focused
-          },
-        })),
+        ...processedLines.map((line, i) => {
+          // Check if this series has only a single point - need to show as dot since lines need 2+ points
+          const isSinglePoint = line.x.length === 1;
+          return {
+            label: line.label,
+            stroke: line.color || `hsl(${(i * 137) % 360}, 70%, 50%)`,
+            width: 1.5,
+            alpha: line.opacity ?? 0.85,
+            dash: line.dashed ? [5, 5] : undefined,
+            spanGaps: true,
+            points: {
+              // Show points for single-point series since lines need 2+ points to be visible
+              show: isSinglePoint,
+              size: isSinglePoint ? 10 : 6,
+              fill: line.color || `hsl(${(i * 137) % 360}, 70%, 50%)`,
+            },
+            // Focus styling - when this series is focused, make it bolder
+            focus: {
+              alpha: 1, // Full opacity when focused
+            },
+          };
+        }),
       ];
 
       // Scales configuration
