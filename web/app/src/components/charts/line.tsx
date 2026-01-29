@@ -677,9 +677,12 @@ export function generateSeriesOptions(
       type: "line" as const,
       smooth: false,
       symbol: "circle" as const, // Show dots at cursor intersection points
-      symbolSize: isSinglePoint ? 8 : 6, // Larger dot for single points to make them more visible
-      showSymbol: isSinglePoint, // Show symbol for single points, otherwise only on hover
-      sampling: "lttb" as const,
+      // Larger symbol for single points to make them visible (lines need 2+ points)
+      symbolSize: isSinglePoint ? 12 : 6,
+      // Always show symbol for single points since there's no line to display
+      showSymbol: isSinglePoint,
+      // Don't sample single points
+      sampling: isSinglePoint ? undefined : ("lttb" as const),
       // Enable large mode for many series or big datasets
       large: isManySeries || hasLargeDataset,
       largeThreshold: isManySeries ? 500 : 2000,
@@ -891,34 +894,34 @@ function generateChartOptions(
     showDelay: 0,
     hideDelay: 100, // Shorter delay to feel more responsive
     transitionDuration: 0.05,
-    position: (point: number[], _params: any, _dom: any, rect: any, size: { viewSize: number[]; contentSize: number[] }) => {
-      // Use actual tooltip size, with fallback minimum for first render
+    position: (point: number[], _params: any, _dom: any, _rect: any, size: { viewSize: number[]; contentSize: number[] }) => {
+      // Follow cursor with offset to the top-right
       const tooltipWidth = Math.max(size.contentSize[0], 200);
       const tooltipHeight = size.contentSize[1];
 
-      const offsetX = 30;
-      const offsetY = 80;
+      const offsetX = 15; // Offset to the right of cursor
+      const offsetY = 10; // Offset above cursor
 
-      const rectY = rect?.y ?? 0;
-      // Use chart container width, not viewport width
       const chartWidth = size.viewSize[0];
+      const chartHeight = size.viewSize[1];
 
-      // Check if tooltip would go off right edge of chart container
-      const rightX = point[0] + offsetX;
-      const wouldOverflowRight = rightX + tooltipWidth > chartWidth;
+      // Default position: to the right and above cursor
+      let x = point[0] + offsetX;
+      let y = point[1] - tooltipHeight - offsetY;
 
-      // Position on left side if it would overflow right, otherwise right side
-      let x = wouldOverflowRight
-        ? point[0] - offsetX - tooltipWidth  // Left of cursor
-        : rightX;                             // Right of cursor
-
-      let y = point[1] - offsetY - tooltipHeight; // Above cursor
-
-      // If tooltip would go off top of viewport, shift down
-      const viewportY = rectY + y;
-      if (viewportY < 10) {
-        y = 10 - rectY;
+      // If tooltip would go off right edge, position to the left of cursor
+      if (x + tooltipWidth > chartWidth) {
+        x = point[0] - tooltipWidth - offsetX;
       }
+
+      // If tooltip would go off top edge, position below cursor
+      if (y < 0) {
+        y = point[1] + offsetY;
+      }
+
+      // Clamp to chart bounds
+      x = Math.max(0, Math.min(x, chartWidth - tooltipWidth));
+      y = Math.max(0, Math.min(y, chartHeight - tooltipHeight));
 
       return [x, y];
     },
