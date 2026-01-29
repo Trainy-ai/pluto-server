@@ -467,9 +467,9 @@ function tooltipPlugin(opts: {
     if (!tooltipEl || !overEl) return;
 
     // Only show tooltip on the chart that the mouse is actually over
-    // This correctly handles synced cursor events (where cursor moves on multiple charts
-    // but only one is actually being hovered)
-    if (!isMouseOverElement(overEl)) {
+    // Use isHovering (set by mouseenter/mouseleave) instead of global mouse position
+    // because global mouse coordinates can be stale with cursor sync events
+    if (!isHovering) {
       tooltipEl.style.display = "none";
       return;
     }
