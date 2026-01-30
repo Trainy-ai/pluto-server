@@ -16,6 +16,14 @@ import {
 } from "../trpc/routers/organization/routers/usage/procs/data-usage";
 import { createContext } from "../lib/context";
 import { searchRunIds } from "../lib/run-search";
+import { clickhouse } from "../lib/clickhouse";
+import {
+  queryRunLogs,
+  queryRunMetrics,
+  queryRunFiles,
+  queryRunDetails,
+  queryAllProjects,
+} from "../lib/queries";
 import type { prisma } from "../lib/prisma";
 import type { ApiKey, Organization, User } from "@prisma/client";
 
@@ -617,38 +625,6 @@ router.openapi(listRunsRoute, async (c) => {
   }, 200);
 });
 
-// ============= Get Run by ID =============
-const getRunRoute = createRoute({
-  method: "get",
-  path: "/{runId}",
-  tags: ["Runs"],
-  summary: "Get run by ID",
-  description: "Decodes a SQID-encoded run ID and returns the numeric ID.",
-  request: {
-    params: z.object({
-      runId: z.string().openapi({ description: "SQID-encoded run ID" }),
-    }),
-  },
-  responses: {
-    200: {
-      description: "Run ID decoded successfully",
-      content: {
-        "application/json": {
-          schema: z.object({
-            runId: z.number().openapi({ description: "Numeric run ID" }),
-          }),
-        },
-      },
-    },
-  },
-});
-
-router.openapi(getRunRoute, async (c) => {
-  const { runId } = c.req.valid("param");
-  const decodedRunId = sqidDecode(runId);
-  return c.json({ runId: decodedRunId }, 200);
-});
-
 // ============= Model Graph Schemas =============
 const modelGraphNodeSchema = z.object({
   type: z.string(),
@@ -765,6 +741,783 @@ router.openapi(createModelGraphRoute, async (c) => {
   ]);
 
   return c.json({ success: true }, 200);
+});
+
+// ============= MCP API Endpoints =============
+
+// ============= Validate API Key =============
+const validateApiKeyRoute = createRoute({
+  method: "get",
+  path: "/auth/validate",
+  tags: ["Auth"],
+  summary: "Validate API key",
+  description: "Validates the API key and returns organization information. Used by MCP clients to verify credentials.",
+  security: [{ bearerAuth: [] }],
+  responses: {
+    200: {
+      description: "API key is valid",
+      content: {
+        "application/json": {
+          schema: z.object({
+            valid: z.boolean(),
+            organization: z.object({
+              id: z.string(),
+              slug: z.string(),
+            }),
+            user: z.object({
+              id: z.string(),
+            }),
+          }).openapi("ValidateApiKeyResponse"),
+        },
+      },
+    },
+    401: {
+      description: "Invalid API key",
+      content: { "application/json": { schema: ErrorSchema } },
+    },
+  },
+});
+
+router.use(validateApiKeyRoute.path, withApiKey);
+router.openapi(validateApiKeyRoute, async (c) => {
+  const apiKey = c.get("apiKey");
+  return c.json({
+    valid: true,
+    organization: {
+      id: apiKey.organization.id,
+      slug: apiKey.organization.slug,
+    },
+    user: {
+      id: apiKey.user.id,
+    },
+  }, 200);
+});
+
+// ============= Get Run Details =============
+const getRunDetailsRoute = createRoute({
+  method: "get",
+  path: "/details/{runId}",
+  tags: ["Runs"],
+  summary: "Get full run details",
+  description: "Returns complete run information including config, metadata, tags, status, and available log names.",
+  security: [{ bearerAuth: [] }],
+  request: {
+    params: z.object({
+      runId: z.coerce.number().openapi({ description: "Numeric run ID" }),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Run details",
+      content: {
+        "application/json": {
+          schema: z.object({
+            id: z.number(),
+            name: z.string(),
+            status: z.string(),
+            tags: z.array(z.string()),
+            config: z.any().nullable(),
+            systemMetadata: z.any().nullable(),
+            loggerSettings: z.any().nullable(),
+            statusMetadata: z.any().nullable(),
+            createdAt: z.string(),
+            updatedAt: z.string(),
+            statusUpdated: z.string().nullable(),
+            projectName: z.string(),
+            externalId: z.string().nullable(),
+            logNames: z.array(z.object({
+              logName: z.string(),
+              logType: z.string(),
+              logGroup: z.string().nullable(),
+            })),
+          }).openapi("RunDetailsResponse"),
+        },
+      },
+    },
+    404: {
+      description: "Run not found",
+      content: { "application/json": { schema: ErrorSchema } },
+    },
+  },
+});
+
+router.use("/details/:runId", withApiKey);
+router.openapi(getRunDetailsRoute, async (c) => {
+  const apiKey = c.get("apiKey");
+  const { runId } = c.req.valid("param");
+  const prisma = c.get("prisma");
+
+  const run = await queryRunDetails(prisma, {
+    organizationId: apiKey.organization.id,
+    runId,
+  });
+
+  if (!run) {
+    return c.json({ error: "Run not found" }, 404);
+  }
+
+  return c.json({
+    id: run.id,
+    name: run.name,
+    status: run.status,
+    tags: run.tags,
+    config: run.config,
+    systemMetadata: run.systemMetadata,
+    loggerSettings: run.loggerSettings,
+    statusMetadata: run.statusMetadata,
+    createdAt: run.createdAt.toISOString(),
+    updatedAt: run.updatedAt.toISOString(),
+    statusUpdated: run.statusUpdated?.toISOString() ?? null,
+    projectName: run.projectName,
+    externalId: run.externalId,
+    logNames: run.logNames,
+  }, 200);
+});
+
+// ============= Query Logs =============
+const queryLogsRoute = createRoute({
+  method: "get",
+  path: "/logs",
+  tags: ["Runs"],
+  summary: "Query console logs from a run",
+  description: "Returns console logs (stdout/stderr) from ClickHouse. Supports filtering by log type and pagination.",
+  security: [{ bearerAuth: [] }],
+  request: {
+    query: z.object({
+      runId: z.coerce.number().openapi({ description: "Numeric run ID" }),
+      projectName: z.string().openapi({ description: "Project name" }),
+      logType: z.enum(["INFO", "ERROR", "WARNING", "DEBUG", "PRINT"]).optional().openapi({ description: "Filter by log type" }),
+      limit: z.coerce.number().min(1).max(10000).default(1000).openapi({ description: "Maximum lines to return" }),
+      offset: z.coerce.number().min(0).default(0).openapi({ description: "Number of lines to skip" }),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Console logs",
+      content: {
+        "application/json": {
+          schema: z.object({
+            logs: z.array(z.object({
+              time: z.string(),
+              logType: z.string(),
+              lineNumber: z.number(),
+              message: z.string(),
+              step: z.number().nullable(),
+            })),
+            total: z.number(),
+          }).openapi("QueryLogsResponse"),
+        },
+      },
+    },
+  },
+});
+
+router.use(queryLogsRoute.path, withApiKey);
+router.openapi(queryLogsRoute, async (c) => {
+  const apiKey = c.get("apiKey");
+  const { runId, projectName, logType, limit, offset } = c.req.valid("query");
+
+  const result = await queryRunLogs(clickhouse, {
+    organizationId: apiKey.organization.id,
+    projectName,
+    runId,
+    logType,
+    limit,
+    offset,
+  });
+
+  return c.json({
+    logs: result.logs,
+    total: result.total,
+  }, 200);
+});
+
+// ============= Query Metrics =============
+const queryMetricsRoute = createRoute({
+  method: "get",
+  path: "/metrics",
+  tags: ["Runs"],
+  summary: "Query metrics from a run",
+  description: "Returns time-series metrics from ClickHouse. Supports filtering by metric name and group. Uses reservoir sampling to limit data points.",
+  security: [{ bearerAuth: [] }],
+  request: {
+    query: z.object({
+      runId: z.coerce.number().openapi({ description: "Numeric run ID" }),
+      projectName: z.string().openapi({ description: "Project name" }),
+      logName: z.string().optional().openapi({ description: "Filter by metric name (e.g., train/loss)" }),
+      logGroup: z.string().optional().openapi({ description: "Filter by metric group (e.g., train)" }),
+      limit: z.coerce.number().min(1).max(10000).default(2000).openapi({ description: "Maximum data points to return" }),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Metrics data",
+      content: {
+        "application/json": {
+          schema: z.object({
+            metrics: z.array(z.object({
+              logName: z.string(),
+              logGroup: z.string(),
+              time: z.string(),
+              step: z.number(),
+              value: z.number(),
+            })),
+          }).openapi("QueryMetricsResponse"),
+        },
+      },
+    },
+  },
+});
+
+router.use(queryMetricsRoute.path, withApiKey);
+router.openapi(queryMetricsRoute, async (c) => {
+  const apiKey = c.get("apiKey");
+  const { runId, projectName, logName, logGroup, limit } = c.req.valid("query");
+
+  const metrics = await queryRunMetrics(clickhouse, {
+    organizationId: apiKey.organization.id,
+    projectName,
+    runId,
+    logName,
+    logGroup,
+    limit,
+  });
+
+  return c.json({ metrics }, 200);
+});
+
+// ============= Get Files =============
+const getFilesRoute = createRoute({
+  method: "get",
+  path: "/files",
+  tags: ["Runs"],
+  summary: "Get files and artifacts from a run",
+  description: "Returns file metadata with presigned URLs for downloading. URLs are valid for 5 days.",
+  security: [{ bearerAuth: [] }],
+  request: {
+    query: z.object({
+      runId: z.coerce.number().openapi({ description: "Numeric run ID" }),
+      projectName: z.string().openapi({ description: "Project name" }),
+      logName: z.string().optional().openapi({ description: "Filter by log name" }),
+      logGroup: z.string().optional().openapi({ description: "Filter by log group" }),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Files with presigned URLs",
+      content: {
+        "application/json": {
+          schema: z.object({
+            files: z.array(z.object({
+              fileName: z.string(),
+              fileType: z.string(),
+              fileSize: z.number(),
+              logName: z.string(),
+              logGroup: z.string(),
+              time: z.string(),
+              step: z.number(),
+              url: z.string(),
+            })),
+          }).openapi("GetFilesResponse"),
+        },
+      },
+    },
+  },
+});
+
+router.use(getFilesRoute.path, withApiKey);
+router.openapi(getFilesRoute, async (c) => {
+  const apiKey = c.get("apiKey");
+  const { runId, projectName, logName, logGroup } = c.req.valid("query");
+
+  const files = await queryRunFiles(clickhouse, {
+    organizationId: apiKey.organization.id,
+    projectName,
+    runId,
+    logName,
+    logGroup,
+  });
+
+  return c.json({ files }, 200);
+});
+
+// ============= List Projects =============
+const listProjectsRoute = createRoute({
+  method: "get",
+  path: "/projects",
+  tags: ["Projects"],
+  summary: "List all projects",
+  description: "Returns all projects in the organization associated with the API key.",
+  security: [{ bearerAuth: [] }],
+  responses: {
+    200: {
+      description: "List of projects",
+      content: {
+        "application/json": {
+          schema: z.object({
+            projects: z.array(z.object({
+              id: z.number(),
+              name: z.string(),
+              createdAt: z.string(),
+              updatedAt: z.string(),
+              runCount: z.number(),
+            })),
+          }).openapi("ListProjectsResponse"),
+        },
+      },
+    },
+  },
+});
+
+router.use(listProjectsRoute.path, withApiKey);
+router.openapi(listProjectsRoute, async (c) => {
+  const apiKey = c.get("apiKey");
+  const prisma = c.get("prisma");
+
+  const projects = await queryAllProjects(prisma, apiKey.organization.id);
+
+  return c.json({
+    projects: projects.map((p) => ({
+      id: p.id,
+      name: p.name,
+      createdAt: p.createdAt.toISOString(),
+      updatedAt: p.updatedAt.toISOString(),
+      runCount: p.runCount,
+    })),
+  }, 200);
+});
+
+// ============= Get Run Statistics =============
+const getStatisticsRoute = createRoute({
+  method: "get",
+  path: "/statistics",
+  tags: ["Runs"],
+  summary: "Get statistics for a run's metrics",
+  description: "Computes statistics (min, max, mean, stddev) and detects anomalies for metrics in a run. Useful for quick analysis without downloading all data points.",
+  security: [{ bearerAuth: [] }],
+  request: {
+    query: z.object({
+      runId: z.coerce.number().openapi({ description: "Numeric run ID" }),
+      projectName: z.string().openapi({ description: "Project name" }),
+      logName: z.string().optional().openapi({ description: "Filter by specific metric name (e.g., train/loss)" }),
+      logGroup: z.string().optional().openapi({ description: "Filter by metric group (e.g., train)" }),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Statistics for metrics",
+      content: {
+        "application/json": {
+          schema: z.object({
+            runId: z.number(),
+            runName: z.string(),
+            projectName: z.string(),
+            url: z.string().openapi({ description: "URL to view this run in the UI" }),
+            metrics: z.array(z.object({
+              logName: z.string(),
+              logGroup: z.string(),
+              count: z.number(),
+              min: z.number(),
+              max: z.number(),
+              mean: z.number(),
+              stddev: z.number(),
+              first: z.object({ step: z.number(), value: z.number() }),
+              last: z.object({ step: z.number(), value: z.number() }),
+              anomalies: z.array(z.object({
+                step: z.number(),
+                value: z.number(),
+                type: z.enum(["spike", "drop", "plateau"]),
+                description: z.string(),
+              })),
+            })),
+          }).openapi("GetStatisticsResponse"),
+        },
+      },
+    },
+    404: {
+      description: "Run not found",
+      content: { "application/json": { schema: ErrorSchema } },
+    },
+  },
+});
+
+router.use(getStatisticsRoute.path, withApiKey);
+router.openapi(getStatisticsRoute, async (c) => {
+  const apiKey = c.get("apiKey");
+  const prisma = c.get("prisma");
+  const { runId, projectName, logName, logGroup } = c.req.valid("query");
+
+  // Get run info
+  const run = await prisma.runs.findFirst({
+    where: {
+      id: runId,
+      organizationId: apiKey.organization.id,
+      project: { name: projectName },
+    },
+    select: { id: true, name: true },
+  });
+
+  if (!run) {
+    return c.json({ error: "Run not found" }, 404);
+  }
+
+  // Query for statistics using ClickHouse aggregation with parameterized queries
+  const queryParams: Record<string, unknown> = {
+    tenantId: apiKey.organization.id,
+    projectName,
+    runId,
+  };
+
+  let whereClause = `
+    tenantId = {tenantId: String}
+    AND projectName = {projectName: String}
+    AND runId = {runId: UInt64}
+  `;
+
+  if (logName) {
+    whereClause += ` AND logName = {logName: String}`;
+    queryParams.logName = logName;
+  }
+  if (logGroup) {
+    whereClause += ` AND logGroup = {logGroup: String}`;
+    queryParams.logGroup = logGroup;
+  }
+
+  const statsQuery = `
+    SELECT
+      logName,
+      logGroup,
+      count() as count,
+      min(value) as min_val,
+      max(value) as max_val,
+      avg(value) as mean_val,
+      stddevPop(value) as stddev_val,
+      argMin(value, step) as first_value,
+      argMin(step, step) as first_step,
+      argMax(value, step) as last_value,
+      argMax(step, step) as last_step
+    FROM mlop_metrics
+    WHERE ${whereClause}
+    GROUP BY logName, logGroup
+    ORDER BY logName
+    LIMIT 100
+  `;
+
+  const statsResult = await clickhouse.query(statsQuery, queryParams);
+  const statsData = (await statsResult.json()) as Array<{
+    logName: string;
+    logGroup: string;
+    count: string;
+    min_val: number;
+    max_val: number;
+    mean_val: number;
+    stddev_val: number;
+    first_value: number;
+    first_step: string;
+    last_value: number;
+    last_step: string;
+  }>;
+
+  // Detect anomalies for each metric
+  const metricsWithAnomalies = await Promise.all(
+    statsData.map(async (stat) => {
+      const anomalies: Array<{ step: number; value: number; type: "spike" | "drop" | "plateau"; description: string }> = [];
+
+      // Query for potential anomalies (values > 2 stddev from mean)
+      if (Number(stat.count) > 10 && stat.stddev_val > 0) {
+        const threshold = stat.mean_val + 2 * stat.stddev_val;
+        const lowerThreshold = stat.mean_val - 2 * stat.stddev_val;
+
+        const anomalyQuery = `
+          SELECT step, value
+          FROM mlop_metrics
+          WHERE tenantId = {tenantId: String}
+            AND projectName = {projectName: String}
+            AND runId = {runId: UInt64}
+            AND logName = {logName: String}
+            AND (value > {threshold: Float64} OR value < {lowerThreshold: Float64})
+          ORDER BY step
+          LIMIT 10
+        `;
+
+        const anomalyResult = await clickhouse.query(anomalyQuery, {
+          tenantId: apiKey.organization.id,
+          projectName,
+          runId,
+          logName: stat.logName,
+          threshold,
+          lowerThreshold,
+        });
+        const anomalyData = (await anomalyResult.json()) as Array<{ step: string; value: number }>;
+
+        for (const a of anomalyData) {
+          const isSpike = a.value > threshold;
+          anomalies.push({
+            step: Number(a.step),
+            value: a.value,
+            type: isSpike ? "spike" : "drop",
+            description: isSpike
+              ? `Value ${a.value.toFixed(4)} is ${((a.value - stat.mean_val) / stat.stddev_val).toFixed(1)} stddev above mean`
+              : `Value ${a.value.toFixed(4)} is ${((stat.mean_val - a.value) / stat.stddev_val).toFixed(1)} stddev below mean`,
+          });
+        }
+      }
+
+      return {
+        logName: stat.logName,
+        logGroup: stat.logGroup,
+        count: Number(stat.count),
+        min: stat.min_val,
+        max: stat.max_val,
+        mean: stat.mean_val,
+        stddev: stat.stddev_val,
+        first: { step: Number(stat.first_step), value: stat.first_value },
+        last: { step: Number(stat.last_step), value: stat.last_value },
+        anomalies,
+      };
+    })
+  );
+
+  const runUrl = `${env.BETTER_AUTH_URL}/o/${apiKey.organization.slug}/projects/${encodeURIComponent(projectName)}/${sqidEncode(runId)}`;
+
+  return c.json({
+    runId,
+    runName: run.name,
+    projectName,
+    url: runUrl,
+    metrics: metricsWithAnomalies,
+  }, 200);
+});
+
+// ============= Compare Runs =============
+const compareRunsRoute = createRoute({
+  method: "get",
+  path: "/compare",
+  tags: ["Runs"],
+  summary: "Compare metrics across multiple runs",
+  description: "Compares statistics for a specific metric across multiple runs. Returns min/max/mean/final values and identifies the best performing run.",
+  security: [{ bearerAuth: [] }],
+  request: {
+    query: z.object({
+      runIds: z.string().openapi({ description: "Comma-separated list of run IDs to compare (e.g., '1,2,5')" }),
+      projectName: z.string().openapi({ description: "Project name" }),
+      logName: z.string().openapi({ description: "Metric name to compare (e.g., 'train/loss')" }),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Comparison results",
+      content: {
+        "application/json": {
+          schema: z.object({
+            projectName: z.string(),
+            logName: z.string(),
+            comparisonUrl: z.string().openapi({ description: "URL to compare these runs in the UI" }),
+            runs: z.array(z.object({
+              runId: z.number(),
+              runName: z.string(),
+              url: z.string().openapi({ description: "URL to view this run" }),
+              status: z.string(),
+              config: z.any().nullable(),
+              stats: z.object({
+                count: z.number(),
+                min: z.number(),
+                max: z.number(),
+                mean: z.number(),
+                final: z.number().openapi({ description: "Final value (at last step)" }),
+                improvement: z.number().openapi({ description: "Percent change from first to last value" }),
+              }).nullable(),
+            })),
+            summary: z.object({
+              bestRun: z.object({
+                runId: z.number(),
+                runName: z.string(),
+                reason: z.string(),
+              }).nullable(),
+              recommendation: z.string(),
+            }),
+          }).openapi("CompareRunsResponse"),
+        },
+      },
+    },
+    400: {
+      description: "Invalid request",
+      content: { "application/json": { schema: ErrorSchema } },
+    },
+  },
+});
+
+router.use(compareRunsRoute.path, withApiKey);
+router.openapi(compareRunsRoute, async (c) => {
+  const apiKey = c.get("apiKey");
+  const prisma = c.get("prisma");
+  const { runIds: runIdsStr, projectName, logName } = c.req.valid("query");
+
+  const MAX_COMPARE_RUNS = 20;
+  const runIds = runIdsStr.split(",").map((id) => Number(id.trim())).filter((id) => !isNaN(id));
+
+  if (runIds.length === 0) {
+    return c.json({ error: "No valid run IDs provided" }, 400);
+  }
+
+  if (runIds.length > MAX_COMPARE_RUNS) {
+    return c.json({ error: `Too many runs to compare. Maximum is ${MAX_COMPARE_RUNS}, got ${runIds.length}` }, 400);
+  }
+
+  // Get run info
+  const runs = await prisma.runs.findMany({
+    where: {
+      id: { in: runIds },
+      organizationId: apiKey.organization.id,
+      project: { name: projectName },
+    },
+    select: { id: true, name: true, status: true, config: true },
+  });
+
+  // Query stats for each run using parameterized queries
+  const runStats = await Promise.all(
+    runs.map(async (run) => {
+      const statsQuery = `
+        SELECT
+          count() as count,
+          min(value) as min_val,
+          max(value) as max_val,
+          avg(value) as mean_val,
+          argMin(value, step) as first_value,
+          argMax(value, step) as last_value
+        FROM mlop_metrics
+        WHERE tenantId = {tenantId: String}
+          AND projectName = {projectName: String}
+          AND runId = {runId: UInt64}
+          AND logName = {logName: String}
+      `;
+
+      const result = await clickhouse.query(statsQuery, {
+        tenantId: apiKey.organization.id,
+        projectName,
+        runId: run.id,
+        logName,
+      });
+      const data = (await result.json()) as Array<{
+        count: string;
+        min_val: number;
+        max_val: number;
+        mean_val: number;
+        first_value: number;
+        last_value: number;
+      }>;
+
+      const stat = data[0];
+      const count = Number(stat?.count || 0);
+
+      return {
+        runId: Number(run.id),
+        runName: run.name,
+        url: `${env.BETTER_AUTH_URL}/o/${apiKey.organization.slug}/projects/${encodeURIComponent(projectName)}/${sqidEncode(Number(run.id))}`,
+        status: run.status,
+        config: run.config,
+        stats: count > 0
+          ? {
+              count,
+              min: stat.min_val,
+              max: stat.max_val,
+              mean: stat.mean_val,
+              final: stat.last_value,
+              improvement: stat.first_value !== 0
+                ? ((stat.first_value - stat.last_value) / stat.first_value) * 100
+                : 0,
+            }
+          : null,
+      };
+    })
+  );
+
+  // Determine best run (for loss-like metrics, lower is better)
+  const isLossMetric = logName.toLowerCase().includes("loss") || logName.toLowerCase().includes("error");
+  const validRuns = runStats.filter((r) => r.stats !== null);
+
+  let bestRun: { runId: number; runName: string; reason: string } | null = null;
+  if (validRuns.length > 0) {
+    if (isLossMetric) {
+      const best = validRuns.reduce((a, b) =>
+        (a.stats?.final ?? Infinity) < (b.stats?.final ?? Infinity) ? a : b
+      );
+      bestRun = {
+        runId: best.runId,
+        runName: best.runName,
+        reason: `Lowest final ${logName}: ${best.stats?.final.toFixed(4)}`,
+      };
+    } else {
+      const best = validRuns.reduce((a, b) =>
+        (a.stats?.final ?? -Infinity) > (b.stats?.final ?? -Infinity) ? a : b
+      );
+      bestRun = {
+        runId: best.runId,
+        runName: best.runName,
+        reason: `Highest final ${logName}: ${best.stats?.final.toFixed(4)}`,
+      };
+    }
+  }
+
+  // Generate recommendation
+  let recommendation = "";
+  if (bestRun && validRuns.length > 1) {
+    const bestRunData = validRuns.find((r) => r.runId === bestRun!.runId);
+    if (bestRunData?.stats?.improvement) {
+      recommendation = `${bestRun.runName} achieved ${Math.abs(bestRunData.stats.improvement).toFixed(1)}% ${
+        bestRunData.stats.improvement > 0 ? "improvement" : "degradation"
+      } in ${logName} during training.`;
+    }
+  } else if (validRuns.length === 0) {
+    recommendation = `No data found for metric '${logName}' in the specified runs.`;
+  }
+
+  const comparisonUrl = `${env.BETTER_AUTH_URL}/o/${apiKey.organization.slug}/projects/${projectName}`;
+
+  return c.json({
+    projectName,
+    logName,
+    comparisonUrl,
+    runs: runStats,
+    summary: {
+      bestRun,
+      recommendation,
+    },
+  }, 200);
+});
+
+// ============= Get Run by ID (SQID Decode) =============
+// NOTE: This catch-all route MUST be registered last to avoid intercepting
+// other routes like /metrics, /projects, /logs, etc.
+const getRunRoute = createRoute({
+  method: "get",
+  path: "/{runId}",
+  tags: ["Runs"],
+  summary: "Get run by ID",
+  description: "Decodes a SQID-encoded run ID and returns the numeric ID.",
+  request: {
+    params: z.object({
+      runId: z.string().openapi({ description: "SQID-encoded run ID" }),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Run ID decoded successfully",
+      content: {
+        "application/json": {
+          schema: z.object({
+            runId: z.number().openapi({ description: "Numeric run ID" }),
+          }),
+        },
+      },
+    },
+  },
+});
+
+router.openapi(getRunRoute, async (c) => {
+  const { runId } = c.req.valid("param");
+  const decodedRunId = sqidDecode(runId);
+  return c.json({ runId: decodedRunId }, 200);
 });
 
 export default router;
