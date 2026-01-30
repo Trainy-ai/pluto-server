@@ -985,6 +985,19 @@ def main():
     else:
         print("\nSkipping file logging (set TEST_FILE_LOGGING=true to enable)")
 
+    # Log a simple table for table viewer testing
+    print("\nLogging a table...")
+    table = pluto.Table(
+        data=[
+            ["Model A", 0.95, 0.92],
+            ["Model B", 0.87, 0.89],
+            ["Model C", 0.91, 0.93],
+        ],
+        columns=["Model", "Precision", "Recall"]
+    )
+    run.log({"metrics/comparison": table})
+    print("  Logged comparison table with 3 models")
+
     print("\nFinishing run...")
     run.finish()
 
