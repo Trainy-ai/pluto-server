@@ -56,8 +56,12 @@ const LineChartWrapper = forwardRef<unknown, LineChartWrapperProps>(
     // uPlot uses position:absolute so needs a positioned parent with explicit dimensions
     // flex: 1 ensures it fills flex containers (like in dashboard widgets)
     if (chartEngine === "uplot") {
+      // Use title as key to force remount when switching between different charts
+      // This ensures each chart gets a clean uPlot instance with correct data
+      const chartKey = props.title || "uplot-chart";
       return (
         <div
+          key={chartKey}
           className={className}
           style={{
             position: "relative",

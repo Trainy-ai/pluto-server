@@ -12,20 +12,7 @@ import ReactECharts from "echarts-for-react";
 import type { EChartsOption, ScatterSeriesOption, LineSeriesOption } from "echarts";
 import { useTheme } from "@/lib/hooks/use-theme";
 import { cn } from "@/lib/utils";
-
-// Extend window interface for chart highlighting functions
-declare global {
-  interface Window {
-    __chartInstances?: Map<string, React.RefObject<ReactECharts | null>>;
-    __chartHighlight?: (chartId: string, seriesIndex: number) => void;
-    __chartDownplay?: (chartId: string) => void;
-  }
-}
-
-// Flag to prevent infinite loop when dispatching highlight/downplay across charts
-// When we dispatch highlight to other charts, it can trigger mouseover events
-// which would then dispatch highlight again, causing infinite recursion
-let isDispatchingHighlight = false;
+import { useChartSyncContext } from "./context/chart-sync-context";
 
 export interface LineData {
   x: number[];
@@ -915,38 +902,39 @@ function generateChartOptions(
     trigger: "axis" as const,
     enterable: true, // Allow hovering over tooltip for scrolling
     confine: false, // Allow tooltip to overflow chart boundaries
+    appendToBody: true, // Move tooltip to body so it can overflow chart container
     showDelay: 0,
     hideDelay: 100, // Shorter delay to feel more responsive
     transitionDuration: 0.05,
-    position: (point: number[], _params: any, _dom: any, _rect: any, size: { viewSize: number[]; contentSize: number[] }) => {
+    position: (point: number[], _params: any, dom: any, _rect: any, size: { viewSize: number[]; contentSize: number[] }) => {
       // Follow cursor with offset to the top-right
+      // Use viewport coordinates to allow tooltip to overflow chart
       const tooltipWidth = Math.max(size.contentSize[0], 200);
       const tooltipHeight = size.contentSize[1];
 
       const offsetX = 15; // Offset to the right of cursor
       const offsetY = 10; // Offset above cursor
 
-      const chartWidth = size.viewSize[0];
-      const chartHeight = size.viewSize[1];
+      // Get chart position in viewport for edge detection
+      const chartRect = dom?.parentElement?.getBoundingClientRect();
+      const viewportX = (chartRect?.left ?? 0) + point[0];
+      const viewportY = (chartRect?.top ?? 0) + point[1];
 
       // Default position: to the right and above cursor
       let x = point[0] + offsetX;
       let y = point[1] - tooltipHeight - offsetY;
 
-      // If tooltip would go off right edge, position to the left of cursor
-      if (x + tooltipWidth > chartWidth) {
+      // If tooltip would go off right edge of VIEWPORT, position to the left
+      if (viewportX + offsetX + tooltipWidth > window.innerWidth - 10) {
         x = point[0] - tooltipWidth - offsetX;
       }
 
-      // If tooltip would go off top edge, position below cursor
-      if (y < 0) {
+      // If tooltip would go off top of VIEWPORT, position below cursor
+      if (viewportY - tooltipHeight - offsetY < 10) {
         y = point[1] + offsetY;
       }
 
-      // Clamp to chart bounds
-      x = Math.max(0, Math.min(x, chartWidth - tooltipWidth));
-      y = Math.max(0, Math.min(y, chartHeight - tooltipHeight));
-
+      // No clamping - let tooltip overflow chart boundaries
       return [x, y];
     },
     axisPointer: {
@@ -989,7 +977,8 @@ function generateChartOptions(
           },
         }
       : undefined,
-    tooltip: tooltipConfig,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    tooltip: tooltipConfig as any, // appendToBody is valid ECharts option but not in types
     legend: legendConfig,
     grid: {
       left: "5%",
@@ -1078,54 +1067,19 @@ const LineChartInner = forwardRef<ReactECharts, LineChartProps>(
     // useId() guarantees uniqueness across the React tree, unlike Math.random()
     const chartId = useId();
 
-    // Expose highlight/downplay functions on window for tooltip hover interaction
+    // Get chart sync context for cross-chart coordination
+    const chartSyncContext = useChartSyncContext();
+
+    // Register with context for cross-chart highlighting
     useEffect(() => {
-      // Create global registry if it doesn't exist
-      if (!window.__chartInstances) {
-        window.__chartInstances = new Map();
-      }
+      if (!chartSyncContext || !chartRef.current) return;
 
-      // Register this chart instance
-      window.__chartInstances.set(chartId, chartRef);
-
-      // Create global highlight function if it doesn't exist
-      if (!window.__chartHighlight) {
-        window.__chartHighlight = (targetChartId: string, seriesIndex: number) => {
-          try {
-            const ref = window.__chartInstances?.get(targetChartId);
-            const chart = ref?.current?.getEchartsInstance();
-            if (chart && !chart.isDisposed?.()) {
-              chart.dispatchAction({
-                type: "highlight",
-                seriesIndex,
-              });
-            }
-          } catch (e) {
-            // Silently ignore errors during highlight (chart may be unmounting)
-          }
-        };
-      }
-
-      if (!window.__chartDownplay) {
-        window.__chartDownplay = (targetChartId: string) => {
-          try {
-            const ref = window.__chartInstances?.get(targetChartId);
-            const chart = ref?.current?.getEchartsInstance();
-            if (chart && !chart.isDisposed?.()) {
-              chart.dispatchAction({
-                type: "downplay",
-              });
-            }
-          } catch (e) {
-            // Silently ignore errors during downplay (chart may be unmounting)
-          }
-        };
-      }
+      chartSyncContext.registerEChart(chartId, chartRef.current);
 
       return () => {
-        window.__chartInstances?.delete(chartId);
+        chartSyncContext.unregisterEChart(chartId);
       };
-    }, [chartId]);
+    }, [chartId, chartSyncContext]);
 
     // Process the data for log scales
     const processedLines = useMemo(
@@ -1438,59 +1392,16 @@ const LineChartInner = forwardRef<ReactECharts, LineChartProps>(
 
           // Cross-chart emphasis: propagate highlight/downplay to all connected charts
           const mouseoverHandler = (params: any) => {
-            // Prevent infinite loop: don't re-dispatch if this event was triggered by a dispatch
-            if (isDispatchingHighlight) return;
-
-            if (params.componentType === "series" && params.seriesName) {
-              isDispatchingHighlight = true;
-              try {
-                // Find all charts and highlight the same series by name
-                window.__chartInstances?.forEach((ref, id) => {
-                  if (id === chartId) return; // Skip self
-                  try {
-                    const otherChart = ref?.current?.getEchartsInstance();
-                    if (otherChart && !otherChart.isDisposed?.()) {
-                      otherChart.dispatchAction({
-                        type: "highlight",
-                        seriesName: params.seriesName,
-                      });
-                    }
-                  } catch {
-                    // Ignore errors
-                  }
-                });
-              } finally {
-                isDispatchingHighlight = false;
-              }
+            if (params.componentType === "series" && params.seriesName && chartSyncContext) {
+              chartSyncContext.highlightSeries(chartId, params.seriesName);
             }
           };
           mouseoverHandlerRef.current = mouseoverHandler;
           echartsInstance.on("mouseover", mouseoverHandler);
 
           const mouseoutHandler = (params: any) => {
-            // Prevent infinite loop: don't re-dispatch if this event was triggered by a dispatch
-            if (isDispatchingHighlight) return;
-
-            if (params.componentType === "series") {
-              isDispatchingHighlight = true;
-              try {
-                // Downplay all series on all other charts
-                window.__chartInstances?.forEach((ref, id) => {
-                  if (id === chartId) return; // Skip self
-                  try {
-                    const otherChart = ref?.current?.getEchartsInstance();
-                    if (otherChart && !otherChart.isDisposed?.()) {
-                      otherChart.dispatchAction({
-                        type: "downplay",
-                      });
-                    }
-                  } catch {
-                    // Ignore errors
-                  }
-                });
-              } finally {
-                isDispatchingHighlight = false;
-              }
+            if (params.componentType === "series" && chartSyncContext) {
+              chartSyncContext.highlightSeries(chartId, null);
             }
           };
           mouseoutHandlerRef.current = mouseoutHandler;
@@ -1504,7 +1415,7 @@ const LineChartInner = forwardRef<ReactECharts, LineChartProps>(
         if (typeof ref === "function") ref(chart);
         else if (ref) ref.current = chart;
       },
-      [ref, setChartRef],
+      [ref, setChartRef, chartId, chartSyncContext],
     );
 
     return (

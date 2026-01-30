@@ -11,6 +11,7 @@ import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import { useTheme } from "@/lib/hooks/use-theme";
 import { cn } from "@/lib/utils";
+import { useChartSyncContext } from "./context/chart-sync-context";
 
 // ============================
 // Types
@@ -47,72 +48,11 @@ export interface LineChartUPlotRef {
   resetZoom: () => void;
 }
 
-// ============================
-// Module-level Registry for Cross-Chart Highlighting
-// ============================
-
 /**
  * Default sync key for all uPlot charts on the same page.
  * This enables cursor synchronization across charts by default.
  */
 const DEFAULT_SYNC_KEY = "uplot-global-sync";
-
-/**
- * Module-level registry for uPlot instances.
- * Used for cursor sync coordination. Charts register/unregister on mount/unmount.
- * NOTE: Cross-chart highlighting is currently disabled to avoid rendering issues.
- */
-const chartRegistry = new Map<string, uPlot>();
-
-/**
- * Track the current mouse position at the document level.
- * This allows us to reliably determine which chart is being directly hovered
- * vs which charts are just receiving synced cursor events.
- */
-let globalMouseX = 0;
-let globalMouseY = 0;
-let globalMouseTrackerInitialized = false;
-
-function initGlobalMouseTracker() {
-  if (globalMouseTrackerInitialized) return;
-  globalMouseTrackerInitialized = true;
-
-  // Use capture phase so this fires BEFORE uPlot handles the event
-  // This ensures globalMouseX/Y are updated before setCursor is called
-  document.addEventListener("mousemove", (e) => {
-    globalMouseX = e.clientX;
-    globalMouseY = e.clientY;
-  }, { capture: true, passive: true });
-}
-
-/**
- * Check if the current global mouse position is within an element's bounds.
- */
-function isMouseOverElement(el: HTMLElement): boolean {
-  const rect = el.getBoundingClientRect();
-  return (
-    globalMouseX >= rect.left &&
-    globalMouseX <= rect.right &&
-    globalMouseY >= rect.top &&
-    globalMouseY <= rect.bottom
-  );
-}
-
-/**
- * Highlight or unhighlight a series across all registered charts.
- * @param sourceChartId - The ID of the chart triggering the highlight
- * @param seriesName - The series label to highlight, or null to reset all
- *
- * NOTE: Cross-chart highlighting is DISABLED due to causing rendering issues
- * where some charts lose their visible lines. The cursor position sync still
- * works via uPlot's built-in sync mechanism.
- */
-function highlightSeriesAcrossCharts(sourceChartId: string, seriesName: string | null): void {
-  // DISABLED: Cross-chart highlighting was causing charts to lose their lines
-  // during initialization when multiple charts are created simultaneously.
-  // Cursor position sync still works via uPlot's built-in sync.cursor mechanism.
-  return;
-}
 
 // ============================
 // Utility Functions
@@ -345,19 +285,18 @@ function tooltipPlugin(opts: {
   let overEl: HTMLElement | null = null;
   let isHovering = false; // Track if mouse is over the chart
   let lastIdx: number | null = null; // Store last valid cursor index
+  let lastLeft: number | null = null; // Store last valid cursor X position
+  let lastTop: number | null = null; // Store last valid cursor Y position
 
   function init(u: uPlot) {
-    // Initialize global mouse tracker on first chart
-    initGlobalMouseTracker();
-
     overEl = u.over;
     tooltipEl = document.createElement("div");
     tooltipEl.className = "uplot-tooltip";
     tooltipEl.style.cssText = `
-      position: absolute;
+      position: fixed;
       display: none;
       pointer-events: none;
-      z-index: 100;
+      z-index: 9999;
       font-family: ui-monospace, monospace;
       font-size: 10px;
       background: ${theme === "dark" ? "#161619" : "#fff"};
@@ -367,7 +306,8 @@ function tooltipPlugin(opts: {
       max-width: 300px;
       box-shadow: 0 2px 8px rgba(0,0,0,0.15);
     `;
-    u.over.appendChild(tooltipEl);
+    // Append to body so tooltip can overflow chart boundaries
+    document.body.appendChild(tooltipEl);
 
     // Track hover state to persist tooltip
     const handleMouseEnter = () => {
@@ -377,6 +317,8 @@ function tooltipPlugin(opts: {
     const handleMouseLeave = () => {
       isHovering = false;
       lastIdx = null;
+      lastLeft = null;
+      lastTop = null;
       if (tooltipEl) {
         tooltipEl.style.display = "none";
       }
@@ -453,35 +395,40 @@ function tooltipPlugin(opts: {
     tooltipEl.appendChild(content);
 
     // Position tooltip following the cursor with offset to top-right
-    const chartWidth = u.over.clientWidth;
-    const chartHeight = u.over.clientHeight;
+    // Use viewport coordinates so tooltip can overflow chart boundaries
     const tooltipWidth = tooltipEl.offsetWidth || 200;
     const tooltipHeight = tooltipEl.offsetHeight || 100;
 
     // Get cursor position from uPlot (relative to chart area)
-    const cursorLeft = u.cursor.left ?? 0;
-    const cursorTop = u.cursor.top ?? 0;
+    // Use last known position if current is null (for tooltip persistence when mouse stops)
+    const cursorLeft = u.cursor.left ?? lastLeft ?? 0;
+    const cursorTop = u.cursor.top ?? lastTop ?? 0;
+
+    // Convert chart-relative coords to viewport coords
+    const chartRect = u.over.getBoundingClientRect();
+    const viewportX = chartRect.left + cursorLeft;
+    const viewportY = chartRect.top + cursorTop;
 
     const offsetX = 15; // Offset to the right
     const offsetY = 10; // Offset above
 
-    // Default position: to the right and above cursor
-    let left = cursorLeft + offsetX;
-    let top = cursorTop - tooltipHeight - offsetY;
+    // Default position: to the right and above cursor (in viewport coords)
+    let left = viewportX + offsetX;
+    let top = viewportY - tooltipHeight - offsetY;
 
-    // If tooltip would go off right edge, position to the left of cursor
-    if (left + tooltipWidth > chartWidth) {
-      left = cursorLeft - tooltipWidth - offsetX;
+    // If tooltip would go off right edge of VIEWPORT, position to the left
+    if (left + tooltipWidth > window.innerWidth - 10) {
+      left = viewportX - tooltipWidth - offsetX;
     }
 
-    // If tooltip would go off top edge, position below cursor
-    if (top < 0) {
-      top = cursorTop + offsetY;
+    // If tooltip would go off top of VIEWPORT, position below cursor
+    if (top < 10) {
+      top = viewportY + offsetY;
     }
 
-    // Clamp to chart bounds
-    left = Math.max(0, Math.min(left, chartWidth - tooltipWidth));
-    top = Math.max(0, Math.min(top, chartHeight - tooltipHeight));
+    // Ensure tooltip stays within viewport (but NOT clamped to chart bounds)
+    left = Math.max(10, Math.min(left, window.innerWidth - tooltipWidth - 10));
+    top = Math.max(10, Math.min(top, window.innerHeight - tooltipHeight - 10));
 
     tooltipEl.style.left = `${left}px`;
     tooltipEl.style.top = `${top}px`;
@@ -499,11 +446,17 @@ function tooltipPlugin(opts: {
       return;
     }
 
-    const { idx } = u.cursor;
+    const { idx, left, top } = u.cursor;
 
-    // Store valid index for tooltip persistence
+    // Store valid cursor data for tooltip persistence when mouse stops moving
     if (idx != null) {
       lastIdx = idx;
+    }
+    if (left != null && left > 0) {
+      lastLeft = left;
+    }
+    if (top != null && top > 0) {
+      lastTop = top;
     }
 
     // Use the last valid index if current is null but we're still hovering
@@ -537,21 +490,6 @@ function tooltipPlugin(opts: {
 
 
 // ============================
-// Cross-Chart Highlighting
-// ============================
-
-/**
- * Register a chart for cross-chart highlighting and return cleanup function.
- */
-function setupCrossChartHighlighting(chartId: string, chart: uPlot): () => void {
-  chartRegistry.set(chartId, chart);
-
-  return () => {
-    chartRegistry.delete(chartId);
-  };
-}
-
-// ============================
 // Main Component
 // ============================
 
@@ -581,6 +519,12 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
     // Measure the chart container directly (not outer container) for accurate sizing
     const { width, height } = useContainerSize(chartContainerRef);
     const chartId = useId();
+
+    // Get chart sync context for cross-chart coordination
+    const chartSyncContext = useChartSyncContext();
+
+    // Use context's syncKey, then prop, then default (in that priority order)
+    const effectiveSyncKey = chartSyncContext?.syncKey ?? syncKey ?? DEFAULT_SYNC_KEY;
 
     // Process data for log scales
     const processedLines = useMemo(
@@ -752,10 +696,9 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
 
       // Scales configuration
       // Use a range function for y-axis to ensure our minimum visible range is applied
-      const yRangeFn: uPlot.Range.Function = (u, dataMin, dataMax) => {
-        // Use our pre-calculated yRange which already has minimum range logic applied
-        return yRange;
-      };
+      // Note: When auto is true, uPlot allows setScale() to override the range.
+      // When using a range function without auto, setScale() is ignored.
+      // We use auto: true to enable dynamic Y rescaling on zoom.
 
       // Use a range function for x-axis to center single points
       const xRangeFn: uPlot.Range.Function | undefined = xRange
@@ -770,9 +713,11 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             : xRangeFn
               ? { range: xRangeFn }
               : { auto: true },
+        // For Y-axis: use auto:true to enable dynamic rescaling via setScale()
+        // The pre-calculated yRange is only used for initial render
         y: logYAxis
           ? { distr: 3 }
-          : { range: yRangeFn },
+          : { auto: true },
       };
 
       // Axes configuration - compact sizes to fit within container
@@ -812,7 +757,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       // Cursor configuration
       const cursor: uPlot.Cursor = {
         sync: {
-          key: syncKey ?? DEFAULT_SYNC_KEY,
+          key: effectiveSyncKey,
           setSeries: false, // Disable uPlot's series visibility sync - we handle highlighting via alpha
         },
         focus: {
@@ -830,6 +775,17 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         show: showLegend,
       };
 
+      // Selection box - CSS styling is applied in global styles (index.css)
+      // BBox properties are initial values - uPlot updates them during drag
+      const select: uPlot.Select = {
+        show: true,
+        over: true, // Place selection in .u-over (above chart)
+        left: 0,
+        top: 0,
+        width: 0,
+        height: 0,
+      };
+
       return {
         // Initial size - will be updated via setSize() on resize
         width: 400,
@@ -839,6 +795,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         axes,
         cursor,
         legend,
+        select,
         plugins: [
           tooltipPlugin({
             theme: theme,
@@ -872,20 +829,54 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
               u.redraw();
             },
           ],
-          setSelect: [
-            (u) => {
-              const { left, width } = u.select;
-              if (width > 0) {
-                // Get the x-axis range from the selection and apply zoom
-                const xMin = u.posToVal(left, "x");
-                const xMax = u.posToVal(left + width, "x");
-                u.setScale("x", { min: xMin, max: xMax });
+          setScale: [
+            (u, scaleKey) => {
+              // Auto-scale Y axis when X scale changes (zoom)
+              if (scaleKey === "x" && !logYAxis) {
+                const xMin = u.scales.x.min;
+                const xMax = u.scales.x.max;
+                if (xMin == null || xMax == null) return;
 
-                // Reset the selection box
-                u.setSelect({ left: 0, top: 0, width: 0, height: 0 }, false);
+                // Find Y min/max for data points within visible X range
+                let visibleYMin = Infinity;
+                let visibleYMax = -Infinity;
+
+                const xData = u.data[0] as number[];
+                for (let si = 1; si < u.data.length; si++) {
+                  const yData = u.data[si] as (number | null)[];
+                  for (let i = 0; i < xData.length; i++) {
+                    const x = xData[i];
+                    const y = yData[i];
+                    if (x >= xMin && x <= xMax && y != null && Number.isFinite(y)) {
+                      visibleYMin = Math.min(visibleYMin, y);
+                      visibleYMax = Math.max(visibleYMax, y);
+                    }
+                  }
+                }
+
+                // Only update if we found valid data
+                if (visibleYMin !== Infinity && visibleYMax !== -Infinity) {
+                  const range = visibleYMax - visibleYMin;
+                  // Add 5% padding, with minimum padding for flat lines
+                  const padding = Math.max(range * 0.05, Math.abs(visibleYMax) * 0.02, 0.1);
+                  const newYMin = visibleYMin >= 0 ? Math.max(0, visibleYMin - padding) : visibleYMin - padding;
+                  const newYMax = visibleYMax + padding;
+
+                  // Only update if meaningfully different to avoid infinite loops
+                  const currentYMin = u.scales.y.min ?? 0;
+                  const currentYMax = u.scales.y.max ?? 1;
+                  const threshold = (currentYMax - currentYMin) * 0.01;
+
+                  if (Math.abs(newYMin - currentYMin) > threshold ||
+                      Math.abs(newYMax - currentYMax) > threshold) {
+                    u.setScale("y", { min: newYMin, max: newYMax });
+                  }
+                }
               }
             },
           ],
+          // Note: setSelect hook removed - zoom is handled by cursor.drag.setScale: true
+          // The setScale hook above handles Y-axis auto-scaling when X scale changes
         },
       };
       // Note: width/height excluded from deps - size changes handled by separate setSize() effect
@@ -900,7 +891,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       showXAxis,
       showYAxis,
       showLegend,
-      syncKey,
+      effectiveSyncKey,
       timeRange,
       chartId,
       yRange,
@@ -937,8 +928,20 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       chartRef.current = chart;
       chartCreatedRef.current = true;
 
-      // Setup cross-chart highlighting
-      const cleanupHighlight = setupCrossChartHighlighting(chartId, chart);
+      // Style the selection box for zoom visibility (uPlot's default is nearly invisible)
+      // Use requestAnimationFrame to ensure uPlot has created the DOM elements
+      const containerEl = chartContainerRef.current;
+      requestAnimationFrame(() => {
+        const selectEl = containerEl?.querySelector('.u-select') as HTMLElement | null;
+        if (selectEl) {
+          const isDark = theme === 'dark';
+          selectEl.style.background = isDark ? 'rgba(100, 150, 255, 0.2)' : 'rgba(100, 150, 255, 0.15)';
+          selectEl.style.border = isDark ? '1px solid rgba(100, 150, 255, 0.9)' : '1px solid rgba(100, 150, 255, 0.8)';
+        }
+      });
+
+      // Register with context for cross-chart coordination
+      chartSyncContext?.registerUPlot(chartId, chart);
 
       // Double-click to reset zoom
       const handleDblClick = () => {
@@ -949,7 +952,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
 
       // Store cleanup function
       cleanupRef.current = () => {
-        cleanupHighlight();
+        chartSyncContext?.unregisterUPlot(chartId);
         container?.removeEventListener("dblclick", handleDblClick);
       };
 
@@ -961,7 +964,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         }
         chartCreatedRef.current = false;
       };
-    }, [options, uplotData, chartId, width, height]);
+    }, [options, uplotData, chartId, width, height, chartSyncContext]);
 
     // Handle resize separately - uses setSize() instead of recreating chart
     useEffect(() => {
@@ -1017,7 +1020,8 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             flex: 1,
             minHeight: 0,
             minWidth: 0,
-            overflow: "hidden",
+            // overflow visible to allow selection box to render
+            overflow: "visible",
           }}
         />
       </div>
