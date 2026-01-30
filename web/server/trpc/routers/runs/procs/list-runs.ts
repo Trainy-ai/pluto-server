@@ -3,10 +3,6 @@ import { protectedOrgProcedure } from "../../../../lib/trpc";
 import { sqidEncode } from "../../../../lib/sqid";
 import { searchRunIds } from "../../../../lib/run-search";
 
-// Maximum number of logs to fetch per run to prevent OOM
-// If a run has more logs than this, they'll need to be fetched via runs.get
-const MAX_LOGS_PER_RUN = 1000;
-
 export const listRunsProcedure = protectedOrgProcedure
   .input(
     z.object({
@@ -53,7 +49,6 @@ export const listRunsProcedure = protectedOrgProcedure
       searchMatchIds = matchIds;
     }
 
-    // First, fetch runs WITHOUT logs to avoid loading unbounded data
     const runs = await ctx.prisma.runs.findMany({
       where: {
         project: {
@@ -79,37 +74,18 @@ export const listRunsProcedure = protectedOrgProcedure
         },
       },
       take: input.limit,
+      // skip: 1 when cursor is provided to avoid returning the cursor record itself
+      // (Prisma cursor pagination includes the cursor record by default)
+      skip: input.cursor ? 1 : 0,
       cursor: input.cursor ? { id: input.cursor } : undefined,
     });
-
-    // Then fetch logs separately with a limit per run to prevent OOM
-    // This is bounded: max 200 runs × 1000 logs = 200k records (vs unbounded millions)
-    const runIds = runs.map((r) => r.id);
-    const allLogs = runIds.length > 0
-      ? await ctx.prisma.runLogs.findMany({
-          where: { runId: { in: runIds } },
-          orderBy: { id: "asc" },
-        })
-      : [];
-
-    // Group logs by runId and limit per run
-    const logsByRunId = new Map<bigint, typeof allLogs>();
-    for (const log of allLogs) {
-      const existing = logsByRunId.get(log.runId) || [];
-      if (existing.length < MAX_LOGS_PER_RUN) {
-        existing.push(log);
-        logsByRunId.set(log.runId, existing);
-      }
-    }
 
     const nextCursor =
       runs.length === input.limit ? runs[runs.length - 1].id : null;
 
-    // Combine runs with their logs and encode the id
     const encodedRuns = runs.map((run) => ({
       ...run,
       id: sqidEncode(run.id),
-      logs: logsByRunId.get(run.id) || [],
     }));
 
     return {

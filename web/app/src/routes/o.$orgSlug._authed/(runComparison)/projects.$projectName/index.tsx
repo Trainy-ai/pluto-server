@@ -6,6 +6,7 @@ import { OrganizationPageTitle } from "@/components/layout/page-title";
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { useSelectedRuns } from "./~hooks/use-selected-runs";
 import { prefetchListRuns, useListRuns, type Run } from "./~queries/list-runs";
+import { useSelectedRunLogs } from "./~queries/selected-run-logs";
 import { useUpdateTags } from "./~queries/update-tags";
 import { useDistinctTags } from "./~queries/distinct-tags";
 import { groupMetrics } from "./~lib/metrics-utils";
@@ -187,12 +188,23 @@ function RouteComponent() {
     shuffleColors,
   } = useSelectedRuns(runs, organizationId, projectName);
 
+  // Fetch logs only for selected runs (lazy loading)
+  const selectedRunIds = useMemo(
+    () => Object.keys(selectedRunsWithColors),
+    [selectedRunsWithColors]
+  );
+  const { data: logsByRunId } = useSelectedRunLogs(
+    selectedRunIds,
+    projectName,
+    organizationId
+  );
+
   // Process metrics data from selected runs
   // Note: Removed useDeferredValue as it was preventing chart updates on deselection
   const groupedMetrics = useMemo(() => {
-    const metrics = groupMetrics(selectedRunsWithColors, organizationId, projectName);
+    const metrics = groupMetrics(selectedRunsWithColors, logsByRunId, organizationId, projectName);
     return metrics;
-  }, [selectedRunsWithColors, organizationId, projectName]);
+  }, [selectedRunsWithColors, logsByRunId, organizationId, projectName]);
 
   return (
     <RunComparisonLayout>
