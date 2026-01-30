@@ -17,9 +17,7 @@ import {
   ChevronLeft,
   ChevronRight,
 } from "lucide-react";
-import { CodeBlock as ReactCodeBlock } from "react-code-block";
-import { themes } from "prism-react-renderer";
-import { useTheme } from "@/lib/hooks/use-theme";
+import { useShikiHtml } from "@/lib/hooks/use-shiki";
 import type { RunLog } from "@/lib/grouping/types";
 import { useGetTextFiles } from "../../~queries/get-text-files";
 import {
@@ -232,7 +230,6 @@ interface FileContentViewerProps {
 }
 
 function FileContentViewer({ file, onDownload }: FileContentViewerProps) {
-  const { resolvedTheme } = useTheme();
   const [copied, setCopied] = useState(false);
   const isPlaintext = isPlaintextFile(file.fileType);
 
@@ -263,6 +260,7 @@ function FileContentViewer({ file, onDownload }: FileContentViewerProps) {
   }, [content]);
 
   const language = getLanguageForExtension(file.fileType);
+  const highlightedHtml = useShikiHtml(displayContent, language);
 
   const handleCopy = () => {
     if (displayContent) {
@@ -363,20 +361,16 @@ function FileContentViewer({ file, onDownload }: FileContentViewerProps) {
         </div>
       )}
       <div className="max-h-[300px] overflow-auto">
-        <ReactCodeBlock
-          code={displayContent}
-          language={language}
-          theme={resolvedTheme === "dark" ? themes.vsDark : themes.vsLight}
-        >
-          <ReactCodeBlock.Code className="!bg-transparent !p-3 text-xs">
-            <div className="table-row">
-              <ReactCodeBlock.LineNumber className="table-cell select-none pr-3 text-right font-mono text-xs text-muted-foreground" />
-              <ReactCodeBlock.LineContent className="table-cell">
-                <ReactCodeBlock.Token />
-              </ReactCodeBlock.LineContent>
-            </div>
-          </ReactCodeBlock.Code>
-        </ReactCodeBlock>
+        {highlightedHtml ? (
+          <div
+            className="shiki-wrapper line-numbers p-3 text-xs"
+            dangerouslySetInnerHTML={{ __html: highlightedHtml }}
+          />
+        ) : (
+          <pre className="p-3 text-xs">
+            <code>{displayContent}</code>
+          </pre>
+        )}
       </div>
     </div>
   );

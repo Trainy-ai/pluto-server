@@ -75,7 +75,7 @@ export function isPlaintextFile(fileType: string): boolean {
 }
 
 /**
- * Map file extensions to Prism language identifiers for syntax highlighting.
+ * Map file extensions to Shiki language identifiers for syntax highlighting.
  */
 export function getLanguageForExtension(ext: string): string {
   const languageMap: Record<string, string> = {
@@ -125,7 +125,7 @@ export function getLanguageForExtension(ext: string): string {
     // Markup
     md: "markdown",
     markdown: "markdown",
-    rst: "rest",
+    rst: "rst",
     // Ruby
     rb: "ruby",
     // PHP
@@ -143,7 +143,7 @@ export function getLanguageForExtension(ext: string): string {
     // GraphQL
     graphql: "graphql",
     // Other
-    dockerfile: "docker",
+    dockerfile: "dockerfile",
     gitignore: "gitignore",
   };
   return languageMap[ext.toLowerCase()] || "text";
