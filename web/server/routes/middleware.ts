@@ -27,8 +27,6 @@ export const withApiKey = async (c: Context, next: () => Promise<void>) => {
   // Format: Authorization: Bearer <apiKey>
   const authorizationKey = c.req.header("Authorization")?.split(" ")[1];
 
-  console.log("authorizationKey", authorizationKey);
-
   if (!authorizationKey) {
     return c.json({ error: "Unauthorized" }, 401);
   }

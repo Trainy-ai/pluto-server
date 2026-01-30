@@ -2,6 +2,7 @@ import { z } from "zod";
 import { protectedOrgProcedure } from "../../../../../../lib/trpc";
 import { sqidDecode } from "../../../../../../lib/sqid";
 import { withCache } from "../../../../../../lib/cache";
+import { queryAllRunLogs } from "../../../../../../lib/queries";
 
 type LogData = {
   logType: string;
@@ -22,28 +23,13 @@ export const logsProcedure = protectedOrgProcedure
       "logs",
       { runId, organizationId, projectName },
       async () => {
-        const query = `
-          SELECT * FROM mlop_logs
-          WHERE tenantId = {tenantId: String}
-          AND projectName = {projectName: String}
-          AND runId = {runId: UInt64}
-          ORDER BY lineNumber ASC
-        `;
-
-        const logs = await ctx.clickhouse.query(query, {
-          tenantId: organizationId,
-          projectName: projectName,
-          runId: runId,
+        const logs = await queryAllRunLogs(ctx.clickhouse, {
+          organizationId,
+          projectName,
+          runId,
         });
 
-        const logsData = (await logs.json()) as {
-          logType: string;
-          message: string;
-          time: string;
-          lineNumber: number;
-        }[];
-
-        return logsData.map((log) => ({
+        return logs.map((log) => ({
           ...log,
           time: new Date(log.time + "Z"), // Add Z to make it UTC
         }));

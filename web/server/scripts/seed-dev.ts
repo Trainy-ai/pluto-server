@@ -52,6 +52,38 @@ const METRIC_NAMES = [
 // Test metrics: parallel horizontal and slanted lines for visual debugging
 const TEST_METRIC_NAMES = ['horizontal', 'slanted_up', 'slanted_down'];
 
+// ============================================================================
+// Story Runs Configuration - Runs with interesting patterns for Claude to analyze
+// ============================================================================
+
+interface StoryRunConfig {
+  name: string;
+  model: string;
+  batchSize: number;
+  lr: number;
+  // Metric anomaly patterns
+  lossSpike?: { start: number; end: number; multiplier: number };
+  earlyStop?: number;  // Stop generating data at this progress %
+  highNoise?: boolean;
+  slowConvergence?: boolean;
+}
+
+// Story runs with memorable patterns (indices 0-4)
+const STORY_RUNS: Record<number, StoryRunConfig> = {
+  0: { name: 'baseline-experiment', model: 'resnet50', batchSize: 16, lr: 0.001 },
+  1: { name: 'transformer-v1', model: 'transformer', batchSize: 32, lr: 0.001, lossSpike: { start: 0.28, end: 0.35, multiplier: 3 } },
+  2: { name: 'cnn-resnet50', model: 'resnet50', batchSize: 64, lr: 0.0005, slowConvergence: true, highNoise: true },
+  3: { name: 'lr-search-001', model: 'bert', batchSize: 128, lr: 0.002, earlyStop: 0.80 },
+  4: { name: 'batch-size-test', model: 'gpt2', batchSize: 32, lr: 0.001, lossSpike: { start: 0.48, end: 0.55, multiplier: 5 } },
+};
+
+// Log types and their weights for random selection
+const LOG_TYPE_WEIGHTS: Record<string, number> = { INFO: 60, DEBUG: 25, WARNING: 10, ERROR: 5 };
+
+// Logs per run configuration
+const HIGH_FIDELITY_LOGS = 5000;   // Story runs and high-fidelity runs
+const STANDARD_LOGS = 200;         // Standard runs
+
 /**
  * Generates a metric name from group and name arrays.
  * First few metrics are "test" group with parallel lines for visual debugging.
@@ -80,8 +112,22 @@ function getMetricName(metricIndex: number): { group: string; name: string; isTe
 }
 
 /**
- * Generates a realistic metric value based on metric type and step.
+ * Selects a random log type based on weights.
+ */
+function getRandomLogType(): string {
+  const total = Object.values(LOG_TYPE_WEIGHTS).reduce((a, b) => a + b, 0);
+  let random = Math.random() * total;
+  for (const [type, weight] of Object.entries(LOG_TYPE_WEIGHTS)) {
+    random -= weight;
+    if (random <= 0) return type;
+  }
+  return 'INFO';
+}
+
+/**
+ * Generates a realistic metric value based on metric type, step, and run story.
  * For test metrics, generates parallel lines at different y-intercepts for each run.
+ * For story runs (indices 0-4), injects anomalies like spikes, early stops, high noise.
  */
 function getMetricValue(metricIndex: number, step: number, totalSteps: number, runIndex: number = 0): number {
   // Test metrics: parallel lines for visual debugging
@@ -112,33 +158,90 @@ function getMetricValue(metricIndex: number, step: number, totalSteps: number, r
   const metricName = METRIC_NAMES[nameIndex];
   const progress = step / totalSteps;
 
+  // Get story config for this run (if applicable)
+  const storyConfig = STORY_RUNS[runIndex];
+
+  // Early stop: return NaN to indicate no more data
+  if (storyConfig?.earlyStop && progress > storyConfig.earlyStop) {
+    return NaN;
+  }
+
+  // Calculate base value based on metric type
+  let baseValue: number;
   switch (metricName) {
     case 'loss':
-      return Math.exp(-step / (totalSteps / 3)) * 2 + Math.random() * 0.1;
+      baseValue = Math.exp(-step / (totalSteps / 3)) * 2 + Math.random() * 0.1;
+      // Apply slow convergence modifier
+      if (storyConfig?.slowConvergence) {
+        baseValue = Math.exp(-step / (totalSteps / 1.5)) * 2.5 + Math.random() * 0.1;
+      }
+      break;
     case 'accuracy':
     case 'precision':
     case 'recall':
     case 'f1':
     case 'auc':
-      return 0.5 + progress * 0.45 + Math.random() * 0.02;
+      baseValue = 0.5 + progress * 0.45 + Math.random() * 0.02;
+      if (storyConfig?.slowConvergence) {
+        baseValue = 0.4 + progress * 0.35 + Math.random() * 0.02;
+      }
+      break;
     case 'perplexity':
-      return 100 * Math.exp(-step / (totalSteps / 2)) + 10 + Math.random() * 5;
+      baseValue = 100 * Math.exp(-step / (totalSteps / 2)) + 10 + Math.random() * 5;
+      break;
     case 'lr':
       // Warmup then decay
-      return step < totalSteps * 0.1
+      baseValue = step < totalSteps * 0.1
         ? 0.001 * (step / (totalSteps * 0.1))
         : 0.001 * Math.exp(-(step - totalSteps * 0.1) / totalSteps);
+      break;
     case 'gpu_util':
-      return 80 + Math.random() * 15;
+      baseValue = 80 + Math.random() * 15;
+      break;
     case 'memory_used':
-      return 0.7 + Math.random() * 0.2;
+      baseValue = 0.7 + Math.random() * 0.2;
+      // Run 3 (lr-search-001) has increasing memory usage leading to OOM
+      if (runIndex === 3) {
+        baseValue = 0.5 + progress * 0.5 + Math.random() * 0.05;
+      }
+      break;
     case 'throughput':
-      return 1000 + Math.random() * 200;
+      baseValue = 1000 + Math.random() * 200;
+      break;
     case 'latency':
-      return 10 + Math.random() * 5;
+      baseValue = 10 + Math.random() * 5;
+      break;
     default:
-      return Math.random() * 0.01 + 0.001;
+      baseValue = Math.random() * 0.01 + 0.001;
   }
+
+  // Apply high noise modifier
+  if (storyConfig?.highNoise) {
+    baseValue += (Math.random() - 0.5) * 0.3;
+  }
+
+  // Apply loss spike modifier (affects loss-like metrics)
+  if (storyConfig?.lossSpike && (metricName === 'loss' || metricName === 'perplexity')) {
+    const { start, end, multiplier } = storyConfig.lossSpike;
+    if (progress >= start && progress <= end) {
+      // Create a spike that peaks in the middle and recovers
+      const spikeProgress = (progress - start) / (end - start);
+      const spikeFactor = Math.sin(spikeProgress * Math.PI) * (multiplier - 1) + 1;
+      baseValue *= spikeFactor;
+    }
+  }
+
+  // Invert spike effect for accuracy metrics (they should drop during issues)
+  if (storyConfig?.lossSpike && ['accuracy', 'precision', 'recall', 'f1', 'auc'].includes(metricName)) {
+    const { start, end, multiplier } = storyConfig.lossSpike;
+    if (progress >= start && progress <= end) {
+      const spikeProgress = (progress - start) / (end - start);
+      const dropFactor = 1 - Math.sin(spikeProgress * Math.PI) * (1 - 1/multiplier);
+      baseValue *= dropFactor;
+    }
+  }
+
+  return baseValue;
 }
 
 /**
@@ -242,6 +345,350 @@ async function seedClickHouseMetrics(
   await clickhouse.close();
   const totalTime = (Date.now() - startTime) / 1000;
   console.log(`   Seeded ${insertedCount.toLocaleString()} metric datapoints in ${totalTime.toFixed(1)}s`);
+}
+
+/**
+ * Generates a config prefix string for log messages.
+ */
+function getConfigPrefix(runIndex: number): string {
+  const storyConfig = STORY_RUNS[runIndex];
+  if (storyConfig) {
+    return `[batch_size=${storyConfig.batchSize}, model=${storyConfig.model}]`;
+  }
+  // For non-story runs, generate based on index
+  const batchSizes = [16, 32, 64, 128];
+  const models = ['resnet50', 'transformer', 'bert', 'gpt2'];
+  return `[batch_size=${batchSizes[runIndex % 4]}, model=${models[runIndex % 4]}]`;
+}
+
+/**
+ * Generates training progress log messages.
+ */
+function generateProgressLog(runIndex: number, step: number, totalSteps: number, epoch: number, totalEpochs: number): string {
+  const prefix = getConfigPrefix(runIndex);
+  const loss = getMetricValue(3, step, totalSteps, runIndex); // Index 3 is first real loss metric
+  if (isNaN(loss)) return ''; // Skip if early stopped
+
+  const progress = step / totalSteps;
+  const storyConfig = STORY_RUNS[runIndex];
+
+  // Check if we're in a spike region
+  if (storyConfig?.lossSpike) {
+    const { start, end } = storyConfig.lossSpike;
+    if (progress >= start && progress <= end) {
+      const spikeProgress = (progress - start) / (end - start);
+      if (spikeProgress < 0.3) {
+        return `${prefix} Step ${step}: loss=${loss.toFixed(4)} (unusual increase)`;
+      } else if (spikeProgress > 0.7) {
+        return `${prefix} Step ${step}: loss=${loss.toFixed(4)} (recovering)`;
+      }
+    }
+  }
+
+  return `${prefix} Epoch ${epoch}/${totalEpochs} | loss: ${loss.toFixed(4)}`;
+}
+
+/**
+ * Generates batch statistics log messages with mask_ratio and pad_ratio.
+ */
+function generateBatchStatsLog(runIndex: number, batchNum: number): string {
+  const prefix = getConfigPrefix(runIndex);
+
+  // Run 2 (cnn-resnet50) has high pad ratios
+  let padRatio: number;
+  if (runIndex === 2) {
+    padRatio = 0.35 + Math.random() * 0.15; // 35-50%
+  } else {
+    padRatio = 0.08 + Math.random() * 0.12; // 8-20%
+  }
+
+  const maskRatio = 0.12 + Math.random() * 0.08; // 12-20%
+
+  return `${prefix} Batch ${batchNum}: mask_ratio=${maskRatio.toFixed(2)}, pad_ratio=${padRatio.toFixed(2)}`;
+}
+
+/**
+ * Generates memory usage log messages.
+ */
+function generateMemoryLog(runIndex: number, progress: number): string {
+  const prefix = getConfigPrefix(runIndex);
+
+  // Run 3 (lr-search-001) has increasing memory leading to OOM
+  if (runIndex === 3) {
+    const allocated = 10 + progress * 6; // 10GB to 16GB
+    const reserved = 16.0;
+    const peak = Math.min(allocated + 0.5, 15.9);
+    return `${prefix} Memory: allocated=${allocated.toFixed(1)}GB, reserved=${reserved.toFixed(1)}GB, peak=${peak.toFixed(1)}GB`;
+  }
+
+  const allocated = 8 + Math.random() * 2;
+  const reserved = 16.0;
+  const peak = allocated + Math.random();
+  return `${prefix} Memory: allocated=${allocated.toFixed(1)}GB, reserved=${reserved.toFixed(1)}GB, peak=${peak.toFixed(1)}GB`;
+}
+
+/**
+ * Generates gradient statistics log messages.
+ */
+function generateGradientLog(runIndex: number, step: number, totalSteps: number): string {
+  const prefix = getConfigPrefix(runIndex);
+  const progress = step / totalSteps;
+  const storyConfig = STORY_RUNS[runIndex];
+
+  // Run 4 (batch-size-test) has gradient explosion around 50%
+  if (runIndex === 4 && storyConfig?.lossSpike) {
+    const { start, end } = storyConfig.lossSpike;
+    if (progress >= start && progress <= end) {
+      const spikeProgress = (progress - start) / (end - start);
+      if (spikeProgress < 0.5) {
+        const norm = 30 + Math.random() * 20; // Exploding gradient
+        return `${prefix} Step ${step}: Gradient norm=${norm.toFixed(2)} (exploding)`;
+      } else {
+        const norm = 1 + Math.random() * 2; // Recovering
+        return `${prefix} Step ${step}: Gradient norm=${norm.toFixed(2)} (stabilized)`;
+      }
+    }
+  }
+
+  // Normal gradient
+  const norm = 1 + Math.random() * 3;
+  const max = 0.1 + Math.random() * 0.2;
+  return `${prefix} Gradient stats: norm=${norm.toFixed(3)}, max=${max.toFixed(3)}`;
+}
+
+/**
+ * Generates special warning/error logs for story runs.
+ */
+function generateStoryLogs(runIndex: number, step: number, totalSteps: number): Array<{ logType: string; message: string }> {
+  const logs: Array<{ logType: string; message: string }> = [];
+  const prefix = getConfigPrefix(runIndex);
+  const progress = step / totalSteps;
+  const storyConfig = STORY_RUNS[runIndex];
+
+  if (!storyConfig) return logs;
+
+  // Run 1 (transformer-v1): Loss spike warning and recovery
+  if (runIndex === 1 && storyConfig.lossSpike) {
+    const { start, end } = storyConfig.lossSpike;
+    const spikeStart = Math.floor(start * totalSteps);
+    const spikeMiddle = Math.floor((start + (end - start) / 2) * totalSteps);
+    const spikeEnd = Math.floor(end * totalSteps);
+
+    if (step === spikeStart) {
+      logs.push({ logType: 'WARNING', message: `${prefix} Loss increased 3x in last 100 steps` });
+    }
+    if (step === spikeMiddle) {
+      logs.push({ logType: 'WARNING', message: `${prefix} Gradient stats: norm=8.234, max=0.523 (elevated)` });
+    }
+    if (step === spikeEnd) {
+      logs.push({ logType: 'INFO', message: `${prefix} Training stabilized after ${Math.floor((end - start) * totalSteps)} steps` });
+    }
+  }
+
+  // Run 2 (cnn-resnet50): High pad ratio warnings
+  if (runIndex === 2) {
+    const batchNum = Math.floor(step / 100);
+    if (batchNum > 0 && step % 500 === 0) {
+      const padRatio = 0.38 + Math.random() * 0.08;
+      logs.push({ logType: 'WARNING', message: `${prefix} pad_ratio=${padRatio.toFixed(2)} exceeds 0.3 threshold` });
+      const efficiency = Math.round((1 - padRatio) * 100);
+      logs.push({ logType: 'INFO', message: `${prefix} Token efficiency: ${efficiency}% (target: 80%)` });
+    }
+  }
+
+  // Run 3 (lr-search-001): OOM progression
+  if (runIndex === 3) {
+    if (progress > 0.70 && progress <= 0.71) {
+      logs.push({ logType: 'WARNING', message: `${prefix} GPU memory at 90%` });
+    }
+    if (progress > 0.75 && progress <= 0.76) {
+      logs.push({ logType: 'WARNING', message: `${prefix} GPU memory at 95%` });
+    }
+    if (progress > 0.79 && progress <= 0.80) {
+      logs.push({ logType: 'ERROR', message: `${prefix} CUDA out of memory at step ${step}` });
+      logs.push({ logType: 'ERROR', message: `${prefix} Training terminated - reduce batch_size or enable gradient checkpointing` });
+    }
+  }
+
+  // Run 4 (batch-size-test): Gradient clipping warnings
+  if (runIndex === 4 && storyConfig.lossSpike) {
+    const { start, end } = storyConfig.lossSpike;
+    const spikeStart = Math.floor(start * totalSteps);
+    const spikeMiddle = Math.floor((start + (end - start) / 2) * totalSteps);
+
+    if (step === spikeStart) {
+      logs.push({ logType: 'WARNING', message: `${prefix} Gradient clipping activated (max_norm=10.0)` });
+    }
+    if (step === spikeMiddle) {
+      logs.push({ logType: 'INFO', message: `${prefix} Gradient norm returning to normal range` });
+    }
+  }
+
+  return logs;
+}
+
+/**
+ * Seeds ClickHouse with log entries.
+ * Story runs and high-fidelity runs get 5000 logs, standard runs get 200.
+ */
+async function seedClickHouseLogs(
+  runs: { id: bigint; name: string }[],
+  tenantId: string,
+  projectName: string,
+): Promise<void> {
+  const clickhouseUrl = process.env.CLICKHOUSE_URL;
+  const clickhouseUser = process.env.CLICKHOUSE_USER || 'default';
+  const clickhousePassword = process.env.CLICKHOUSE_PASSWORD || '';
+
+  if (!clickhouseUrl) {
+    console.log('   CLICKHOUSE_URL not set, skipping ClickHouse log seeding');
+    return;
+  }
+
+  const clickhouse = createClient({
+    url: clickhouseUrl,
+    username: clickhouseUser,
+    password: clickhousePassword,
+  });
+
+  // Calculate total logs
+  const storyRunCount = Object.keys(STORY_RUNS).length;
+  const highFidelityLogRuns = Math.min(HIGH_FIDELITY_RUNS, runs.length);
+  const highFidelityLogs = highFidelityLogRuns * HIGH_FIDELITY_LOGS;
+  const standardLogs = Math.max(0, runs.length - highFidelityLogRuns) * STANDARD_LOGS;
+  const totalLogs = highFidelityLogs + standardLogs;
+
+  console.log(`   Seeding ClickHouse with ~${totalLogs.toLocaleString()} log entries...`);
+  console.log(`   - ${storyRunCount} story runs × ${HIGH_FIDELITY_LOGS.toLocaleString()} logs (with anomaly patterns)`);
+  console.log(`   - ${highFidelityLogRuns - storyRunCount} high-fidelity runs × ${HIGH_FIDELITY_LOGS.toLocaleString()} logs`);
+  console.log(`   - ${Math.max(0, runs.length - highFidelityLogRuns)} standard runs × ${STANDARD_LOGS.toLocaleString()} logs`);
+
+  const BATCH_SIZE = 10000;
+  let batch: Record<string, unknown>[] = [];
+  let insertedCount = 0;
+  const startTime = Date.now();
+
+  for (let runIndex = 0; runIndex < runs.length; runIndex++) {
+    const run = runs[runIndex];
+    const isHighFidelity = runIndex < HIGH_FIDELITY_RUNS;
+    const logsForRun = isHighFidelity ? HIGH_FIDELITY_LOGS : STANDARD_LOGS;
+    const totalSteps = isHighFidelity ? HIGH_FIDELITY_DATAPOINTS : STANDARD_DATAPOINTS;
+    const stepsPerLog = Math.floor(totalSteps / logsForRun);
+    const totalEpochs = 100;
+
+    const baseTime = Date.now() - totalSteps * 1000;
+    let lineNumber = 0;
+
+    for (let logIdx = 0; logIdx < logsForRun; logIdx++) {
+      const step = logIdx * stepsPerLog;
+      const progress = step / totalSteps;
+      const epoch = Math.floor(progress * totalEpochs) + 1;
+      const timestamp = new Date(baseTime + step * 1000).toISOString().replace('T', ' ').replace('Z', '');
+
+      // Check for early stop (run 3)
+      const storyConfig = STORY_RUNS[runIndex];
+      if (storyConfig?.earlyStop && progress > storyConfig.earlyStop) {
+        break;
+      }
+
+      // Generate story-specific logs first (warnings, errors)
+      const storyLogs = generateStoryLogs(runIndex, step, totalSteps);
+      for (const sLog of storyLogs) {
+        batch.push({
+          tenantId,
+          projectName,
+          runId: Number(run.id),
+          logType: sLog.logType,
+          time: timestamp,
+          lineNumber: lineNumber++,
+          message: sLog.message,
+          step,
+        });
+      }
+
+      // Generate regular logs based on position in training
+      let logType = getRandomLogType();
+      let message: string;
+
+      const msgType = logIdx % 10;
+      switch (msgType) {
+        case 0:
+        case 1:
+        case 2:
+          // Progress logs (30%)
+          message = generateProgressLog(runIndex, step, totalSteps, epoch, totalEpochs);
+          logType = 'INFO';
+          break;
+        case 3:
+        case 4:
+          // Batch stats (20%)
+          message = generateBatchStatsLog(runIndex, Math.floor(step / 100));
+          logType = 'DEBUG';
+          break;
+        case 5:
+          // Memory logs (10%)
+          message = generateMemoryLog(runIndex, progress);
+          logType = 'DEBUG';
+          break;
+        case 6:
+          // Gradient logs (10%)
+          message = generateGradientLog(runIndex, step, totalSteps);
+          logType = 'DEBUG';
+          break;
+        default:
+          // Generic training logs (30%)
+          const prefix = getConfigPrefix(runIndex);
+          const templates = [
+            `${prefix} Checkpoint saved at step ${step}`,
+            `${prefix} Learning rate: ${(0.001 * Math.exp(-progress)).toExponential(4)}`,
+            `${prefix} Throughput: ${Math.round(800 + Math.random() * 400)} samples/sec`,
+            `${prefix} Data loader: ${Math.round(10 + Math.random() * 20)}ms avg batch time`,
+          ];
+          message = templates[logIdx % templates.length];
+          logType = 'INFO';
+      }
+
+      if (message) {
+        batch.push({
+          tenantId,
+          projectName,
+          runId: Number(run.id),
+          logType,
+          time: timestamp,
+          lineNumber: lineNumber++,
+          message,
+          step,
+        });
+      }
+
+      if (batch.length >= BATCH_SIZE) {
+        await clickhouse.insert({
+          table: 'mlop_logs',
+          values: batch,
+          format: 'JSONEachRow',
+        });
+        insertedCount += batch.length;
+        batch = [];
+
+        const elapsed = (Date.now() - startTime) / 1000;
+        const rate = insertedCount / elapsed;
+        console.log(`   Log progress: ${insertedCount.toLocaleString()} logs (${Math.round(rate).toLocaleString()} rows/sec)`);
+      }
+    }
+  }
+
+  if (batch.length > 0) {
+    await clickhouse.insert({
+      table: 'mlop_logs',
+      values: batch,
+      format: 'JSONEachRow',
+    });
+    insertedCount += batch.length;
+  }
+
+  await clickhouse.close();
+  const totalTime = (Date.now() - startTime) / 1000;
+  console.log(`   Seeded ${insertedCount.toLocaleString()} log entries in ${totalTime.toFixed(1)}s`);
 }
 
 async function main() {
@@ -363,7 +810,8 @@ async function main() {
     where: { organizationId: org.id, name: 'Dev API Key' },
   });
 
-  const apiKeyValue = `mlps_dev_${nanoid(32)}`;
+  // Use mlpi_ (insecure) prefix so key is stored plaintext for dev convenience
+  const apiKeyValue = `mlpi_dev_${nanoid(32)}`;
 
   if (!apiKey) {
     apiKey = await prisma.apiKey.create({
@@ -462,12 +910,19 @@ async function main() {
         creatorApiKeyId: apiKey.id,
         status: i % 5 === 0 ? ('RUNNING' as const) : ('COMPLETED' as const),
         tags,
-        config: {
-          model: ['resnet50', 'transformer', 'bert', 'gpt2'][i % 4],
-          lr: 0.001 * (i + 1),
-          batch_size: [16, 32, 64, 128][i % 4],
-          epochs: 100,
-        },
+        config: STORY_RUNS[i]
+          ? {
+              model: STORY_RUNS[i].model,
+              lr: STORY_RUNS[i].lr,
+              batch_size: STORY_RUNS[i].batchSize,
+              epochs: 100,
+            }
+          : {
+              model: ['resnet50', 'transformer', 'bert', 'gpt2'][i % 4],
+              lr: 0.001 * (i + 1),
+              batch_size: [16, 32, 64, 128][i % 4],
+              epochs: 100,
+            },
         systemMetadata: {
           hostname: `dev-machine-${i % 3}`,
           gpu: ['A100', 'V100', 'RTX 4090'][i % 3],
@@ -506,12 +961,14 @@ async function main() {
   }
 
   // Fetch ALL runs to ensure metrics are seeded
+  // Order by ID to ensure story runs (1-5) are processed first
   const allRuns = await prisma.runs.findMany({
     where: {
       projectId: project.id,
       organizationId: org.id,
     },
     select: { id: true, name: true },
+    orderBy: { id: 'asc' },
   });
 
   // Register metric names (skipDuplicates handles existing ones)
@@ -535,6 +992,9 @@ async function main() {
 
   // Always seed ClickHouse (check if metrics exist first)
   await seedClickHouseMetrics(allRuns, org.id, project.name);
+
+  // Seed ClickHouse logs with story-driven patterns
+  await seedClickHouseLogs(allRuns, org.id, project.name);
 
   console.log('\n' + '='.repeat(50));
   console.log('Development data seeded successfully!\n');
