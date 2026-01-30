@@ -124,6 +124,10 @@ export function useSelectedRuns(
 
   // Load cached data on initial render or when org/project changes
   useEffect(() => {
+    // Reset state first to clear any stale data from previous project
+    setRunColors({});
+    setSelectedRunsWithColors({});
+
     const loadCachedData = async () => {
       try {
         const cachedData = await runCacheDb.getData(storageKey);

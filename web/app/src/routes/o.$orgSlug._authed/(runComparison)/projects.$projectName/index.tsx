@@ -10,6 +10,7 @@ import { useUpdateTags } from "./~queries/update-tags";
 import { useDistinctTags } from "./~queries/distinct-tags";
 import { groupMetrics } from "./~lib/metrics-utils";
 import { MetricsDisplay } from "./~components/metrics-display";
+import { SideBySideView } from "./~components/side-by-side/side-by-side-view";
 import { DataTable } from "./~components/runs-table/data-table";
 import { useRefresh } from "./~hooks/use-refresh";
 import { useRunCount } from "./~queries/run-count";
@@ -55,6 +56,8 @@ export const Route = createFileRoute(
  * Main component for the run comparison page
  * Integrates data loading, selection state, and the display of runs and metrics
  */
+type ViewMode = "charts" | "side-by-side";
+
 function RouteComponent() {
   const { organizationId, projectName, organizationSlug } =
     Route.useRouteContext();
@@ -72,6 +75,9 @@ function RouteComponent() {
     },
     [navigate],
   );
+
+  // View mode state - "charts" (default) or "side-by-side"
+  const [viewMode, setViewMode] = useState<ViewMode>("charts");
 
   // Tag filter state
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
@@ -240,6 +246,8 @@ function RouteComponent() {
                 onStatusFilterChange={setSelectedStatuses}
                 searchQuery={searchInput}
                 onSearchChange={handleSearchChange}
+                viewMode={viewMode}
+                onViewModeChange={setViewMode}
                 onSelectFirstN={selectFirstN}
                 onSelectAllByIds={selectAllByIds}
                 onDeselectAll={deselectAll}
@@ -254,6 +262,11 @@ function RouteComponent() {
             <div className="flex h-full flex-col overflow-y-auto overscroll-y-contain pl-2">
               {(isLoading || runCountLoading) && runs.length === 0 ? (
                 <Skeleton className="h-full w-full" />
+              ) : viewMode === "side-by-side" ? (
+                <SideBySideView
+                  selectedRunsWithColors={selectedRunsWithColors}
+                  onRemoveRun={(runId) => handleRunSelection(runId, false)}
+                />
               ) : (
                 <div className="relative h-full">
                   <MetricsDisplay

@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/table";
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import { ChevronLeft, ChevronRight, Search } from "lucide-react";
+import { ChevronLeft, ChevronRight, Columns, Search } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -37,6 +37,8 @@ import { DEFAULT_PAGE_SIZE } from "./config";
 import { TagsFilter } from "./tags-filter";
 import { StatusFilter } from "./status-filter";
 import { VisibilityOptions } from "./visibility-options";
+
+type ViewMode = "charts" | "side-by-side";
 
 interface DataTableProps {
   runs: Run[];
@@ -61,6 +63,8 @@ interface DataTableProps {
   onStatusFilterChange: (statuses: string[]) => void;
   searchQuery: string;
   onSearchChange: (query: string) => void;
+  viewMode: ViewMode;
+  onViewModeChange: (mode: ViewMode) => void;
   // Visibility options
   onSelectFirstN: (n: number) => void;
   onSelectAllByIds: (runIds: string[]) => void;
@@ -91,6 +95,8 @@ export function DataTable({
   onStatusFilterChange,
   searchQuery,
   onSearchChange,
+  viewMode,
+  onViewModeChange,
   onSelectFirstN,
   onSelectAllByIds,
   onDeselectAll,
@@ -285,21 +291,35 @@ export function DataTable({
       )}
       {/* Header section - shrink-0 prevents shrinking */}
       <div className="mb-2 shrink-0 space-y-2">
-        <div className="mt-2 flex items-center gap-1 pl-1 text-sm text-muted-foreground">
-          <span className="font-medium">
-            {Object.keys(selectedRunsWithColors).length}
-          </span>
-          <span>of</span>
-          <span className="font-medium">{runCount}</span>
-          <span>runs selected</span>
-          {(hasActiveFilters || showOnlySelected) && (
-            <>
-              <span className="text-muted-foreground/50">·</span>
-              <span className="text-muted-foreground/80">
-                Showing {displayedRuns.length} runs
-              </span>
-            </>
-          )}
+        <div className="mt-2 flex items-center justify-between">
+          <div className="flex items-center gap-1 pl-1 text-sm text-muted-foreground">
+            <span className="font-medium">
+              {Object.keys(selectedRunsWithColors).length}
+            </span>
+            <span>of</span>
+            <span className="font-medium">{runCount}</span>
+            <span>runs selected</span>
+            {(hasActiveFilters || showOnlySelected) && (
+              <>
+                <span className="text-muted-foreground/50">·</span>
+                <span className="text-muted-foreground/80">
+                  Showing {displayedRuns.length} runs
+                </span>
+              </>
+            )}
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className={cn(
+              "h-9 gap-1",
+              viewMode === "side-by-side" && "border-primary"
+            )}
+            onClick={() => onViewModeChange(viewMode === "charts" ? "side-by-side" : "charts")}
+          >
+            <Columns className="h-4 w-4" />
+            <span className="hidden sm:inline">Side-by-side</span>
+          </Button>
         </div>
         <div className="flex items-center gap-2">
           <div className="relative flex-1">

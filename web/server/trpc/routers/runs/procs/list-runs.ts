@@ -73,6 +73,11 @@ export const listRunsProcedure = protectedOrgProcedure
       orderBy: {
         createdAt: input.direction === "forward" ? "desc" : "asc",
       },
+      include: {
+        creator: {
+          select: { name: true, email: true },
+        },
+      },
       take: input.limit,
       cursor: input.cursor ? { id: input.cursor } : undefined,
     });
