@@ -8,6 +8,7 @@ import { triggerRouter } from "./routers/trigger/router";
 import { countRunsProcedure } from "./procs/runs-count";
 import { updateTagsProcedure } from "./procs/update-tags";
 import { distinctTagsProcedure } from "./procs/distinct-tags";
+import { getLogsByRunIdsProcedure } from "./procs/get-logs-by-run-ids";
 
 export const runsRouter = router({
   // Procedures
@@ -17,6 +18,7 @@ export const runsRouter = router({
   count: countRunsProcedure,
   updateTags: updateTagsProcedure,
   distinctTags: distinctTagsProcedure,
+  getLogsByRunIds: getLogsByRunIdsProcedure,
   // Routers
   data: dataRouter,
   trigger: triggerRouter,

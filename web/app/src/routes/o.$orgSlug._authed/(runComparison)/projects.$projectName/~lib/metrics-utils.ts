@@ -4,7 +4,8 @@ import type { inferOutput } from "@trpc/tanstack-react-query";
 import type { trpc } from "@/utils/trpc";
 
 type Run = inferOutput<typeof trpc.runs.list>["runs"][number];
-type RunLog = Run["logs"][number];
+type LogsByRunId = inferOutput<typeof trpc.runs.getLogsByRunIds>;
+type RunLog = LogsByRunId[string][number];
 
 /**
  * Cache structure for stable output references.
@@ -12,7 +13,6 @@ type RunLog = Run["logs"][number];
  * This prevents cross-project data leakage when multiple tabs are open.
  */
 interface CacheEntry {
-  inputRef: Record<string, { run: Run; color: string }> | null;
   inputKey: string | null;
   output: GroupedMetrics | null;
 }
@@ -26,7 +26,7 @@ const projectCaches = new Map<string, CacheEntry>();
 function getCacheEntry(projectKey: string): CacheEntry {
   let entry = projectCaches.get(projectKey);
   if (!entry) {
-    entry = { inputRef: null, inputKey: null, output: null };
+    entry = { inputKey: null, output: null };
     projectCaches.set(projectKey, entry);
   }
   return entry;
@@ -37,15 +37,24 @@ function getCacheEntry(projectKey: string): CacheEntry {
  * - Which runs are selected (by ID)
  * - What color each run has
  * - Run status (affects chart behavior)
+ * - Which logs are loaded
  */
 function generateCacheKey(
   selectedRunsWithColors: Record<string, { run: Run; color: string }>,
+  logsByRunId: LogsByRunId | undefined,
 ): string {
-  const entries = Object.entries(selectedRunsWithColors)
+  const runEntries = Object.entries(selectedRunsWithColors)
     .map(([id, { color, run }]) => `${id}:${color}:${run.status}`)
     .sort()
     .join("|");
-  return entries;
+
+  // Include log count per run in cache key to detect when logs are loaded
+  const logCounts = Object.entries(logsByRunId || {})
+    .map(([id, logs]) => `${id}:${logs.length}`)
+    .sort()
+    .join(",");
+
+  return `${runEntries}::${logCounts}`;
 }
 
 /**
@@ -62,12 +71,14 @@ function generateCacheKey(
  * cross-project data leakage when multiple tabs are open.
  *
  * @param selectedRunsWithColors - Record of selected runs with their assigned colors
+ * @param logsByRunId - Logs fetched separately, keyed by run ID
  * @param organizationId - Organization ID for cache scoping
  * @param projectName - Project name for cache scoping
  * @returns Grouped metrics organized by log group
  */
 export const groupMetrics = (
   selectedRunsWithColors: Record<string, { run: Run; color: string }>,
+  logsByRunId: LogsByRunId | undefined,
   organizationId: string,
   projectName: string,
 ): GroupedMetrics => {
@@ -75,24 +86,27 @@ export const groupMetrics = (
   const projectKey = `${organizationId}:${projectName}`;
   const cache = getCacheEntry(projectKey);
 
-  // Fast path: same reference as last call
-  if (cache.inputRef === selectedRunsWithColors && cache.output) {
-    return cache.output;
-  }
-
   // Check if content actually changed using cache key
-  const newCacheKey = generateCacheKey(selectedRunsWithColors);
+  const newCacheKey = generateCacheKey(selectedRunsWithColors, logsByRunId);
   if (newCacheKey === cache.inputKey && cache.output) {
     // Content hasn't changed, return cached output
-    cache.inputRef = selectedRunsWithColors;
     return cache.output;
   }
 
   // Content changed, compute new result
   const groups: GroupedMetrics = {};
 
-  Object.values(selectedRunsWithColors).forEach(({ run, color }) => {
-    run.logs.forEach((log: RunLog) => {
+  if (!logsByRunId) {
+    // No logs loaded yet, return empty
+    cache.inputKey = newCacheKey;
+    cache.output = groups;
+    return groups;
+  }
+
+  Object.entries(selectedRunsWithColors).forEach(([runId, { run, color }]) => {
+    const logs = logsByRunId[runId] || [];
+
+    logs.forEach((log: RunLog) => {
       if (!log.logType) return;
 
       const groupKey = getLogGroupName({
@@ -132,7 +146,6 @@ export const groupMetrics = (
   });
 
   // Update cache
-  cache.inputRef = selectedRunsWithColors;
   cache.inputKey = newCacheKey;
   cache.output = groups;
 
