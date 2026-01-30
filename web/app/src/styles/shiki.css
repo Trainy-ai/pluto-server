@@ -1,0 +1,27 @@
+.shiki-wrapper pre {
+  background: transparent !important;
+  margin: 0;
+  padding: 0;
+}
+
+.shiki-wrapper code {
+  counter-reset: line;
+}
+
+.shiki-wrapper .line {
+  display: inline-block;
+  width: 100%;
+}
+
+.shiki-wrapper.line-numbers .line::before {
+  counter-increment: line;
+  content: counter(line);
+  display: inline-block;
+  width: 2.5em;
+  margin-right: 1em;
+  text-align: right;
+  color: var(--color-muted-foreground);
+  opacity: 0.5;
+  user-select: none;
+  font-size: 0.75rem;
+}

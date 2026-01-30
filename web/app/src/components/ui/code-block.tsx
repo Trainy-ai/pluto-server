@@ -1,8 +1,6 @@
-import React, { useState } from "react";
-import { CodeBlock as ReactCodeBlock } from "react-code-block";
+import { useState, useMemo } from "react";
 import { Copy, Check } from "lucide-react";
-import { themes } from "prism-react-renderer";
-import { useTheme } from "@/lib/hooks/use-theme";
+import { useShikiHtml } from "@/lib/hooks/use-shiki";
 
 interface CodeBlockProps {
   code: string;
@@ -18,7 +16,7 @@ const CodeBlock = ({
   showLineNumbers = false,
 }: CodeBlockProps) => {
   const [state, setState] = useState({ value: false });
-  const { resolvedTheme } = useTheme();
+  const html = useShikiHtml(code, language);
 
   const copyCode = () => {
     setState({ value: true });
@@ -33,46 +31,51 @@ const CodeBlock = ({
     xl: "text-lg sm:text-xl",
   };
 
-  return (
-    <ReactCodeBlock
-      code={code}
-      language={language}
-      theme={resolvedTheme === "dark" ? themes.vsDark : themes.vsLight}
-    >
-      <div className="group relative">
-        <ReactCodeBlock.Code
-          className={`rounded-xl border border-border bg-card !p-4 shadow-lg sm:!p-6 ${fontSizeClasses[fontSize]}`}
-        >
-          <div className="table-row">
-            {showLineNumbers && (
-              <ReactCodeBlock.LineNumber className="table-cell pr-3 text-right text-xs text-muted-foreground select-none sm:pr-4 sm:text-sm" />
-            )}
-            <ReactCodeBlock.LineContent className="table-cell">
-              <ReactCodeBlock.Token />
-            </ReactCodeBlock.LineContent>
-          </div>
-        </ReactCodeBlock.Code>
+  const wrapperClass = useMemo(() => {
+    const classes = ["shiki-wrapper"];
+    if (showLineNumbers) {
+      classes.push("line-numbers");
+    }
+    return classes.join(" ");
+  }, [showLineNumbers]);
 
-        <button
-          className="absolute top-1.5 right-1.5 rounded-lg border border-border bg-background/80 px-2 py-1 text-xs font-medium text-muted-foreground opacity-0 shadow-sm transition-all group-hover:opacity-100 hover:bg-accent hover:text-accent-foreground sm:top-2 sm:right-2 sm:px-3 sm:py-1.5 sm:text-sm"
-          onClick={copyCode}
+  if (!html) {
+    return (
+      <div className="group relative">
+        <pre
+          className={`rounded-xl border border-border bg-card p-4 shadow-lg sm:p-6 ${fontSizeClasses[fontSize]}`}
         >
-          <div className="flex items-center gap-1 sm:gap-1.5">
-            {state.value ? (
-              <>
-                <Check className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-                <span>Copied!</span>
-              </>
-            ) : (
-              <>
-                <Copy className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-                <span>Copy</span>
-              </>
-            )}
-          </div>
-        </button>
+          <code>{code}</code>
+        </pre>
       </div>
-    </ReactCodeBlock>
+    );
+  }
+
+  return (
+    <div className="group relative">
+      <div
+        className={`${wrapperClass} rounded-xl border border-border bg-card p-4 shadow-lg sm:p-6 ${fontSizeClasses[fontSize]}`}
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+      <button
+        className="absolute top-1.5 right-1.5 rounded-lg border border-border bg-background/80 px-2 py-1 text-xs font-medium text-muted-foreground opacity-0 shadow-sm transition-all group-hover:opacity-100 hover:bg-accent hover:text-accent-foreground sm:top-2 sm:right-2 sm:px-3 sm:py-1.5 sm:text-sm"
+        onClick={copyCode}
+      >
+        <div className="flex items-center gap-1 sm:gap-1.5">
+          {state.value ? (
+            <>
+              <Check className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+              <span>Copied!</span>
+            </>
+          ) : (
+            <>
+              <Copy className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+              <span>Copy</span>
+            </>
+          )}
+        </div>
+      </button>
+    </div>
   );
 };
 
