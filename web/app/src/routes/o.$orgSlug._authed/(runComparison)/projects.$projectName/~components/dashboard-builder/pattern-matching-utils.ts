@@ -1,8 +1,11 @@
 import type { GroupedMetrics } from "@/lib/grouping/types";
 
 /**
- * Extract all metric names from GroupedMetrics, formatted as "groupName/metricName".
+ * Extract all metric names from GroupedMetrics.
  * Only includes METRIC type by default (for chart widgets).
+ *
+ * Note: metric.name already contains the full path (e.g., "training/dataset/favorita_sales").
+ * The groupName is just for UI grouping, not part of the metric identifier.
  */
 export function extractMetricNames(
   groupedMetrics: GroupedMetrics,
@@ -13,9 +16,7 @@ export function extractMetricNames(
   for (const [, group] of Object.entries(groupedMetrics)) {
     for (const metric of group.metrics) {
       if (includeTypes.includes(metric.type)) {
-        names.push(
-          group.groupName ? `${group.groupName}/${metric.name}` : metric.name
-        );
+        names.push(metric.name);
       }
     }
   }

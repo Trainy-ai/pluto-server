@@ -27,6 +27,7 @@ import {
   FileTextIcon,
   ImageIcon,
   ArrowLeftIcon,
+  InfoIcon,
 } from "lucide-react";
 import { MetricSelector } from "./metric-selector";
 import { extractMetricNames, matchMetricsByPattern } from "./pattern-matching-utils";
@@ -434,6 +435,14 @@ function ChartConfigForm({
 }) {
   return (
     <div className="space-y-4">
+      {/* Info about selected runs */}
+      <div className="flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-200">
+        <InfoIcon className="mt-0.5 size-4 shrink-0" />
+        <p>
+          Only metrics from your currently selected runs are shown. Select more runs in the sidebar to see additional metrics.
+        </p>
+      </div>
+
       {/* Mode Toggle */}
       <div className="grid gap-2">
         <Label>Metric Selection Mode</Label>

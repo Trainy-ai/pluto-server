@@ -6,6 +6,8 @@ import {
 import type { GroupedMetrics, RunStatus } from "@/lib/grouping/types";
 
 // Helper to create test GroupedMetrics
+// Note: In real data, metric.name contains the FULL path (e.g., "training/dataset/favorita_sales").
+// The groupName is just for UI grouping, not part of the metric identifier.
 function createGroupedMetrics(
   groups: Array<{
     groupName: string;
@@ -18,7 +20,7 @@ function createGroupedMetrics(
     result[group.groupName] = {
       groupName: group.groupName,
       metrics: group.metrics.map((m) => ({
-        name: m.name,
+        name: m.name, // Full metric path
         type: m.type,
         data: [
           {
@@ -36,13 +38,14 @@ function createGroupedMetrics(
 }
 
 describe("extractMetricNames", () => {
-  it("extracts metric names with group prefixes", () => {
+  it("extracts metric names (full paths already in metric.name)", () => {
     const groupedMetrics = createGroupedMetrics([
       {
         groupName: "training/dataset",
         metrics: [
-          { name: "favorita_sales", type: "METRIC" },
-          { name: "walmart_sales", type: "METRIC" },
+          // metric.name contains full path, groupName is just for UI grouping
+          { name: "training/dataset/favorita_sales", type: "METRIC" },
+          { name: "training/dataset/walmart_sales", type: "METRIC" },
         ],
       },
     ]);
@@ -51,6 +54,7 @@ describe("extractMetricNames", () => {
 
     expect(names).toContain("training/dataset/favorita_sales");
     expect(names).toContain("training/dataset/walmart_sales");
+    expect(names).toHaveLength(2);
   });
 
   it("handles metrics without group name", () => {
@@ -64,7 +68,7 @@ describe("extractMetricNames", () => {
     const names = extractMetricNames(groupedMetrics);
 
     expect(names).toContain("loss");
-    expect(names).not.toContain("/loss");
+    expect(names).toHaveLength(1);
   });
 
   it("only includes METRIC types by default", () => {
@@ -72,9 +76,9 @@ describe("extractMetricNames", () => {
       {
         groupName: "train",
         metrics: [
-          { name: "loss", type: "METRIC" },
-          { name: "samples", type: "IMAGE" },
-          { name: "weights", type: "HISTOGRAM" },
+          { name: "train/loss", type: "METRIC" },
+          { name: "train/samples", type: "IMAGE" },
+          { name: "train/weights", type: "HISTOGRAM" },
         ],
       },
     ]);
@@ -84,21 +88,22 @@ describe("extractMetricNames", () => {
     expect(names).toContain("train/loss");
     expect(names).not.toContain("train/samples");
     expect(names).not.toContain("train/weights");
+    expect(names).toHaveLength(1);
   });
 
   it("handles multiple groups with nested paths", () => {
     const groupedMetrics = createGroupedMetrics([
       {
         groupName: "training/dataset",
-        metrics: [{ name: "favorita_sales", type: "METRIC" }],
+        metrics: [{ name: "training/dataset/favorita_sales", type: "METRIC" }],
       },
       {
         groupName: "training/model",
-        metrics: [{ name: "loss", type: "METRIC" }],
+        metrics: [{ name: "training/model/loss", type: "METRIC" }],
       },
       {
         groupName: "eval",
-        metrics: [{ name: "accuracy", type: "METRIC" }],
+        metrics: [{ name: "eval/accuracy", type: "METRIC" }],
       },
     ]);
 
@@ -107,17 +112,18 @@ describe("extractMetricNames", () => {
     expect(names).toContain("training/dataset/favorita_sales");
     expect(names).toContain("training/model/loss");
     expect(names).toContain("eval/accuracy");
+    expect(names).toHaveLength(3);
   });
 
   it("returns sorted names", () => {
     const groupedMetrics = createGroupedMetrics([
       {
         groupName: "z_group",
-        metrics: [{ name: "metric_a", type: "METRIC" }],
+        metrics: [{ name: "z_group/metric_a", type: "METRIC" }],
       },
       {
         groupName: "a_group",
-        metrics: [{ name: "metric_b", type: "METRIC" }],
+        metrics: [{ name: "a_group/metric_b", type: "METRIC" }],
       },
     ]);
 
@@ -184,7 +190,7 @@ describe("matchMetricsByPattern", () => {
   });
 
   it("matches exact metric names", () => {
-    const matches = matchMetricsByPattern("loss", testMetrics);
+    const matches = matchMetricsByPattern("^loss$", testMetrics);
 
     expect(matches).toContain("loss");
     expect(matches).toHaveLength(1);
