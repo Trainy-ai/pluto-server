@@ -29,6 +29,7 @@ import {
   ArrowLeftIcon,
 } from "lucide-react";
 import { MetricSelector } from "./metric-selector";
+import { extractMetricNames, matchMetricsByPattern } from "./pattern-matching-utils";
 import type { GroupedMetrics } from "@/lib/grouping/types";
 import type {
   WidgetType,
@@ -94,31 +95,6 @@ const WIDGET_TYPES: {
   },
 ];
 
-// Helper to safely test regex patterns (prevents ReDoS)
-function safeRegexTest(pattern: string, str: string, timeoutMs = 100): boolean {
-  // Simple patterns that are safe
-  if (pattern.length < 50 && !/(\.\*){3,}|(\+\+)|(\{\d+,\}){2,}/.test(pattern)) {
-    try {
-      return new RegExp(pattern).test(str);
-    } catch {
-      return false;
-    }
-  }
-
-  // For complex patterns, limit execution time by checking character by character
-  // This is a simplified approach - just reject overly complex patterns
-  try {
-    const regex = new RegExp(pattern);
-    const start = performance.now();
-    const result = regex.test(str);
-    if (performance.now() - start > timeoutMs) {
-      return false;
-    }
-    return result;
-  } catch {
-    return false;
-  }
-}
 
 export function AddWidgetModal({
   open,
@@ -143,29 +119,16 @@ export function AddWidgetModal({
   const isEditing = !!editWidget;
 
   // Compute all available metric names from groupedMetrics
-  const allMetricNames = useMemo(() => {
-    const names: string[] = [];
-    for (const [groupName, metrics] of Object.entries(groupedMetrics)) {
-      for (const metricName of Object.keys(metrics)) {
-        names.push(groupName ? `${groupName}/${metricName}` : metricName);
-      }
-    }
-    return names.sort();
-  }, [groupedMetrics]);
+  const allMetricNames = useMemo(
+    () => extractMetricNames(groupedMetrics),
+    [groupedMetrics]
+  );
 
   // Compute matching metrics based on pattern
-  const matchingMetrics = useMemo(() => {
-    if (!pattern.trim()) return [];
-
-    try {
-      // Validate regex syntax first
-      new RegExp(pattern);
-    } catch {
-      return [];
-    }
-
-    return allMetricNames.filter((name) => safeRegexTest(pattern, name));
-  }, [pattern, allMetricNames]);
+  const matchingMetrics = useMemo(
+    () => matchMetricsByPattern(pattern, allMetricNames),
+    [pattern, allMetricNames]
+  );
 
   const handleTypeSelect = (type: WidgetType) => {
     setSelectedType(type);
