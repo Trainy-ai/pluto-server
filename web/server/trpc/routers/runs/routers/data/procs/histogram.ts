@@ -50,7 +50,7 @@ export const histogramProcedure = protectedOrgProcedure
           AND projectName = {projectName: String}
           AND runId = {runId: UInt64}
           AND logName = {logName: String}
-          AND dataType = 'HISTOGRAM'
+          AND dataType ILIKE 'histogram'
         `;
 
         const result = (await ctx.clickhouse
