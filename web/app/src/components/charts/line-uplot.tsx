@@ -804,6 +804,13 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       };
     }, [chartId]);
 
+    // Callback for series focus changes - notifies context for cross-chart highlighting
+    const handleSeriesFocus = useMemo(() => {
+      return (seriesLabel: string | null) => {
+        chartSyncContextRef.current?.setHighlightedSeriesName(seriesLabel);
+      };
+    }, []);
+
     // Build uPlot options
     const options = useMemo<uPlot.Options>(() => {
       const isDark = theme === "dark";
@@ -956,22 +963,28 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         hooks: {
           setSeries: [
             (u, seriesIdx) => {
-              // Handle series focus for local chart highlighting only
-              // Cross-chart highlighting is disabled to avoid rendering issues
+              // Handle series focus for local + cross-chart highlighting
               if (seriesIdx == null) {
                 // No series focused - reset all series to normal alpha
                 for (let i = 1; i < u.series.length; i++) {
                   const originalAlpha = processedLines[i - 1]?.opacity ?? 0.85;
                   u.series[i].alpha = originalAlpha;
                 }
+                // Notify context to clear cross-chart highlighting
+                handleSeriesFocus(null);
               } else {
-                // Highlight focused series, fade others (local chart only)
+                // Highlight focused series, fade others
                 for (let i = 1; i < u.series.length; i++) {
                   if (i === seriesIdx) {
                     u.series[i].alpha = 1; // Full opacity for focused series
                   } else {
                     u.series[i].alpha = 0.2; // Fade unfocused series
                   }
+                }
+                // Notify context for cross-chart highlighting
+                const seriesLabel = processedLines[seriesIdx - 1]?.label;
+                if (seriesLabel) {
+                  handleSeriesFocus(seriesLabel);
                 }
               }
               // Redraw to apply alpha changes
@@ -1047,6 +1060,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       xRange,
       handleHoverChange,
       isActiveChart,
+      handleSeriesFocus,
     ]);
 
     // Store cleanup function ref for proper cleanup on unmount
@@ -1057,6 +1071,12 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
 
     // Track initial dimensions for chart creation
     const initialDimensionsRef = useRef<{ width: number; height: number } | null>(null);
+
+    // Track zoom state to preserve across chart recreations
+    const zoomStateRef = useRef<{ xMin: number; xMax: number } | null>(null);
+
+    // Track previous data structure to detect if setData() can be used
+    const prevDataStructureRef = useRef<{ seriesCount: number } | null>(null);
 
     // Store dimensions when first valid
     useEffect(() => {
@@ -1074,8 +1094,27 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       const dims = initialDimensionsRef.current || { width, height };
       if (!chartContainerRef.current || dims.width === 0 || dims.height === 0) return;
 
-      // Destroy existing chart if present (shouldn't happen but be safe)
+      const currentSeriesCount = uplotData.length;
+
+      // Check if we can use setData() instead of full recreation
+      // setData() preserves zoom state and is more efficient
+      if (
+        chartRef.current &&
+        prevDataStructureRef.current &&
+        prevDataStructureRef.current.seriesCount === currentSeriesCount
+      ) {
+        // Structure is the same - use setData() to preserve zoom
+        chartRef.current.setData(uplotData);
+        return;
+      }
+
+      // Save zoom state before destroying chart (if user has zoomed)
       if (chartRef.current) {
+        const xScale = chartRef.current.scales.x;
+        // Only save if user has explicitly zoomed (min/max are set)
+        if (xScale.min != null && xScale.max != null) {
+          zoomStateRef.current = { xMin: xScale.min, xMax: xScale.max };
+        }
         chartRef.current.destroy();
         chartRef.current = null;
       }
@@ -1090,6 +1129,29 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       const chart = new uPlot(chartOptions, uplotData, chartContainerRef.current);
       chartRef.current = chart;
       chartCreatedRef.current = true;
+
+      // Track data structure for future setData() optimization
+      prevDataStructureRef.current = { seriesCount: currentSeriesCount };
+
+      // Restore zoom state if it was saved (user had zoomed before recreation)
+      if (zoomStateRef.current) {
+        const { xMin, xMax } = zoomStateRef.current;
+        // Validate that the saved zoom is within current data bounds
+        const xData = uplotData[0] as number[];
+        if (xData.length > 0) {
+          const dataMin = Math.min(...xData);
+          const dataMax = Math.max(...xData);
+          // Only restore if zoom range overlaps with data
+          if (xMin < dataMax && xMax > dataMin) {
+            // Use requestAnimationFrame to ensure chart is fully initialized
+            requestAnimationFrame(() => {
+              chart.setScale("x", { min: xMin, max: xMax });
+            });
+          }
+        }
+        // Clear saved zoom state after restoring
+        zoomStateRef.current = null;
+      }
 
       // Style the selection box for zoom visibility (uPlot's default is nearly invisible)
       // Use requestAnimationFrame to ensure uPlot has created the DOM elements
@@ -1109,6 +1171,8 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       // Double-click to reset zoom
       const handleDblClick = () => {
         chart.setData(chart.data);
+        // Clear saved zoom state so it doesn't get restored on next data update
+        zoomStateRef.current = null;
       };
       const container = chartContainerRef.current;
       container.addEventListener("dblclick", handleDblClick);
@@ -1143,6 +1207,41 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
     // which already depends on uplotData. A separate setData effect was
     // removed because it caused issues with scale calculation when both
     // effects ran simultaneously.
+
+    // Apply cross-chart highlighting when another chart highlights a series
+    useEffect(() => {
+      const chart = chartRef.current;
+      if (!chart || !chartSyncContext) return;
+
+      const highlightedName = chartSyncContext.highlightedSeriesName;
+
+      // Skip if this chart is the source of the highlight (already handled in setSeries hook)
+      // We detect this by checking if the chart's focused series matches the highlighted name
+      const focusedIdx = chart.cursor.idx !== null ? chart.series.findIndex(
+        (s, i) => i > 0 && s.label === highlightedName
+      ) : -1;
+
+      // Apply highlighting based on context
+      if (highlightedName === null) {
+        // No series highlighted - reset all to original alpha
+        for (let i = 1; i < chart.series.length; i++) {
+          const originalAlpha = processedLines[i - 1]?.opacity ?? 0.85;
+          chart.series[i].alpha = originalAlpha;
+        }
+      } else {
+        // Find the series with matching label and highlight it
+        for (let i = 1; i < chart.series.length; i++) {
+          const seriesLabel = chart.series[i].label;
+          if (seriesLabel === highlightedName) {
+            chart.series[i].alpha = 1; // Full opacity for highlighted
+          } else {
+            chart.series[i].alpha = 0.2; // Fade others
+          }
+        }
+      }
+
+      chart.redraw();
+    }, [chartSyncContext?.highlightedSeriesName, processedLines, chartSyncContext]);
 
     // Expose imperative handle
     useImperativeHandle(
