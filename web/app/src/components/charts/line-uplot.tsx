@@ -289,8 +289,12 @@ function tooltipPlugin(opts: {
   lines: LineData[];
   /** External hover state ref that survives chart recreation */
   hoverStateRef?: { current: HoverState };
+  /** Callback when hover state changes (for context tracking) */
+  onHoverChange?: (isHovering: boolean) => void;
+  /** Function to check if this chart is the currently hovered chart */
+  isActiveChart?: () => boolean;
 }): uPlot.Plugin {
-  const { theme, isDateTime, timeRange, lines, hoverStateRef } = opts;
+  const { theme, isDateTime, timeRange, lines, hoverStateRef, onHoverChange, isActiveChart } = opts;
 
   // DEBUG: Temporary logging to diagnose tooltip persistence issue
   const DEBUG_TOOLTIP = false; // Set to true for debugging
@@ -349,6 +353,8 @@ function tooltipPlugin(opts: {
       }
       isHovering = true;
       syncHoverState();
+      // Notify context that this chart is now hovered
+      onHoverChange?.(true);
       // Show tooltip immediately on mouseenter (uPlot demo pattern)
       if (tooltipEl) {
         tooltipEl.style.display = "block";
@@ -371,6 +377,8 @@ function tooltipPlugin(opts: {
         lastLeft = null;
         lastTop = null;
         syncHoverState();
+        // Notify context that this chart is no longer hovered
+        onHoverChange?.(false);
         if (tooltipEl) {
           tooltipEl.style.display = "none";
         }
@@ -512,11 +520,17 @@ function tooltipPlugin(opts: {
   function setCursor(u: uPlot) {
     if (!tooltipEl || !overEl) return;
 
-    // If not hovering, just return - don't update content
-    // Visibility is controlled by mouseenter/mouseleave only
-    if (!isHovering) {
-      // Only log occasionally to avoid spam
-      log(`setCursor (not hovering) - idx=${u.cursor.idx}`);
+    // Check if this chart is the one being directly hovered
+    // This prevents synced charts from showing tooltips
+    const isActive = isActiveChart?.() ?? true; // Default to true if no context
+
+    // If not hovering OR this is a synced cursor (not active chart), hide tooltip
+    if (!isHovering || !isActive) {
+      // Hide tooltip if visible and this isn't the active chart
+      if (!isActive && tooltipEl.style.display !== "none") {
+        tooltipEl.style.display = "none";
+        log(`setCursor - hiding tooltip (not active chart)`);
+      }
       return;
     }
 
@@ -615,6 +629,12 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
 
     // Get chart sync context for cross-chart coordination
     const chartSyncContext = useChartSyncContext();
+
+    // Store context in ref for stable access in callbacks (avoids chart recreation on hover changes)
+    const chartSyncContextRef = useRef(chartSyncContext);
+    useEffect(() => {
+      chartSyncContextRef.current = chartSyncContext;
+    }, [chartSyncContext]);
 
     // Use context's syncKey, then prop, then default (in that priority order)
     const effectiveSyncKey = chartSyncContext?.syncKey ?? syncKey ?? DEFAULT_SYNC_KEY;
@@ -750,6 +770,39 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       // Multiple points - let uPlot auto-scale
       return null;
     }, [uplotData, logXAxis, isDateTime]);
+
+    // Callback for when hover state changes - notifies context to track active chart
+    // Uses ref to avoid recreating chart on hover changes
+    const handleHoverChange = useMemo(() => {
+      return (isHovering: boolean) => {
+        const ctx = chartSyncContextRef.current;
+        if (!ctx) return;
+
+        if (isHovering) {
+          ctx.setHoveredChart(chartId);
+        } else {
+          // Only clear if this chart was the hovered one
+          // Prevents race conditions when quickly moving between charts
+          // (e.g., A's mouseleave fires after B's mouseenter)
+          if (ctx.hoveredChartId === chartId) {
+            ctx.setHoveredChart(null);
+          }
+        }
+      };
+    }, [chartId]);
+
+    // Function to check if this chart is currently the active (hovered) chart
+    // Used by tooltipPlugin to only show tooltip on the directly-hovered chart
+    // Uses ref to read current hover state at call time without causing chart recreation
+    const isActiveChart = useMemo(() => {
+      return () => {
+        const ctx = chartSyncContextRef.current;
+        // If no context, default to active (standalone chart)
+        if (!ctx) return true;
+        // Active if no chart is hovered or this chart is the hovered one
+        return ctx.hoveredChartId === null || ctx.hoveredChartId === chartId;
+      };
+    }, [chartId]);
 
     // Build uPlot options
     const options = useMemo<uPlot.Options>(() => {
@@ -896,6 +949,8 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             timeRange,
             lines: processedLines,
             hoverStateRef, // Survives chart recreation
+            onHoverChange: handleHoverChange, // Notifies context of hover state
+            isActiveChart, // Checks if this chart is the one being hovered
           }),
         ],
         hooks: {
@@ -990,6 +1045,8 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       chartId,
       yRange,
       xRange,
+      handleHoverChange,
+      isActiveChart,
     ]);
 
     // Store cleanup function ref for proper cleanup on unmount
