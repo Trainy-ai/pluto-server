@@ -7,6 +7,10 @@ import {
 import { SignInCard } from "./~components/sign-in-card";
 import { trpc } from "@/utils/trpc";
 import { Footer } from "@/components/ui/footer";
+import { env } from "@/lib/env";
+
+// Demo org slug (must match seed-demo.ts)
+const DEMO_ORG_SLUG = "dev-org";
 
 export const Route = createFileRoute("/auth/sign-in")({
   component: RouteComponent,
@@ -18,6 +22,11 @@ export const Route = createFileRoute("/auth/sign-in")({
     }
   },
   beforeLoad: async ({ context: { queryClient }, search }) => {
+    // In demo mode, redirect directly to the demo org dashboard
+    if (env.VITE_SKIP_AUTH_DEMO) {
+      throw redirect({ to: `/o/$orgSlug`, params: { orgSlug: DEMO_ORG_SLUG } });
+    }
+
     let auth = await queryClient.ensureQueryData(trpc.auth.queryOptions());
     if (auth) {
       throw redirect({ to: "/o", search: { redirect: search?.redirect } });

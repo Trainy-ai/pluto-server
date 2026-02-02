@@ -1,9 +1,19 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import { SignUpCard } from "./~components/sign-up-card";
 import { Footer } from "@/components/ui/footer";
+import { env } from "@/lib/env";
+
+// Demo org slug (must match seed-demo.ts)
+const DEMO_ORG_SLUG = "dev-org";
 
 export const Route = createFileRoute("/auth/sign-up")({
   component: RouteComponent,
+  beforeLoad: async () => {
+    // In demo mode, redirect directly to the demo org dashboard
+    if (env.VITE_SKIP_AUTH_DEMO) {
+      throw redirect({ to: `/o/$orgSlug`, params: { orgSlug: DEMO_ORG_SLUG } });
+    }
+  },
 });
 
 function RouteComponent() {
