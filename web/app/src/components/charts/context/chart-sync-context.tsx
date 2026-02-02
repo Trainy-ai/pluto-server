@@ -35,6 +35,10 @@ interface ChartSyncContextValue {
   // Hover tracking - only the hovered chart should show tooltip
   hoveredChartId: string | null;
   setHoveredChart: (id: string | null) => void;
+
+  // Cross-chart series highlighting for uPlot (tracked via state for subscriptions)
+  highlightedSeriesName: string | null;
+  setHighlightedSeriesName: (name: string | null) => void;
 }
 
 // ============================
@@ -76,6 +80,9 @@ export function ChartSyncProvider({
   // Track which chart is currently being hovered (for tooltip display)
   // Only the hovered chart should show its tooltip; synced charts show only cursor line
   const [hoveredChartId, setHoveredChartId] = useState<string | null>(null);
+
+  // Track which series is highlighted across all charts (for uPlot cross-chart highlighting)
+  const [highlightedSeriesName, setHighlightedSeriesName] = useState<string | null>(null);
 
   // ECharts registration
   const registerEChart = useCallback((id: string, ref: ReactECharts) => {
@@ -159,6 +166,11 @@ export function ChartSyncProvider({
     setHoveredChartId(id);
   }, []);
 
+  // Callback for setting highlighted series name (stable reference)
+  const setHighlightedSeries = useCallback((name: string | null) => {
+    setHighlightedSeriesName(name);
+  }, []);
+
   // Memoize context value to prevent unnecessary re-renders
   const contextValue = useMemo<ChartSyncContextValue>(
     () => ({
@@ -172,6 +184,8 @@ export function ChartSyncProvider({
       highlightSeries,
       hoveredChartId,
       setHoveredChart,
+      highlightedSeriesName,
+      setHighlightedSeriesName: setHighlightedSeries,
     }),
     [
       registerEChart,
@@ -184,6 +198,8 @@ export function ChartSyncProvider({
       highlightSeries,
       hoveredChartId,
       setHoveredChart,
+      highlightedSeriesName,
+      setHighlightedSeries,
     ]
   );
 

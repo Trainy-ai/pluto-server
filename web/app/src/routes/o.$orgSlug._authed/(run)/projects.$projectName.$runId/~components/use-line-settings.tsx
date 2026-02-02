@@ -40,8 +40,8 @@ export const DEFAULT_SETTINGS: LineChartSettings = {
   // 0 = no limit (show all points, no downsampling)
   // Set to 1000+ for better performance with large datasets
   maxPointsPerSeries: 0,
-  // Default to ECharts (Legacy) - uPlot is Alpha
-  chartEngine: "echarts",
+  // Default to uPlot - better performance and has zoom built-in
+  chartEngine: "uplot",
 };
 
 const lineSettingsDb = new LocalCache<LineChartSettings>(
