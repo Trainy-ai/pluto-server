@@ -13,6 +13,7 @@ import { useTheme } from "@/lib/hooks/use-theme";
 import { cn } from "@/lib/utils";
 import { useChartSyncContext } from "./context/chart-sync-context";
 
+
 // ============================
 // Types
 // ============================
@@ -273,20 +274,45 @@ function createTooltipRow(
   return row;
 }
 
+/** Type for hover state that persists across chart recreations */
+interface HoverState {
+  isHovering: boolean;
+  lastIdx: number | null;
+  lastLeft: number | null;
+  lastTop: number | null;
+}
+
 function tooltipPlugin(opts: {
   theme: string;
   isDateTime: boolean;
   timeRange: number;
   lines: LineData[];
+  /** External hover state ref that survives chart recreation */
+  hoverStateRef?: { current: HoverState };
 }): uPlot.Plugin {
-  const { theme, isDateTime, timeRange, lines } = opts;
+  const { theme, isDateTime, timeRange, lines, hoverStateRef } = opts;
+
+  // DEBUG: Temporary logging to diagnose tooltip persistence issue
+  const DEBUG_TOOLTIP = false; // Set to true for debugging
+  const tooltipId = Math.random().toString(36).substring(7);
+  const log = (msg: string) => DEBUG_TOOLTIP && console.log(`[tooltip-${tooltipId}] ${msg}`);
+  log("tooltipPlugin created");
 
   let tooltipEl: HTMLDivElement | null = null;
   let overEl: HTMLElement | null = null;
-  let isHovering = false; // Track if mouse is over the chart
-  let lastIdx: number | null = null; // Store last valid cursor index
-  let lastLeft: number | null = null; // Store last valid cursor X position
-  let lastTop: number | null = null; // Store last valid cursor Y position
+  // Restore ALL state from external ref (survives chart recreation)
+  let lastIdx: number | null = hoverStateRef?.current.lastIdx ?? null;
+  let lastLeft: number | null = hoverStateRef?.current.lastLeft ?? null;
+  let lastTop: number | null = hoverStateRef?.current.lastTop ?? null;
+  let isHovering = hoverStateRef?.current.isHovering ?? false;
+  let hideTimeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  // Sync local state to external ref (includes cursor position now)
+  const syncHoverState = () => {
+    if (hoverStateRef) {
+      hoverStateRef.current = { isHovering, lastIdx, lastLeft, lastTop };
+    }
+  };
 
   function init(u: uPlot) {
     overEl = u.over;
@@ -309,39 +335,85 @@ function tooltipPlugin(opts: {
     // Append to body so tooltip can overflow chart boundaries
     document.body.appendChild(tooltipEl);
 
-    // Track hover state to persist tooltip
+    // Following uPlot's official tooltips.html demo pattern EXACTLY:
+    // mouseenter -> show tooltip (cancel any pending hide)
+    // mouseleave -> hide tooltip (with small debounce to prevent spurious hides)
+    // setCursor -> just update content, never control visibility
     const handleMouseEnter = () => {
+      log(`mouseenter - was isHovering=${isHovering}, hideTimeoutId=${hideTimeoutId !== null}`);
+      // Cancel any pending hide
+      if (hideTimeoutId !== null) {
+        clearTimeout(hideTimeoutId);
+        hideTimeoutId = null;
+        log("  cancelled pending hide");
+      }
       isHovering = true;
+      syncHoverState();
+      // Show tooltip immediately on mouseenter (uPlot demo pattern)
+      if (tooltipEl) {
+        tooltipEl.style.display = "block";
+        log("  set display=block");
+      }
     };
 
     const handleMouseLeave = () => {
-      isHovering = false;
-      lastIdx = null;
-      lastLeft = null;
-      lastTop = null;
-      if (tooltipEl) {
-        tooltipEl.style.display = "none";
+      log(`mouseleave - isHovering=${isHovering}, pendingHide=${hideTimeoutId !== null}`);
+      // Small debounce to prevent spurious mouseleave events from hiding tooltip
+      // This protects against edge cases like cursor sync updates or scroll events
+      // that might trigger false mouseleave events
+      if (hideTimeoutId !== null) {
+        clearTimeout(hideTimeoutId);
       }
+      hideTimeoutId = setTimeout(() => {
+        log("  hide timeout fired - hiding tooltip");
+        isHovering = false;
+        lastIdx = null;
+        lastLeft = null;
+        lastTop = null;
+        syncHoverState();
+        if (tooltipEl) {
+          tooltipEl.style.display = "none";
+        }
+        hideTimeoutId = null;
+      }, 50); // 50ms debounce - enough to filter spurious events but not noticeable to user
     };
 
     overEl.addEventListener("mouseenter", handleMouseEnter);
     overEl.addEventListener("mouseleave", handleMouseLeave);
 
-    // Store cleanup functions on the element for later removal
+    // Store cleanup function on the element for later removal
     (overEl as HTMLElement & { _tooltipCleanup?: () => void })._tooltipCleanup = () => {
       overEl?.removeEventListener("mouseenter", handleMouseEnter);
       overEl?.removeEventListener("mouseleave", handleMouseLeave);
+      // Clear any pending hide timeout
+      if (hideTimeoutId !== null) {
+        clearTimeout(hideTimeoutId);
+        hideTimeoutId = null;
+      }
     };
+
+    // CRITICAL: Check if we were hovering before chart recreation
+    // This handles the case where chart is recreated while mouse is stationary over it
+    // The external hoverStateRef preserves the hover state AND cursor position
+    if (isHovering && tooltipEl && lastIdx != null) {
+      log(`init: restoring hover state - idx=${lastIdx}, left=${lastLeft}, top=${lastTop}`);
+      tooltipEl.style.display = "block";
+      // Immediately update tooltip content with restored state
+      // Use requestAnimationFrame to ensure uPlot is fully initialized
+      requestAnimationFrame(() => {
+        if (lastIdx != null) {
+          updateTooltipContent(u, lastIdx);
+        }
+      });
+    }
   }
 
   function updateTooltipContent(u: uPlot, idx: number) {
     if (!tooltipEl) return;
 
     const xVal = u.data[0][idx];
-    if (xVal == null) {
-      tooltipEl.style.display = "none";
-      return;
-    }
+    // If no valid x value, just return - don't hide (mouseleave handles that)
+    if (xVal == null) return;
 
     // Format x value
     const xFormatted = isDateTime
@@ -400,9 +472,11 @@ function tooltipPlugin(opts: {
     const tooltipHeight = tooltipEl.offsetHeight || 100;
 
     // Get cursor position from uPlot (relative to chart area)
-    // Use last known position if current is null (for tooltip persistence when mouse stops)
-    const cursorLeft = u.cursor.left ?? lastLeft ?? 0;
-    const cursorTop = u.cursor.top ?? lastTop ?? 0;
+    // uPlot sets cursor.left/top to -10 when cursor is outside chart
+    // Use last known position if current is invalid (negative)
+    // Note: 0 is valid (left/top edge), so check >= 0
+    const cursorLeft = (u.cursor.left != null && u.cursor.left >= 0) ? u.cursor.left : (lastLeft ?? 0);
+    const cursorTop = (u.cursor.top != null && u.cursor.top >= 0) ? u.cursor.top : (lastTop ?? 0);
 
     // Convert chart-relative coords to viewport coords
     const chartRect = u.over.getBoundingClientRect();
@@ -432,40 +506,50 @@ function tooltipPlugin(opts: {
 
     tooltipEl.style.left = `${left}px`;
     tooltipEl.style.top = `${top}px`;
-    tooltipEl.style.display = "block";
+    // Note: visibility controlled by mouseenter/mouseleave, not here
   }
 
   function setCursor(u: uPlot) {
     if (!tooltipEl || !overEl) return;
 
-    // Only show tooltip on the chart that the mouse is actually over
-    // Use isHovering (set by mouseenter/mouseleave) instead of global mouse position
-    // because global mouse coordinates can be stale with cursor sync events
+    // If not hovering, just return - don't update content
+    // Visibility is controlled by mouseenter/mouseleave only
     if (!isHovering) {
-      tooltipEl.style.display = "none";
+      // Only log occasionally to avoid spam
+      log(`setCursor (not hovering) - idx=${u.cursor.idx}`);
       return;
     }
 
     const { idx, left, top } = u.cursor;
+    log(`setCursor - idx=${idx}, left=${left?.toFixed(0)}, top=${top?.toFixed(0)}, lastIdx=${lastIdx}`);
 
     // Store valid cursor data for tooltip persistence when mouse stops moving
-    if (idx != null) {
+    // Only sync to ref when idx changes (not every mouse move) to reduce overhead
+    if (idx != null && idx !== lastIdx) {
       lastIdx = idx;
-    }
-    if (left != null && left > 0) {
-      lastLeft = left;
-    }
-    if (top != null && top > 0) {
-      lastTop = top;
+      // Also capture position at this point
+      if (left != null && left >= 0) {
+        lastLeft = left;
+      }
+      if (top != null && top >= 0) {
+        lastTop = top;
+      }
+      syncHoverState();
+    } else {
+      // Still update local position cache for tooltip positioning
+      if (left != null && left >= 0) {
+        lastLeft = left;
+      }
+      if (top != null && top >= 0) {
+        lastTop = top;
+      }
     }
 
     // Use the last valid index if current is null but we're still hovering
     const displayIdx = idx ?? lastIdx;
 
-    if (displayIdx == null) {
-      tooltipEl.style.display = "none";
-      return;
-    }
+    // If no valid index, just return - don't hide (mouseleave handles that)
+    if (displayIdx == null) return;
 
     updateTooltipContent(u, displayIdx);
   }
@@ -475,6 +559,7 @@ function tooltipPlugin(opts: {
       init,
       setCursor,
       destroy(u: uPlot) {
+        log(`destroy called - isHovering=${isHovering}, hideTimeoutId=${hideTimeoutId !== null}`);
         // Cleanup event listeners
         const cleanup = (overEl as HTMLElement & { _tooltipCleanup?: () => void })?._tooltipCleanup;
         cleanup?.();
@@ -516,6 +601,14 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
     const containerRef = useRef<HTMLDivElement>(null);
     const chartRef = useRef<uPlot | null>(null);
     const chartContainerRef = useRef<HTMLDivElement>(null);
+    // External hover state that survives chart recreation
+    // This fixes tooltip disappearing when chart is recreated while mouse is hovering
+    const hoverStateRef = useRef<HoverState>({
+      isHovering: false,
+      lastIdx: null,
+      lastLeft: null,
+      lastTop: null,
+    });
     // Measure the chart container directly (not outer container) for accurate sizing
     const { width, height } = useContainerSize(chartContainerRef);
     const chartId = useId();
@@ -802,6 +895,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             isDateTime,
             timeRange,
             lines: processedLines,
+            hoverStateRef, // Survives chart recreation
           }),
         ],
         hooks: {
@@ -904,12 +998,24 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
     // Track if chart has been created - used to decide between create vs resize
     const chartCreatedRef = useRef(false);
 
+    // Track initial dimensions for chart creation
+    const initialDimensionsRef = useRef<{ width: number; height: number } | null>(null);
+
+    // Store dimensions when first valid
+    useEffect(() => {
+      if (width > 0 && height > 0 && !initialDimensionsRef.current) {
+        initialDimensionsRef.current = { width, height };
+      }
+    }, [width, height]);
+
     // Create chart when container has dimensions and data is ready
     // Note: We intentionally recreate the chart when options change because
     // uPlot doesn't support updating options after creation. The yRangeFn
     // for auto-scaling is baked into the options at creation time.
     useEffect(() => {
-      if (!chartContainerRef.current || width === 0 || height === 0) return;
+      // Use stored initial dimensions or current dimensions
+      const dims = initialDimensionsRef.current || { width, height };
+      if (!chartContainerRef.current || dims.width === 0 || dims.height === 0) return;
 
       // Destroy existing chart if present (shouldn't happen but be safe)
       if (chartRef.current) {
@@ -922,8 +1028,8 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         chartContainerRef.current.removeChild(chartContainerRef.current.firstChild);
       }
 
-      // Create new chart with current dimensions
-      const chartOptions = { ...options, width, height };
+      // Create new chart with stored dimensions
+      const chartOptions = { ...options, width: dims.width, height: dims.height };
       const chart = new uPlot(chartOptions, uplotData, chartContainerRef.current);
       chartRef.current = chart;
       chartCreatedRef.current = true;
@@ -964,7 +1070,10 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         }
         chartCreatedRef.current = false;
       };
-    }, [options, uplotData, chartId, width, height, chartSyncContext]);
+      // Note: width/height intentionally excluded - size changes handled by separate setSize() effect
+      // Including them here causes infinite recreation loop when ResizeObserver fires after chart mount
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [options, uplotData, chartId, chartSyncContext]);
 
     // Handle resize separately - uses setSize() instead of recreating chart
     useEffect(() => {
