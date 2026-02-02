@@ -47,6 +47,12 @@ const envSchema = z.object({
   NODE_ENV: z.enum(["development", "production", "test"]).optional(),
   IS_DOCKER: z.string().optional(), // Could refine if specific values like "true" are expected
   VERCEL: z.string().optional(), // Could refine if specific values like "1" are expected
+
+  // Demo mode - skips authentication and uses a pre-seeded demo user
+  SKIP_AUTH_DEMO: z.preprocess(
+    (val) => val === "true",
+    z.boolean().default(false)
+  ),
 });
 
 // Validate environment variables
