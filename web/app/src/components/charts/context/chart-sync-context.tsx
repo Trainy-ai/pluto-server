@@ -5,6 +5,7 @@ import React, {
   useCallback,
   useEffect,
   useMemo,
+  useState,
 } from "react";
 import type ReactECharts from "echarts-for-react";
 import type { ECharts } from "echarts";
@@ -30,6 +31,10 @@ interface ChartSyncContextValue {
 
   // Cross-chart highlighting (replaces window.__chartInstances)
   highlightSeries: (sourceChartId: string, seriesName: string | null) => void;
+
+  // Hover tracking - only the hovered chart should show tooltip
+  hoveredChartId: string | null;
+  setHoveredChart: (id: string | null) => void;
 }
 
 // ============================
@@ -67,6 +72,10 @@ export function ChartSyncProvider({
 
   // Flag to prevent infinite highlight loops
   const isHighlightingRef = useRef(false);
+
+  // Track which chart is currently being hovered (for tooltip display)
+  // Only the hovered chart should show its tooltip; synced charts show only cursor line
+  const [hoveredChartId, setHoveredChartId] = useState<string | null>(null);
 
   // ECharts registration
   const registerEChart = useCallback((id: string, ref: ReactECharts) => {
@@ -145,6 +154,11 @@ export function ChartSyncProvider({
     []
   );
 
+  // Callback for setting hovered chart (stable reference)
+  const setHoveredChart = useCallback((id: string | null) => {
+    setHoveredChartId(id);
+  }, []);
+
   // Memoize context value to prevent unnecessary re-renders
   const contextValue = useMemo<ChartSyncContextValue>(
     () => ({
@@ -156,6 +170,8 @@ export function ChartSyncProvider({
       getUPlotInstances,
       syncKey,
       highlightSeries,
+      hoveredChartId,
+      setHoveredChart,
     }),
     [
       registerEChart,
@@ -166,6 +182,8 @@ export function ChartSyncProvider({
       getUPlotInstances,
       syncKey,
       highlightSeries,
+      hoveredChartId,
+      setHoveredChart,
     ]
   );
 
