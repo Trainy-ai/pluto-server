@@ -149,17 +149,14 @@ test.describe("Run Selection", () => {
     await decrementButton.click();
 
     await page.locator('button:has-text("Apply")').click();
-    await page.waitForTimeout(500);
 
-    // Wait for charts to render
-    await page.waitForLoadState("networkidle");
-
-    // Check that chart canvas elements exist (ECharts renders to canvas)
+    // Wait for charts to render - ECharts renders asynchronously to canvas
+    // Use polling to wait for canvas elements to appear (more reliable than fixed timeout)
     const charts = page.locator('canvas');
-
-    // There should be at least one chart visible
-    const chartCount = await charts.count();
-    expect(chartCount).toBeGreaterThan(0);
+    await expect(async () => {
+      const chartCount = await charts.count();
+      expect(chartCount).toBeGreaterThan(0);
+    }).toPass({ timeout: 10000 });
 
     // The chart should have data (check via chart container having content)
     const chartContainers = page.locator('[class*="echarts"], [data-testid*="chart"]');

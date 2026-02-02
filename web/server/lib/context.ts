@@ -12,14 +12,17 @@ export type CreateContextOptions = {
 const DEMO_USER_EMAIL = "dev@example.com";
 const DEMO_ORG_SLUG = "dev-org";
 
+// Derive session type from better-auth to stay in sync with auth library
+type AuthSession = Awaited<ReturnType<typeof auth.api.getSession>>;
+
 // Cached demo session to avoid repeated DB lookups
-let cachedDemoSession: Awaited<ReturnType<typeof getDemoSession>> | null = null;
+let cachedDemoSession: AuthSession = null;
 
 /**
  * Fetches the demo user and organization from the database and constructs
  * a session object that mimics what better-auth would return.
  */
-async function getDemoSession() {
+async function getDemoSession(): Promise<AuthSession> {
   // Return cached session if available
   if (cachedDemoSession) {
     return cachedDemoSession;
