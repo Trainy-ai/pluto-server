@@ -61,7 +61,7 @@ export const tableProcedure = protectedOrgProcedure
           AND projectName = {projectName: String}
           AND runId = {runId: UInt64}
           AND logName = {logName: String}
-          AND dataType = 'TABLE'
+          AND dataType ILIKE 'table'
         `;
 
         const result = (await ctx.clickhouse
