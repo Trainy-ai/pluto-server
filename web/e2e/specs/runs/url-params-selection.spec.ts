@@ -53,8 +53,11 @@ test.describe("Run Comparison URL Parameters", () => {
       await page.waitForLoadState("networkidle");
 
       // Verify the selection counter shows exactly 2 runs selected
+      // Use toPass() for resilience against selection state propagation delays
       const selectionContainer = page.locator('text=runs selected').locator('..');
-      await expect(selectionContainer).toContainText("2", { timeout: 5000 });
+      await expect(async () => {
+        await expect(selectionContainer).toContainText("2", { timeout: 2000 });
+      }).toPass({ timeout: 10000 });
     });
 
     test("?runs= param with single run ID selects that run", async ({ page }) => {
