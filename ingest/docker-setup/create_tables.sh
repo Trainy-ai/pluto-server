@@ -16,6 +16,24 @@ if [ ! -d "$SQL_DIR" ]; then
     exit 1
 fi
 
+echo "Waiting for ClickHouse to be ready..."
+MAX_RETRIES=30
+RETRY_INTERVAL=2
+for i in $(seq 1 $MAX_RETRIES); do
+    if curl -sS -u "${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}" \
+        --connect-timeout 3 --max-time 5 \
+        -d "SELECT 1" "$CLICKHOUSE_URL" > /dev/null 2>&1; then
+        echo "ClickHouse is ready."
+        break
+    fi
+    if [ "$i" -eq "$MAX_RETRIES" ]; then
+        echo "Error: ClickHouse did not become ready after $MAX_RETRIES attempts."
+        exit 1
+    fi
+    echo "ClickHouse not ready yet (attempt $i/$MAX_RETRIES), retrying in ${RETRY_INTERVAL}s..."
+    sleep "$RETRY_INTERVAL"
+done
+
 echo "Looking for SQL files in $SQL_DIR..."
 
 # Find and process each .sql file

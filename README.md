@@ -6,15 +6,9 @@ For a managed instance with better scalability, stability and support, please vi
 
 ### 🚀 Getting Started
 
-#### 0. Ensure you have `docker-compose` (or `podman-compose`) and the current user has access to Docker daemon
+#### Prerequisites
 
-```bash
-sudo pacman -S docker-compose
-# or
-sudo apt install docker-compose
-# or
-sudo port install docker-compose
-```
+- **Docker** with **Compose v2** (the `docker compose` command). This comes with [Docker Desktop](https://www.docker.com/products/docker-desktop/) or can be installed separately via the [Compose plugin](https://docs.docker.com/compose/install/).
 
 #### 1. Get the repository
 
@@ -32,20 +26,23 @@ cp .env.example .env
 #### 3. Let's go!
 
 ```bash
-sudo docker-compose --env-file .env up --build
+docker compose --env-file .env up --build -d
 ```
-or to have more granular control over the services,
+
+The server will be swiftly available at `http://localhost:3000`.
+
+#### 4. Verify it works
+
+1. Open `http://localhost:3000` and create an account
+2. Go to `http://localhost:3000/api-keys` and generate an API key
+3. Install the Python SDK and run the integration test:
+
 ```bash
-sudo docker-compose --env-file .env up -d traefik clickhouse py ingest
+pip install pluto-ml
+TEST_LOCAL=true python3 tests/e2e/integration_test.py
 ```
 
-The server will be swiftly available at `http://localhost:3000`. 
-
-To use the self-hosted server with the client, simply initialize the client with
-
-```python
-pluto.init(settings={"host": "localhost"}) # or a specified host matching the CORS policy of the server set by .env
-```
+When prompted, paste your API key. The test will log metrics, a table, and finish a run. If it completes successfully, your deployment is working.
 
 ### 📲 What's Inside?
 
@@ -56,6 +53,30 @@ pluto.init(settings={"host": "localhost"}) # or a specified host matching the CO
 - an S3-compatible storage server on `port 9000`
 - a ClickHouse database on `port 9000` (not exposed to host by default)
 - a PostgreSQL database on `port 5432` (not exposed to host by default)
+
+### 🔧 Troubleshooting
+
+**Connecting the Python SDK to your self-hosted server:**
+
+```python
+pluto.init(settings={"host": "localhost"}) # or a specified host matching the CORS policy of the server set by .env
+```
+
+**502 Bad Gateway on first load:**
+
+On a fresh start, the frontend (nginx) may start before the backend is ready. Nginx caches the failed connection and keeps returning 502 even after the backend comes up. Restart the frontend container to fix it:
+```bash
+docker compose --env-file .env restart frontend
+```
+
+**Rebuilding from scratch:**
+
+If you encounter stale build issues, rebuild without cache:
+```bash
+docker compose --env-file .env build --no-cache
+docker compose --env-file .env up -d
+```
+
 
 ### 📦 Moving Servers
 
@@ -74,4 +95,3 @@ docker compose --env-file .env up --build
 ```
 
 The frontend container runs Nginx which serves the static build and proxies API requests (`/trpc` and `/api`) to the backend container via Docker's internal network (`http://backend:3001`). This is configured in `web/app/nginx.conf`.
-
