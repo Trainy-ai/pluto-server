@@ -524,15 +524,17 @@ function tooltipPlugin(opts: {
     // This prevents synced charts from showing tooltips
     const isActive = isActiveChart?.() ?? true; // Default to true if no context
 
-    // If not hovering OR this is a synced cursor (not active chart), hide tooltip
-    if (!isHovering || !isActive) {
-      // Hide tooltip if visible and this isn't the active chart
-      if (!isActive && tooltipEl.style.display !== "none") {
-        tooltipEl.style.display = "none";
-        log(`setCursor - hiding tooltip (not active chart)`);
-      }
+    // For non-active (synced) charts, HIDE the tooltip
+    // This prevents multiple tooltips from appearing on different charts
+    // With synchronous ref tracking in chart-sync-context, this is now safe
+    if (!isActive) {
+      log(`setCursor - hiding tooltip (not active chart)`);
+      tooltipEl.style.display = "none";
       return;
     }
+
+    // If not hovering, don't update content
+    if (!isHovering) return;
 
     const { idx, left, top } = u.cursor;
     log(`setCursor - idx=${idx}, left=${left?.toFixed(0)}, top=${top?.toFixed(0)}, lastIdx=${lastIdx}`);
@@ -636,6 +638,15 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       chartSyncContextRef.current = chartSyncContext;
     }, [chartSyncContext]);
 
+    // Track last focused series for emphasis persistence (don't reset on seriesIdx=null)
+    const lastFocusedSeriesRef = useRef<number | null>(null);
+
+    // Ref to access processedLines in callbacks without causing dependency issues
+    const processedLinesRef = useRef<typeof lines>([]);
+
+    // Store chart instance ref for resetting alpha on mouseleave
+    const chartInstanceRef = useRef<uPlot | null>(null);
+
     // Use context's syncKey, then prop, then default (in that priority order)
     const effectiveSyncKey = chartSyncContext?.syncKey ?? syncKey ?? DEFAULT_SYNC_KEY;
 
@@ -644,6 +655,9 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       () => filterDataForLogScale(lines, logXAxis, logYAxis),
       [lines, logXAxis, logYAxis]
     );
+
+    // Keep ref in sync for callbacks
+    processedLinesRef.current = processedLines;
 
     // Calculate time range for datetime formatting
     const timeRange = useMemo(() => {
@@ -787,29 +801,36 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           if (ctx.hoveredChartId === chartId) {
             ctx.setHoveredChart(null);
           }
+
+          // Clear cross-chart emphasis when mouse leaves
+          ctx.highlightUPlotSeries(chartId, null);
+
+          // Clear local emphasis tracking
+          lastFocusedSeriesRef.current = null;
+
+          // NOTE: Removed u.redraw(false) here - it was potentially corrupting chart state
+          // The stroke color reset is not needed because uPlot's focus.alpha handles emphasis
+          // and the redraw call during mouseleave could interfere with initial rendering
         }
       };
     }, [chartId]);
 
     // Function to check if this chart is currently the active (hovered) chart
     // Used by tooltipPlugin to only show tooltip on the directly-hovered chart
-    // Uses ref to read current hover state at call time without causing chart recreation
+    // CRITICAL: Uses hoveredChartIdRef for SYNCHRONOUS access during cursor sync events
+    // The ref is updated immediately when setHoveredChart is called, while React state is async
+    // This prevents race conditions where tooltips appear on multiple charts
     const isActiveChart = useMemo(() => {
       return () => {
         const ctx = chartSyncContextRef.current;
         // If no context, default to active (standalone chart)
         if (!ctx) return true;
+        // Use ref for synchronous read (falls back to state for backwards compatibility)
+        const currentHovered = ctx.hoveredChartIdRef?.current ?? ctx.hoveredChartId;
         // Active if no chart is hovered or this chart is the hovered one
-        return ctx.hoveredChartId === null || ctx.hoveredChartId === chartId;
+        return currentHovered === null || currentHovered === chartId;
       };
     }, [chartId]);
-
-    // Callback for series focus changes - notifies context for cross-chart highlighting
-    const handleSeriesFocus = useMemo(() => {
-      return (seriesLabel: string | null) => {
-        chartSyncContextRef.current?.setHighlightedSeriesName(seriesLabel);
-      };
-    }, []);
 
     // Build uPlot options
     const options = useMemo<uPlot.Options>(() => {
@@ -826,22 +847,19 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         ...processedLines.map((line, i) => {
           // Check if this series has only a single point - need to show as dot since lines need 2+ points
           const isSinglePoint = line.x.length === 1;
+          const baseColor = line.color || `hsl(${(i * 137) % 360}, 70%, 50%)`;
+
           return {
             label: line.label,
-            stroke: line.color || `hsl(${(i * 137) % 360}, 70%, 50%)`,
-            width: 1.5,
-            alpha: line.opacity ?? 0.85,
+            stroke: baseColor,
+            width: 2.5,
             dash: line.dashed ? [5, 5] : undefined,
             spanGaps: true,
             points: {
               // Show points for single-point series since lines need 2+ points to be visible
               show: isSinglePoint,
               size: isSinglePoint ? 10 : 6,
-              fill: line.color || `hsl(${(i * 137) % 360}, 70%, 50%)`,
-            },
-            // Focus styling - when this series is focused, make it bolder
-            focus: {
-              alpha: 1, // Full opacity when focused
+              fill: baseColor,
             },
           };
         }),
@@ -911,10 +929,10 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       const cursor: uPlot.Cursor = {
         sync: {
           key: effectiveSyncKey,
-          setSeries: false, // Disable uPlot's series visibility sync - we handle highlighting via alpha
+          setSeries: true, // Enable series focus sync - required for focus detection to work
         },
         focus: {
-          prox: 30,
+          prox: 1e6, // Very large threshold = always focus on closest series regardless of distance
         },
         drag: {
           x: true,
@@ -949,6 +967,11 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         cursor,
         legend,
         select,
+        // Top-level focus configuration (required for series highlighting)
+        // alpha < 1 dims unfocused series when one is focused
+        focus: {
+          alpha: 0.3, // Dim unfocused series to 30% opacity
+        },
         plugins: [
           tooltipPlugin({
             theme: theme,
@@ -961,34 +984,30 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           }),
         ],
         hooks: {
+          ready: [
+            (u) => {
+              // Store chart instance for resetting alpha on mouseleave
+              chartInstanceRef.current = u;
+            },
+          ],
           setSeries: [
-            (u, seriesIdx) => {
-              // Handle series focus for local + cross-chart highlighting
-              if (seriesIdx == null) {
-                // No series focused - reset all series to normal alpha
-                for (let i = 1; i < u.series.length; i++) {
-                  const originalAlpha = processedLines[i - 1]?.opacity ?? 0.85;
-                  u.series[i].alpha = originalAlpha;
-                }
-                // Notify context to clear cross-chart highlighting
-                handleSeriesFocus(null);
-              } else {
-                // Highlight focused series, fade others
-                for (let i = 1; i < u.series.length; i++) {
-                  if (i === seriesIdx) {
-                    u.series[i].alpha = 1; // Full opacity for focused series
-                  } else {
-                    u.series[i].alpha = 0.2; // Fade unfocused series
-                  }
-                }
-                // Notify context for cross-chart highlighting
-                const seriesLabel = processedLines[seriesIdx - 1]?.label;
+            (u, seriesIdx, opts) => {
+              // Focus detection hook - uPlot calls this when cursor focus changes
+              // Note: Visual emphasis via stroke/width changes doesn't work reliably
+              // due to how uPlot handles runtime series property modifications.
+              // The focus detection itself works correctly.
+
+              if (seriesIdx != null && seriesIdx > 0) {
+                // Series is focused - track it for persistence
+                lastFocusedSeriesRef.current = seriesIdx;
+
+                // CROSS-CHART highlighting - propagate to other charts via context
+                const seriesLabel = processedLines[seriesIdx - 1]?.label ?? null;
                 if (seriesLabel) {
-                  handleSeriesFocus(seriesLabel);
+                  chartSyncContextRef.current?.highlightUPlotSeries(chartId, seriesLabel);
                 }
               }
-              // Redraw to apply alpha changes
-              u.redraw();
+              // Don't reset on seriesIdx === null to prevent emphasis flicker
             },
           ],
           setScale: [
@@ -1060,7 +1079,6 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       xRange,
       handleHoverChange,
       isActiveChart,
-      handleSeriesFocus,
     ]);
 
     // Store cleanup function ref for proper cleanup on unmount
@@ -1166,7 +1184,8 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       });
 
       // Register with context for cross-chart coordination
-      chartSyncContext?.registerUPlot(chartId, chart);
+      // Use ref to avoid depending on context object (which changes on hover)
+      chartSyncContextRef.current?.registerUPlot(chartId, chart);
 
       // Double-click to reset zoom
       const handleDblClick = () => {
@@ -1179,7 +1198,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
 
       // Store cleanup function
       cleanupRef.current = () => {
-        chartSyncContext?.unregisterUPlot(chartId);
+        chartSyncContextRef.current?.unregisterUPlot(chartId);
         container?.removeEventListener("dblclick", handleDblClick);
       };
 
@@ -1193,8 +1212,9 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       };
       // Note: width/height intentionally excluded - size changes handled by separate setSize() effect
       // Including them here causes infinite recreation loop when ResizeObserver fires after chart mount
+      // IMPORTANT: chartSyncContext excluded - accessing via ref to prevent recreation on hover changes
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [options, uplotData, chartId, chartSyncContext]);
+    }, [options, uplotData, chartId]);
 
     // Handle resize separately - uses setSize() instead of recreating chart
     useEffect(() => {
@@ -1208,40 +1228,9 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
     // removed because it caused issues with scale calculation when both
     // effects ran simultaneously.
 
-    // Apply cross-chart highlighting when another chart highlights a series
-    useEffect(() => {
-      const chart = chartRef.current;
-      if (!chart || !chartSyncContext) return;
-
-      const highlightedName = chartSyncContext.highlightedSeriesName;
-
-      // Skip if this chart is the source of the highlight (already handled in setSeries hook)
-      // We detect this by checking if the chart's focused series matches the highlighted name
-      const focusedIdx = chart.cursor.idx !== null ? chart.series.findIndex(
-        (s, i) => i > 0 && s.label === highlightedName
-      ) : -1;
-
-      // Apply highlighting based on context
-      if (highlightedName === null) {
-        // No series highlighted - reset all to original alpha
-        for (let i = 1; i < chart.series.length; i++) {
-          const originalAlpha = processedLines[i - 1]?.opacity ?? 0.85;
-          chart.series[i].alpha = originalAlpha;
-        }
-      } else {
-        // Find the series with matching label and highlight it
-        for (let i = 1; i < chart.series.length; i++) {
-          const seriesLabel = chart.series[i].label;
-          if (seriesLabel === highlightedName) {
-            chart.series[i].alpha = 1; // Full opacity for highlighted
-          } else {
-            chart.series[i].alpha = 0.2; // Fade others
-          }
-        }
-      }
-
-      chart.redraw();
-    }, [chartSyncContext?.highlightedSeriesName, processedLines, chartSyncContext]);
+    // NOTE: Cross-chart highlighting is now handled directly in the setSeries hook
+    // via chartSyncContextRef.current?.highlightUPlotSeries() which directly
+    // manipulates other uPlot instances. This avoids React state timing issues.
 
     // Expose imperative handle
     useImperativeHandle(
