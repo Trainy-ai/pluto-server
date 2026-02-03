@@ -187,11 +187,9 @@ export function ChartSyncProvider({
         if (seriesLabel === null) {
           // Reset all series to full alpha
           for (let i = 1; i < chart.series.length; i++) {
-            const s = chart.series[i] as uPlot.Series & { _alpha?: number };
-            s._alpha = 1;
-            s.alpha = 1;
+            chart.series[i].alpha = 1;
           }
-          chart.redraw();
+          chart.redraw(false); // Lightweight redraw for alpha changes
         } else {
           // Highlight matching series using alpha
           let hasMatch = false;
@@ -205,12 +203,10 @@ export function ChartSyncProvider({
           // Only apply highlighting if this chart has the series
           if (hasMatch) {
             for (let i = 1; i < chart.series.length; i++) {
-              const s = chart.series[i] as uPlot.Series & { _alpha?: number };
-              const match = s.label === seriesLabel;
-              s._alpha = match ? 1 : 0.15;
-              s.alpha = match ? 1 : 0.15;
+              const match = chart.series[i].label === seriesLabel;
+              chart.series[i].alpha = match ? 1 : 0.3; // Match local chart alpha (0.3)
             }
-            chart.redraw();
+            chart.redraw(false); // Lightweight redraw for alpha changes
           }
           // If no match, don't change - chart shows different metrics
         }

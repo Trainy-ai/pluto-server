@@ -802,15 +802,21 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             ctx.setHoveredChart(null);
           }
 
-          // Clear cross-chart emphasis when mouse leaves
-          ctx.highlightUPlotSeries(chartId, null);
-
           // Clear local emphasis tracking
           lastFocusedSeriesRef.current = null;
 
-          // NOTE: Removed u.redraw(false) here - it was potentially corrupting chart state
-          // The stroke color reset is not needed because uPlot's focus.alpha handles emphasis
-          // and the redraw call during mouseleave could interfere with initial rendering
+          // Reset LOCAL chart's alpha to full opacity
+          const u = chartInstanceRef.current;
+          if (u) {
+            for (let i = 1; i < u.series.length; i++) {
+              u.series[i].alpha = 1;
+            }
+            // Safe to redraw here - only fires on explicit mouseleave after chart is ready
+            u.redraw(false);
+          }
+
+          // Clear cross-chart emphasis for OTHER charts
+          ctx.highlightUPlotSeries(chartId, null);
         }
       };
     }, [chartId]);
@@ -993,13 +999,20 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           setSeries: [
             (u, seriesIdx, opts) => {
               // Focus detection hook - uPlot calls this when cursor focus changes
-              // Note: Visual emphasis via stroke/width changes doesn't work reliably
-              // due to how uPlot handles runtime series property modifications.
-              // The focus detection itself works correctly.
+              // We manually apply alpha to maintain emphasis when mouse stops moving
+              // (uPlot's native focus.alpha only works during active cursor movement)
 
               if (seriesIdx != null && seriesIdx > 0) {
                 // Series is focused - track it for persistence
                 lastFocusedSeriesRef.current = seriesIdx;
+
+                // Apply LOCAL emphasis: highlight focused series, dim others
+                for (let i = 1; i < u.series.length; i++) {
+                  u.series[i].alpha = i === seriesIdx ? 1 : 0.3;
+                }
+                // Redraw to apply alpha changes - safe here because setSeries
+                // only fires after chart is ready and user is interacting
+                u.redraw(false);
 
                 // CROSS-CHART highlighting - propagate to other charts via context
                 const seriesLabel = processedLines[seriesIdx - 1]?.label ?? null;
@@ -1008,6 +1021,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
                 }
               }
               // Don't reset on seriesIdx === null to prevent emphasis flicker
+              // Reset happens on mouseleave via handleHoverChange
             },
           ],
           setScale: [
