@@ -24,16 +24,31 @@ import {
 } from "@/components/ui/resizable";
 import { useDebouncedCallback } from "@/lib/hooks/use-debounced-callback";
 
+// Search params type for the route
+// Note: runs is stored as comma-separated string in URL for cleaner URLs
+interface RunComparisonSearchParams {
+  chart?: string;
+  runs?: string;  // Comma-separated run IDs (e.g., "id1,id2,id3")
+}
+
 export const Route = createFileRoute(
   "/o/$orgSlug/_authed/(runComparison)/projects/$projectName/",
 )({
   component: RouteComponent,
-  validateSearch: (search) => {
+  validateSearch: (search): RunComparisonSearchParams => {
+    const result: RunComparisonSearchParams = {};
+
     // Support ?chart=<viewId> to deep-link to a specific custom chart
     if (typeof search.chart === "string" && search.chart.trim()) {
-      return { chart: search.chart.trim() };
+      result.chart = search.chart.trim();
     }
-    return {};
+
+    // Support ?runs=id1,id2,id3 to pre-select specific runs (stored as comma-separated string)
+    if (typeof search.runs === "string" && search.runs.trim()) {
+      result.runs = search.runs.trim();
+    }
+
+    return result;
   },
   beforeLoad: async ({ context, params }) => {
     const auth = context.auth;
@@ -62,20 +77,48 @@ type ViewMode = "charts" | "side-by-side";
 function RouteComponent() {
   const { organizationId, projectName, organizationSlug } =
     Route.useRouteContext();
-  const { chart } = Route.useSearch();
+  const { chart, runs: urlRunsParam } = Route.useSearch();
   const navigate = useNavigate();
+
+  // Parse comma-separated run IDs from URL into array
+  const urlRunIds = useMemo(() => {
+    if (!urlRunsParam) return undefined;
+    const ids = urlRunsParam.split(",").map((id) => id.trim()).filter(Boolean);
+    return ids.length > 0 ? ids : undefined;
+  }, [urlRunsParam]);
 
   // Handler for changing the selected dashboard view (syncs with URL)
   const handleViewChange = useCallback(
     (viewId: string | null) => {
       void navigate({
         to: ".",
-        search: viewId ? { chart: viewId } : {},
+        search: (prev) => ({
+          ...prev,
+          chart: viewId || undefined,
+        }),
         replace: true,
       });
     },
     [navigate],
   );
+
+  // Handler for syncing run selection to URL (debounced to avoid excessive updates)
+  const handleSelectionChange = useCallback(
+    (selectedRunIds: string[]) => {
+      void navigate({
+        to: ".",
+        search: (prev) => ({
+          ...prev,
+          runs: selectedRunIds.length > 0 ? selectedRunIds.join(",") : undefined,
+        }),
+        replace: true,
+      });
+    },
+    [navigate],
+  );
+
+  // Debounced version of selection change to avoid rapid URL updates
+  const debouncedSelectionChange = useDebouncedCallback(handleSelectionChange, 300);
 
   // View mode state - "charts" (default) or "side-by-side"
   const [viewMode, setViewMode] = useState<ViewMode>("charts");
@@ -186,7 +229,10 @@ function RouteComponent() {
     selectAllByIds,
     deselectAll,
     shuffleColors,
-  } = useSelectedRuns(runs, organizationId, projectName);
+  } = useSelectedRuns(runs, organizationId, projectName, {
+    urlRunIds,
+    onSelectionChange: debouncedSelectionChange,
+  });
 
   // Fetch logs only for selected runs (lazy loading)
   const selectedRunIds = useMemo(

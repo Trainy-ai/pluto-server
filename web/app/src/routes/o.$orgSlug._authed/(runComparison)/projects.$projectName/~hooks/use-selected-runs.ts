@@ -32,6 +32,13 @@ function getStorageKey(organizationId: string, projectName: string): string {
   return `run-selection-data:${organizationId}:${projectName}`;
 }
 
+interface UseSelectedRunsOptions {
+  /** Run IDs from URL params to pre-select (overrides cache) */
+  urlRunIds?: string[];
+  /** Callback when selection changes (for URL sync) */
+  onSelectionChange?: (selectedRunIds: string[]) => void;
+}
+
 interface UseSelectedRunsReturn {
   /** Map of all run IDs to their assigned colors */
   runColors: Record<RunId, Color>;
@@ -79,20 +86,24 @@ export const getColorForRun = (runId: string): Color => {
  * Features:
  * - Assigns deterministic colors to runs based on their names
  * - Maintains color consistency across selections
- * - Automatically selects the 5 most recent runs initially
+ * - Automatically selects the 5 most recent runs initially (unless URL params provided)
  * - Provides handlers for selection and color changes
  * - Persists selections and colors in local cache (scoped per org/project)
+ * - Supports URL params for shareable pre-selected runs
  *
  * @param runs - Array of run objects from the API
  * @param organizationId - The organization ID for cache scoping
  * @param projectName - The project name for cache scoping
+ * @param options - Optional configuration including URL run IDs and selection change callback
  * @returns Object containing state and handlers for run selection and colors
  */
 export function useSelectedRuns(
   runs: Run[] | undefined,
   organizationId: string,
   projectName: string,
+  options?: UseSelectedRunsOptions,
 ): UseSelectedRunsReturn {
+  const { urlRunIds, onSelectionChange } = options ?? {};
   // Store all run colors, whether selected or not
   const [runColors, setRunColors] = useState<Record<RunId, Color>>({});
   const [selectedRunsWithColors, setSelectedRunsWithColors] = useState<
@@ -103,6 +114,10 @@ export function useSelectedRuns(
   // This allows React to interrupt expensive downstream renders
   const [, startTransition] = useTransition();
 
+  // Track whether initial URL params have been applied
+  const urlParamsAppliedRef = useRef(false);
+  // Track the previous URL run IDs to detect changes
+  const prevUrlRunIdsRef = useRef<string[] | undefined>(undefined);
 
   // Ref for stable callback access to runs without dependency
   const runsRef = useRef(runs);
@@ -173,6 +188,41 @@ export function useSelectedRuns(
     }
   }, [runColors, selectedRunsWithColors, debouncedSaveToCache, storageKey]);
 
+  // Handle URL param changes (when navigating with different ?runs= param)
+  useEffect(() => {
+    // Check if URL params actually changed
+    const prevIds = prevUrlRunIdsRef.current;
+    const prevIdsStr = prevIds?.join(",") ?? "";
+    const newIdsStr = urlRunIds?.join(",") ?? "";
+
+    if (prevIdsStr === newIdsStr) {
+      return; // No change
+    }
+
+    // Update ref to track current value
+    prevUrlRunIdsRef.current = urlRunIds;
+
+    // If we have runs loaded and URL params changed, apply the new selection
+    if (runs?.length && urlRunIds && urlRunIds.length > 0) {
+      const runsById = new Map(runs.map((r) => [r.id, r]));
+      const newSelectedRuns: Record<RunId, { run: Run; color: Color }> = {};
+
+      urlRunIds.forEach((runId) => {
+        const run = runsById.get(runId);
+        if (run) {
+          const color = runColors[runId] || getColorForRun(runId);
+          newSelectedRuns[runId] = { run, color };
+        }
+      });
+
+      // Apply the selection from URL params (replaces existing selection)
+      if (Object.keys(newSelectedRuns).length > 0) {
+        setSelectedRunsWithColors(newSelectedRuns);
+        urlParamsAppliedRef.current = true;
+      }
+    }
+  }, [urlRunIds, runs, runColors]);
+
   // Initialize or update colors when runs change
   useEffect(() => {
     if (!runs?.length) return;
@@ -186,20 +236,47 @@ export function useSelectedRuns(
 
       setRunColors(newColors);
 
+      // Helper to select first 5 runs as default
+      const selectDefaultRuns = () => {
+        const latestRuns = runs.slice(0, 5);
+        return latestRuns.reduce<Record<RunId, { run: Run; color: Color }>>(
+          (acc, run) => {
+            acc[run.id] = { run, color: newColors[run.id] };
+            return acc;
+          },
+          {},
+        );
+      };
+
       // Initialize selected runs only if none are selected yet
       if (Object.keys(selectedRunsWithColors).length === 0) {
-        const latestRuns = runs.slice(0, 5);
-        const newSelectedRuns = latestRuns.reduce<
-          Record<RunId, { run: Run; color: Color }>
-        >((acc, run) => {
-          acc[run.id] = {
-            run,
-            color: newColors[run.id],
-          };
-          return acc;
-        }, {});
+        // If URL params provided, use those for initial selection
+        if (urlRunIds && urlRunIds.length > 0 && !urlParamsAppliedRef.current) {
+          urlParamsAppliedRef.current = true;
+          const runsById = new Map(runs.map((r) => [r.id, r]));
+          const newSelectedRuns: Record<RunId, { run: Run; color: Color }> = {};
 
-        setSelectedRunsWithColors(newSelectedRuns);
+          urlRunIds.forEach((runId) => {
+            const run = runsById.get(runId);
+            if (run) {
+              newSelectedRuns[runId] = {
+                run,
+                color: newColors[runId] || getColorForRun(runId),
+              };
+            }
+          });
+
+          // Only set if we found at least one valid run
+          if (Object.keys(newSelectedRuns).length > 0) {
+            setSelectedRunsWithColors(newSelectedRuns);
+          } else {
+            // Fall back to default: select first 5 runs
+            setSelectedRunsWithColors(selectDefaultRuns());
+          }
+        } else if (!urlParamsAppliedRef.current || !urlRunIds?.length) {
+          // No URL params or already applied - use default selection (first 5 runs)
+          setSelectedRunsWithColors(selectDefaultRuns());
+        }
       }
     }
     // Handle subsequent runs loaded through pagination
@@ -224,7 +301,15 @@ export function useSelectedRuns(
         }));
       }
     }
-  }, [runs, runColors, selectedRunsWithColors]); // Include runColors and selectedRunsWithColors in dependencies
+  }, [runs, runColors, selectedRunsWithColors, urlRunIds]); // Include runColors, selectedRunsWithColors, and urlRunIds in dependencies
+
+  // Notify parent when selection changes (for URL sync)
+  useEffect(() => {
+    if (onSelectionChange) {
+      const selectedIds = Object.keys(selectedRunsWithColors);
+      onSelectionChange(selectedIds);
+    }
+  }, [selectedRunsWithColors, onSelectionChange]);
 
   // Memoize handlers to prevent unnecessary rerenders
   // Uses refs to avoid dependency on runs/runColors which change frequently

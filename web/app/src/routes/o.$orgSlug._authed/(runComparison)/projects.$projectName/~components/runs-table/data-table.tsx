@@ -397,6 +397,7 @@ export function DataTable({
                 table.getRowModel().rows.map((row) => (
                   <TableRow
                     key={row.id}
+                    data-run-id={row.original.id}
                     data-state={row.getIsSelected() ? "selected" : ""}
                   >
                     {row.getVisibleCells().map((cell) => (
