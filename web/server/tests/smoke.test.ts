@@ -1736,6 +1736,9 @@ describe('SDK API Endpoints (with API Key)', () => {
         expect(data.runs).toBeDefined();
         expect(Array.isArray(data.runs)).toBe(true);
         expect(data.comparisonUrl).toBeDefined();
+        // Verify comparisonUrl includes the runs param for pre-selection
+        expect(data.comparisonUrl).toContain('?runs=');
+        expect(data.comparisonUrl).toContain(testRunIds.join(','));
         expect(data.summary).toBeDefined();
       });
 

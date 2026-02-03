@@ -1472,7 +1472,8 @@ router.openapi(compareRunsRoute, async (c) => {
     recommendation = `No data found for metric '${logName}' in the specified runs.`;
   }
 
-  const comparisonUrl = `${env.BETTER_AUTH_URL}/o/${apiKey.organization.slug}/projects/${projectName}`;
+  const runIdsParam = runIds.join(",");
+  const comparisonUrl = `${env.BETTER_AUTH_URL}/o/${apiKey.organization.slug}/projects/${encodeURIComponent(projectName)}?runs=${runIdsParam}`;
 
   return c.json({
     projectName,
