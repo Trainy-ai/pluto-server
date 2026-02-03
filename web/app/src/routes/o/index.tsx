@@ -19,12 +19,13 @@ export const Route = createFileRoute("/o/")({
     return searchParamsSchema.parse(search);
   },
   beforeLoad: async ({ search }) => {
-    const [auth, invites] = await Promise.all([
-      userAuthCheck({ search }),
-      queryClient.ensureQueryData(
-        trpc.organization.invite.myInvites.queryOptions(),
-      ),
-    ]);
+    // Auth check must run first - if user is unauthenticated, they get redirected
+    // to sign-in. Running myInvites in parallel causes UNAUTHORIZED errors for
+    // users clicking invitation links while not logged in.
+    const auth = await userAuthCheck({ search });
+    const invites = await queryClient.ensureQueryData(
+      trpc.organization.invite.myInvites.queryOptions(),
+    );
 
     if (search.onboarding) {
       // if they do not have any invites, redirect to the organization setup page
