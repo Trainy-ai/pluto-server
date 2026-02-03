@@ -17,6 +17,12 @@ services:
         hard: 262144
     env_file:
       - .env
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:8123/ping || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+      start_period: 30s
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.clickhouse_secure.rule=Host(`${TRAEFIK_CLICKHOUSE_HOST}`)"
@@ -42,7 +48,8 @@ services:
       test: [ "CMD", "pg_isready", "-U", "postgres", "-d", "postgres" ]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 30s
 
   minio:
     image: minio/minio:latest
@@ -116,13 +123,17 @@ services:
     networks:
       - mlop_network
     depends_on:
-      - clickhouse
-      - db
-      - minio
+      clickhouse:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
     env_file:
       - .env
     volumes:
       - ./.mlop/dlq:/var/mlop/dlq
+    restart: unless-stopped
     entrypoint: [ "/bin/sh", "-c", "/opt/docker-setup/create_tables.sh; exec server-rs" ]
 
   backend:
@@ -148,7 +159,7 @@ services:
     # entrypoint: [ "/bin/sh", "-c", "bun ./.next/standalone/server.js" ]
     restart: unless-stopped
     environment:
-      - MALLOC_ARENA_MAX=1 # TODO: specific to glibc
+      - MALLOC_ARENA_MAX=4
     env_file:
       - .env
 
