@@ -1,7 +1,7 @@
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tag } from "lucide-react";
 import { TagsEditorPopover } from "@/components/tags-editor-popover";
+import { TagBadge } from "@/components/tag-badge";
 
 interface RunTagsProps {
   tags: string[];
@@ -16,9 +16,7 @@ export function RunTags({ tags, onTagsUpdate }: RunTagsProps) {
           <span className="text-sm text-muted-foreground">No tags</span>
         )}
         {tags.map((tag) => (
-          <Badge key={tag} variant="secondary" className="text-xs">
-            {tag}
-          </Badge>
+          <TagBadge key={tag} tag={tag} />
         ))}
       </div>
       <TagsEditorPopover
