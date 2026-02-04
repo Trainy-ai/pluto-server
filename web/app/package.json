@@ -94,7 +94,7 @@
     "gif.js": "^0.2.0",
     "lodash": "^4.17.23",
     "lucide-react": "^0.487.0",
-    "posthog-js": "^1.237.0",
+    "posthog-js": "^1.339.1",
     "react": "^19.1.0",
     "shiki": "^3.0.0",
     "react-day-picker": "^9.6.6",
