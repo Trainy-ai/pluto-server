@@ -24,7 +24,8 @@
       "sharp"
     ],
     "overrides": {
-      "fast-xml-parser": "^5.3.4"
+      "fast-xml-parser": "^5.3.4",
+      "diff": "^8.0.3"
     }
   }
 }

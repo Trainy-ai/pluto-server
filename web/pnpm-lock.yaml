@@ -6,6 +6,7 @@ settings:
 
 overrides:
   fast-xml-parser: ^5.3.4
+  diff: ^8.0.3
 
 importers:
 
@@ -3667,8 +3668,8 @@ packages:
   dexie@4.0.11:
     resolution: {integrity: sha512-SOKO002EqlvBYYKQSew3iymBoN2EQ4BDw/3yprjh7kAfFzjBYkaMNa/pZvcA7HSWlcKSQb9XhPe3wKyQ0x4A8A==}
 
-  diff@7.0.0:
-    resolution: {integrity: sha512-PJWHUb1RFevKCwaFA9RlG5tCd+FO5iRh9A8HEtkmBH2Li03iJriB6m6JIN4rGz3K3JLawI7/veA1xzRKP6ISBw==}
+  diff@8.0.3:
+    resolution: {integrity: sha512-qejHi7bcSD4hQAZE0tNAawRK1ZtafHDmMTMkrrIGgSLl7hTnQHmKCeB45xAcbfTqK2zowkM3j3bHt/4b/ARbYQ==}
     engines: {node: '>=0.3.1'}
 
   dompurify@3.3.1:
@@ -8013,7 +8014,7 @@ snapshots:
       '@babel/generator': 7.27.0
       '@babel/parser': 7.27.0
       ansis: 3.17.0
-      diff: 7.0.0
+      diff: 8.0.3
 
   '@tanstack/store@0.7.0': {}
 
@@ -8781,7 +8782,7 @@ snapshots:
 
   dexie@4.0.11: {}
 
-  diff@7.0.0: {}
+  diff@8.0.3: {}
 
   dompurify@3.3.1:
     optionalDependencies:
