@@ -185,13 +185,14 @@ export function ChartSyncProvider({
         if (id === sourceChartId) return; // Skip source chart
 
         if (seriesLabel === null) {
-          // Reset all series to full alpha
+          // Reset all series to normal width (2px)
+          // Alpha doesn't work with redraw(false), so we use width for emphasis
           for (let i = 1; i < chart.series.length; i++) {
-            chart.series[i].alpha = 1;
+            chart.series[i].width = 2;
           }
-          chart.redraw(false); // Lightweight redraw for alpha changes
+          chart.redraw(false); // Lightweight redraw for width changes
         } else {
-          // Highlight matching series using alpha
+          // Highlight matching series using width
           let hasMatch = false;
           for (let i = 1; i < chart.series.length; i++) {
             if (chart.series[i].label === seriesLabel) {
@@ -204,9 +205,10 @@ export function ChartSyncProvider({
           if (hasMatch) {
             for (let i = 1; i < chart.series.length; i++) {
               const match = chart.series[i].label === seriesLabel;
-              chart.series[i].alpha = match ? 1 : 0.3; // Match local chart alpha (0.3)
+              // Focused series = thick (4px), unfocused = thin (1.5px)
+              chart.series[i].width = match ? 4 : 1.5;
             }
-            chart.redraw(false); // Lightweight redraw for alpha changes
+            chart.redraw(false); // Lightweight redraw for width changes
           }
           // If no match, don't change - chart shows different metrics
         }
