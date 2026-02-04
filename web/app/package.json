@@ -29,7 +29,7 @@
   "devDependencies": {
     "@better-auth/sso": "^1.4.10",
     "@tanstack/router-plugin": "^1.115.3",
-    "@types/lodash": "^4.17.16",
+    "@types/lodash": "^4.17.23",
     "@types/node": "^22.14.1",
     "@types/react": "^19.1.1",
     "@types/react-dom": "^19.1.2",
@@ -92,7 +92,7 @@
     "echarts-for-react": "^3.0.3",
     "framer-motion": "^12.6.5",
     "gif.js": "^0.2.0",
-    "lodash": "^4.17.21",
+    "lodash": "^4.17.23",
     "lucide-react": "^0.487.0",
     "posthog-js": "^1.237.0",
     "react": "^19.1.0",
