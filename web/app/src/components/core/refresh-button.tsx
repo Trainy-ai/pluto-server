@@ -101,6 +101,16 @@ export function RefreshButton({
 
   useEffect(() => {
     const handleKeyPress = (event: KeyboardEvent) => {
+      // Ignore if user is typing in an input, textarea, or contenteditable element
+      const target = event.target as HTMLElement;
+      if (
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.isContentEditable
+      ) {
+        return;
+      }
+
       if (
         event.key.toLowerCase() === keyboardShortcut.toLowerCase() &&
         !event.ctrlKey &&
