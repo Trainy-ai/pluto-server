@@ -16,6 +16,22 @@ test.describe("Run Comparison URL Parameters", () => {
   const projectName = TEST_PROJECT.name;
 
   /**
+   * Clear IndexedDB cache to ensure URL params take priority over cached selection.
+   * The useSelectedRuns hook caches selection state in IndexedDB, which can
+   * interfere with URL param tests if not cleared.
+   */
+  async function clearSelectionCache(page: import("@playwright/test").Page) {
+    await page.evaluate(() => {
+      return new Promise<void>((resolve) => {
+        const deleteRequest = indexedDB.deleteDatabase("run-selection-db");
+        deleteRequest.onsuccess = () => resolve();
+        deleteRequest.onerror = () => resolve();
+        deleteRequest.onblocked = () => resolve();
+      });
+    });
+  }
+
+  /**
    * Helper to get run IDs from the table.
    * Requires data-run-id attribute on table rows.
    */
@@ -47,6 +63,10 @@ test.describe("Run Comparison URL Parameters", () => {
         return;
       }
 
+      // Clear the selection cache before testing URL params
+      // This ensures URL params aren't overridden by cached selection from first visit
+      await clearSelectionCache(page);
+
       // Now navigate with the runs URL parameter
       await page.goto(`/o/${orgSlug}/projects/${projectName}?runs=${runIds[0]},${runIds[1]}`);
       await waitForTRPC(page);
@@ -73,6 +93,9 @@ test.describe("Run Comparison URL Parameters", () => {
         return;
       }
 
+      // Clear cache to ensure URL params take priority
+      await clearSelectionCache(page);
+
       // Navigate with single run in URL
       await page.goto(`/o/${orgSlug}/projects/${projectName}?runs=${runIds[0]}`);
       await waitForTRPC(page);
@@ -80,7 +103,9 @@ test.describe("Run Comparison URL Parameters", () => {
 
       // Verify exactly 1 run is selected
       const selectionContainer = page.locator('text=runs selected').locator('..');
-      await expect(selectionContainer).toContainText("1", { timeout: 5000 });
+      await expect(async () => {
+        await expect(selectionContainer).toContainText("1", { timeout: 2000 });
+      }).toPass({ timeout: 10000 });
     });
 
     test("invalid run IDs in ?runs= param are gracefully ignored", async ({ page }) => {
@@ -96,6 +121,9 @@ test.describe("Run Comparison URL Parameters", () => {
         return;
       }
 
+      // Clear cache to ensure URL params take priority
+      await clearSelectionCache(page);
+
       // Navigate with one valid and one invalid run ID
       await page.goto(`/o/${orgSlug}/projects/${projectName}?runs=${runIds[0]},nonexistent-run-id-12345`);
       await waitForTRPC(page);
@@ -103,7 +131,9 @@ test.describe("Run Comparison URL Parameters", () => {
 
       // Should only select the valid run (1 selected)
       const selectionContainer = page.locator('text=runs selected').locator('..');
-      await expect(selectionContainer).toContainText("1", { timeout: 5000 });
+      await expect(async () => {
+        await expect(selectionContainer).toContainText("1", { timeout: 2000 });
+      }).toPass({ timeout: 10000 });
     });
 
     test("empty ?runs= param falls back to default selection", async ({ page }) => {
@@ -213,6 +243,9 @@ test.describe("Run Comparison URL Parameters", () => {
         return;
       }
 
+      // Clear cache to ensure URL params take priority
+      await clearSelectionCache(page);
+
       // Navigate with both runs and chart params
       await page.goto(`/o/${orgSlug}/projects/${projectName}?runs=${runIds[0]}&chart=some-chart-id`);
       await waitForTRPC(page);
@@ -220,7 +253,9 @@ test.describe("Run Comparison URL Parameters", () => {
 
       // Verify 1 run is selected (runs param works)
       const selectionContainer = page.locator('text=runs selected').locator('..');
-      await expect(selectionContainer).toContainText("1", { timeout: 5000 });
+      await expect(async () => {
+        await expect(selectionContainer).toContainText("1", { timeout: 2000 });
+      }).toPass({ timeout: 10000 });
 
       // Verify URL still has both params
       const url = page.url();
@@ -247,14 +282,20 @@ test.describe("Run Comparison URL Parameters", () => {
       const shareableUrl = `/o/${orgSlug}/projects/${projectName}?runs=${runIds[0]},${runIds[1]},${runIds[2]}`;
 
       // Open in a new page (simulating sharing)
+      // Note: IndexedDB is shared within the same browser context, so clear cache first
       const newPage = await context.newPage();
+      await newPage.goto(`/o/${orgSlug}`);  // Navigate to any page to have context for IndexedDB
+      await clearSelectionCache(newPage);
+
       await newPage.goto(shareableUrl);
       await waitForTRPC(newPage);
       await newPage.waitForLoadState("networkidle");
 
       // Verify exactly 3 runs are selected
       const selectionContainer = newPage.locator('text=runs selected').locator('..');
-      await expect(selectionContainer).toContainText("3", { timeout: 5000 });
+      await expect(async () => {
+        await expect(selectionContainer).toContainText("3", { timeout: 2000 });
+      }).toPass({ timeout: 10000 });
 
       await newPage.close();
     });
