@@ -13,6 +13,7 @@ import LineSettings from "./line-settings";
 import { DashboardViewSelector, DashboardBuilder } from "./dashboard-builder";
 import { useDashboardView, type DashboardView } from "../~queries/dashboard-views";
 import type { SelectedRunWithColor } from "../~hooks/use-selected-runs";
+import { ChartSyncProvider } from "@/components/charts/context/chart-sync-context";
 
 interface MetricsDisplayProps {
   groupedMetrics: GroupedMetrics;
@@ -125,14 +126,68 @@ export function MetricsDisplay({
   // If a custom view is selected, render the DashboardBuilder
   if (selectedViewId && selectedView) {
     return (
-      <div className="flex-1 space-y-4">
-        <div className="sticky top-0 z-10 flex items-center justify-between gap-4 bg-background pb-2">
-          <DashboardViewSelector
+      <ChartSyncProvider syncKey={`dashboard-${selectedViewId}`}>
+        <div className="flex-1 space-y-4">
+          <div className="sticky top-0 z-10 flex items-center justify-between gap-4 bg-background pb-2">
+            <div className="flex items-center gap-4">
+              <DashboardViewSelector
+                organizationId={organizationId}
+                projectName={projectName}
+                selectedViewId={selectedViewId}
+                onViewChange={setSelectedViewId}
+              />
+              <div className="flex-1">
+                <LogSearch
+                  onSearch={handleSearch}
+                  placeholder="Search groups and metrics..."
+                />
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <RefreshButton
+                onRefresh={onRefresh}
+                lastRefreshed={lastRefreshed}
+                refreshInterval={10_000}
+                defaultAutoRefresh={false}
+              />
+              <LineSettings
+                organizationId={organizationId}
+                projectName={projectName}
+                logNames={uniqueLogNames}
+              />
+            </div>
+          </div>
+          <DashboardBuilder
+            view={selectedView}
+            groupedMetrics={groupedMetrics}
+            selectedRuns={selectedRuns}
             organizationId={organizationId}
             projectName={projectName}
-            selectedViewId={selectedViewId}
-            onViewChange={setSelectedViewId}
           />
+        </div>
+      </ChartSyncProvider>
+    );
+  }
+
+  // Default "All Metrics" view
+  return (
+    <ChartSyncProvider syncKey={`all-metrics-${projectName}`}>
+      <div className="flex-1 space-y-4">
+        <div className="sticky top-0 z-10 flex items-center justify-between gap-4 bg-background pb-2">
+          <div className="flex items-center gap-4">
+            <DashboardViewSelector
+              organizationId={organizationId}
+              projectName={projectName}
+              selectedViewId={selectedViewId}
+              onViewChange={setSelectedViewId}
+            />
+            <div className="flex-1">
+              <LogSearch
+                onSearch={handleSearch}
+                placeholder="Search groups and metrics..."
+              />
+            </div>
+          </div>
           <div className="flex items-center gap-2">
             <RefreshButton
               onRefresh={onRefresh}
@@ -140,61 +195,24 @@ export function MetricsDisplay({
               refreshInterval={10_000}
               defaultAutoRefresh={false}
             />
-          </div>
-        </div>
-        <DashboardBuilder
-          view={selectedView}
-          groupedMetrics={groupedMetrics}
-          selectedRuns={selectedRuns}
-          organizationId={organizationId}
-          projectName={projectName}
-        />
-      </div>
-    );
-  }
-
-  // Default "All Metrics" view
-  return (
-    <div className="flex-1 space-y-4">
-      <div className="sticky top-0 z-10 flex items-center justify-between gap-4 bg-background pb-2">
-        <div className="flex items-center gap-4">
-          <DashboardViewSelector
-            organizationId={organizationId}
-            projectName={projectName}
-            selectedViewId={selectedViewId}
-            onViewChange={setSelectedViewId}
-          />
-          <div className="flex-1">
-            <LogSearch
-              onSearch={handleSearch}
-              placeholder="Search groups and metrics..."
+            <LineSettings
+              organizationId={organizationId}
+              projectName={projectName}
+              logNames={uniqueLogNames}
             />
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <RefreshButton
-            onRefresh={onRefresh}
-            lastRefreshed={lastRefreshed}
-            refreshInterval={10_000}
-            defaultAutoRefresh={false}
-          />
-          <LineSettings
+        {filteredGroups.map(([group, data]) => (
+          <MemoizedMultiGroup
+            key={group}
+            title={data.groupName}
+            groupId={`${projectName}-${group}`}
+            metrics={filteredMetricsPerGroup.get(group) ?? data.metrics}
             organizationId={organizationId}
             projectName={projectName}
-            logNames={uniqueLogNames}
           />
-        </div>
+        ))}
       </div>
-      {filteredGroups.map(([group, data]) => (
-        <MemoizedMultiGroup
-          key={group}
-          title={data.groupName}
-          groupId={`${projectName}-${group}`}
-          metrics={filteredMetricsPerGroup.get(group) ?? data.metrics}
-          organizationId={organizationId}
-          projectName={projectName}
-        />
-      ))}
-    </div>
+    </ChartSyncProvider>
   );
 }

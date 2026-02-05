@@ -1,9 +1,8 @@
 "use client";
 
-import { default as LineChart } from "@/components/charts/line";
+import { default as LineChart, type LineChartUPlotRef } from "@/components/charts/line-wrapper";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import ReactECharts from "echarts-for-react";
 import { memo, useEffect } from "react";
 import { useQueries } from "@tanstack/react-query";
 import { trpc, trpcClient } from "@/utils/trpc";
@@ -21,7 +20,7 @@ interface MultiLineChartProps {
   }[];
   title: string;
   xlabel: string;
-  ref: (ref: ReactECharts | null) => void;
+  ref: (ref: LineChartUPlotRef | null) => void;
   onLoad: () => void;
   organizationId: string;
   projectName: string;
