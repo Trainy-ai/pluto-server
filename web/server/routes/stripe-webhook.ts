@@ -149,13 +149,15 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
   }
 
   // Update organization subscription to PRO
+  // Note: seats is the max allowed seats for the plan, not current member count
+  // Stripe billing uses memberCount for per-seat charges
   await prisma.organizationSubscription.update({
     where: { organizationId },
     data: {
       plan: SubscriptionPlan.PRO,
       stripeCustomerId: customerId,
       stripeSubscriptionId: subscriptionId,
-      seats: memberCount,
+      seats: PRO_PLAN_CONFIG.seats,
       usageLimits: {
         dataUsageGB: PRO_PLAN_CONFIG.dataUsageGB,
         trainingHoursPerMonth: PRO_PLAN_CONFIG.trainingHoursPerMonth,
@@ -163,7 +165,7 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
     },
   });
 
-  console.log(`Organization ${organizationId} upgraded to PRO plan with ${memberCount} seats`);
+  console.log(`Organization ${organizationId} upgraded to PRO plan (${memberCount} members, ${PRO_PLAN_CONFIG.seats} seats max)`);
 
   // Send admin notification
   await notifyAdminOfBillingEvent("New PRO Upgrade", {
