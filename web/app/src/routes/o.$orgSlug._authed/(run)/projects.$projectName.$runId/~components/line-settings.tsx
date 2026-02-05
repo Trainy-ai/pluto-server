@@ -219,8 +219,8 @@ const LineSettings = ({
 
   const logs =
     runData?.logs
-      .filter((log) => log.logType === "METRIC")
-      .map((log) => log.logName) || [];
+      .filter((log: { logType: string; logName: string }) => log.logType === "METRIC")
+      .map((log: { logType: string; logName: string }) => log.logName) || [];
   const { primaryLogs, secondaryLogs } = getLogNames(logs);
 
   const allLogs = [...primaryLogs, ...secondaryLogs];

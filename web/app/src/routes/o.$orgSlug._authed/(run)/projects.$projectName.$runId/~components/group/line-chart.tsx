@@ -3,8 +3,7 @@
 import { memo, useEffect, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import LineChart from "@/components/charts/line";
-import ReactECharts from "echarts-for-react";
+import LineChart from "@/components/charts/line-wrapper";
 import { ensureGetGraph, useGetGraph } from "../../~queries/get-graph";
 import { useCheckDatabaseSize } from "@/lib/db/local-cache";
 import { metricsCache } from "@/lib/db/index";
@@ -55,9 +54,6 @@ interface LineChartWithFetchProps {
   tenantId: string;
   projectName: string;
   runId: string;
-  setChartRef: (index: number) => (ref: ReactECharts | null) => void;
-  index: number;
-  onLoad: () => void;
 }
 
 type ChartData = {
@@ -372,9 +368,6 @@ export const LineChartWithFetch = memo(
     tenantId,
     projectName,
     runId,
-    setChartRef,
-    index,
-    onLoad,
   }: LineChartWithFetchProps) => {
     useCheckDatabaseSize(metricsCache);
 
@@ -395,13 +388,6 @@ export const LineChartWithFetch = memo(
       runId,
       settings,
     );
-
-    // Notify the parent when new data loads
-    useEffect(() => {
-      if (data) {
-        onLoad();
-      }
-    }, [data, onLoad]);
 
     // Render loading state
     if ((isLoading && !data) || isLoadingCustomChart) {
@@ -450,7 +436,6 @@ export const LineChartWithFetch = memo(
     const commonProps = {
       className: "h-full",
       title: logName,
-      ref: setChartRef(index),
       logXAxis: settings.xAxisLogScale,
       logYAxis: settings.yAxisLogScale,
     };
@@ -462,7 +447,6 @@ export const LineChartWithFetch = memo(
         title={chartConfig.title}
         isDateTime={chartConfig.isDateTime}
         xlabel={chartConfig.xlabel}
-        ref={setChartRef(index)}
       />
     ) : (
       <LineChart

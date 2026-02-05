@@ -6,9 +6,9 @@ describe("useSelectedRuns", () => {
   describe("getColorForRun", () => {
     it("returns consistent color for the same runId", () => {
       const runId = "run-123";
-      const color1 = getColorForRun(runId);
-      const color2 = getColorForRun(runId);
-      const color3 = getColorForRun(runId);
+      const color1 = getColorForRun(runId, COLORS);
+      const color2 = getColorForRun(runId, COLORS);
+      const color3 = getColorForRun(runId, COLORS);
 
       expect(color1).toBe(color2);
       expect(color2).toBe(color3);
@@ -30,7 +30,7 @@ describe("useSelectedRuns", () => {
       ];
 
       for (const runId of runIds) {
-        colors.add(getColorForRun(runId));
+        colors.add(getColorForRun(runId, COLORS));
       }
 
       // At least 5 different colors from 10 different runs
@@ -52,30 +52,30 @@ describe("useSelectedRuns", () => {
       ];
 
       for (const runId of testRunIds) {
-        const color = getColorForRun(runId);
+        const color = getColorForRun(runId, COLORS);
         expect(COLORS).toContain(color);
       }
     });
 
     it("handles edge case run IDs", () => {
       // Empty string
-      const emptyColor = getColorForRun("");
+      const emptyColor = getColorForRun("", COLORS);
       expect(COLORS).toContain(emptyColor);
 
       // Single character
-      const singleCharColor = getColorForRun("a");
+      const singleCharColor = getColorForRun("a", COLORS);
       expect(COLORS).toContain(singleCharColor);
 
       // Numeric string
-      const numericColor = getColorForRun("12345");
+      const numericColor = getColorForRun("12345", COLORS);
       expect(COLORS).toContain(numericColor);
 
       // Special characters
-      const specialColor = getColorForRun("run-with-dashes_and_underscores.and.dots");
+      const specialColor = getColorForRun("run-with-dashes_and_underscores.and.dots", COLORS);
       expect(COLORS).toContain(specialColor);
 
       // UUID-like
-      const uuidColor = getColorForRun("550e8400-e29b-41d4-a716-446655440000");
+      const uuidColor = getColorForRun("550e8400-e29b-41d4-a716-446655440000", COLORS);
       expect(COLORS).toContain(uuidColor);
     });
 
@@ -85,7 +85,7 @@ describe("useSelectedRuns", () => {
       const numRuns = 100;
 
       for (let i = 0; i < numRuns; i++) {
-        const color = getColorForRun(`run-${i}`);
+        const color = getColorForRun(`run-${i}`, COLORS);
         colorCounts.set(color, (colorCounts.get(color) || 0) + 1);
       }
 
@@ -102,12 +102,12 @@ describe("useSelectedRuns", () => {
       const runId = "specific-run-id";
 
       // Call in different orders with other runs in between
-      const first = getColorForRun(runId);
-      getColorForRun("other-run-1");
-      getColorForRun("other-run-2");
-      const second = getColorForRun(runId);
-      getColorForRun("yet-another-run");
-      const third = getColorForRun(runId);
+      const first = getColorForRun(runId, COLORS);
+      getColorForRun("other-run-1", COLORS);
+      getColorForRun("other-run-2", COLORS);
+      const second = getColorForRun(runId, COLORS);
+      getColorForRun("yet-another-run", COLORS);
+      const third = getColorForRun(runId, COLORS);
 
       expect(first).toBe(second);
       expect(second).toBe(third);

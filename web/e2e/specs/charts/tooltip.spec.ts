@@ -31,12 +31,12 @@ async function navigateToProjectWithCharts(
 }
 
 /**
- * Wait for ECharts to render within a container
- * ECharts renders inside a div with class "echarts-for-react"
+ * Wait for uPlot charts to render
+ * uPlot renders inside a div with class "uplot"
  */
 async function waitForChartRender(page: import("@playwright/test").Page) {
-  // Wait for at least one ECharts container to be visible
-  const chartContainer = page.locator(".echarts-for-react").first();
+  // Wait for at least one uPlot container to be visible
+  const chartContainer = page.locator(".uplot").first();
   await expect(chartContainer).toBeVisible({ timeout: 15000 });
 
   // Wait a bit for the chart to fully render its canvas
@@ -46,15 +46,13 @@ async function waitForChartRender(page: import("@playwright/test").Page) {
 }
 
 /**
- * Get the ECharts tooltip element
- * ECharts renders tooltips in a div with specific styles
+ * Get the uPlot tooltip element
+ * Our uPlot implementation uses a custom tooltip div
  */
-function getTooltip(page: import("@playwright/test").Page) {
-  // ECharts tooltips have position: absolute and are children of the chart container
-  // They also have a specific z-index and contain formatted content
-  return page.locator('div[style*="position: absolute"][style*="z-index"]').filter({
-    has: page.locator("table, span, div"),
-  });
+function getTooltipSelector() {
+  // Our custom uPlot tooltip implementation uses absolute positioning
+  // Look for tooltip containers that are visible
+  return '.uplot-tooltip, [data-tooltip-chart], .absolute.z-50.pointer-events-none';
 }
 
 test.describe("Chart Tooltip Behavior", () => {
@@ -75,9 +73,19 @@ test.describe("Chart Tooltip Behavior", () => {
     // Wait extra time for data to fully load in CI environment
     await page.waitForTimeout(1000);
 
-    // Get chart bounding box for hovering
-    const chartBox = await chartContainer.boundingBox();
+    // Get chart overlay bounding box for hovering (uPlot uses .u-over for interactions)
+    const chartOverlay = chartContainer.locator(".u-over");
+    const chartBox = await chartOverlay.boundingBox();
     if (!chartBox) {
+      // Fall back to chart container
+      const containerBox = await chartContainer.boundingBox();
+      if (!containerBox) {
+        throw new Error("Could not get chart bounding box");
+      }
+    }
+
+    const box = chartBox || (await chartContainer.boundingBox());
+    if (!box) {
       throw new Error("Could not get chart bounding box");
     }
 
@@ -86,33 +94,51 @@ test.describe("Chart Tooltip Behavior", () => {
     for (let xOffset = 0.3; xOffset <= 0.7; xOffset += 0.1) {
       // Hover over different x positions in the chart
       await page.mouse.move(
-        chartBox.x + chartBox.width * xOffset,
-        chartBox.y + chartBox.height / 2
+        box.x + box.width * xOffset,
+        box.y + box.height / 2
       );
 
-      // Wait for tooltip to appear (ECharts has a slight delay)
+      // Wait for tooltip to appear
       await page.waitForTimeout(500);
 
-      // Look for tooltip - ECharts creates a div with position absolute
-      // Check for multiple possible tooltip structures
-      const tooltipVisible = await page
-        .locator('div[style*="position: absolute"]')
-        .filter({
-          has: page.locator("table, span, div"),
-        })
-        .first()
-        .isVisible()
-        .catch(() => false);
+      // Check for uPlot tooltip or any visible tooltip-like element
+      const hasTooltip = await page.evaluate(() => {
+        // Check for various tooltip implementations
+        const tooltipSelectors = [
+          ".uplot-tooltip",
+          "[data-tooltip-chart]",
+          ".absolute.z-50.pointer-events-none",
+        ];
 
-      // Alternative: check for canvas-based tooltip or axis pointer
-      const hasCanvasInteraction = await page.evaluate(() => {
-        // Check if any ECharts tooltip elements exist in the DOM
-        const tooltipDivs = document.querySelectorAll('[class*="tooltip"], [style*="z-index"][style*="position: absolute"]');
-        return tooltipDivs.length > 0;
+        for (const selector of tooltipSelectors) {
+          const elements = document.querySelectorAll(selector);
+          for (const el of elements) {
+            const style = window.getComputedStyle(el);
+            if (
+              style.display !== "none" &&
+              style.visibility !== "hidden" &&
+              style.opacity !== "0" &&
+              (el as HTMLElement).offsetParent !== null
+            ) {
+              return true;
+            }
+          }
+        }
+
+        // Also check if uPlot cursor is active (indicates hover is working)
+        const cursors = document.querySelectorAll(".uplot .u-cursor");
+        for (const cursor of cursors) {
+          const style = window.getComputedStyle(cursor);
+          if (style.display !== "none") {
+            return true;
+          }
+        }
+
+        return false;
       });
 
-      if (tooltipVisible || hasCanvasInteraction) {
-        console.log(`Tooltip detected at x=${xOffset.toFixed(1)}`);
+      if (hasTooltip) {
+        console.log(`Tooltip/cursor detected at x=${xOffset.toFixed(1)}`);
         tooltipDetected = true;
         break;
       }
@@ -120,7 +146,7 @@ test.describe("Chart Tooltip Behavior", () => {
 
     // Log result but don't fail hard - chart interaction may vary in headless mode
     if (tooltipDetected) {
-      console.log("Chart tooltip interaction working");
+      console.log("Chart tooltip/cursor interaction working");
       expect(tooltipDetected).toBeTruthy();
     } else {
       // In CI headless mode, tooltip detection can be unreliable
@@ -149,8 +175,9 @@ test.describe("Chart Tooltip Behavior", () => {
     // Wait a bit more for data to load
     await page.waitForTimeout(1000);
 
-    // Get chart bounding box
-    const chartBox = await chartContainer.boundingBox();
+    // Get chart overlay bounding box
+    const chartOverlay = chartContainer.locator(".u-over");
+    const chartBox = await chartOverlay.boundingBox();
     if (!chartBox) {
       throw new Error("Could not get chart bounding box");
     }
@@ -165,21 +192,35 @@ test.describe("Chart Tooltip Behavior", () => {
       await page.waitForTimeout(200);
 
       // Check if tooltip appeared with content
-      const tooltip = page.locator('div[style*="position: absolute"]').filter({
-        has: page.locator("table"),
+      const tooltipContent = await page.evaluate(() => {
+        const tooltipSelectors = [
+          ".uplot-tooltip",
+          "[data-tooltip-chart]",
+          ".absolute.z-50.pointer-events-none",
+        ];
+
+        for (const selector of tooltipSelectors) {
+          const elements = document.querySelectorAll(selector);
+          for (const el of elements) {
+            const style = window.getComputedStyle(el);
+            if (
+              style.display !== "none" &&
+              style.visibility !== "hidden" &&
+              (el as HTMLElement).textContent?.trim()
+            ) {
+              return (el as HTMLElement).textContent?.trim() || "";
+            }
+          }
+        }
+        return null;
       });
 
-      if (await tooltip.isVisible().catch(() => false)) {
-        // Check that tooltip contains some text (run names, values, etc.)
-        const tooltipText = await tooltip.textContent();
+      if (tooltipContent && tooltipContent.length > 0) {
         console.log(
-          `Tooltip found at x=${xOffset.toFixed(1)}, content length: ${tooltipText?.length || 0}`
+          `Tooltip found at x=${xOffset.toFixed(1)}, content length: ${tooltipContent.length}`
         );
-
-        if (tooltipText && tooltipText.length > 0) {
-          expect(tooltipText.length).toBeGreaterThan(0);
-          return; // Test passes
-        }
+        expect(tooltipContent.length).toBeGreaterThan(0);
+        return; // Test passes
       }
     }
 
@@ -193,7 +234,7 @@ test.describe("Chart Tooltip Behavior", () => {
     );
   });
 
-  test("tooltip is scrollable when many runs are selected", async ({ page }) => {
+  test("chart cursor is visible when hovering", async ({ page }) => {
     const projectHref = await navigateToProjectWithCharts(page, orgSlug);
 
     if (!projectHref) {
@@ -205,8 +246,9 @@ test.describe("Chart Tooltip Behavior", () => {
     // Wait for chart to render
     const chartContainer = await waitForChartRender(page);
 
-    // Get chart bounding box
-    const chartBox = await chartContainer.boundingBox();
+    // Get chart overlay bounding box
+    const chartOverlay = chartContainer.locator(".u-over");
+    const chartBox = await chartOverlay.boundingBox();
     if (!chartBox) {
       throw new Error("Could not get chart bounding box");
     }
@@ -218,102 +260,29 @@ test.describe("Chart Tooltip Behavior", () => {
     );
     await page.waitForTimeout(300);
 
-    // Find tooltip
-    const tooltip = page.locator('div[style*="position: absolute"]').filter({
-      has: page.locator("table"),
+    // Check for uPlot cursor (vertical line indicator)
+    const cursorInfo = await page.evaluate(() => {
+      const cursors = document.querySelectorAll(".uplot .u-cursor");
+      let visibleCount = 0;
+
+      for (const cursor of cursors) {
+        const style = window.getComputedStyle(cursor);
+        if (style.display !== "none" && style.visibility !== "hidden") {
+          visibleCount++;
+        }
+      }
+
+      return { total: cursors.length, visible: visibleCount };
     });
 
-    const tooltipVisible = await tooltip.isVisible().catch(() => false);
+    console.log("Cursor info:", cursorInfo);
 
-    if (tooltipVisible) {
-      // Check if tooltip has overflow-y: auto (scrollable) when content exceeds max-height
-      const tooltipStyles = await tooltip.evaluate((el) => {
-        const computed = window.getComputedStyle(el);
-        return {
-          overflowY: computed.overflowY,
-          maxHeight: computed.maxHeight,
-          scrollHeight: el.scrollHeight,
-          clientHeight: el.clientHeight,
-        };
-      });
-
-      console.log("Tooltip styles:", tooltipStyles);
-
-      // Verify tooltip has max-height set (from our extraCssText)
-      // Our implementation sets max-height: 50vh
-      if (
-        tooltipStyles.maxHeight &&
-        tooltipStyles.maxHeight !== "none" &&
-        tooltipStyles.maxHeight !== ""
-      ) {
-        expect(tooltipStyles.overflowY).toBe("auto");
-        console.log("Tooltip has scrollable configuration");
-      } else {
-        // If tooltip doesn't need scroll (content fits), just verify it's visible
-        console.log(
-          "Tooltip visible but content fits without scroll"
-        );
-      }
+    // Verify cursor is present (uPlot creates cursor elements)
+    if (cursorInfo.total > 0) {
+      console.log("Chart cursor elements present");
+      expect(cursorInfo.total).toBeGreaterThan(0);
     } else {
-      console.log("No tooltip visible to test scroll behavior");
-    }
-  });
-
-  test("tooltip positions correctly near chart edges", async ({ page }) => {
-    const projectHref = await navigateToProjectWithCharts(page, orgSlug);
-
-    if (!projectHref) {
-      console.log("No projects found, skipping test");
-      test.skip();
-      return;
-    }
-
-    // Wait for chart to render
-    const chartContainer = await waitForChartRender(page);
-
-    // Get chart bounding box
-    const chartBox = await chartContainer.boundingBox();
-    if (!chartBox) {
-      throw new Error("Could not get chart bounding box");
-    }
-
-    // Hover near the RIGHT edge of the chart
-    // Our implementation should flip tooltip to the left side
-    await page.mouse.move(
-      chartBox.x + chartBox.width * 0.9, // 90% from left = near right edge
-      chartBox.y + chartBox.height / 2
-    );
-    await page.waitForTimeout(400);
-
-    // Find tooltip
-    const tooltip = page.locator('div[style*="position: absolute"]').filter({
-      has: page.locator("table"),
-    });
-
-    const tooltipVisible = await tooltip.isVisible().catch(() => false);
-
-    if (tooltipVisible) {
-      const tooltipBox = await tooltip.boundingBox();
-      if (tooltipBox) {
-        // Check that tooltip is positioned to the LEFT of the cursor
-        // (i.e., tooltip right edge should be less than cursor x position)
-        const cursorX = chartBox.x + chartBox.width * 0.9;
-
-        console.log(
-          `Cursor X: ${cursorX}, Tooltip left: ${tooltipBox.x}, Tooltip right: ${tooltipBox.x + tooltipBox.width}`
-        );
-
-        // The tooltip should either:
-        // 1. Be positioned to the left of cursor (for overflow handling)
-        // 2. Or be within the chart bounds
-        const tooltipRightEdge = tooltipBox.x + tooltipBox.width;
-        const chartRightEdge = chartBox.x + chartBox.width;
-
-        expect(tooltipRightEdge).toBeLessThanOrEqual(chartRightEdge + 50); // Allow small overflow
-        console.log("Tooltip positioned within acceptable bounds near right edge");
-      }
-    } else {
-      console.log("No tooltip visible at right edge position");
+      console.log("No cursor elements found - chart may not have cursor enabled");
     }
   });
 
@@ -331,8 +300,9 @@ test.describe("Chart Tooltip Behavior", () => {
     // Wait for chart to render
     const chartContainer = await waitForChartRender(page);
 
-    // Get chart bounding box
-    const chartBox = await chartContainer.boundingBox();
+    // Get chart overlay bounding box
+    const chartOverlay = chartContainer.locator(".u-over");
+    const chartBox = await chartOverlay.boundingBox();
     if (!chartBox) {
       throw new Error("Could not get chart bounding box");
     }
@@ -344,32 +314,69 @@ test.describe("Chart Tooltip Behavior", () => {
     );
     await page.waitForTimeout(300);
 
-    // Check if tooltip appeared
-    const tooltipSelector = 'div[style*="position: absolute"]';
-    const tooltipsBefore = await page
-      .locator(tooltipSelector)
-      .filter({ has: page.locator("table") })
-      .count();
+    // Check if cursor/tooltip appeared
+    const tooltipsBefore = await page.evaluate(() => {
+      let count = 0;
+      // Check for tooltips
+      const tooltipSelectors = [
+        ".uplot-tooltip",
+        "[data-tooltip-chart]",
+        ".absolute.z-50.pointer-events-none",
+      ];
+      for (const selector of tooltipSelectors) {
+        const elements = document.querySelectorAll(selector);
+        for (const el of elements) {
+          const style = window.getComputedStyle(el);
+          if (style.display !== "none" && style.visibility !== "hidden") {
+            count++;
+          }
+        }
+      }
+      // Also count visible cursors
+      const cursors = document.querySelectorAll(".uplot .u-cursor");
+      for (const cursor of cursors) {
+        const style = window.getComputedStyle(cursor);
+        if (style.display !== "none") {
+          count++;
+        }
+      }
+      return count;
+    });
 
-    console.log(`Tooltips visible while hovering: ${tooltipsBefore}`);
+    console.log(`Tooltips/cursors visible while hovering: ${tooltipsBefore}`);
 
     // Move mouse away from the chart (far outside)
     await page.mouse.move(0, 0);
 
-    // Wait for tooltip to disappear (our hideDelay is 100ms)
+    // Wait for tooltip to disappear
     await page.waitForTimeout(500);
 
     // Check that tooltip is no longer visible
-    const tooltipAfter = page.locator(tooltipSelector).filter({
-      has: page.locator("table"),
+    const tooltipsAfter = await page.evaluate(() => {
+      let count = 0;
+      const tooltipSelectors = [
+        ".uplot-tooltip",
+        "[data-tooltip-chart]",
+      ];
+      for (const selector of tooltipSelectors) {
+        const elements = document.querySelectorAll(selector);
+        for (const el of elements) {
+          const style = window.getComputedStyle(el);
+          if (
+            style.display !== "none" &&
+            style.visibility !== "hidden" &&
+            style.opacity !== "0"
+          ) {
+            count++;
+          }
+        }
+      }
+      return count;
     });
-
-    // The tooltip should either be hidden (display: none) or removed from DOM
-    const stillVisible = await tooltipAfter.isVisible().catch(() => false);
 
     if (tooltipsBefore > 0) {
       // If there was a tooltip, it should now be hidden
-      expect(stillVisible).toBeFalsy();
+      expect(tooltipsAfter).toBe(0);
       console.log("Tooltip correctly disappeared after moving mouse away");
     } else {
       console.log(

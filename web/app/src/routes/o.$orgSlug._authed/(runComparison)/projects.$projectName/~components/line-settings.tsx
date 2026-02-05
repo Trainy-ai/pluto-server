@@ -236,7 +236,6 @@ const LineSettings = ({
       <Drawer
         direction="right"
         onDrag={(e) => e.preventDefault()}
-        modal={false}
       >
         <DrawerTrigger asChild>
           <Button
