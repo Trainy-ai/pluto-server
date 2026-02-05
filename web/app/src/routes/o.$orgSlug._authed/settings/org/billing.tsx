@@ -42,7 +42,7 @@ const FREE_FEATURES = [
 ];
 
 const PRO_FEATURES = [
-  "10 team members",
+  "Up to 10 team members",
   "10 TB storage",
 ];
 
@@ -51,11 +51,12 @@ function RouteComponent() {
   const search = Route.useSearch();
   const isPro = orgSubscription.plan === "PRO";
 
-  // Check if Stripe billing is configured
-  const { data: billingConfig } = useQuery(
+  // Check if Stripe billing is configured and get seat price
+  const { data: billingConfig, isLoading: isBillingConfigLoading } = useQuery(
     trpc.organization.billing.isConfigured.queryOptions()
   );
   const isStripeConfigured = billingConfig?.isConfigured ?? false;
+  const seatPrice = billingConfig?.seatPriceDollars;
 
   // Show toast for successful upgrade
   useEffect(() => {
@@ -152,8 +153,19 @@ function RouteComponent() {
               <CardDescription>For growing teams with advanced needs</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="text-3xl font-bold">
-                $49<span className="text-sm font-normal text-muted-foreground">/month</span>
+              <div>
+                <div className="text-3xl font-bold">
+                  {seatPrice !== undefined ? (
+                    <>${seatPrice}<span className="text-sm font-normal text-muted-foreground">/seat/month</span></>
+                  ) : (
+                    <span className="inline-block h-9 w-24 animate-pulse rounded bg-muted" />
+                  )}
+                </div>
+                {isPro && seatPrice !== undefined && (
+                  <p className="text-sm text-muted-foreground mt-1">
+                    {orgSubscription.seats} {orgSubscription.seats === 1 ? "seat" : "seats"} × ${seatPrice} = ${orgSubscription.seats * seatPrice}/month
+                  </p>
+                )}
               </div>
               <ul className="space-y-2">
                 {PRO_FEATURES.map((feature) => (
