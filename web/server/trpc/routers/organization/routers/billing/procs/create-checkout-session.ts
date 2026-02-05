@@ -59,6 +59,11 @@ export const createCheckoutSessionProcedure = protectedOrgProcedure
       });
     }
 
+    // Get current member count for seat-based billing
+    const memberCount = await ctx.prisma.member.count({
+      where: { organizationId: input.organizationId },
+    });
+
     // Create Stripe checkout session
     const baseUrl = env.BETTER_AUTH_URL;
     const successUrl = `${baseUrl}/o/${organization.slug}/settings/org/billing?success=true`;
@@ -71,6 +76,7 @@ export const createCheckoutSessionProcedure = protectedOrgProcedure
       customerEmail: ctx.user.email,
       successUrl,
       cancelUrl,
+      seatCount: memberCount,
     });
 
     return {

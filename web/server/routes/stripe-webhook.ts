@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { SubscriptionPlan } from "@prisma/client";
-import { constructWebhookEvent, PRO_PLAN_CONFIG, FREE_PLAN_CONFIG, CANCELLED_SUBSCRIPTION_ID, isStripeConfigured } from "../lib/stripe";
+import { constructWebhookEvent, PRO_PLAN_CONFIG, FREE_PLAN_CONFIG, CANCELLED_SUBSCRIPTION_ID, isStripeConfigured, syncSubscriptionSeats } from "../lib/stripe";
 import { prisma } from "../lib/prisma";
 import { sendEmail } from "../lib/email";
 import { env } from "../lib/env";
@@ -127,6 +127,20 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
     where: { id: organizationId },
   });
 
+  // Get current member count for initial seat count
+  const memberCount = await prisma.member.count({
+    where: { organizationId },
+  });
+
+  // Sync Stripe subscription if member count changed during checkout
+  // (handles race condition where members were added/removed during payment)
+  try {
+    await syncSubscriptionSeats(subscriptionId, memberCount);
+  } catch (error) {
+    console.error("Failed to sync Stripe seat count:", error);
+    // Continue - local DB update is still important
+  }
+
   // Update organization subscription to PRO
   await prisma.organizationSubscription.update({
     where: { organizationId },
@@ -134,7 +148,7 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
       plan: SubscriptionPlan.PRO,
       stripeCustomerId: customerId,
       stripeSubscriptionId: subscriptionId,
-      seats: PRO_PLAN_CONFIG.seats,
+      seats: memberCount,
       usageLimits: {
         dataUsageGB: PRO_PLAN_CONFIG.dataUsageGB,
         trainingHoursPerMonth: PRO_PLAN_CONFIG.trainingHoursPerMonth,
@@ -142,7 +156,7 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
     },
   });
 
-  console.log(`Organization ${organizationId} upgraded to PRO plan`);
+  console.log(`Organization ${organizationId} upgraded to PRO plan with ${memberCount} seats`);
 
   // Send admin notification
   await notifyAdminOfBillingEvent("New PRO Upgrade", {
