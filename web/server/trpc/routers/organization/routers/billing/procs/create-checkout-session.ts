@@ -69,10 +69,15 @@ export const createCheckoutSessionProcedure = protectedOrgProcedure
     const successUrl = `${baseUrl}/o/${organization.slug}/settings/org/billing?success=true`;
     const cancelUrl = `${baseUrl}/o/${organization.slug}/settings/org/billing?cancelled=true`;
 
+    // Only use existing customer ID if it's a valid Stripe customer ID
+    // (handles legacy orgs with placeholder values like "TODO" or empty strings)
+    const existingCustomerId = organization.OrganizationSubscription?.stripeCustomerId;
+    const validCustomerId = existingCustomerId?.startsWith("cus_") ? existingCustomerId : undefined;
+
     const session = await createCheckoutSession({
       organizationId: organization.id,
       organizationName: organization.name,
-      customerId: organization.OrganizationSubscription?.stripeCustomerId,
+      customerId: validCustomerId,
       customerEmail: ctx.user.email,
       successUrl,
       cancelUrl,
