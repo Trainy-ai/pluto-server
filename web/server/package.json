@@ -1,11 +1,12 @@
 {
   "name": "@mlop/server",
-  "main": "src/index.ts",
+  "main": "index.ts",
   "type": "module",
   "scripts": {
     "check-types": "tsc --noEmit",
     "lint": "eslint .",
     "lint:prisma": "eslint . -c eslint.config.strict.js",
+    "lint:unused": "knip",
     "test:setup": "dotenv -e .env.test -- tsx tests/setup.ts",
     "test:setup:cleanup": "dotenv -e .env.test -- tsx tests/setup.ts cleanup",
     "test:smoke": "dotenv -e .env.test -- vitest run --reporter=verbose",
@@ -79,6 +80,7 @@
   },
   "devDependencies": {
     "@better-auth/sso": "^1.4.10",
+    "knip": "^5.83.0",
     "@noble/hashes": "^2.0.1",
     "@types/bcrypt": "^6.0.0",
     "@types/node": "^22.14.1",

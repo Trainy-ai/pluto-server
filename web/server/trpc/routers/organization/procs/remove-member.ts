@@ -1,10 +1,11 @@
-import { OrganizationRole } from "@prisma/client";
+import { OrganizationRole, SubscriptionPlan } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import {
   protectedOrgProcedure,
   protectedProcedure,
 } from "../../../../lib/trpc";
 import { z } from "zod";
+import { syncSubscriptionSeats, CANCELLED_SUBSCRIPTION_ID } from "../../../../lib/stripe";
 
 export const removeMemberProcedure = protectedOrgProcedure
   .input(z.object({ memberId: z.string() }))
@@ -65,6 +66,32 @@ export const removeMemberProcedure = protectedOrgProcedure
         id: input.memberId,
       },
     });
+
+    // Update Stripe seat count if org is on PRO plan with active subscription
+    const orgSub = await ctx.prisma.organizationSubscription.findUnique({
+      where: { organizationId: input.organizationId },
+    });
+
+    if (
+      orgSub?.plan === SubscriptionPlan.PRO &&
+      orgSub.stripeSubscriptionId &&
+      orgSub.stripeSubscriptionId !== CANCELLED_SUBSCRIPTION_ID
+    ) {
+      const newMemberCount = await ctx.prisma.member.count({
+        where: { organizationId: input.organizationId },
+      });
+      try {
+        await syncSubscriptionSeats(orgSub.stripeSubscriptionId, newMemberCount);
+        // Update local seat count
+        await ctx.prisma.organizationSubscription.update({
+          where: { organizationId: input.organizationId },
+          data: { seats: newMemberCount },
+        });
+      } catch (error) {
+        console.error("Failed to update Stripe seat count:", error);
+        // Don't throw - member was already removed, billing update can be retried
+      }
+    }
 
     return { success: true };
   });

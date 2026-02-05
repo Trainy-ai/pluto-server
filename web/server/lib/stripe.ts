@@ -39,6 +39,9 @@ export const PRO_PLAN_CONFIG = {
 // Sentinel value for cancelled subscriptions (field is non-nullable in schema)
 export const CANCELLED_SUBSCRIPTION_ID = "cancelled";
 
+// Per-seat pricing: $250/seat/month
+export const SEAT_PRICE_DOLLARS = 250;
+
 interface CreateCheckoutSessionParams {
   organizationId: string;
   organizationName: string;
@@ -46,6 +49,7 @@ interface CreateCheckoutSessionParams {
   customerEmail: string;
   successUrl: string;
   cancelUrl: string;
+  seatCount: number; // Number of seats to bill for
 }
 
 export async function createCheckoutSession(
@@ -63,7 +67,7 @@ export async function createCheckoutSession(
     line_items: [
       {
         price: env.STRIPE_PRO_PRICE_ID,
-        quantity: 1,
+        quantity: params.seatCount, // Bill for current member count
       },
     ],
     success_url: params.successUrl,
@@ -89,6 +93,33 @@ export async function createCheckoutSession(
   }
 
   return stripe.checkout.sessions.create(sessionParams);
+}
+
+/**
+ * Sync Stripe subscription seat count with actual member count.
+ * Used after member changes to ensure billing matches reality.
+ */
+export async function syncSubscriptionSeats(
+  subscriptionId: string,
+  memberCount: number
+): Promise<void> {
+  const stripe = getStripe();
+
+  const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+  const item = subscription.items.data[0];
+
+  if (!item) {
+    console.error("No subscription item found for subscription:", subscriptionId);
+    return;
+  }
+
+  // Only update if quantity differs
+  if (item.quantity !== memberCount) {
+    await stripe.subscriptionItems.update(item.id, {
+      quantity: memberCount,
+      proration_behavior: "create_prorations",
+    });
+  }
 }
 
 interface CreatePortalSessionParams {
