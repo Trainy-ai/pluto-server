@@ -12,6 +12,7 @@ import healthRoutes from "./routes/health";
 import versionRoutes from "./routes/version";
 import runRoutes from "./routes/runs-openapi";
 import authRoutes from "./routes/auth";
+import stripeWebhookRoutes from "./routes/stripe-webhook";
 import { withApiKey } from "./routes/middleware";
 
 const app = new OpenAPIHono();
@@ -61,6 +62,7 @@ app.route("/api", healthRoutes);
 app.route("/api", versionRoutes);
 app.route("/api/runs", runRoutes);
 app.route("/api/auth", authRoutes);
+app.route("/api/stripe", stripeWebhookRoutes);
 
 app.use(
   "/trpc/*",

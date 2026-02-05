@@ -12,8 +12,8 @@ const FREE_LIMITS = {
 };
 
 const PRO_LIMITS = {
-  dataUsageGB: 100,
-  trainingHoursPerMonth: 750,
+  dataUsageGB: 10000, // 10 TB
+  trainingHoursPerMonth: 999999, // Effectively unlimited
 };
 
 export const getLimits = (plan: SubscriptionPlan) => {
