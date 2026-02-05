@@ -55,8 +55,9 @@ export const createOrgProcedure = protectedProcedure
       });
     }
 
-    const stripeCustomerId = "TODO";
-    const stripeSubscriptionId = "TODO";
+    // Empty strings for new free organizations - Stripe IDs will be set when they upgrade
+    const stripeCustomerId = "";
+    const stripeSubscriptionId = "";
 
     // 1. Create the Organization first
     const newOrgId = nanoid();
