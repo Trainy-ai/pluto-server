@@ -6,6 +6,49 @@ import { organization } from "better-auth/plugins";
 import { sso } from "@better-auth/sso";
 import { prisma } from "../lib/prisma";
 import { env } from "./env";
+import { sendEmail } from "./email";
+
+// Escape HTML to prevent XSS/HTML injection in email notifications
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+// Send notification email to admin when a new user signs up
+async function notifyAdminOfNewSignup(user: { email: string; name: string; id: string }) {
+  if (!env.ADMIN_NOTIFICATION_EMAIL) {
+    return;
+  }
+
+  const signupTime = new Date().toISOString();
+  const safeName = escapeHtml(user.name);
+  const safeEmail = escapeHtml(user.email);
+  const safeId = escapeHtml(user.id);
+
+  const html = `
+    <h2>New User Signup</h2>
+    <p>A new user has signed up for mlop:</p>
+    <ul>
+      <li><strong>Name:</strong> ${safeName}</li>
+      <li><strong>Email:</strong> ${safeEmail}</li>
+      <li><strong>User ID:</strong> ${safeId}</li>
+      <li><strong>Time:</strong> ${signupTime}</li>
+    </ul>
+  `;
+
+  const text = `New User Signup\n\nName: ${user.name}\nEmail: ${user.email}\nUser ID: ${user.id}\nTime: ${signupTime}`;
+
+  await sendEmail({
+    to: env.ADMIN_NOTIFICATION_EMAIL,
+    subject: `[mlop] New signup: ${safeEmail}`,
+    html,
+    text,
+  });
+}
 
 // Build trusted origins list for auth
 const trustedOrigins = [env.PUBLIC_URL];
@@ -20,6 +63,20 @@ export const auth = betterAuth({
   appName: env.NODE_ENV === "development" ? "mlop-dev" : "mlop",
   emailAndPassword: {
     enabled: env.IS_DOCKER === "true" || env.NODE_ENV === "test" || env.NODE_ENV === "development",
+  },
+  databaseHooks: {
+    user: {
+      create: {
+        after: async (user) => {
+          // Send notification email to admin
+          await notifyAdminOfNewSignup({
+            email: user.email,
+            name: user.name,
+            id: user.id,
+          });
+        },
+      },
+    },
   },
   account: {
     accountLinking: {

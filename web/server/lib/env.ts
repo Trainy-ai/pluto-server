@@ -43,6 +43,14 @@ const envSchema = z.object({
   // Redis (optional - graceful degradation if not available)
   REDIS_URL: z.string().url().optional(),
 
+  // Stripe (optional - required for billing features)
+  STRIPE_SECRET_KEY: z.string().min(1).optional(),
+  STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),
+  STRIPE_PRO_PRICE_ID: z.string().min(1).optional(), // Price ID for PRO plan
+
+  // Admin notifications (optional)
+  ADMIN_NOTIFICATION_EMAIL: z.string().email().optional(), // Email to receive new signup notifications
+
   // Deployment/Environment Specific
   NODE_ENV: z.enum(["development", "production", "test"]).optional(),
   IS_DOCKER: z.string().optional(), // Could refine if specific values like "true" are expected
