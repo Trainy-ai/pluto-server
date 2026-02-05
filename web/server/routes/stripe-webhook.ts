@@ -75,6 +75,13 @@ router.post("/webhook", async (c) => {
     return c.json({ error: "Invalid signature" }, 400);
   }
 
+  // Prevent test mode webhooks from modifying production data
+  // This protects against staging (with test keys) accidentally upgrading prod subscriptions
+  if (!event.livemode) {
+    console.log(`Ignoring test mode webhook event: ${event.type}`);
+    return c.json({ received: true });
+  }
+
   try {
     switch (event.type) {
       case "checkout.session.completed": {
