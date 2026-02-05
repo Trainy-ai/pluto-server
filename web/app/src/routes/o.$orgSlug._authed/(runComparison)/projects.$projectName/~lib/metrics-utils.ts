@@ -103,6 +103,10 @@ export const groupMetrics = (
     return groups;
   }
 
+  // Media types that fetch their data independently - should include all selected runs
+  const MEDIA_TYPES = new Set(["IMAGE", "AUDIO", "VIDEO"]);
+
+  // First pass: build metric groups from logs
   Object.entries(selectedRunsWithColors).forEach(([runId, { run, color }]) => {
     const logs = logsByRunId[runId] || [];
 
@@ -142,6 +146,29 @@ export const groupMetrics = (
         color,
         status: run.status,
       });
+    });
+  });
+
+  // Second pass: for media types, ensure ALL selected runs are included
+  // This allows media components to fetch data for newly selected runs
+  // even if their logs haven't loaded yet (placeholderData scenario)
+  Object.values(groups).forEach((group) => {
+    group.metrics.forEach((metric) => {
+      if (MEDIA_TYPES.has(metric.type)) {
+        const existingRunIds = new Set(metric.data.map((d) => d.runId));
+
+        // Add any missing selected runs
+        Object.entries(selectedRunsWithColors).forEach(([, { run, color }]) => {
+          if (!existingRunIds.has(run.id)) {
+            metric.data.push({
+              runId: run.id,
+              runName: run.name,
+              color,
+              status: run.status,
+            });
+          }
+        });
+      }
     });
   });
 

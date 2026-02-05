@@ -24,5 +24,7 @@ export const useSelectedRunLogs = (
     },
     enabled: sortedIds.length > 0,
     staleTime: 5 * 60 * 1000, // 5 minutes
+    // Keep previous data during refetch to prevent charts from going blank
+    placeholderData: (previousData) => previousData,
   });
 };

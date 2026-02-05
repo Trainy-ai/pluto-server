@@ -2,6 +2,7 @@ import * as React from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "./popover";
 import { Button } from "./button";
 import { cn } from "@/lib/utils";
+import { useTheme, type ResolvedTheme } from "@/lib/hooks/use-theme";
 
 interface ColorPickerProps {
   color?: string;
@@ -10,115 +11,92 @@ interface ColorPickerProps {
   className?: string;
 }
 
-export const COLORS = [
-  // Reds
-  "#FF6B6B",
-  "#FF8787",
-  "#FFA8A8",
-  "#FFB8B8",
-  "#FF4D4D",
-  "#FF3333",
-  "#FF1A1A",
-  "#FF0000",
-  // Oranges
-  "#FFA94D",
-  "#FFC078",
-  "#FFD8A8",
-  "#FFE3BF",
-  "#FF922B",
-  "#FF7600",
-  "#FF5E00",
-  "#FF4500",
-  // Yellows
-  "#FFD43B",
-  "#FFE066",
-  "#FFEC99",
-  "#FFF3BF",
-  "#FCC419",
-  "#FAB005",
-  "#F59F00",
-  "#F08C00",
-  // Greens
-  "#51CF66",
-  "#69DB7C",
-  "#8CE99A",
-  "#B2F2BB",
-  "#40C057",
-  "#37B24D",
-  "#2F9E44",
-  "#2B8A3E",
-  // Teals
-  "#20C997",
-  "#38D9A9",
-  "#63E6BE",
-  "#96F2D7",
-  "#12B886",
-  "#0CA678",
-  "#099268",
-  "#087F5B",
-  // Cyans
-  "#22B8CF",
-  "#3BC9DB",
-  "#66D9E8",
-  "#99E9F2",
-  "#15AABF",
-  "#1098AD",
-  "#0C8599",
-  "#0B7285",
-  // Blues
-  "#339AF0",
-  "#4DABF7",
-  "#74C0FC",
-  "#A5D8FF",
-  "#228BE6",
-  "#1C7ED6",
-  "#1971C2",
-  "#1864AB",
-  // Indigos
-  "#5C7CFA",
-  "#748FFC",
-  "#91A7FF",
-  "#BAC8FF",
-  "#4C6EF5",
-  "#4263EB",
-  "#3B5BDB",
-  "#364FC7",
-  // Violets
-  "#7950F2",
-  "#845EF7",
-  "#9775FA",
-  "#B197FC",
-  "#6741D9",
-  "#5F3DC4",
-  "#5235AB",
-  "#482595",
-  // Magentas
-  "#E64980",
-  "#F783AC",
-  "#FDA7C6",
-  "#FCC2D7",
-  "#D6336C",
-  "#C2255C",
-  "#A61E4D",
-  "#9C1A45",
-  // Grays
-  "#868E96",
-  "#ADB5BD",
-  "#CED4DA",
-  "#DEE2E6",
-  "#495057",
-  "#343A40",
-  "#212529",
-  "#1A1C1E",
+// Dark mode palette: Bright, saturated colors that pop against dark backgrounds
+// Optimized for visibility and accessibility on dark (#1a1a1a) backgrounds
+export const COLORS_DARK = [
+  // Primary bright colors - high visibility
+  "#22D3EE", // Cyan
+  "#4ADE80", // Green
+  "#FB923C", // Orange
+  "#F472B6", // Pink
+  "#A78BFA", // Purple
+  "#60A5FA", // Blue
+  "#FBBF24", // Amber
+  "#34D399", // Emerald
+  // Secondary bright colors
+  "#F87171", // Red
+  "#38BDF8", // Sky
+  "#C084FC", // Violet
+  "#2DD4BF", // Teal
+  "#FB7185", // Rose
+  "#818CF8", // Indigo
+  "#A3E635", // Lime
+  "#E879F9", // Fuchsia
+  // Tertiary colors - slightly muted but still visible
+  "#67E8F9", // Lighter cyan
+  "#86EFAC", // Lighter green
+  "#FDBA74", // Lighter orange
+  "#F9A8D4", // Lighter pink
+  "#C4B5FD", // Lighter purple
+  "#93C5FD", // Lighter blue
+  "#FCD34D", // Lighter amber
+  "#6EE7B7", // Lighter emerald
 ];
+
+// Light mode palette: Medium-dark saturated colors that stand out against light backgrounds
+// Optimized for visibility and accessibility on light (#ffffff) backgrounds
+export const COLORS_LIGHT = [
+  // Primary colors - strong contrast on white
+  "#0891B2", // Cyan-600
+  "#16A34A", // Green-600
+  "#EA580C", // Orange-600
+  "#DB2777", // Pink-600
+  "#7C3AED", // Violet-600
+  "#2563EB", // Blue-600
+  "#D97706", // Amber-600
+  "#059669", // Emerald-600
+  // Secondary colors
+  "#DC2626", // Red-600
+  "#0284C7", // Sky-600
+  "#9333EA", // Purple-600
+  "#0D9488", // Teal-600
+  "#E11D48", // Rose-600
+  "#4F46E5", // Indigo-600
+  "#65A30D", // Lime-600
+  "#C026D3", // Fuchsia-600
+  // Tertiary colors - slightly lighter but still high contrast
+  "#0E7490", // Cyan-700
+  "#15803D", // Green-700
+  "#C2410C", // Orange-700
+  "#BE185D", // Pink-700
+  "#6D28D9", // Violet-700
+  "#1D4ED8", // Blue-700
+  "#B45309", // Amber-700
+  "#047857", // Emerald-700
+];
+
+// Default export for backwards compatibility - uses dark mode colors
+export const COLORS = COLORS_DARK;
+
+// Get colors based on resolved theme
+export function getChartColors(theme: ResolvedTheme): string[] {
+  return theme === "dark" ? COLORS_DARK : COLORS_LIGHT;
+}
+
+// Hook to get theme-aware colors
+export function useChartColors(): string[] {
+  const { resolvedTheme } = useTheme();
+  return React.useMemo(() => getChartColors(resolvedTheme), [resolvedTheme]);
+}
 
 export function ColorPicker({
   color,
-  defaultColor = COLORS[0],
+  defaultColor,
   onChange,
   className,
 }: ColorPickerProps) {
-  const currentColor = color ?? defaultColor;
+  const colors = useChartColors();
+  const currentColor = color ?? defaultColor ?? colors[0];
   return (
     <Popover>
       <PopoverTrigger asChild>
@@ -137,8 +115,8 @@ export function ColorPicker({
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-[320px] p-3" sideOffset={4}>
-        <div className="grid grid-cols-8 gap-1">
-          {COLORS.map((colorValue) => (
+        <div className="grid grid-cols-6 gap-1">
+          {colors.map((colorValue) => (
             <button
               key={colorValue}
               className={cn(

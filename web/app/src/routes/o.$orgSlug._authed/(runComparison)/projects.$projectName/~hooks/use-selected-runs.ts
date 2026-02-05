@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useTransition } from "react";
-import { COLORS } from "@/components/ui/color-picker";
+import { useChartColors } from "@/components/ui/color-picker";
 import type { Run } from "../~queries/list-runs";
 import { LocalCache } from "@/lib/db/local-cache";
 import { useDebouncedCallback } from "@/lib/hooks/use-debounced-callback";
@@ -66,9 +66,10 @@ interface UseSelectedRunsReturn {
 /**
  * Get a deterministic color based on the run id
  * @param runId - The ID of the run to generate a color for
+ * @param colors - The color palette to use (theme-aware)
  * @returns A color from the predefined palette
  */
-export const getColorForRun = (runId: string): Color => {
+export const getColorForRun = (runId: string, colors: string[]): Color => {
   // Simple hash function to convert string to number
   const hash = runId.split("").reduce((acc, char, index) => {
     // Add positional weighting to create more variation
@@ -77,7 +78,7 @@ export const getColorForRun = (runId: string): Color => {
 
   // Use the hash to select a color from the palette
   // The modulo determines which color is selected
-  return COLORS[Math.abs(hash) % COLORS.length];
+  return colors[Math.abs(hash) % colors.length];
 };
 
 /**
@@ -104,6 +105,10 @@ export function useSelectedRuns(
   options?: UseSelectedRunsOptions,
 ): UseSelectedRunsReturn {
   const { urlRunIds, onSelectionChange } = options ?? {};
+
+  // Get theme-aware color palette
+  const chartColors = useChartColors();
+
   // Store all run colors, whether selected or not
   const [runColors, setRunColors] = useState<Record<RunId, Color>>({});
   const [selectedRunsWithColors, setSelectedRunsWithColors] = useState<
@@ -113,6 +118,12 @@ export function useSelectedRuns(
   // Use transition for selection updates to keep UI responsive
   // This allows React to interrupt expensive downstream renders
   const [, startTransition] = useTransition();
+
+  // Ref for stable access to colors in callbacks
+  const chartColorsRef = useRef(chartColors);
+  useEffect(() => {
+    chartColorsRef.current = chartColors;
+  }, [chartColors]);
 
   // Track whether initial URL params have been applied
   const urlParamsAppliedRef = useRef(false);
@@ -210,7 +221,7 @@ export function useSelectedRuns(
       urlRunIds.forEach((runId) => {
         const run = runsById.get(runId);
         if (run) {
-          const color = runColors[runId] || getColorForRun(runId);
+          const color = runColors[runId] || getColorForRun(runId, chartColorsRef.current);
           newSelectedRuns[runId] = { run, color };
         }
       });
@@ -230,7 +241,7 @@ export function useSelectedRuns(
     // First run initialization - set initial colors and selections
     if (Object.keys(runColors).length === 0) {
       const newColors = runs.reduce<Record<RunId, Color>>((acc, run) => {
-        acc[run.id] = getColorForRun(run.id);
+        acc[run.id] = getColorForRun(run.id, chartColorsRef.current);
         return acc;
       }, {});
 
@@ -261,7 +272,7 @@ export function useSelectedRuns(
             if (run) {
               newSelectedRuns[runId] = {
                 run,
-                color: newColors[runId] || getColorForRun(runId),
+                color: newColors[runId] || getColorForRun(runId, chartColorsRef.current),
               };
             }
           });
@@ -288,7 +299,7 @@ export function useSelectedRuns(
         // Generate colors for new runs
         const newColors = runsWithoutColors.reduce<Record<RunId, Color>>(
           (acc, run) => {
-            acc[run.id] = getColorForRun(run.id);
+            acc[run.id] = getColorForRun(run.id, chartColorsRef.current);
             return acc;
           },
           {},
@@ -335,7 +346,7 @@ export function useSelectedRuns(
 
           // Ensure we have a color for this run - always use runId for consistency
           const currentRunColors = runColorsRef.current;
-          const color = currentRunColors[runId] || getColorForRun(runId);
+          const color = currentRunColors[runId] || getColorForRun(runId, chartColorsRef.current);
 
           // Update runColors if needed
           if (!currentRunColors[runId]) {
@@ -422,7 +433,7 @@ export function useSelectedRuns(
       const newSelectedRuns: Record<RunId, { run: Run; color: Color }> = {};
 
       firstNRuns.forEach((run) => {
-        const color = runColors[run.id] || getColorForRun(run.id);
+        const color = runColors[run.id] || getColorForRun(run.id, chartColorsRef.current);
         newSelectedRuns[run.id] = { run, color };
       });
 
@@ -447,7 +458,7 @@ export function useSelectedRuns(
           if (!newSelectedRuns[runId]) {
             const run = runsById.get(runId);
             if (run) {
-              const color = runColors[runId] || getColorForRun(runId);
+              const color = runColors[runId] || getColorForRun(runId, chartColorsRef.current);
               newSelectedRuns[runId] = { run, color };
             }
           }

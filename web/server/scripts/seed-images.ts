@@ -48,7 +48,7 @@ const IMAGE_LOG_GROUP = 'media';
 const IMAGE_LOG_NAME = 'training_samples';
 const IMAGE_LOG_FULL_NAME = `${IMAGE_LOG_GROUP}/${IMAGE_LOG_NAME}`;
 const STEPS_WITH_IMAGES = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
-const RUNS_TO_SEED = 5; // Seed images for first 5 runs
+const RUNS_TO_SEED = 15; // Seed images for first 15 runs
 
 /**
  * Creates a simple PNG image as a Buffer.

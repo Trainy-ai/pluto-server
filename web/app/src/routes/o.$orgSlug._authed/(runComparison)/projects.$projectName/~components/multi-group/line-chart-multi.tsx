@@ -1,10 +1,9 @@
 "use client";
 
-import { default as LineChart } from "@/components/charts/line";
+import { default as LineChart } from "@/components/charts/line-wrapper";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import ReactECharts from "echarts-for-react";
-import { memo, useEffect, useState } from "react";
+import { memo, useMemo } from "react";
 import { useQueries } from "@tanstack/react-query";
 import { trpc, trpcClient } from "@/utils/trpc";
 import { useCheckDatabaseSize } from "@/lib/db/local-cache";
@@ -30,8 +29,6 @@ interface MultiLineChartProps {
   }[];
   title: string;
   xlabel: string;
-  ref: (ref: ReactECharts | null) => void;
-  onLoad: () => void;
   organizationId: string;
   projectName: string;
   /** When true, all runs are in a terminal state and data won't change */
@@ -173,8 +170,6 @@ export const MultiLineChart = memo(
     lines,
     title,
     xlabel,
-    ref,
-    onLoad,
     organizationId,
     projectName,
     allRunsCompleted = false,
@@ -186,9 +181,6 @@ export const MultiLineChart = memo(
 
     // Use Infinity staleTime for completed runs since their data won't change
     const staleTime = allRunsCompleted ? COMPLETED_RUN_STALE_TIME : ACTIVE_RUN_STALE_TIME;
-
-    // Track loading state for custom chart data
-    const [isLoadingCustomChart, setIsLoadingCustomChart] = useState(false);
 
     // Fetch data for all lines in parallel with optimized settings for quick cancellation
     const queries = useLocalQueries<MetricDataPoint>(
@@ -243,36 +235,25 @@ export const MultiLineChart = memo(
 
     // Check error states and get data
     const isError = queries.some((query) => query.isError);
-    const allData = queries
-      .map((query, index) => ({
+
+    // Memoize allData to prevent chart recreations on every render
+    const allData = useMemo(() => {
+      return queries
+        .map((query, index) => ({
+          data: (query.data ?? []) as MetricDataPoint[],
+          isLoading: query.isLoading,
+          runInfo: lines[index],
+        }))
+        .filter((item) => item.data.length > 0);
+    }, [queries, lines]);
+
+    // Also get custom log data if applicable - memoized
+    const customLogData = useMemo(() => {
+      return customLogQueries.map((query, index) => ({
         data: (query.data ?? []) as MetricDataPoint[],
-        isLoading: query.isLoading,
-        runInfo: lines[index],
-      }))
-      .filter((item) => item.data.length > 0);
-
-    // Also get custom log data if applicable
-    const customLogData = customLogQueries.map((query, index) => ({
-      data: (query.data ?? []) as MetricDataPoint[],
-      runId: lines[index]?.runId,
-    }));
-
-    // Notify parent when all data loads
-    useEffect(() => {
-      if (queries.every((query) => query.data !== undefined)) {
-        onLoad();
-      }
-    }, [queries, onLoad]);
-
-    // Error state
-    if (isError) {
-      return (
-        <div className="flex h-full w-full flex-grow flex-col items-center justify-center bg-red-500">
-          <h2 className="text-2xl font-bold">{title}</h2>
-          <p className="text-sm text-gray-200">Error fetching data</p>
-        </div>
-      );
-    }
+        runId: lines[index]?.runId,
+      }));
+    }, [customLogQueries, lines]);
 
     const hasAnyData = allData.some((item) => item.data?.length > 0);
     const allQueriesDone = queries.every((query) => !query.isLoading);
@@ -284,6 +265,262 @@ export const MultiLineChart = memo(
 
     const isInitialLoading =
       !hasAnyData && (!allQueriesDone || isLoadingCustomLogData);
+
+    // Memoize all chart data computations to prevent chart recreation on every render
+    // IMPORTANT: This useMemo must be called BEFORE any early returns to maintain hook order
+    const chartResult = useMemo(() => {
+      // Return null for loading/empty states - will be handled by early returns below
+      if (!hasAnyData) {
+        return null;
+      }
+      // System metrics chart - always uses relative time like in line-chart.tsx
+      if (title.startsWith("sys/") || title.startsWith("_sys/")) {
+        // Calculate the appropriate time unit across all datasets
+        let unit = "s";
+        let divisor = 1;
+        if (allData.length > 0 && allData[0].data.length > 0) {
+          // For each run, find the max time span
+          const timeSpans = allData.map(({ data }) => {
+            if (data.length < 2) return 0;
+            const sortedData = [...data].sort(
+              (a, b) => new Date(a.time).getTime() - new Date(b.time).getTime(),
+            );
+            const firstTime = new Date(sortedData[0].time).getTime();
+            const lastTime = new Date(
+              sortedData[sortedData.length - 1].time,
+            ).getTime();
+            return (lastTime - firstTime) / 1000; // time span in seconds
+          });
+
+          // Use the largest time span to determine the unit
+          const maxTimeSpan = Math.max(...timeSpans);
+          const timeUnit = getTimeUnitForDisplay(maxTimeSpan);
+          unit = timeUnit.unit;
+          divisor = timeUnit.divisor;
+        }
+
+        const chartData = allData
+          .filter((item) => item.data.length > 0)
+          .flatMap(({ data, runInfo }) => {
+            const sortedData = [...data].sort(
+              (a, b) => new Date(a.time).getTime() - new Date(b.time).getTime(),
+            );
+
+            // Calculate all time differences in seconds from the first data point
+            const relativeTimes = sortedData.map(
+              (d) =>
+                (new Date(d.time).getTime() -
+                  new Date(sortedData[0].time).getTime()) /
+                1000,
+            );
+
+            // Convert all values to the selected unit using the consistent divisor
+            const normalizedTimes = relativeTimes.map(
+              (seconds) => seconds / divisor,
+            );
+
+            const baseData = {
+              x: normalizedTimes,
+              y: sortedData.map((d: MetricDataPoint) => Number(d.value)),
+              label: runInfo.runName,
+              color: runInfo.color,
+            };
+
+            const downsampledData = applyDownsampling(baseData, settings.maxPointsPerSeries);
+            return applySmoothing(downsampledData, settings.smoothing);
+          });
+
+        return {
+          type: "system" as const,
+          data: chartData,
+          xlabel: `relative time (${unit})`,
+          isDateTime: false,
+          className: "h-full min-h-96 w-full flex-grow",
+        };
+      }
+
+      // Handle different chart types based on settings
+      switch (settings.selectedLog) {
+        case "Absolute Time": {
+          const data = allData
+            .filter((item) => item.data.length > 0)
+            .flatMap(({ data, runInfo }) => {
+              const baseData = {
+                x: data.map((d: MetricDataPoint) => new Date(d.time).getTime()),
+                y: data.map((d: MetricDataPoint) => Number(d.value)),
+                label: runInfo.runName,
+                color: runInfo.color,
+              };
+              const downsampledData = applyDownsampling(baseData, settings.maxPointsPerSeries);
+              return applySmoothing(downsampledData, settings.smoothing);
+            });
+
+          return {
+            type: "data" as const,
+            data,
+            xlabel: "absolute time",
+            isDateTime: true,
+            className: "h-full w-full",
+          };
+        }
+
+        case "Relative Time": {
+          const data = allData
+            .filter((item) => item.data.length > 0)
+            .flatMap(({ data, runInfo }) => {
+              // Calculate relative times in seconds from first data point
+              const firstTime = new Date(data[0].time).getTime();
+              const relativeTimes = data.map(
+                (d) => (new Date(d.time).getTime() - firstTime) / 1000,
+              );
+
+              // Determine appropriate time unit
+              const maxSeconds = Math.max(...relativeTimes);
+              const { divisor, unit } = getTimeUnitForDisplay(maxSeconds);
+
+              // Convert to appropriate unit
+              const normalizedTimes = relativeTimes.map(
+                (seconds) => seconds / divisor,
+              );
+
+              const baseData = {
+                x: normalizedTimes,
+                y: data.map((d: MetricDataPoint) => Number(d.value)),
+                label: runInfo.runName,
+                color: runInfo.color,
+              };
+
+              const downsampledData = applyDownsampling(baseData, settings.maxPointsPerSeries);
+              return applySmoothing(downsampledData, settings.smoothing);
+            });
+
+          // Determine time unit from the first dataset
+          const firstDataset = allData[0]?.data || [];
+          const firstTime =
+            firstDataset.length > 0
+              ? new Date(firstDataset[0].time).getTime()
+              : 0;
+          const lastTime =
+            firstDataset.length > 0
+              ? new Date(firstDataset[firstDataset.length - 1].time).getTime()
+              : 0;
+          const maxSeconds = (lastTime - firstTime) / 1000;
+          const { unit } = getTimeUnitForDisplay(maxSeconds);
+
+          return {
+            type: "data" as const,
+            data,
+            xlabel: `relative time (${unit})`,
+            isDateTime: false,
+            className: "h-full w-full",
+          };
+        }
+
+        case "Step": {
+          // Default step-based chart
+          const data = allData
+            .filter((item) => item.data.length > 0)
+            .flatMap(({ data, runInfo }) => {
+              const baseData = {
+                x: data.map((d: MetricDataPoint) => Number(d.step)),
+                y: data.map((d: MetricDataPoint) => Number(d.value)),
+                label: runInfo.runName,
+                color: runInfo.color,
+              };
+              const downsampledData = applyDownsampling(baseData, settings.maxPointsPerSeries);
+              return applySmoothing(downsampledData, settings.smoothing);
+            });
+
+          return {
+            type: "data" as const,
+            data,
+            xlabel,
+            isDateTime: false,
+            className: "h-full w-full",
+          };
+        }
+
+        default: {
+          // Custom selected log chart - use the selected log for x-axis values
+          if (customLogData.length === 0) {
+            return {
+              type: "error" as const,
+              errorType: "no-custom-data" as const,
+            };
+          }
+
+          // Match up x values (selected log) with y values (current log)
+          const validChartData: {
+            runInfo: { runId: string; runName: string; color: string };
+            alignedData: { x: number[]; y: number[] } | null;
+          }[] = allData
+            .filter((item) => item.data.length > 0)
+            .map(({ data, runInfo }) => {
+              // Find matching custom log data for this run
+              const matchingXData = customLogData.find(
+                (d) => d.runId === runInfo.runId,
+              )?.data;
+
+              if (!matchingXData || matchingXData.length === 0) {
+                return { runInfo, alignedData: null };
+              }
+
+              // Align and unzip x and y data
+              const alignedData = alignAndUnzip(matchingXData, data);
+
+              if (alignedData.x.length === 0 || alignedData.y.length === 0) {
+                return { runInfo, alignedData: null };
+              }
+
+              return { runInfo, alignedData };
+            });
+
+          // Check if we have any valid data to show
+          const hasValidData = validChartData.some(
+            (item) => item.alignedData !== null,
+          );
+
+          if (!hasValidData) {
+            return {
+              type: "error" as const,
+              errorType: "no-valid-data" as const,
+            };
+          }
+
+          // Create chart data from valid comparisons
+          const data = validChartData
+            .filter((item) => item.alignedData !== null)
+            .flatMap(({ runInfo, alignedData }) => {
+              const baseData = {
+                x: alignedData!.x,
+                y: alignedData!.y,
+                label: runInfo.runName,
+                color: runInfo.color,
+              };
+              const downsampledData = applyDownsampling(baseData, settings.maxPointsPerSeries);
+              return applySmoothing(downsampledData, settings.smoothing);
+            });
+
+          return {
+            type: "data" as const,
+            data,
+            xlabel: settings.selectedLog,
+            isDateTime: false,
+            className: "h-full w-full",
+          };
+        }
+      }
+    }, [allData, customLogData, settings, title, xlabel, hasAnyData]);
+
+    // Error state
+    if (isError) {
+      return (
+        <div className="flex h-full w-full flex-grow flex-col items-center justify-center bg-red-500">
+          <h2 className="text-2xl font-bold">{title}</h2>
+          <p className="text-sm text-gray-200">Error fetching data</p>
+        </div>
+      );
+    }
 
     // Initial loading state - show metric title and series names while loading
     if (isInitialLoading) {
@@ -335,283 +572,33 @@ export const MultiLineChart = memo(
       );
     }
 
-    // System metrics chart - always uses relative time like in line-chart.tsx
-    if (title.startsWith("sys/") || title.startsWith("_sys/")) {
-      // Calculate the appropriate time unit across all datasets
-      let unit = "s";
-      let divisor = 1;
-      if (allData.length > 0 && allData[0].data.length > 0) {
-        // For each run, find the max time span
-        const timeSpans = allData.map(({ data }) => {
-          if (data.length < 2) return 0;
-          const sortedData = [...data].sort(
-            (a, b) => new Date(a.time).getTime() - new Date(b.time).getTime(),
-          );
-          const firstTime = new Date(sortedData[0].time).getTime();
-          const lastTime = new Date(
-            sortedData[sortedData.length - 1].time,
-          ).getTime();
-          return (lastTime - firstTime) / 1000; // time span in seconds
-        });
-
-        // Use the largest time span to determine the unit
-        const maxTimeSpan = Math.max(...timeSpans);
-        const timeUnit = getTimeUnitForDisplay(maxTimeSpan);
-        unit = timeUnit.unit;
-        divisor = timeUnit.divisor;
-      }
-
-      const chartData = allData
-        .filter((item) => item.data.length > 0)
-        .flatMap(({ data, runInfo }) => {
-          const sortedData = [...data].sort(
-            (a, b) => new Date(a.time).getTime() - new Date(b.time).getTime(),
-          );
-
-          // Calculate all time differences in seconds from the first data point
-          const relativeTimes = sortedData.map(
-            (d) =>
-              (new Date(d.time).getTime() -
-                new Date(sortedData[0].time).getTime()) /
-              1000,
-          );
-
-          // Convert all values to the selected unit using the consistent divisor
-          const normalizedTimes = relativeTimes.map(
-            (seconds) => seconds / divisor,
-          );
-
-          const baseData = {
-            x: normalizedTimes,
-            y: sortedData.map((d: MetricDataPoint) => Number(d.value)),
-            label: runInfo.runName,
-            color: runInfo.color,
-          };
-
-          const downsampledData = applyDownsampling(baseData, settings.maxPointsPerSeries);
-          return applySmoothing(downsampledData, settings.smoothing);
-        });
-
+    // Handle error cases from chart data computation
+    if (!chartResult || chartResult.type === "error") {
       return (
-        <LineChart
-          lines={chartData}
-          className="h-full min-h-96 w-full flex-grow"
-          title={title}
-          xlabel={`relative time (${unit})`}
-          ref={ref}
-          showLegend={true}
-          isDateTime={false}
-          logXAxis={settings.xAxisLogScale}
-          logYAxis={settings.yAxisLogScale}
-        />
+        <div className="flex h-full flex-grow flex-col items-center justify-center bg-accent p-4">
+          <p className="text-center text-sm text-gray-500">
+            Could not compare{" "}
+            <code className="rounded bg-muted px-1">{title}</code> with{" "}
+            <code className="rounded bg-muted px-1">
+              {settings.selectedLog}
+            </code>
+          </p>
+        </div>
       );
     }
 
-    // Prepare chart data based on selected strategy
-    let chartDataWithStrategy;
-
-    // Handle different chart types based on settings
-    switch (settings.selectedLog) {
-      case "Absolute Time":
-        chartDataWithStrategy = allData
-          .filter((item) => item.data.length > 0)
-          .flatMap(({ data, runInfo }) => {
-            const baseData = {
-              x: data.map((d: MetricDataPoint) => new Date(d.time).getTime()),
-              y: data.map((d: MetricDataPoint) => Number(d.value)),
-              label: runInfo.runName,
-              color: runInfo.color,
-            };
-            const downsampledData = applyDownsampling(baseData, settings.maxPointsPerSeries);
-            return applySmoothing(downsampledData, settings.smoothing);
-          });
-
-        return (
-          <LineChart
-            lines={chartDataWithStrategy}
-            className="h-full w-full"
-            title={title}
-            xlabel="absolute time"
-            ref={ref}
-            showLegend={true}
-            isDateTime={true}
-            logXAxis={settings.xAxisLogScale}
-            logYAxis={settings.yAxisLogScale}
-          />
-        );
-
-      case "Relative Time":
-        chartDataWithStrategy = allData
-          .filter((item) => item.data.length > 0)
-          .flatMap(({ data, runInfo }) => {
-            // Calculate relative times in seconds from first data point
-            const firstTime = new Date(data[0].time).getTime();
-            const relativeTimes = data.map(
-              (d) => (new Date(d.time).getTime() - firstTime) / 1000,
-            );
-
-            // Determine appropriate time unit
-            const maxSeconds = Math.max(...relativeTimes);
-            const { divisor, unit } = getTimeUnitForDisplay(maxSeconds);
-
-            // Convert to appropriate unit
-            const normalizedTimes = relativeTimes.map(
-              (seconds) => seconds / divisor,
-            );
-
-            const baseData = {
-              x: normalizedTimes,
-              y: data.map((d: MetricDataPoint) => Number(d.value)),
-              label: runInfo.runName,
-              color: runInfo.color,
-            };
-
-            const downsampledData = applyDownsampling(baseData, settings.maxPointsPerSeries);
-            return applySmoothing(downsampledData, settings.smoothing);
-          });
-
-        // Determine time unit from the first dataset
-        const firstDataset = allData[0]?.data || [];
-        const firstTime =
-          firstDataset.length > 0
-            ? new Date(firstDataset[0].time).getTime()
-            : 0;
-        const lastTime =
-          firstDataset.length > 0
-            ? new Date(firstDataset[firstDataset.length - 1].time).getTime()
-            : 0;
-        const maxSeconds = (lastTime - firstTime) / 1000;
-        const { unit } = getTimeUnitForDisplay(maxSeconds);
-
-        return (
-          <LineChart
-            lines={chartDataWithStrategy}
-            className="h-full w-full"
-            title={title}
-            xlabel={`relative time (${unit})`}
-            ref={ref}
-            showLegend={true}
-            logXAxis={settings.xAxisLogScale}
-            logYAxis={settings.yAxisLogScale}
-          />
-        );
-
-      case "Step":
-        // Default step-based chart
-        chartDataWithStrategy = allData
-          .filter((item) => item.data.length > 0)
-          .flatMap(({ data, runInfo }) => {
-            const baseData = {
-              x: data.map((d: MetricDataPoint) => Number(d.step)),
-              y: data.map((d: MetricDataPoint) => Number(d.value)),
-              label: runInfo.runName,
-              color: runInfo.color,
-            };
-            const downsampledData = applyDownsampling(baseData, settings.maxPointsPerSeries);
-            return applySmoothing(downsampledData, settings.smoothing);
-          });
-
-        return (
-          <LineChart
-            lines={chartDataWithStrategy}
-            className="h-full w-full"
-            title={title}
-            xlabel={xlabel}
-            ref={ref}
-            showLegend={true}
-            logXAxis={settings.xAxisLogScale}
-            logYAxis={settings.yAxisLogScale}
-          />
-        );
-
-      default:
-        // Custom selected log chart - use the selected log for x-axis values
-        if (customLogData.length === 0) {
-          // No custom data, show message that we can't compare
-          return (
-            <div className="flex h-full flex-grow flex-col items-center justify-center bg-accent p-4">
-              <p className="text-center text-sm text-gray-500">
-                Could not compare{" "}
-                <code className="rounded bg-muted px-1">{title}</code> with{" "}
-                <code className="rounded bg-muted px-1">
-                  {settings.selectedLog}
-                </code>
-              </p>
-            </div>
-          );
-        }
-
-        // Match up x values (selected log) with y values (current log)
-        const validChartData: {
-          runInfo: { runId: string; runName: string; color: string };
-          alignedData: { x: number[]; y: number[] } | null;
-        }[] = allData
-          .filter((item) => item.data.length > 0)
-          .map(({ data, runInfo }) => {
-            // Find matching custom log data for this run
-            const matchingXData = customLogData.find(
-              (d) => d.runId === runInfo.runId,
-            )?.data;
-
-            if (!matchingXData || matchingXData.length === 0) {
-              return { runInfo, alignedData: null };
-            }
-
-            // Align and unzip x and y data
-            const alignedData = alignAndUnzip(matchingXData, data);
-
-            if (alignedData.x.length === 0 || alignedData.y.length === 0) {
-              return { runInfo, alignedData: null };
-            }
-
-            return { runInfo, alignedData };
-          });
-
-        // Check if we have any valid data to show
-        const hasValidData = validChartData.some(
-          (item) => item.alignedData !== null,
-        );
-
-        if (!hasValidData) {
-          return (
-            <div className="flex h-full flex-grow flex-col items-center justify-center bg-accent p-4">
-              <p className="text-center text-sm text-gray-500">
-                Could not compare{" "}
-                <code className="rounded bg-muted px-1">{title}</code> with{" "}
-                <code className="rounded bg-muted px-1">
-                  {settings.selectedLog}
-                </code>
-              </p>
-            </div>
-          );
-        }
-
-        // Create chart data from valid comparisons
-        chartDataWithStrategy = validChartData
-          .filter((item) => item.alignedData !== null)
-          .flatMap(({ runInfo, alignedData }) => {
-            const baseData = {
-              x: alignedData!.x,
-              y: alignedData!.y,
-              label: runInfo.runName,
-              color: runInfo.color,
-            };
-            const downsampledData = applyDownsampling(baseData, settings.maxPointsPerSeries);
-            return applySmoothing(downsampledData, settings.smoothing);
-          });
-
-        return (
-          <LineChart
-            lines={chartDataWithStrategy}
-            className="h-full w-full"
-            title={title}
-            xlabel={settings.selectedLog}
-            ref={ref}
-            showLegend={true}
-            logXAxis={settings.xAxisLogScale}
-            logYAxis={settings.yAxisLogScale}
-          />
-        );
-    }
+    // Render the chart with memoized data
+    return (
+      <LineChart
+        lines={chartResult.data}
+        className={chartResult.className}
+        title={title}
+        xlabel={chartResult.xlabel}
+        showLegend={true}
+        isDateTime={chartResult.isDateTime}
+        logXAxis={settings.xAxisLogScale}
+        logYAxis={settings.yAxisLogScale}
+      />
+    );
   },
 );

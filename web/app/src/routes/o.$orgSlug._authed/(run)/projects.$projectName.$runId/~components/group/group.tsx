@@ -1,8 +1,6 @@
 import { DropdownRegion } from "@/components/core/runs/dropdown-region/dropdown-region";
 import type { LogGroup } from "@/lib/grouping/types";
-import { useState, useCallback, useMemo, memo } from "react";
-import { useChartSync } from "@/components/charts/hooks/use-chart-sync";
-import ReactECharts from "echarts-for-react";
+import { useMemo, memo } from "react";
 import { LineChartWithFetch } from "./line-chart";
 import { ImagesView } from "./images";
 import { AudioView } from "./audio";
@@ -26,12 +24,6 @@ const DataGroupBase = ({
   runId,
 }: DataGroupProps) => {
   const groupId = `metrics-${group.groupName}`;
-  const [loadedCharts, setLoadedCharts] = useState(0);
-  const { setChartRef } = useChartSync(groupId, loadedCharts);
-
-  const handleChartLoad = useCallback(() => {
-    setLoadedCharts((prev) => prev + 1);
-  }, []);
 
   // Memoize sorted logs to prevent unnecessary re-sorting
   const sortedLogs = useMemo(() => {
@@ -43,19 +35,16 @@ const DataGroupBase = ({
   // Return render functions instead of elements for lazy evaluation
   // Components are only created when DropdownRegion calls the render function
   const children = useMemo(() => {
-    return sortedLogs.map((log, index) => () => (
+    return sortedLogs.map((log) => () => (
       <LogView
         key={log.id}
         log={log}
-        setChartRef={setChartRef}
-        index={index}
-        onLoad={handleChartLoad}
         tenantId={tenantId}
         projectName={projectName}
         runId={runId}
       />
     ));
-  }, [sortedLogs, setChartRef, handleChartLoad, tenantId, projectName, runId]);
+  }, [sortedLogs, tenantId, projectName, runId]);
 
   return (
     <DropdownRegion
@@ -72,9 +61,6 @@ DataGroup.displayName = "DataGroup";
 
 interface LogViewProps {
   log: LogGroup["logs"][number];
-  setChartRef: (index: number) => (ref: ReactECharts | null) => void;
-  index: number;
-  onLoad: () => void;
   tenantId: string;
   projectName: string;
   runId: string;
@@ -83,9 +69,6 @@ interface LogViewProps {
 const LogView = memo(
   ({
     log,
-    setChartRef,
-    index,
-    onLoad,
     tenantId,
     projectName,
     runId,
@@ -97,9 +80,6 @@ const LogView = memo(
           tenantId={tenantId}
           projectName={projectName}
           runId={runId}
-          setChartRef={setChartRef}
-          index={index}
-          onLoad={onLoad}
         />
       );
     }

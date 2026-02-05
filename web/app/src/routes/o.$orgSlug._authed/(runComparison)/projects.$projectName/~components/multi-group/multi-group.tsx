@@ -8,9 +8,7 @@ import { MultiGroupVideo } from "./video";
 import { MultiHistogramView } from "./histogram-view";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useMemo, useState, useCallback, memo } from "react";
-import { useChartSync } from "@/components/charts/hooks/use-chart-sync";
-import ReactECharts from "echarts-for-react";
+import { useMemo, useCallback, memo } from "react";
 import { cn } from "@/lib/utils";
 import type { RunLogType, RunStatus } from "@/lib/grouping/types";
 import { trpc } from "@/utils/trpc";
@@ -57,12 +55,17 @@ export const MultiGroup = ({
   organizationId,
   projectName,
 }: MultiGroupProps) => {
-  const [loadedCharts, setLoadedCharts] = useState<number>(0);
-  const { setChartRef } = useChartSync(groupId, loadedCharts);
-
-  const handleChartLoad = useCallback(() => {
-    setLoadedCharts((prev: number) => prev + 1);
-  }, []);
+  // Memoize lines arrays for each metric to prevent recreation
+  const memoizedLines = useMemo(() => {
+    return metrics.map((metric) => {
+      if (metric.type !== "METRIC") return null;
+      return metric.data.map((line) => ({
+        runId: line.runId,
+        runName: line.runName,
+        color: line.color,
+      }));
+    });
+  }, [metrics]);
 
   // Return render functions instead of elements for lazy evaluation
   // Components are only created when DropdownRegion calls the render function
@@ -70,11 +73,9 @@ export const MultiGroup = ({
     () =>
       metrics.map((metric, index) => {
         if (metric.type === "METRIC") {
-          const lines = metric.data.map((line) => ({
-            runId: line.runId,
-            runName: line.runName,
-            color: line.color,
-          }));
+          const lines = memoizedLines[index];
+          if (!lines) return () => null;
+
           // Check if all runs are in a terminal state (not actively running)
           const allRunsCompleted = metric.data.every(
             (line) => line.status !== "RUNNING"
@@ -85,8 +86,6 @@ export const MultiGroup = ({
               lines={lines}
               title={metric.name}
               xlabel="step"
-              ref={setChartRef(index)}
-              onLoad={handleChartLoad}
               organizationId={organizationId}
               projectName={projectName}
               allRunsCompleted={allRunsCompleted}
@@ -145,8 +144,7 @@ export const MultiGroup = ({
       }),
     [
       metrics,
-      setChartRef,
-      handleChartLoad,
+      memoizedLines,
       className,
       organizationId,
       projectName,

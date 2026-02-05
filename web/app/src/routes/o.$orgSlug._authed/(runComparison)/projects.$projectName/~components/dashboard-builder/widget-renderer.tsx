@@ -1,4 +1,4 @@
-import { useMemo, useCallback, useRef } from "react";
+import { useMemo } from "react";
 import type {
   Widget,
   ChartWidgetConfig,
@@ -13,7 +13,6 @@ import { MultiLineChart } from "../multi-group/line-chart-multi";
 import { MultiGroupImage } from "../multi-group/image";
 import { MultiGroupVideo } from "../multi-group/video";
 import { MultiGroupAudio } from "../multi-group/audio";
-import type ReactECharts from "echarts-for-react";
 
 interface WidgetRendererProps {
   widget: Widget;
@@ -96,12 +95,6 @@ function ChartWidget({
   organizationId: string;
   projectName: string;
 }) {
-  const chartRef = useRef<ReactECharts | null>(null);
-  const handleRef = useCallback((ref: ReactECharts | null) => {
-    chartRef.current = ref;
-  }, []);
-  const handleLoad = useCallback(() => {}, []);
-
   // Build lines array from selected runs
   const lines = useMemo(() => {
     return Object.entries(selectedRuns).map(([runId, { run, color }]) => ({
@@ -148,8 +141,6 @@ function ChartWidget({
         lines={lines}
         title={metricName}
         xlabel={config.xAxis === "time" ? "time" : "step"}
-        ref={handleRef}
-        onLoad={handleLoad}
         organizationId={organizationId}
         projectName={projectName}
         allRunsCompleted={allRunsCompleted}
