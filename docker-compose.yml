@@ -154,7 +154,7 @@ services:
       - db
       - minio
       - redis
-    entrypoint: [ "/bin/sh", "-c", "prisma migrate deploy && node server.js" ]
+    entrypoint: [ "/bin/sh", "-c", "prisma migrate deploy && node server/server.js" ]
     # entrypoint: [ "/bin/sh", "-c", "bun ./.next/standalone/server.js" ]
     restart: unless-stopped
     environment:

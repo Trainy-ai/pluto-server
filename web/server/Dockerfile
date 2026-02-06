@@ -61,7 +61,15 @@ RUN pnpm run build
 # Dereference pnpm symlinks so COPY works in runner stage
 # prisma CLI + engines are needed for `prisma migrate deploy` at startup
 RUN cp -rL node_modules/prisma /tmp/prisma-cli && \
-    cp -rL node_modules/@prisma /tmp/prisma-modules
+    cp -rL node_modules/@prisma /tmp/prisma-modules && \
+    # pnpm may not hoist @prisma/engines to node_modules/@prisma/ — find it
+    # in the prisma CLI's own scope within the pnpm virtual store
+    if [ ! -d "/tmp/prisma-modules/engines" ]; then \
+      PRISMA_NM=$(dirname "$(readlink -f node_modules/prisma)") && \
+      if [ -d "$PRISMA_NM/@prisma/engines" ]; then \
+        cp -rL "$PRISMA_NM/@prisma/engines" /tmp/prisma-modules/engines; \
+      fi; \
+    fi
 
 # Stage 3: Production runner
 FROM node:22-alpine AS runner
@@ -105,4 +113,4 @@ USER nextjs
 
 EXPOSE 3001
 
-CMD ["node", "server.js"]
+CMD ["node", "server/server.js"]
