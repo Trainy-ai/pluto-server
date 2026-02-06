@@ -1,0 +1,35 @@
+# Backend Dockerfile build context excludes
+# Only server/ workspace files + workspace config needed
+
+# Exclude frontend source (but keep package.json for workspace resolution)
+app/src/
+app/public/
+app/node_modules/
+app/.next/
+app/dist/
+app/.env*
+app/Dockerfile*
+app/.dockerignore
+app/index.html
+app/vite.config.*
+app/tsconfig*
+app/postcss*
+app/tailwind*
+app/components.json
+
+# Exclude root-level dev files
+node_modules/
+.pnpm-store/
+.turbo/
+turbo.json
+e2e/
+playwright.config.ts
+
+# Exclude server build artifacts and dev files
+server/node_modules
+server/.next
+server/.env*
+server/Dockerfile*
+server/.dockerignore
+server/npm-debug.log
+server/README.md
