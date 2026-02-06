@@ -1,10 +1,32 @@
-FROM node:lts AS base
-RUN apt-get update && apt-get install -y libc6-dev curl && rm -rf /var/lib/apt/lists/*
-
-# FROM node:18-alpine AS base
-# RUN apk add --no-cache libc6-compat openssl
+# Stage 1: Dependencies
+FROM node:22-alpine AS deps
+RUN apk add --no-cache libc6-compat openssl
 
 WORKDIR /app
+
+# Enable corepack for pnpm
+RUN corepack enable pnpm
+
+# Copy workspace config and lockfile for deterministic installs
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+
+# Copy app package.json so pnpm can resolve the full workspace from the lockfile
+COPY app/package.json ./app/
+
+# Copy server package files
+COPY server/package.json ./server/
+COPY server/prisma ./server/prisma/
+
+# Install dependencies with frozen lockfile for reproducible builds
+RUN pnpm install --frozen-lockfile --filter @mlop/server
+
+# Stage 2: Builder (inherits from deps to avoid redundant setup)
+FROM deps AS builder
+
+# Copy server source files
+COPY server/ ./server/
+
+WORKDIR /app/server
 
 # Build-time version info
 ARG GIT_COMMIT="unknown"
@@ -14,62 +36,73 @@ ARG SERVICE_VERSION="unknown"
 
 # Dummy environment variables for build-time validation
 # Real values will be provided at runtime via docker-compose env_file
-ARG IS_DOCKER="true"
-ARG DATABASE_URL="postgresql://dummy:dummy@localhost:5432/dummy?schema=public"
-ARG DATABASE_DIRECT_URL="postgresql://dummy:dummy@localhost:5432/dummy?schema=public"
-ARG STORAGE_ENDPOINT="http://localhost:9000"
-ARG STORAGE_ACCESS_KEY_ID="dummy"
-ARG STORAGE_SECRET_ACCESS_KEY="dummy"
-ARG STORAGE_BUCKET="dummy"
-ARG STORAGE_REGION="us-east-1"
-ARG CLICKHOUSE_URL="http://localhost:8123"
-ARG CLICKHOUSE_USER="dummy"
-ARG CLICKHOUSE_PASSWORD="dummy"
-ARG GITHUB_CLIENT_ID="dummy"
-ARG GITHUB_CLIENT_SECRET="dummy"
-ARG GOOGLE_CLIENT_ID="dummy"
-ARG GOOGLE_CLIENT_SECRET="dummy"
-ARG PUBLIC_URL="http://localhost:3001"
-ARG BETTER_AUTH_URL="http://localhost:3000"
-ARG BETTER_AUTH_SECRET="dummy_secret_at_least_32_characters_long"
+ENV IS_DOCKER="true"
+ENV DATABASE_URL="postgresql://dummy:dummy@localhost:5432/dummy?schema=public"
+ENV DATABASE_DIRECT_URL="postgresql://dummy:dummy@localhost:5432/dummy?schema=public"
+ENV STORAGE_ENDPOINT="http://localhost:9000"
+ENV STORAGE_ACCESS_KEY_ID="dummy"
+ENV STORAGE_SECRET_ACCESS_KEY="dummy"
+ENV STORAGE_BUCKET="dummy"
+ENV STORAGE_REGION="us-east-1"
+ENV CLICKHOUSE_URL="http://localhost:8123"
+ENV CLICKHOUSE_USER="dummy"
+ENV CLICKHOUSE_PASSWORD="dummy"
+ENV GITHUB_CLIENT_ID="dummy"
+ENV GITHUB_CLIENT_SECRET="dummy"
+ENV GOOGLE_CLIENT_ID="dummy"
+ENV GOOGLE_CLIENT_SECRET="dummy"
+ENV PUBLIC_URL="http://localhost:3001"
+ENV BETTER_AUTH_URL="http://localhost:3000"
+ENV BETTER_AUTH_SECRET="dummy_secret_at_least_32_characters_long"
 
-ENV IS_DOCKER=${IS_DOCKER}
-ENV DATABASE_URL=${DATABASE_URL}
-ENV DATABASE_DIRECT_URL=${DATABASE_DIRECT_URL}
-ENV STORAGE_ENDPOINT=${STORAGE_ENDPOINT}
-ENV STORAGE_ACCESS_KEY_ID=${STORAGE_ACCESS_KEY_ID}
-ENV STORAGE_SECRET_ACCESS_KEY=${STORAGE_SECRET_ACCESS_KEY}
-ENV STORAGE_BUCKET=${STORAGE_BUCKET}
-ENV STORAGE_REGION=${STORAGE_REGION}
-ENV CLICKHOUSE_URL=${CLICKHOUSE_URL}
-ENV CLICKHOUSE_USER=${CLICKHOUSE_USER}
-ENV CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
-ENV GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
-ENV GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
-ENV GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
-ENV GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
-ENV PUBLIC_URL=${PUBLIC_URL}
-ENV BETTER_AUTH_URL=${BETTER_AUTH_URL}
-ENV BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
+# Build the application (runs prisma generate + next build)
+RUN pnpm run build
 
-COPY . .
-RUN corepack enable pnpm && pnpm i && pnpm run build
+# Dereference pnpm symlinks so COPY works in runner stage
+# prisma CLI + engines are needed for `prisma migrate deploy` at startup
+RUN cp -rL node_modules/prisma /tmp/prisma-cli && \
+    cp -rL node_modules/@prisma /tmp/prisma-modules
 
-# Copy Prisma files to standalone output for migrations
-RUN mkdir -p .next/standalone/prisma && \
-    cp -r prisma/migrations .next/standalone/prisma/ && \
-    cp prisma/schema.prisma .next/standalone/prisma/
+# Stage 3: Production runner
+FROM node:22-alpine AS runner
+RUN apk add --no-cache libc6-compat openssl
 
-# Runtime environment - all secrets provided via K8s ConfigMaps/Secrets
+WORKDIR /app
+
+# Create non-root user for security
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 nextjs
+
+# Copy standalone output (includes server.js + all traced runtime deps)
+COPY --from=builder --chown=nextjs:nodejs /app/server/.next/standalone ./
+
+# Copy Prisma schema + migrations for prisma migrate deploy
+COPY --from=builder --chown=nextjs:nodejs /app/server/prisma ./prisma
+
+# Copy prisma CLI + engines from builder (avoids hardcoded version + network call)
+# Standalone output bundles @prisma/client for runtime, but the CLI + migration
+# engine are separate and needed for `prisma migrate deploy` at container startup
+COPY --from=builder /tmp/prisma-cli ./node_modules/prisma
+COPY --from=builder /tmp/prisma-modules ./node_modules/@prisma
+RUN ln -s /app/node_modules/prisma/build/index.js /usr/local/bin/prisma
+
+# Runtime environment
 ENV NODE_ENV=production
 ENV PORT=3001
 ENV HOSTNAME="0.0.0.0"
 
 # Version info (baked in at build time)
+ARG GIT_COMMIT="unknown"
+ARG GIT_BRANCH="unknown"
+ARG BUILD_TIME="unknown"
+ARG SERVICE_VERSION="unknown"
 ENV GIT_COMMIT=${GIT_COMMIT}
 ENV GIT_BRANCH=${GIT_BRANCH}
 ENV BUILD_TIME=${BUILD_TIME}
 ENV SERVICE_VERSION=${SERVICE_VERSION}
 
-CMD ["node", "./.next/standalone/server.js"]
+USER nextjs
+
 EXPOSE 3001
+
+CMD ["node", "server.js"]
