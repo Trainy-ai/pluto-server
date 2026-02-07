@@ -10,6 +10,35 @@ import React, {
 import type uPlot from "uplot";
 
 // ============================
+// Helpers
+// ============================
+
+/**
+ * Apply series highlight widths to a uPlot chart.
+ * If label is provided and matches a series, highlights it (4px) and dims others (0.5px).
+ * If label is null or doesn't match any series, resets all to default (2.5px).
+ */
+function applySeriesHighlight(chart: uPlot, label: string | null): void {
+  if (label) {
+    const hasMatch = chart.series.some((s) => s.label === label);
+    if (hasMatch) {
+      for (let i = 1; i < chart.series.length; i++) {
+        const match = chart.series[i].label === label;
+        chart.series[i].width = match ? 4 : 0.5;
+      }
+    } else {
+      for (let i = 1; i < chart.series.length; i++) {
+        chart.series[i].width = 2.5;
+      }
+    }
+  } else {
+    for (let i = 1; i < chart.series.length; i++) {
+      chart.series[i].width = 2.5;
+    }
+  }
+}
+
+// ============================
 // Types
 // ============================
 
@@ -45,6 +74,10 @@ interface ChartSyncContextValue {
   // null means no active zoom (use globalXRange instead)
   syncedZoomRange: [number, number] | null;
   setSyncedZoomRange: (range: [number, number] | null) => void;
+
+  // Table-driven series highlighting - when a run row is hovered in the runs table
+  // Separate from chart-driven highlighting to avoid conflicts
+  tableHighlightedSeries: string | null;
 }
 
 // ============================
@@ -63,6 +96,8 @@ interface ChartSyncProviderProps {
   syncKey?: string;
   /** Global X-axis range for all charts. Computed from server before charts render. */
   initialGlobalXRange?: [number, number] | null;
+  /** Series name to highlight from the runs table (external to chart hover system) */
+  tableHighlightedSeries?: string | null;
 }
 
 /**
@@ -78,6 +113,7 @@ export function ChartSyncProvider({
   children,
   syncKey = "chart-sync-default",
   initialGlobalXRange = null,
+  tableHighlightedSeries: tableHighlightedSeriesProp = null,
 }: ChartSyncProviderProps) {
   // Use refs for registries to avoid re-renders when charts register/unregister
   const uplotInstancesRef = useRef(new Map<string, uPlot>());
@@ -145,6 +181,27 @@ export function ChartSyncProvider({
     setSyncedZoomRangeInternal(range);   // Async - for React re-renders
   }, []);
 
+  // Table-highlighted series ref for synchronous access
+  const tableHighlightedSeriesRef = useRef<string | null>(tableHighlightedSeriesProp);
+
+  // Keep ref in sync with prop
+  useEffect(() => {
+    tableHighlightedSeriesRef.current = tableHighlightedSeriesProp;
+  }, [tableHighlightedSeriesProp]);
+
+  // Apply table highlight widths to all charts when the prop changes
+  useEffect(() => {
+    const label = tableHighlightedSeriesProp;
+
+    // Only apply if no chart is actively being hovered
+    if (hoveredChartIdRef.current !== null) return;
+
+    uplotInstancesRef.current.forEach((chart) => {
+      applySeriesHighlight(chart, label);
+      chart.redraw(false);
+    });
+  }, [tableHighlightedSeriesProp]);
+
   // uPlot registration
   const registerUPlot = useCallback((id: string, chart: uPlot) => {
     uplotInstancesRef.current.set(id, chart);
@@ -176,29 +233,16 @@ export function ChartSyncProvider({
         if (id === sourceChartId) return; // Skip source chart
 
         if (seriesLabel === null) {
-          // Reset all series to normal width (2.5px matches line-uplot default)
-          for (let i = 1; i < chart.series.length; i++) {
-            chart.series[i].width = 2.5;
-          }
-          chart.redraw(false); // Lightweight redraw for width changes
+          // Fall back to table highlight if active, otherwise reset to default
+          const tableLabel = tableHighlightedSeriesRef.current;
+          applySeriesHighlight(chart, tableLabel);
+          chart.redraw(false);
         } else {
-          // Highlight matching series using width
-          let hasMatch = false;
-          for (let i = 1; i < chart.series.length; i++) {
-            if (chart.series[i].label === seriesLabel) {
-              hasMatch = true;
-              break;
-            }
-          }
-
           // Only apply highlighting if this chart has the series
+          const hasMatch = chart.series.some((s) => s.label === seriesLabel);
           if (hasMatch) {
-            for (let i = 1; i < chart.series.length; i++) {
-              const match = chart.series[i].label === seriesLabel;
-              // Focused series = thick (4px), unfocused = very thin (0.5px) for obvious contrast
-              chart.series[i].width = match ? 4 : 0.5;
-            }
-            chart.redraw(false); // Lightweight redraw for width changes
+            applySeriesHighlight(chart, seriesLabel);
+            chart.redraw(false);
           }
         }
       });
@@ -214,6 +258,7 @@ export function ChartSyncProvider({
     hoveredChartIdRef.current = id; // SYNC - immediate, for cursor sync checks
     setHoveredChartId(id);          // ASYNC - for React re-renders
     // Clear highlighted series when mouse leaves all charts
+    // Table highlight (if active) will take over via the stroke function's 3rd priority tier
     if (id === null) {
       setHighlightedSeriesName(null);
     }
@@ -316,6 +361,7 @@ export function ChartSyncProvider({
       globalXRange,
       syncedZoomRange,
       setSyncedZoomRange,
+      tableHighlightedSeries: tableHighlightedSeriesProp,
     }),
     [
       registerUPlot,
@@ -331,6 +377,7 @@ export function ChartSyncProvider({
       resetZoom,
       globalXRange,
       syncedZoomRange,
+      tableHighlightedSeriesProp,
     ]
   );
 

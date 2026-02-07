@@ -70,6 +70,8 @@ interface DataTableProps {
   onSelectAllByIds: (runIds: string[]) => void;
   onDeselectAll: () => void;
   onShuffleColors: () => void;
+  /** Callback when a run row is hovered (for chart highlighting) */
+  onRunHover?: (runName: string | null) => void;
 }
 
 export function DataTable({
@@ -101,6 +103,7 @@ export function DataTable({
   onSelectAllByIds,
   onDeselectAll,
   onShuffleColors,
+  onRunHover,
 }: DataTableProps) {
   // Internal pagination state
   const [{ pageIndex, pageSize }, setPagination] = useState<PaginationState>({
@@ -110,6 +113,9 @@ export function DataTable({
 
   // Column sizing state for resizable columns
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
+
+  // Track which run row is hovered (for highlight data attribute)
+  const [hoveredRunId, setHoveredRunId] = useState<string | null>(null);
 
   // Visibility options state
   const [showOnlySelected, setShowOnlySelected] = useState(false);
@@ -398,7 +404,20 @@ export function DataTable({
                   <TableRow
                     key={row.id}
                     data-run-id={row.original.id}
+                    data-run-name={row.original.name}
                     data-state={row.getIsSelected() ? "selected" : ""}
+                    data-hover-highlight={hoveredRunId === row.original.id ? "true" : undefined}
+                    onMouseEnter={() => {
+                      // Only highlight selected runs (those with visible chart curves)
+                      if (row.getIsSelected()) {
+                        setHoveredRunId(row.original.id);
+                        onRunHover?.(row.original.name);
+                      }
+                    }}
+                    onMouseLeave={() => {
+                      setHoveredRunId(null);
+                      onRunHover?.(null);
+                    }}
                   >
                     {row.getVisibleCells().map((cell) => (
                       <TableCell
