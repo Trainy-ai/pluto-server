@@ -6,6 +6,7 @@ use tower::ServiceExt;
 use std::path::PathBuf;
 use tokio::fs;
 use testcontainers::runners::AsyncRunner;
+use common::clickhouse_image;
 
 #[tokio::test]
 async fn test_ingest_metrics_endpoint() {
@@ -330,7 +331,7 @@ async fn test_dlq_persists_and_replays_on_clickhouse_failure() {
     let testcontainers_host = std::env::var("TESTCONTAINERS_HOST_OVERRIDE")
         .unwrap_or_else(|_| "127.0.0.1".into());
 
-    let new_clickhouse_container = testcontainers_modules::clickhouse::ClickHouse::default()
+    let new_clickhouse_container = clickhouse_image()
         .start()
         .await
         .expect("Failed to start new ClickHouse container");
@@ -341,8 +342,8 @@ async fn test_dlq_persists_and_replays_on_clickhouse_failure() {
         .expect("Failed to get new ClickHouse port");
     let new_clickhouse_url = format!("http://{}:{}", testcontainers_host, new_clickhouse_port);
 
-    // Give ClickHouse a moment to fully start
-    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+    // Poll until ClickHouse is ready to accept queries
+    common::wait_for_clickhouse_ready(&new_clickhouse_url, 60).await;
 
     // Create new client for the fresh instance
     let new_clickhouse_client = clickhouse::Client::default()
