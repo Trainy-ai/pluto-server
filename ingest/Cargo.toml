@@ -12,14 +12,14 @@ name = "server-rs"
 path = "src/main.rs"
 
 [dependencies]
-axum = "0.7.1"
+axum = "0.7.9"
 clickhouse = { version = "0.12.2", features = ["rustls-tls"] }
 hyper-tls = "0.5"
 futures = "0.3"
 serde_json = "1"
 serde = { version = "1.0", features = ["derive"] }
 # axum-server = { version = "0.7.1" }
-tokio = { version = "1.39.0", features = ["full"] }
+tokio = { version = "1.49.0", features = ["full"] }
 serde-inline-default = "0.2.3"
 lazy_static = "1.5.0"
 clap = { version = "3.0", features = ["derive"] }
@@ -44,8 +44,8 @@ uuid = { version = "1.10", features = ["v4", "serde"] }
 thiserror = "2.0"
 
 [dev-dependencies]
-testcontainers = { version = "0.23.3", features = ["blocking"] }
-testcontainers-modules = { version = "0.11.6", features = ["postgres", "clickhouse"] }
+testcontainers = { version = "0.26.3", features = ["blocking"] }
+testcontainers-modules = { version = "0.14.0", features = ["postgres"] }
 http-body-util = "0.1"
 tower = { version = "0.4", features = ["util"] }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] }

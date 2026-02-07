@@ -2,18 +2,58 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use testcontainers::{
+    core::IntoContainerPort,
     runners::AsyncRunner,
     ContainerAsync,
+    GenericImage,
+    ImageExt,
 };
-use testcontainers_modules::{
-    postgres::Postgres,
-    clickhouse::ClickHouse,
-};
+use testcontainers_modules::postgres::Postgres;
 use tokio::sync::mpsc;
 
 use server_rs::dlq::DlqConfig;
 use server_rs::models::{data::DataRow, files::FilesRow, log::LogRow, metrics::MetricRow};
+
+/// Create a ClickHouse GenericImage with a simple wait strategy.
+///
+/// We use GenericImage instead of testcontainers_modules::clickhouse::ClickHouse because
+/// the module's HTTP-based readiness check (HttpWaitStrategy) is unreliable in
+/// Docker-in-Docker CI environments, causing intermittent startup timeouts.
+/// Instead, we skip the built-in wait and do our own HTTP readiness polling after start.
+pub fn clickhouse_image() -> GenericImage {
+    GenericImage::new("clickhouse/clickhouse-server", "23.3.8.21-alpine")
+        .with_exposed_port(8123.tcp())
+        // No wait condition - we'll poll for readiness manually after starting
+}
+
+/// Poll ClickHouse HTTP endpoint until it's ready, with retries.
+pub async fn wait_for_clickhouse_ready(url: &str, timeout_secs: u64) {
+    let client = clickhouse::Client::default()
+        .with_url(url)
+        .with_user("default")
+        .with_password("");
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
+    loop {
+        match client.query("SELECT 1").fetch_one::<u8>().await {
+            Ok(_) => {
+                println!("ClickHouse is ready at {}", url);
+                return;
+            }
+            Err(e) => {
+                if tokio::time::Instant::now() >= deadline {
+                    panic!(
+                        "ClickHouse at {} not ready after {}s: {}",
+                        url, timeout_secs, e
+                    );
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        }
+    }
+}
 
 // Test database helper
 pub async fn setup_test_database(database_url: &str) -> PgPool {
@@ -116,7 +156,7 @@ pub async fn setup_clickhouse_tables(clickhouse_url: &str, user: &str, password:
 // Test containers setup
 pub struct TestContainers {
     pub postgres_container: ContainerAsync<Postgres>,
-    pub clickhouse_container: ContainerAsync<ClickHouse>,
+    pub clickhouse_container: ContainerAsync<GenericImage>,
     pub postgres_url: String,
     pub clickhouse_url: String,
     pub postgres_pool: PgPool,
@@ -132,6 +172,7 @@ impl TestContainers {
 
         // Start PostgreSQL container
         let postgres_container = Postgres::default()
+            .with_startup_timeout(Duration::from_secs(300))
             .start()
             .await
             .expect("Failed to start postgres container");
@@ -143,8 +184,8 @@ impl TestContainers {
             postgres_port
         );
 
-        // Start ClickHouse container
-        let clickhouse_container = ClickHouse::default()
+        // Start ClickHouse container using GenericImage (no built-in readiness wait)
+        let clickhouse_container = clickhouse_image()
             .start()
             .await
             .expect("Failed to start clickhouse container");
@@ -152,8 +193,8 @@ impl TestContainers {
         let clickhouse_port = clickhouse_container.get_host_port_ipv4(8123).await.expect("Failed to get clickhouse port");
         let clickhouse_url = format!("http://{}:{}", testcontainers_host, clickhouse_port);
 
-        // Give ClickHouse a moment to fully start
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        // Poll until ClickHouse is actually ready to accept queries
+        wait_for_clickhouse_ready(&clickhouse_url, 60).await;
 
         // Setup database schemas
         let postgres_pool = setup_test_database(&postgres_url).await;
