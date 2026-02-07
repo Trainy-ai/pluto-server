@@ -663,6 +663,9 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
     // Track cross-chart highlighted series name (from other charts in the sync group)
     const crossChartHighlightRef = useRef<string | null>(null);
 
+    // Track table-driven highlighted series name (from runs table hover)
+    const tableHighlightRef = useRef<string | null>(null);
+
     // Ref for tooltip to access highlighted series name synchronously
     const highlightedSeriesRef = useRef<string | null>(null);
 
@@ -720,6 +723,29 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         }
       }
     }, [chartSyncContext?.highlightedSeriesName, chartSyncContext?.hoveredChartIdRef, chartId]);
+
+    // Subscribe to table highlight changes (from runs table row hover)
+    // This is separate from cross-chart highlighting to avoid conflicts
+    useEffect(() => {
+      const tableHighlightName = chartSyncContext?.tableHighlightedSeries ?? null;
+      const prevValue = tableHighlightRef.current;
+      tableHighlightRef.current = tableHighlightName;
+
+      // Skip if unchanged
+      if (prevValue === tableHighlightName) return;
+
+      // Only trigger redraw if no chart hover is active (table highlight is lowest priority)
+      const isActive = chartSyncContext?.hoveredChartIdRef?.current === chartId;
+      const crossChartActive = chartSyncContext?.highlightedSeriesName !== null &&
+        chartSyncContext?.highlightedSeriesName !== tableHighlightName;
+
+      if (!isActive && !crossChartActive) {
+        const chart = chartInstanceRef.current;
+        if (chart) {
+          chart.redraw();
+        }
+      }
+    }, [chartSyncContext?.tableHighlightedSeries, chartSyncContext?.hoveredChartIdRef, chartSyncContext?.highlightedSeriesName, chartId]);
 
     // Calculate time range for datetime formatting
     const timeRange = useMemo(() => {
@@ -914,13 +940,34 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           // Clear local emphasis tracking
           lastFocusedSeriesRef.current = null;
 
-          // Trigger redraw so stroke functions re-evaluate (will see focusedIdx === null)
+          // Reset widths on THIS chart, falling back to table highlight if active
           const u = chartInstanceRef.current;
           if (u) {
-            u.redraw(); // Full redraw to reset stroke colors
+            const tableLabel = tableHighlightRef.current;
+            if (tableLabel) {
+              const hasMatch = u.series.some((s) => s.label === tableLabel);
+              if (hasMatch) {
+                // Apply table highlight widths
+                for (let i = 1; i < u.series.length; i++) {
+                  const match = u.series[i].label === tableLabel;
+                  u.series[i].width = match ? 4 : 0.5;
+                }
+              } else {
+                // Reset all widths to default if no match in this chart
+                for (let i = 1; i < u.series.length; i++) {
+                  u.series[i].width = 2.5;
+                }
+              }
+            } else {
+              // Reset all widths to default
+              for (let i = 1; i < u.series.length; i++) {
+                u.series[i].width = 2.5;
+              }
+            }
+            u.redraw(); // Full redraw to reset stroke colors and widths
           }
 
-          // Clear cross-chart emphasis for OTHER charts
+          // Clear cross-chart emphasis for OTHER charts (falls back to table highlight internally)
           ctx.highlightUPlotSeries(chartId, null);
         }
       };
@@ -966,10 +1013,11 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             stroke: (u: uPlot, seriesIdx: number) => {
               const localFocusIdx = lastFocusedSeriesRef.current;
               const crossChartLabel = crossChartHighlightRef.current;
+              const tableLabel = tableHighlightRef.current;
               const thisSeriesLabel = u.series[seriesIdx]?.label;
 
-
               // Determine if this series should be highlighted
+              // Priority: local chart hover > cross-chart hover > table row hover
               let isHighlighted = false;
 
               if (localFocusIdx !== null) {
@@ -978,6 +1026,9 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
               } else if (crossChartLabel !== null) {
                 // Cross-chart highlight (another chart is being hovered)
                 isHighlighted = thisSeriesLabel === crossChartLabel;
+              } else if (tableLabel !== null) {
+                // Table row hover highlight (runs table)
+                isHighlighted = thisSeriesLabel === tableLabel;
               } else {
                 // No focus - all series at full color
                 return baseColor;

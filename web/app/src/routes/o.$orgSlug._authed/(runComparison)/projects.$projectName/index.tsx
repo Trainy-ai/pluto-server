@@ -123,6 +123,9 @@ function RouteComponent() {
   // View mode state - "charts" (default) or "side-by-side"
   const [viewMode, setViewMode] = useState<ViewMode>("charts");
 
+  // Track hovered run name from runs table for chart highlighting
+  const [hoveredRunName, setHoveredRunName] = useState<string | null>(null);
+
   // Tag filter state
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   // Status filter state
@@ -310,6 +313,7 @@ function RouteComponent() {
                 onSelectAllByIds={selectAllByIds}
                 onDeselectAll={deselectAll}
                 onShuffleColors={shuffleColors}
+                onRunHover={setHoveredRunName}
               />
             </div>
           </ResizablePanel>
@@ -336,6 +340,7 @@ function RouteComponent() {
                     selectedRuns={selectedRunsWithColors}
                     selectedViewId={chart ?? null}
                     onViewChange={handleViewChange}
+                    tableHighlightedRunName={hoveredRunName}
                   />
                   {isFetching && runs.length > 0 && (
                     <div className="absolute inset-0 flex items-center justify-center bg-background/50">
