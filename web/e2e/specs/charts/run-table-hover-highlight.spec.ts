@@ -71,9 +71,9 @@ test.describe("Run Table Hover → Chart Highlight", () => {
     const firstSelectedRow = selectedRows.first();
     await expect(firstSelectedRow).toBeVisible({ timeout: 5000 });
 
-    // Get the run name from the row (stored in data-run-name attribute)
-    const runName = await firstSelectedRow.getAttribute("data-run-name");
-    expect(runName).toBeTruthy();
+    // Get the run ID from the row (used for unique series matching)
+    const runId = await firstSelectedRow.getAttribute("data-run-id");
+    expect(runId).toBeTruthy();
 
     // Hover over the run row
     await firstSelectedRow.hover();
@@ -88,7 +88,8 @@ test.describe("Run Table Hover → Chart Highlight", () => {
     // Check that the chart highlight system was triggered by inspecting
     // series widths on uPlot instances. When a run is highlighted from the table,
     // its corresponding series should have width=4 and others should have width=0.5.
-    const highlightState = await page.evaluate((expectedRunName) => {
+    // Matching is done by _seriesId (run ID) to handle duplicate run names.
+    const highlightState = await page.evaluate((expectedRunId) => {
       const charts = document.querySelectorAll(".uplot");
       const results: {
         chartIndex: number;
@@ -104,9 +105,9 @@ test.describe("Run Table Hover → Chart Highlight", () => {
         let hasMatch = false;
         let highlightedCorrectly = true;
 
-        // First, check if there is a matching series in this chart
+        // First, check if there is a matching series by _seriesId
         for (let si = 1; si < uplotInstance.series.length; si++) {
-          if (uplotInstance.series[si].label === expectedRunName) {
+          if (uplotInstance.series[si]._seriesId === expectedRunId) {
             hasMatch = true;
             break;
           }
@@ -116,7 +117,7 @@ test.describe("Run Table Hover → Chart Highlight", () => {
         if (hasMatch) {
           for (let si = 1; si < uplotInstance.series.length; si++) {
             const series = uplotInstance.series[si];
-            const isHighlighted = series.label === expectedRunName;
+            const isHighlighted = series._seriesId === expectedRunId;
             const expectedWidth = isHighlighted ? 4 : 0.5;
             if (series.width !== expectedWidth) {
               highlightedCorrectly = false;
@@ -133,7 +134,7 @@ test.describe("Run Table Hover → Chart Highlight", () => {
       }
 
       return results;
-    }, runName);
+    }, runId);
 
     // At least one chart should have the matching series highlighted
     const chartsWithMatch = highlightState.filter((r) => r.hasMatchingSeries);

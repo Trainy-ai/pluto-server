@@ -15,21 +15,17 @@ import type uPlot from "uplot";
 
 /**
  * Apply series highlight widths to a uPlot chart.
- * If label is provided and matches a series, highlights it (4px) and dims others (0.5px).
- * If label is null or doesn't match any series, resets all to default (2.5px).
+ * If value is provided and matches a series, highlights it (4px) and dims others (0.5px).
+ * If value is null or doesn't match any series, resets all to default (2.5px).
+ * @param key - which series property to match against ('label' for cross-chart, '_seriesId' for table highlight)
  */
-function applySeriesHighlight(chart: uPlot, label: string | null): void {
-  if (label) {
-    const hasMatch = chart.series.some((s) => s.label === label);
-    if (hasMatch) {
-      for (let i = 1; i < chart.series.length; i++) {
-        const match = chart.series[i].label === label;
-        chart.series[i].width = match ? 4 : 0.5;
-      }
-    } else {
-      for (let i = 1; i < chart.series.length; i++) {
-        chart.series[i].width = 2.5;
-      }
+export function applySeriesHighlight(chart: uPlot, value: string | null, key: '_seriesId' | 'label' = 'label'): void {
+  const hasMatch = value && chart.series.some((s: any) => s[key] === value);
+
+  if (hasMatch) {
+    for (let i = 1; i < chart.series.length; i++) {
+      const match = (chart.series[i] as any)[key] === value;
+      chart.series[i].width = match ? 4 : 0.5;
     }
   } else {
     for (let i = 1; i < chart.series.length; i++) {
@@ -197,7 +193,7 @@ export function ChartSyncProvider({
     if (hoveredChartIdRef.current !== null) return;
 
     uplotInstancesRef.current.forEach((chart) => {
-      applySeriesHighlight(chart, label);
+      applySeriesHighlight(chart, label, '_seriesId');
       chart.redraw(false);
     });
   }, [tableHighlightedSeriesProp]);
@@ -234,8 +230,8 @@ export function ChartSyncProvider({
 
         if (seriesLabel === null) {
           // Fall back to table highlight if active, otherwise reset to default
-          const tableLabel = tableHighlightedSeriesRef.current;
-          applySeriesHighlight(chart, tableLabel);
+          const tableId = tableHighlightedSeriesRef.current;
+          applySeriesHighlight(chart, tableId, '_seriesId');
           chart.redraw(false);
         } else {
           // Only apply highlighting if this chart has the series
