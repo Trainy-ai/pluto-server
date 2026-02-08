@@ -70,8 +70,8 @@ interface DataTableProps {
   onSelectAllByIds: (runIds: string[]) => void;
   onDeselectAll: () => void;
   onShuffleColors: () => void;
-  /** Callback when a run row is hovered (for chart highlighting) */
-  onRunHover?: (runName: string | null) => void;
+  /** Callback when a run row is hovered (for chart highlighting). Passes the run's unique SQID. */
+  onRunHover?: (runId: string | null) => void;
 }
 
 export function DataTable({
@@ -411,7 +411,7 @@ export function DataTable({
                       // Only highlight selected runs (those with visible chart curves)
                       if (row.getIsSelected()) {
                         setHoveredRunId(row.original.id);
-                        onRunHover?.(row.original.name);
+                        onRunHover?.(row.original.id);
                       }
                     }}
                     onMouseLeave={() => {

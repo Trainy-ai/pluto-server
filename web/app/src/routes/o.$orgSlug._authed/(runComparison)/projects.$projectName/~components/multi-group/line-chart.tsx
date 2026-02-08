@@ -120,6 +120,7 @@ export const MultiLineChart = memo(
             ),
             y: sortedData.map((d: MetricDataPoint) => Number(d.value)),
             label: runInfo.runName,
+            seriesId: runInfo.runId,
             color: runInfo.color,
           };
         });
@@ -144,6 +145,7 @@ export const MultiLineChart = memo(
         x: data.map((d: MetricDataPoint) => Number(d.step)),
         y: data.map((d: MetricDataPoint) => Number(d.value)),
         label: runInfo.runName,
+        seriesId: runInfo.runId,
         color: runInfo.color,
       }));
 

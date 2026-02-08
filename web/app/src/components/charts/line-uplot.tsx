@@ -11,7 +11,7 @@ import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import { useTheme } from "@/lib/hooks/use-theme";
 import { cn } from "@/lib/utils";
-import { useChartSyncContext } from "./context/chart-sync-context";
+import { useChartSyncContext, applySeriesHighlight } from "./context/chart-sync-context";
 import { toast } from "sonner";
 
 
@@ -23,6 +23,8 @@ export interface LineData {
   x: number[];
   y: number[];
   label: string;
+  /** Unique identifier for this series (e.g. run ID). Used for highlighting when labels may not be unique. Falls back to label if not provided. */
+  seriesId?: string;
   color?: string;
   dashed?: boolean;
   hideFromLegend?: boolean;
@@ -943,27 +945,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           // Reset widths on THIS chart, falling back to table highlight if active
           const u = chartInstanceRef.current;
           if (u) {
-            const tableLabel = tableHighlightRef.current;
-            if (tableLabel) {
-              const hasMatch = u.series.some((s) => s.label === tableLabel);
-              if (hasMatch) {
-                // Apply table highlight widths
-                for (let i = 1; i < u.series.length; i++) {
-                  const match = u.series[i].label === tableLabel;
-                  u.series[i].width = match ? 4 : 0.5;
-                }
-              } else {
-                // Reset all widths to default if no match in this chart
-                for (let i = 1; i < u.series.length; i++) {
-                  u.series[i].width = 2.5;
-                }
-              }
-            } else {
-              // Reset all widths to default
-              for (let i = 1; i < u.series.length; i++) {
-                u.series[i].width = 2.5;
-              }
-            }
+            applySeriesHighlight(u, tableHighlightRef.current, '_seriesId');
             u.redraw(); // Full redraw to reset stroke colors and widths
           }
 
@@ -1009,12 +991,14 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
 
           return {
             label: line.label,
+            _seriesId: line.seriesId ?? line.label,
             // Use a function for stroke that checks both local and cross-chart focus
             stroke: (u: uPlot, seriesIdx: number) => {
               const localFocusIdx = lastFocusedSeriesRef.current;
               const crossChartLabel = crossChartHighlightRef.current;
-              const tableLabel = tableHighlightRef.current;
+              const tableId = tableHighlightRef.current;
               const thisSeriesLabel = u.series[seriesIdx]?.label;
+              const thisSeriesId = (u.series[seriesIdx] as any)?._seriesId;
 
               // Determine if this series should be highlighted
               // Priority: local chart hover > cross-chart hover > table row hover
@@ -1026,9 +1010,9 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
               } else if (crossChartLabel !== null) {
                 // Cross-chart highlight (another chart is being hovered)
                 isHighlighted = thisSeriesLabel === crossChartLabel;
-              } else if (tableLabel !== null) {
-                // Table row hover highlight (runs table)
-                isHighlighted = thisSeriesLabel === tableLabel;
+              } else if (tableId !== null) {
+                // Table row hover highlight - match by unique seriesId to handle duplicate run names
+                isHighlighted = thisSeriesId === tableId;
               } else {
                 // No focus - all series at full color
                 return baseColor;

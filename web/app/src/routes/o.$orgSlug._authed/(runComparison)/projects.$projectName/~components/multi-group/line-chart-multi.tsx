@@ -323,6 +323,7 @@ export const MultiLineChart = memo(
               x: normalizedTimes,
               y: sortedData.map((d: MetricDataPoint) => Number(d.value)),
               label: runInfo.runName,
+              seriesId: runInfo.runId,
               color: runInfo.color,
             };
 
@@ -349,6 +350,7 @@ export const MultiLineChart = memo(
                 x: data.map((d: MetricDataPoint) => new Date(d.time).getTime()),
                 y: data.map((d: MetricDataPoint) => Number(d.value)),
                 label: runInfo.runName,
+                seriesId: runInfo.runId,
                 color: runInfo.color,
               };
               const downsampledData = applyDownsampling(baseData, settings.maxPointsPerSeries);
@@ -387,6 +389,7 @@ export const MultiLineChart = memo(
                 x: normalizedTimes,
                 y: data.map((d: MetricDataPoint) => Number(d.value)),
                 label: runInfo.runName,
+                seriesId: runInfo.runId,
                 color: runInfo.color,
               };
 
@@ -425,6 +428,7 @@ export const MultiLineChart = memo(
                 x: data.map((d: MetricDataPoint) => Number(d.step)),
                 y: data.map((d: MetricDataPoint) => Number(d.value)),
                 label: runInfo.runName,
+                seriesId: runInfo.runId,
                 color: runInfo.color,
               };
               const downsampledData = applyDownsampling(baseData, settings.maxPointsPerSeries);
@@ -495,6 +499,7 @@ export const MultiLineChart = memo(
                 x: alignedData!.x,
                 y: alignedData!.y,
                 label: runInfo.runName,
+                seriesId: runInfo.runId,
                 color: runInfo.color,
               };
               const downsampledData = applyDownsampling(baseData, settings.maxPointsPerSeries);
