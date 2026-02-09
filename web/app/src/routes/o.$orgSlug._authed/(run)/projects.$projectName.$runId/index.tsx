@@ -17,6 +17,8 @@ import { prefetchGetRun, useGetRun } from "./~queries/get-run";
 import { Layout, SkeletonLayout } from "./~components/layout";
 import { refreshAllData } from "./~queries/refresh-all-data";
 import LineSettings from "./~components/line-settings";
+import { useLineSettings } from "./~components/use-line-settings";
+import { SmoothingSlider } from "@/components/charts/smoothing-slider";
 import { useMemo } from "react";
 
 export const Route = createFileRoute(
@@ -56,6 +58,13 @@ function RouteComponent() {
     defaultAutoRefresh: runData?.status === "RUNNING",
     refreshInterval: 5000,
   });
+
+  const {
+    settings,
+    updateSettings,
+    updateSmoothingSettings,
+    getSmoothingConfig,
+  } = useLineSettings(organizationId, projectName, runId);
 
   const { filteredLogGroups, handleSearch } = useFilteredLogs({
     logs: runData?.logs || [],
@@ -100,7 +109,13 @@ function RouteComponent() {
         <div className="flex flex-col gap-4">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold">Run Metrics</h2>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-3">
+              <SmoothingSlider
+                settings={settings}
+                updateSmoothingSettings={updateSmoothingSettings}
+                updateSettings={updateSettings}
+                getSmoothingConfig={getSmoothingConfig}
+              />
               <RefreshButton
                 onRefresh={handleRefresh}
                 lastRefreshed={lastRefreshTime || undefined}

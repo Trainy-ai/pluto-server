@@ -27,7 +27,7 @@ export const DEFAULT_SETTINGS: LineChartSettings = {
   xAxisLogScale: false,
   yAxisLogScale: false,
   smoothing: {
-    enabled: false,
+    enabled: true,
     algorithm: "gaussian",
     parameter: 2,
     showOriginalData: true,
@@ -115,7 +115,7 @@ export function useLineSettings(
       case "ema":
         return { min: 0, max: 0.999, step: 0.001, defaultValue: 0.6 };
       case "gaussian":
-        return { min: 0.1, max: 10, step: 0.1, defaultValue: 2 };
+        return { min: 0.1, max: 100, step: 0.1, defaultValue: 2 };
       case "running":
         return { min: 1, max: 100, step: 1, defaultValue: 10 };
       default:

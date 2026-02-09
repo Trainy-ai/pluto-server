@@ -10,6 +10,8 @@ import {
   type SearchIndex,
 } from "../~lib/search-utils";
 import LineSettings from "./line-settings";
+import { SmoothingSlider } from "@/components/charts/smoothing-slider";
+import { useLineSettings } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/use-line-settings";
 import { DashboardViewSelector, DashboardBuilder } from "./dashboard-builder";
 import { useDashboardView, type DashboardView } from "../~queries/dashboard-views";
 import type { SelectedRunWithColor } from "../~hooks/use-selected-runs";
@@ -59,6 +61,13 @@ export function MetricsDisplay({
 
   // Fetch the selected dashboard view
   const { data: selectedView } = useDashboardView(organizationId, selectedViewId);
+
+  const {
+    settings,
+    updateSettings,
+    updateSmoothingSettings,
+    getSmoothingConfig,
+  } = useLineSettings(organizationId, projectName, "full");
 
   const uniqueLogNames = Object.keys(groupedMetrics)
     .map((group) =>
@@ -146,7 +155,13 @@ export function MetricsDisplay({
                 />
               </div>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-3">
+              <SmoothingSlider
+                settings={settings}
+                updateSmoothingSettings={updateSmoothingSettings}
+                updateSettings={updateSettings}
+                getSmoothingConfig={getSmoothingConfig}
+              />
               <RefreshButton
                 onRefresh={onRefresh}
                 lastRefreshed={lastRefreshed}
@@ -191,7 +206,13 @@ export function MetricsDisplay({
               />
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
+            <SmoothingSlider
+              settings={settings}
+              updateSmoothingSettings={updateSmoothingSettings}
+              updateSettings={updateSettings}
+              getSmoothingConfig={getSmoothingConfig}
+            />
             <RefreshButton
               onRefresh={onRefresh}
               lastRefreshed={lastRefreshed}
