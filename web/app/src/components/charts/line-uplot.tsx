@@ -11,6 +11,7 @@ import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import { useTheme } from "@/lib/hooks/use-theme";
 import { cn } from "@/lib/utils";
+import { applyAlpha } from "@/lib/math/color-alpha";
 import { useChartSyncContext, applySeriesHighlight } from "./context/chart-sync-context";
 import { toast } from "sonner";
 
@@ -256,7 +257,8 @@ function createTooltipRow(
   value: number,
   color: string,
   textColor: string,
-  isHighlighted: boolean = false
+  isHighlighted: boolean = false,
+  rawValue?: number,
 ): HTMLDivElement {
   const row = document.createElement("div");
   row.style.cssText = `padding: 1px 4px; display: flex; align-items: center; gap: 6px; white-space: nowrap${isHighlighted ? "; background: rgba(255,255,255,0.05)" : ""}`;
@@ -273,7 +275,11 @@ function createTooltipRow(
 
   const valueSpan = document.createElement("span");
   valueSpan.style.cssText = `color: ${textColor}; font-weight: 500; flex-shrink: 0`;
-  valueSpan.textContent = formatAxisLabel(value);
+  if (rawValue != null && rawValue !== value) {
+    valueSpan.textContent = `${formatAxisLabel(value)} (${formatAxisLabel(rawValue)})`;
+  } else {
+    valueSpan.textContent = formatAxisLabel(value);
+  }
   row.appendChild(valueSpan);
 
   return row;
@@ -437,7 +443,21 @@ function tooltipPlugin(opts: {
 
     // Gather series values
     const textColor = theme === "dark" ? "#fff" : "#000";
-    const seriesItems: { name: string; value: number; color: string; hidden: boolean }[] = [];
+    const seriesItems: { name: string; value: number; color: string; hidden: boolean; rawValue?: number }[] = [];
+
+    // First pass: collect raw (original) values from hidden smoothing series
+    const rawValues = new Map<string, number>();
+    for (let i = 1; i < u.series.length; i++) {
+      const series = u.series[i];
+      const yVal = u.data[i][idx];
+      const lineData = lines[i - 1];
+      if (yVal != null && series.show !== false && lineData?.hideFromLegend) {
+        const labelText = typeof series.label === "string" ? series.label : "";
+        if (labelText.endsWith(" (original)")) {
+          rawValues.set(labelText.slice(0, -" (original)".length), yVal);
+        }
+      }
+    }
 
     for (let i = 1; i < u.series.length; i++) {
       const series = u.series[i];
@@ -453,6 +473,7 @@ function tooltipPlugin(opts: {
           value: yVal,
           color: seriesColor,
           hidden: lineData?.hideFromLegend || false,
+          rawValue: rawValues.get(labelText),
         });
       }
     }
@@ -490,7 +511,7 @@ function tooltipPlugin(opts: {
     // Add ALL rows using safe DOM APIs - scrolling handles overflow
     for (const s of visibleItems) {
       const isHighlighted = highlightedName !== null && s.name === highlightedName;
-      content.appendChild(createTooltipRow(s.name, s.value, s.color, textColor, isHighlighted));
+      content.appendChild(createTooltipRow(s.name, s.value, s.color, textColor, isHighlighted, s.rawValue));
     }
 
     tooltipEl.appendChild(content);
@@ -993,48 +1014,56 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             label: line.label,
             _seriesId: line.seriesId ?? line.label,
             // Use a function for stroke that checks both local and cross-chart focus
+            // and applies per-series opacity (used by smoothing to dim raw data)
             stroke: (u: uPlot, seriesIdx: number) => {
               const localFocusIdx = lastFocusedSeriesRef.current;
               const crossChartLabel = crossChartHighlightRef.current;
               const tableId = tableHighlightRef.current;
               const thisSeriesLabel = u.series[seriesIdx]?.label;
               const thisSeriesId = (u.series[seriesIdx] as any)?._seriesId;
+              const lineOpacity = line.opacity ?? 1;
 
               // Determine if this series should be highlighted
               // Priority: local chart hover > cross-chart hover > table row hover
               let isHighlighted = false;
+              let highlightedLabel: string | null = null;
 
               if (localFocusIdx !== null) {
                 // Local focus takes priority (this chart is being hovered)
                 isHighlighted = seriesIdx === localFocusIdx;
+                highlightedLabel = typeof u.series[localFocusIdx]?.label === "string"
+                  ? (u.series[localFocusIdx].label as string) : null;
               } else if (crossChartLabel !== null) {
                 // Cross-chart highlight (another chart is being hovered)
                 isHighlighted = thisSeriesLabel === crossChartLabel;
+                highlightedLabel = crossChartLabel;
               } else if (tableId !== null) {
                 // Table row hover highlight - match by unique seriesId to handle duplicate run names
                 isHighlighted = thisSeriesId === tableId;
-              } else {
-                // No focus - all series at full color
-                return baseColor;
               }
 
-              // Return full color for highlighted series, dimmed for others
-              if (isHighlighted) {
-                return baseColor;
+              const isFocusActive =
+                localFocusIdx !== null || crossChartLabel !== null || tableId !== null;
+
+              // Check if this is the raw/original companion of the highlighted series
+              const isRawOfHighlighted = isFocusActive && !isHighlighted &&
+                line.hideFromLegend &&
+                typeof thisSeriesLabel === "string" &&
+                thisSeriesLabel.endsWith(" (original)") &&
+                highlightedLabel !== null &&
+                thisSeriesLabel === highlightedLabel + " (original)";
+
+              if (!isFocusActive || isHighlighted) {
+                return lineOpacity < 1
+                  ? applyAlpha(baseColor, lineOpacity)
+                  : baseColor;
               }
-              // Dim unfocused series using rgba for reliable canvas alpha support
-              if (baseColor.startsWith('#')) {
-                const hex = baseColor.slice(1);
-                const r = parseInt(hex.slice(0, 2), 16);
-                const g = parseInt(hex.slice(2, 4), 16);
-                const b = parseInt(hex.slice(4, 6), 16);
-                return `rgba(${r}, ${g}, ${b}, 0.15)`;
-              } else if (baseColor.startsWith('rgb(')) {
-                return baseColor.replace('rgb(', 'rgba(').replace(')', ', 0.15)');
-              } else if (baseColor.startsWith('hsl(')) {
-                return baseColor.replace('hsl(', 'hsla(').replace(')', ', 0.15)');
+              // Slightly boost raw companion of emphasized series
+              if (isRawOfHighlighted) {
+                return applyAlpha(baseColor, Math.min(lineOpacity * 2.5, 0.35));
               }
-              return baseColor;
+              // Dim unfocused series: combine line opacity with focus dimming
+              return applyAlpha(baseColor, lineOpacity * 0.15);
             },
             width: 2.5,
             dash: line.dashed ? [5, 5] : undefined,
@@ -1043,7 +1072,9 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
               // Show points for single-point series since lines need 2+ points to be visible
               show: isSinglePoint,
               size: isSinglePoint ? 10 : 6,
-              fill: baseColor,
+              fill: (line.opacity ?? 1) < 1
+                ? applyAlpha(baseColor, line.opacity!)
+                : baseColor,
             },
           };
         }),
@@ -1108,7 +1139,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           setSeries: false, // DISABLED - was causing seriesIdx to always be null due to cross-chart sync
         },
         focus: {
-          prox: 30, // Focus on series within 30px of cursor (triggers setSeries hook with correct idx)
+          prox: -1, // Always highlight the closest series regardless of distance
         },
         drag: {
           x: true,
@@ -1190,6 +1221,10 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
               for (let si = 1; si < u.series.length; si++) {
                 const series = u.series[si];
                 if (!series.show) continue; // Skip hidden series
+
+                // Skip raw/original series from smoothing - only smoothed lines should compete for emphasis
+                const lineData = processedLines[si - 1];
+                if (lineData?.hideFromLegend) continue;
 
                 const yData = u.data[si] as (number | null)[];
                 const yVal = yData[idx];
