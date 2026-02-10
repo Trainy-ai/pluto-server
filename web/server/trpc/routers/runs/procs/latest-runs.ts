@@ -10,7 +10,7 @@ export const latestRunsProcedure = protectedOrgProcedure
       search: z.string().optional(),
       tags: z.array(z.string()).optional(),
       status: z.array(z.enum(["RUNNING", "COMPLETED", "FAILED", "TERMINATED", "CANCELLED"])).optional(),
-      limit: z.number().min(1).max(100).default(10),
+      limit: z.number().min(1).max(200).default(10),
     })
   )
   .query(async ({ ctx, input }) => {

@@ -469,7 +469,7 @@ export function DataTable({
             </span>
           </SelectTrigger>
           <SelectContent side="top">
-            {[5, 10, 15, 20].map((pageSizeVal) => (
+            {[5, 10, 15, 20, 50, 100].map((pageSizeVal) => (
               <SelectItem key={pageSizeVal} value={`${pageSizeVal}`}>
                 <span className="text-xs">{pageSizeVal} Rows</span>
               </SelectItem>
