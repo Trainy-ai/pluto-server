@@ -3,7 +3,7 @@ import path from "path";
 
 export default defineConfig({
   test: {
-    environment: "node",
+    environment: "jsdom",
     setupFiles: ["./src/lib/db/__tests__/setup.ts"],
   },
   resolve: {
