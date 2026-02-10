@@ -85,6 +85,9 @@ interface ChartSyncContextValue {
   // Table-driven series highlighting - when a run row is hovered in the runs table
   // Separate from chart-driven highlighting to avoid conflicts
   tableHighlightedSeries: string | null;
+
+  // Ref to check if syncXScale is currently propagating (prevents target charts from broadcasting)
+  isSyncingZoomRef: React.RefObject<boolean>;
 }
 
 // ============================
@@ -371,6 +374,7 @@ export function ChartSyncProvider({
       syncedZoomRange,
       setSyncedZoomRange,
       tableHighlightedSeries: tableHighlightedSeriesProp,
+      isSyncingZoomRef,
     }),
     [
       registerUPlot,
@@ -387,6 +391,7 @@ export function ChartSyncProvider({
       globalXRange,
       syncedZoomRange,
       tableHighlightedSeriesProp,
+      // isSyncingZoomRef intentionally omitted - stable ref, never changes
     ]
   );
 
