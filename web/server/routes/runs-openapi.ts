@@ -1353,7 +1353,7 @@ router.openapi(compareRunsRoute, async (c) => {
   const prisma = c.get("prisma");
   const { runIds: runIdsStr, projectName, logName } = c.req.valid("query");
 
-  const MAX_COMPARE_RUNS = 20;
+  const MAX_COMPARE_RUNS = 100;
   const runIds = runIdsStr.split(",").map((id) => Number(id.trim())).filter((id) => !isNaN(id));
 
   if (runIds.length === 0) {
