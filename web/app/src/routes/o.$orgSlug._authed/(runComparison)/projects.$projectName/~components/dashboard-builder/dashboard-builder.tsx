@@ -218,7 +218,7 @@ export function DashboardBuilder({
   return (
     <div ref={containerRef} className="flex-1 space-y-4">
       {/* Toolbar */}
-      <div className="sticky top-0 z-10 flex items-center justify-between gap-4 bg-background pb-2">
+      <div className="flex items-center justify-between gap-4 pb-2">
         <div className="flex items-center gap-2">
           <h2 className="text-lg font-semibold">{view.name}</h2>
           {hasChanges && (

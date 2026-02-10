@@ -11,6 +11,7 @@ import {
 } from "../~lib/search-utils";
 import LineSettings from "./line-settings";
 import { SmoothingSlider } from "@/components/charts/smoothing-slider";
+
 import { useLineSettings } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/use-line-settings";
 import { DashboardViewSelector, DashboardBuilder } from "./dashboard-builder";
 import { useDashboardView, type DashboardView } from "../~queries/dashboard-views";
@@ -140,7 +141,7 @@ export function MetricsDisplay({
     return (
       <ChartSyncProvider syncKey={`dashboard-${selectedViewId}`} tableHighlightedSeries={tableHighlightedRunId}>
         <div className="flex-1 space-y-4">
-          <div className="sticky top-0 z-10 flex items-center justify-between gap-4 bg-background pb-2">
+          <div className="sticky top-0 z-20 flex items-center justify-between gap-4 bg-background pb-2">
             <div className="flex items-center gap-4">
               <DashboardViewSelector
                 organizationId={organizationId}

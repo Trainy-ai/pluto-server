@@ -19,6 +19,7 @@ import { refreshAllData } from "./~queries/refresh-all-data";
 import LineSettings from "./~components/line-settings";
 import { useLineSettings } from "./~components/use-line-settings";
 import { SmoothingSlider } from "@/components/charts/smoothing-slider";
+
 import { useMemo } from "react";
 
 export const Route = createFileRoute(

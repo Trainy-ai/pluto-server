@@ -50,6 +50,7 @@ import {
   useLineSettings,
   DEFAULT_SETTINGS,
 } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/use-line-settings";
+import { useChartLineWidth } from "@/lib/hooks/use-chart-line-width";
 
 interface LineSettingsProps {
   organizationId: string;
@@ -167,6 +168,8 @@ const LineSettings = ({
     getSmoothingInfo,
     resetSettings,
   } = useLineSettings(organizationId, projectName, "full");
+
+  const { lineWidth, setLineWidth } = useChartLineWidth();
 
   const [open, setOpen] = useState(false);
   const [sliderValue, setSliderValue] = useState<number>(
@@ -490,6 +493,31 @@ const LineSettings = ({
                     <SelectItem value="0">No limit (may be slow)</SelectItem>
                   </SelectContent>
                 </Select>
+              </div>
+            </SettingsSection>
+
+            <SettingsSection title="Line Width">
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <Label className="text-sm">Thickness</Label>
+                  <span className="rounded bg-muted px-2 py-0.5 text-sm font-medium">
+                    {lineWidth}px
+                  </span>
+                </div>
+                <div className="px-1">
+                  <Slider
+                    min={0.5}
+                    max={5}
+                    step={0.5}
+                    value={[lineWidth]}
+                    onValueChange={([v]) => setLineWidth(v)}
+                    className="py-2"
+                  />
+                  <div className="mt-1 flex justify-between px-1 text-xs text-muted-foreground">
+                    <span>0.5</span>
+                    <span>5</span>
+                  </div>
+                </div>
               </div>
             </SettingsSection>
 

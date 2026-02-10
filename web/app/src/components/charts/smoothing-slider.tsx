@@ -74,48 +74,48 @@ export function SmoothingSlider({
           Smoothing
         </Label>
       </div>
-      {settings.smoothing.enabled && (
-        <div className="flex items-center gap-2 duration-200 animate-in fade-in-50">
-          <Select
-            value={settings.smoothing.algorithm}
-            onValueChange={handleAlgorithmChange}
-          >
-            <SelectTrigger className="h-6 w-auto gap-1 border-none bg-muted/50 px-2 text-xs shadow-none">
-              <SelectValue>
-                {ALGORITHM_LABELS[settings.smoothing.algorithm]}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent className="min-w-0">
-              <SelectItem value="ema" className="text-xs">
-                EMA
-              </SelectItem>
-              <SelectItem value="twema" className="text-xs">
-                TWEMA
-              </SelectItem>
-              <SelectItem value="gaussian" className="text-xs">
-                Gaussian
-              </SelectItem>
-              <SelectItem value="running" className="text-xs">
-                Running Avg
-              </SelectItem>
-            </SelectContent>
-          </Select>
-          <Slider
-            min={config.min}
-            max={config.max}
-            step={config.step}
-            value={[sliderValue]}
-            onValueChange={(values) => setSliderValue(values[0])}
-            onValueCommit={(values) =>
-              updateSmoothingSettings("parameter", values[0])
-            }
-            className="w-24"
-          />
-          <span className="min-w-[2.5rem] text-right font-mono text-xs text-muted-foreground">
-            {sliderValue}
-          </span>
-        </div>
-      )}
+      <div className={`flex items-center gap-2 transition-opacity duration-200 ${settings.smoothing.enabled ? "opacity-100" : "pointer-events-none opacity-40"}`}>
+        <Select
+          value={settings.smoothing.algorithm}
+          onValueChange={handleAlgorithmChange}
+          disabled={!settings.smoothing.enabled}
+        >
+          <SelectTrigger className="h-6 w-auto gap-1 border-none bg-muted/50 px-2 text-xs shadow-none">
+            <SelectValue>
+              {ALGORITHM_LABELS[settings.smoothing.algorithm]}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent className="min-w-0">
+            <SelectItem value="ema" className="text-xs">
+              EMA
+            </SelectItem>
+            <SelectItem value="twema" className="text-xs">
+              TWEMA
+            </SelectItem>
+            <SelectItem value="gaussian" className="text-xs">
+              Gaussian
+            </SelectItem>
+            <SelectItem value="running" className="text-xs">
+              Running Avg
+            </SelectItem>
+          </SelectContent>
+        </Select>
+        <Slider
+          min={config.min}
+          max={config.max}
+          step={config.step}
+          value={[sliderValue]}
+          onValueChange={(values) => setSliderValue(values[0])}
+          onValueCommit={(values) =>
+            updateSmoothingSettings("parameter", values[0])
+          }
+          disabled={!settings.smoothing.enabled}
+          className="w-24"
+        />
+        <span className="min-w-[2.5rem] text-right font-mono text-xs text-muted-foreground">
+          {sliderValue}
+        </span>
+      </div>
     </div>
   );
 }

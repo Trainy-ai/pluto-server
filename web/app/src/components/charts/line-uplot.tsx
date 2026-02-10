@@ -13,6 +13,7 @@ import { useTheme } from "@/lib/hooks/use-theme";
 import { cn } from "@/lib/utils";
 import { applyAlpha } from "@/lib/math/color-alpha";
 import { useChartSyncContext, applySeriesHighlight } from "./context/chart-sync-context";
+import { useChartLineWidth } from "@/lib/hooks/use-chart-line-width";
 import { toast } from "sonner";
 
 
@@ -656,6 +657,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
     ref
   ) => {
     const { resolvedTheme: theme } = useTheme();
+    const { lineWidth: chartLineWidth } = useChartLineWidth();
     const containerRef = useRef<HTMLDivElement>(null);
     const chartRef = useRef<uPlot | null>(null);
     const chartContainerRef = useRef<HTMLDivElement>(null);
@@ -691,6 +693,10 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
 
     // Ref for tooltip to access highlighted series name synchronously
     const highlightedSeriesRef = useRef<string | null>(null);
+
+    // Ref for line width so event handlers can read the latest value
+    const chartLineWidthRef = useRef(chartLineWidth);
+    chartLineWidthRef.current = chartLineWidth;
 
     // Ref to access processedLines in callbacks without causing dependency issues
     const processedLinesRef = useRef<typeof lines>([]);
@@ -966,7 +972,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           // Reset widths on THIS chart, falling back to table highlight if active
           const u = chartInstanceRef.current;
           if (u) {
-            applySeriesHighlight(u, tableHighlightRef.current, '_seriesId');
+            applySeriesHighlight(u, tableHighlightRef.current, '_seriesId', chartLineWidthRef.current);
             u.redraw(); // Full redraw to reset stroke colors and widths
           }
 
@@ -1065,7 +1071,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
               // Dim unfocused series: combine line opacity with focus dimming
               return applyAlpha(baseColor, lineOpacity * 0.15);
             },
-            width: 2.5,
+            width: chartLineWidth,
             dash: line.dashed ? [5, 5] : undefined,
             spanGaps: true,
             points: {
@@ -1386,6 +1392,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       chartId,
       handleHoverChange,
       isActiveChart,
+      chartLineWidth,
     ]);
 
     // Store cleanup function ref for proper cleanup on unmount

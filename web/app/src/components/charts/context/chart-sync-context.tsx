@@ -13,23 +13,34 @@ import type uPlot from "uplot";
 // Helpers
 // ============================
 
+/** Read current chart line width from localStorage (for imperative use outside React) */
+function getStoredLineWidth(): number {
+  const stored = localStorage.getItem("chart-line-width");
+  if (stored === null) return 1.5;
+  const parsed = parseFloat(stored);
+  return isNaN(parsed) ? 1.5 : parsed;
+}
+
 /**
  * Apply series highlight widths to a uPlot chart.
- * If value is provided and matches a series, highlights it (4px) and dims others (0.5px).
- * If value is null or doesn't match any series, resets all to default (2.5px).
+ * If value is provided and matches a series, highlights it and dims others.
+ * If value is null or doesn't match any series, resets all to defaultWidth.
  * @param key - which series property to match against ('label' for cross-chart, '_seriesId' for table highlight)
+ * @param defaultWidth - base line width (default 1.5)
  */
-export function applySeriesHighlight(chart: uPlot, value: string | null, key: '_seriesId' | 'label' = 'label'): void {
+export function applySeriesHighlight(chart: uPlot, value: string | null, key: '_seriesId' | 'label' = 'label', defaultWidth = 1.5): void {
   const hasMatch = value && chart.series.some((s: any) => s[key] === value);
 
   if (hasMatch) {
+    const highlightedWidth = defaultWidth * 1.6;
+    const dimmedWidth = Math.max(0.3, defaultWidth * 0.2);
     for (let i = 1; i < chart.series.length; i++) {
       const match = (chart.series[i] as any)[key] === value;
-      chart.series[i].width = match ? 4 : 0.5;
+      chart.series[i].width = match ? highlightedWidth : dimmedWidth;
     }
   } else {
     for (let i = 1; i < chart.series.length; i++) {
-      chart.series[i].width = 2.5;
+      chart.series[i].width = defaultWidth;
     }
   }
 }
@@ -192,8 +203,9 @@ export function ChartSyncProvider({
     // Only apply if no chart is actively being hovered
     if (hoveredChartIdRef.current !== null) return;
 
+    const lw = getStoredLineWidth();
     uplotInstancesRef.current.forEach((chart) => {
-      applySeriesHighlight(chart, label, '_seriesId');
+      applySeriesHighlight(chart, label, '_seriesId', lw);
       chart.redraw(false);
     });
   }, [tableHighlightedSeriesProp]);
@@ -228,16 +240,17 @@ export function ChartSyncProvider({
       uplotInstancesRef.current.forEach((chart, id) => {
         if (id === sourceChartId) return; // Skip source chart
 
+        const lw = getStoredLineWidth();
         if (seriesLabel === null) {
           // Fall back to table highlight if active, otherwise reset to default
           const tableId = tableHighlightedSeriesRef.current;
-          applySeriesHighlight(chart, tableId, '_seriesId');
+          applySeriesHighlight(chart, tableId, '_seriesId', lw);
           chart.redraw(false);
         } else {
           // Only apply highlighting if this chart has the series
           const hasMatch = chart.series.some((s) => s.label === seriesLabel);
           if (hasMatch) {
-            applySeriesHighlight(chart, seriesLabel);
+            applySeriesHighlight(chart, seriesLabel, 'label', lw);
             chart.redraw(false);
           }
         }
