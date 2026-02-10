@@ -29,6 +29,7 @@ import { Layout } from "../~components/layout";
 import { z } from "zod";
 import { Requirements } from "./~components/requirements";
 import { GpuDisplay } from "./~components/gpu-display";
+import { KonduktorDisplay } from "./~components/konduktor-display";
 import { Spinner } from "@/components/ui/spinner";
 import { stripSystemMetadata } from "./~utils/strip-system-metadat";
 import { GitStatus } from "./~components/git-status";
@@ -208,8 +209,14 @@ function RouteComponent() {
 
         {/* System Information Section */}
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-          <SystemDisplay systemMetadata={currentRun.systemMetadata} />
+          <KonduktorDisplay
+            systemMetadata={currentRun.systemMetadata}
+            run={currentRun}
+          />
           <GpuDisplay systemMetadata={currentRun.systemMetadata} />
+          <div className="lg:col-span-2">
+            <SystemDisplay systemMetadata={currentRun.systemMetadata} />
+          </div>
         </div>
 
         {/* Git and Process Information */}
