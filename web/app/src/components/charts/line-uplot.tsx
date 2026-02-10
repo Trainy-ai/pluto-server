@@ -886,6 +886,13 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
     // Track the last applied global range to avoid redundant setScale calls
     const lastAppliedGlobalRangeRef = useRef<[number, number] | null>(null);
 
+    // Guard flag to prevent setScale hook from broadcasting during programmatic scale changes
+    // (chart creation, zoom sync from context, reset zoom). Without this, programmatic setScale
+    // calls during scroll (when isActiveChart() returns true because no chart is hovered) would
+    // corrupt syncedZoomRange in context, breaking zoom for charts that unmount/remount via
+    // VirtualizedChart.
+    const isProgrammaticScaleRef = useRef(false);
+
     // Track if we've shown the "no visible data" toast for current zoom
     // Reset when zoom changes to allow showing again
     const noDataToastShownRef = useRef<string | null>(null);
@@ -941,9 +948,16 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       // Update user zoom flag based on whether we're applying a synced zoom
       userHasZoomedRef.current = !!syncedZoom;
       try {
-        chart.setScale("x", { min: rangeMin, max: rangeMax });
+        isProgrammaticScaleRef.current = true;
+        // Use batch() to force synchronous commit - uPlot's commit() uses microtask,
+        // so without batch() the setScale hook fires AFTER isProgrammaticScaleRef is reset.
+        chart.batch(() => {
+          chart.setScale("x", { min: rangeMin, max: rangeMax });
+        });
       } catch {
         // Ignore errors from disposed charts
+      } finally {
+        isProgrammaticScaleRef.current = false;
       }
     }, [chartSyncContext?.syncedZoomRange, chartSyncContext?.globalXRange, logXAxis, isDateTime]);
 
@@ -1287,8 +1301,12 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
                 if (xMin == null || xMax == null) return;
 
                 // ZOOM SYNC: Broadcast X scale to other charts via context
-                // Only sync if this chart is the one being interacted with
-                if (isActiveChart()) {
+                // Only sync if this is a user-initiated zoom (drag), not a programmatic scale change.
+                // Programmatic changes (chart init, zoom sync from context, syncXScale propagation)
+                // must not broadcast back to context as that corrupts syncedZoomRange for other charts.
+                // Also skip when syncXScale is propagating to this chart (isSyncingZoomRef) -
+                // without this, target charts re-broadcast during scroll when isActiveChart() is true.
+                if (!isProgrammaticScaleRef.current && !chartSyncContextRef.current?.isSyncingZoomRef?.current && isActiveChart()) {
                   chartSyncContextRef.current?.syncXScale(chartId, xMin, xMax);
                   // Mark that user has manually zoomed (prevents global range from overwriting)
                   userHasZoomedRef.current = true;
@@ -1450,7 +1468,14 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           prevDataStructureRef.current.seriesCount === currentSeriesCount
         ) {
           // Structure is the same - use setData() to preserve zoom
-          chartRef.current.setData(uplotData);
+          try {
+            isProgrammaticScaleRef.current = true;
+            chartRef.current.batch(() => {
+              chartRef.current!.setData(uplotData);
+            });
+          } finally {
+            isProgrammaticScaleRef.current = false;
+          }
           prevDataRef.current = uplotData;
           return;
         }
@@ -1475,7 +1500,17 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
 
       // Create new chart with stored dimensions
       const chartOptions = { ...options, width: dims.width, height: dims.height };
-      const chart = new uPlot(chartOptions, uplotData, chartContainerRef.current);
+      let chart: uPlot;
+      try {
+        isProgrammaticScaleRef.current = true;
+        chart = new uPlot(chartOptions, uplotData, chartContainerRef.current);
+        // Flush uPlot's pending microtask commit synchronously so setScale hooks
+        // fire while isProgrammaticScaleRef is still true. Without this, commit()
+        // defers to a microtask which fires AFTER the finally block resets the guard.
+        chart.batch(() => {});
+      } finally {
+        isProgrammaticScaleRef.current = false;
+      }
       chartRef.current = chart;
       chartCreatedRef.current = true;
 
@@ -1554,12 +1589,36 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         }
         // Set scale immediately - uPlot supports this right after creation
         try {
-          chart.setScale("x", { min: rangeMin, max: rangeMax });
+          isProgrammaticScaleRef.current = true;
+          chart.batch(() => {
+            chart.setScale("x", { min: rangeMin, max: rangeMax });
+          });
         } catch {
           // Ignore errors if chart was already destroyed
+        } finally {
+          isProgrammaticScaleRef.current = false;
         }
-      } else if (process.env.NODE_ENV === 'development') {
-        console.log(`[uPlot ${chartId}] No range to apply (auto-scale)`);
+      } else {
+        // No external range to apply - check if data needs single-point centering.
+        // When all data shares one x-value, uPlot auto-scale puts the point at the edge.
+        // Center it instead by adding symmetric padding around the value.
+        if (!logXAxis && !isDateTime) {
+          const xData = uplotData[0] as number[];
+          if (xData.length === 1) {
+            const xVal = xData[0];
+            const padding = Math.max(Math.abs(xVal) * 0.5, 1);
+            try {
+              isProgrammaticScaleRef.current = true;
+              chart.batch(() => {
+                chart.setScale("x", { min: xVal - padding, max: xVal + padding });
+              });
+            } catch {
+              // Ignore errors if chart was already destroyed
+            } finally {
+              isProgrammaticScaleRef.current = false;
+            }
+          }
+        }
       }
 
       // Style the selection box for zoom visibility (uPlot's default is nearly invisible)
@@ -1597,9 +1656,14 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
                 lastAppliedGlobalRangeRef.current = lateSyncedZoom;
                 userHasZoomedRef.current = true;
                 try {
-                  chart.setScale("x", { min: lateSyncedZoom[0], max: lateSyncedZoom[1] });
+                  isProgrammaticScaleRef.current = true;
+                  chart.batch(() => {
+                    chart.setScale("x", { min: lateSyncedZoom[0], max: lateSyncedZoom[1] });
+                  });
                 } catch {
                   // Chart may have been destroyed
+                } finally {
+                  isProgrammaticScaleRef.current = false;
                 }
               }
             }
@@ -1609,7 +1673,14 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
 
       // Double-click to reset zoom
       const handleDblClick = () => {
-        chart.setData(chart.data);
+        try {
+          isProgrammaticScaleRef.current = true;
+          chart.batch(() => {
+            chart.setData(chart.data);
+          });
+        } finally {
+          isProgrammaticScaleRef.current = false;
+        }
         // Clear saved zoom state so it doesn't get restored on next data update
         zoomStateRef.current = null;
         // Clear user zoom flag so global range can be applied again
@@ -1628,9 +1699,14 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           lastAppliedGlobalRangeRef.current = [globalMin, globalMax];
           requestAnimationFrame(() => {
             try {
-              chart.setScale("x", { min: globalMin, max: globalMax });
+              isProgrammaticScaleRef.current = true;
+              chart.batch(() => {
+                chart.setScale("x", { min: globalMin, max: globalMax });
+              });
             } catch {
               // Ignore errors
+            } finally {
+              isProgrammaticScaleRef.current = false;
             }
           });
         }
@@ -1660,9 +1736,21 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
     }, [options, uplotData, chartId, width, height]);
 
     // Handle resize separately - uses setSize() instead of recreating chart
+    // Guard with isProgrammaticScaleRef because setSize() triggers uPlot's auto-scale
+    // (via commit()), which fires the setScale hook. Without the guard, a resize during
+    // scroll (when no chart is hovered) would broadcast the auto-scaled range to context,
+    // corrupting syncedZoomRange - especially problematic for single-point charts whose
+    // auto-scaled range (e.g. [0, 1]) overwrites other charts' ranges.
     useEffect(() => {
       if (chartRef.current && width > 0 && height > 0) {
-        chartRef.current.setSize({ width, height });
+        try {
+          isProgrammaticScaleRef.current = true;
+          chartRef.current.batch(() => {
+            chartRef.current!.setSize({ width, height });
+          });
+        } finally {
+          isProgrammaticScaleRef.current = false;
+        }
       }
     }, [width, height]);
 
@@ -1683,7 +1771,12 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         resetZoom: () => {
           // Reset by re-setting data which recalculates auto bounds
           if (chartRef.current) {
-            chartRef.current.setData(chartRef.current.data);
+            try {
+              isProgrammaticScaleRef.current = true;
+              chartRef.current.setData(chartRef.current.data);
+            } finally {
+              isProgrammaticScaleRef.current = false;
+            }
           }
         },
       }),
