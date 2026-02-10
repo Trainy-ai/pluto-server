@@ -6,6 +6,7 @@ import { SELECTED_RUNS_LIMIT } from "./config";
 import { StatusIndicator } from "@/components/layout/dashboard/sidebar";
 import type { Run } from "../../~queries/list-runs";
 import { TagsCell } from "./tags-cell";
+import { NotesCell } from "./notes-cell";
 import {
   Tooltip,
   TooltipTrigger,
@@ -107,6 +108,7 @@ interface ColumnsProps {
   onSelectionChange: (runId: RunId, isSelected: boolean) => void;
   onColorChange: (runId: RunId, color: RunColor) => void;
   onTagsUpdate: (runId: RunId, tags: string[]) => void;
+  onNotesUpdate: (runId: RunId, notes: string | null) => void;
   /** Getter function for run colors - avoids column recreation on color changes */
   getRunColor: (runId: RunId) => RunColor | undefined;
   allTags: string[];
@@ -149,6 +151,7 @@ export const columns = ({
   onSelectionChange,
   onColorChange,
   onTagsUpdate,
+  onNotesUpdate,
   getRunColor,
   allTags,
 }: ColumnsProps): ColumnDef<Run>[] => {
@@ -228,6 +231,23 @@ export const columns = ({
             tags={tags}
             allTags={allTags}
             onTagsUpdate={(newTags) => onTagsUpdate(runId, newTags)}
+          />
+        );
+      },
+    },
+    {
+      header: "Notes",
+      accessorKey: "notes",
+      size: 120,
+      minSize: 80,
+      cell: ({ row }) => {
+        const runId = row.original.id;
+        const notes = row.original.notes ?? null;
+
+        return (
+          <NotesCell
+            notes={notes}
+            onNotesUpdate={(newNotes) => onNotesUpdate(runId, newNotes)}
           />
         );
       },

@@ -47,6 +47,7 @@ interface DataTableProps {
   onColorChange: (runId: string, color: string) => void;
   onSelectionChange: (runId: string, isSelected: boolean) => void;
   onTagsUpdate: (runId: string, tags: string[]) => void;
+  onNotesUpdate: (runId: string, notes: string | null) => void;
   selectedRunsWithColors: Record<string, { run: Run; color: string }>;
   runColors: Record<string, string>;
   defaultRowSelection?: Record<number, boolean>;
@@ -81,6 +82,7 @@ export function DataTable({
   onColorChange,
   onSelectionChange,
   onTagsUpdate,
+  onNotesUpdate,
   selectedRunsWithColors,
   runColors,
   defaultRowSelection = {},
@@ -182,6 +184,7 @@ export function DataTable({
         onColorChange,
         onSelectionChange,
         onTagsUpdate,
+        onNotesUpdate,
         getRunColor,
         allTags,
       }),
@@ -191,6 +194,7 @@ export function DataTable({
       onColorChange,
       onSelectionChange,
       onTagsUpdate,
+      onNotesUpdate,
       getRunColor,
       allTags,
     ],

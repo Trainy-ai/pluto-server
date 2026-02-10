@@ -8,6 +8,7 @@ import { useSelectedRuns } from "./~hooks/use-selected-runs";
 import { prefetchListRuns, useListRuns, type Run } from "./~queries/list-runs";
 import { useSelectedRunLogs } from "./~queries/selected-run-logs";
 import { useUpdateTags } from "./~queries/update-tags";
+import { useUpdateNotes } from "./~queries/update-notes";
 import { useDistinctTags } from "./~queries/distinct-tags";
 import { groupMetrics } from "./~lib/metrics-utils";
 import { MetricsDisplay } from "./~components/metrics-display";
@@ -183,6 +184,9 @@ function RouteComponent() {
   // Mutation for updating tags
   const updateTagsMutation = useUpdateTags(organizationId, projectName);
 
+  // Mutation for updating notes
+  const updateNotesMutation = useUpdateNotes(organizationId, projectName);
+
   // Fetch all distinct tags across all runs in the project
   // This ensures the filter dropdown shows all available tags, not just those from loaded runs
   const { data: distinctTagsData } = useDistinctTags(organizationId, projectName);
@@ -220,6 +224,19 @@ function RouteComponent() {
       });
     },
     [organizationId, projectName, updateTagsMutation]
+  );
+
+  // Handler for updating notes on a run
+  const handleNotesUpdate = useCallback(
+    (runId: string, notes: string | null) => {
+      updateNotesMutation.mutate({
+        organizationId,
+        runId,
+        projectName,
+        notes,
+      });
+    },
+    [organizationId, projectName, updateNotesMutation]
   );
 
   const {
@@ -291,6 +308,7 @@ function RouteComponent() {
                 onColorChange={handleColorChange}
                 onSelectionChange={handleRunSelection}
                 onTagsUpdate={handleTagsUpdate}
+                onNotesUpdate={handleNotesUpdate}
                 selectedRunsWithColors={selectedRunsWithColors}
                 runColors={runColors}
                 defaultRowSelection={defaultRowSelection}
