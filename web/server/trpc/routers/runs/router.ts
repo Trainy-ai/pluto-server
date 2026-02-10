@@ -7,6 +7,7 @@ import { dataRouter } from "./routers/data/router";
 import { triggerRouter } from "./routers/trigger/router";
 import { countRunsProcedure } from "./procs/runs-count";
 import { updateTagsProcedure } from "./procs/update-tags";
+import { updateNotesProcedure } from "./procs/update-notes";
 import { distinctTagsProcedure } from "./procs/distinct-tags";
 import { getLogsByRunIdsProcedure } from "./procs/get-logs-by-run-ids";
 
@@ -17,6 +18,7 @@ export const runsRouter = router({
   latest: latestRunsProcedure,
   count: countRunsProcedure,
   updateTags: updateTagsProcedure,
+  updateNotes: updateNotesProcedure,
   distinctTags: distinctTagsProcedure,
   getLogsByRunIds: getLogsByRunIdsProcedure,
   // Routers

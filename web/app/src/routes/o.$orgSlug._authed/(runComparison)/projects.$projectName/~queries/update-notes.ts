@@ -1,13 +1,13 @@
 import { trpc } from "@/utils/trpc";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
-export const useUpdateTags = (orgId: string, projectName: string) => {
+export const useUpdateNotes = (orgId: string, projectName: string) => {
   const queryClient = useQueryClient();
 
   return useMutation(
-    trpc.runs.updateTags.mutationOptions({
+    trpc.runs.updateNotes.mutationOptions({
       onSuccess: () => {
-        // Invalidate all runs queries to refetch with updated tags
+        // Invalidate all runs queries to refetch with updated notes
         queryClient.invalidateQueries({
           queryKey: [["runs"]],
         });
