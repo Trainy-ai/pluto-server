@@ -168,5 +168,6 @@ async def _migrate_run(
 
 if __name__ == "__main__":
     import uvicorn
-    # check_api_key(next(get_db()), "mlpi_nN0GRrPKhOytr8oN")
-    uvicorn.run(app, host="0.0.0.0", port=3004)
+    offset = int(os.getenv("PORT_OFFSET", "0"))
+    port = int(os.getenv("PORT", str(3004 + offset)))
+    uvicorn.run(app, host="0.0.0.0", port=port)

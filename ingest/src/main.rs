@@ -37,6 +37,10 @@ struct Cli {
     /// Optional: Specify environment to load (.env.<ENV> file)
     #[clap(long)]
     env: Option<String>,
+
+    /// Port to listen on (default: 3003, or PORT env var)
+    #[clap(long)]
+    port: Option<u16>,
 }
 
 #[tokio::main]
@@ -369,8 +373,20 @@ async fn main() {
         .merge(files::router())
         .with_state(state); // Provide the application state to the routes
 
+    // Determine port: CLI flag > PORT env var > (3003 + PORT_OFFSET)
+    let port_offset: u16 = std::env::var("PORT_OFFSET")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(0);
+    let port = cli.port.unwrap_or_else(|| {
+        std::env::var("PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(3003 + port_offset)
+    });
+
     // Define the server address (IPv6)
-    let ipv6 = SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 0], 3003));
+    let ipv6 = SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 0], port));
     tracing::info!(address = %ipv6, "Server starting to listen");
 
     // Bind the TCP listener and start the Axum server
