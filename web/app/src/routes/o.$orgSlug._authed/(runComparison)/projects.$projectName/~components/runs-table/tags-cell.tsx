@@ -12,13 +12,13 @@ interface TagsCellProps {
 
 export function TagsCell({ tags, allTags, onTagsUpdate }: TagsCellProps) {
   return (
-    <div className="flex items-center gap-1">
-      <div className="flex flex-wrap items-center gap-1 overflow-hidden">
+    <div className="flex items-center gap-1 overflow-hidden">
+      <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
         {tags.slice(0, 2).map((tag) => (
           <TagBadge key={tag} tag={tag} truncate />
         ))}
         {tags.length > 2 && (
-          <Badge variant="outline" className="text-xs">
+          <Badge variant="outline" className="shrink-0 text-xs bg-primary/10">
             +{tags.length - 2}
           </Badge>
         )}

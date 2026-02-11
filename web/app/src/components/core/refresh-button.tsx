@@ -116,6 +116,23 @@ export function RefreshButton({
         !event.ctrlKey &&
         !event.metaKey
       ) {
+        // Don't trigger when typing in inputs, textareas, selects, or contenteditable elements
+        const target = event.target as HTMLElement | null;
+        if (target) {
+          const tagName = target.tagName.toLowerCase();
+          if (
+            tagName === "input" ||
+            tagName === "textarea" ||
+            tagName === "select" ||
+            target.isContentEditable ||
+            target.closest("[role='dialog']") ||
+            target.closest("[role='combobox']") ||
+            target.closest("[role='listbox']") ||
+            target.closest("[data-radix-popper-content-wrapper]")
+          ) {
+            return;
+          }
+        }
         const now = Date.now();
         if (now - lastKeyPressRef.current >= rateLimitMs) {
           lastKeyPressRef.current = now;

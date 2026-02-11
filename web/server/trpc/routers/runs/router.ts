@@ -9,7 +9,10 @@ import { countRunsProcedure } from "./procs/runs-count";
 import { updateTagsProcedure } from "./procs/update-tags";
 import { updateNotesProcedure } from "./procs/update-notes";
 import { distinctTagsProcedure } from "./procs/distinct-tags";
+import { distinctColumnKeysProcedure, searchColumnKeysProcedure } from "./procs/distinct-column-keys";
 import { getLogsByRunIdsProcedure } from "./procs/get-logs-by-run-ids";
+import { distinctMetricNamesProcedure } from "./procs/distinct-metric-names";
+import { metricSummariesProcedure } from "./procs/metric-summaries";
 
 export const runsRouter = router({
   // Procedures
@@ -20,7 +23,11 @@ export const runsRouter = router({
   updateTags: updateTagsProcedure,
   updateNotes: updateNotesProcedure,
   distinctTags: distinctTagsProcedure,
+  distinctColumnKeys: distinctColumnKeysProcedure,
+  searchColumnKeys: searchColumnKeysProcedure,
   getLogsByRunIds: getLogsByRunIdsProcedure,
+  distinctMetricNames: distinctMetricNamesProcedure,
+  metricSummaries: metricSummariesProcedure,
   // Routers
   data: dataRouter,
   trigger: triggerRouter,

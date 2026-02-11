@@ -17,13 +17,13 @@ export type ElementType<T> = T extends (infer U)[] ? U : T;
 declare module "@tanstack/react-table" {
   interface ColumnMeta<TData extends RowData, TValue> {
     /* The display name of the column. */
-    displayName: string;
+    displayName?: string;
 
     /* The column icon. */
-    icon: LucideIcon;
+    icon?: LucideIcon;
 
     /* The data type of the column. */
-    type: ColumnDataType;
+    type?: ColumnDataType;
 
     /* An optional list of options for the column. */
     /* This is used for columns with type 'option' or 'multiOption'. */
@@ -40,6 +40,9 @@ declare module "@tanstack/react-table" {
     /* An optional "soft" max for the number range slider. */
     /* This is used for columns with type 'number'. */
     max?: number;
+
+    /* Background color for the column (hex color string). */
+    backgroundColor?: string;
   }
 }
 

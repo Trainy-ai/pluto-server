@@ -185,7 +185,7 @@ export const VisibilityOptions = memo(function VisibilityOptions({
       <div
         data-radix-popper-content-wrapper=""
         data-open={open ? "true" : "false"}
-        className="absolute left-0 top-full z-50 mt-1 w-64 rounded-md border bg-popover text-popover-foreground shadow-md"
+        className="absolute right-0 top-full z-50 mt-1 w-64 rounded-md border bg-popover text-popover-foreground shadow-md"
         style={{
           opacity: open ? 1 : 0,
           pointerEvents: open ? "auto" : "none",

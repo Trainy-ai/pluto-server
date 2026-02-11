@@ -26,6 +26,7 @@ import {
 } from "../lib/queries";
 import type { prisma } from "../lib/prisma";
 import type { ApiKey, Organization, User } from "@prisma/client";
+import { extractAndUpsertColumnKeys } from "../lib/extract-column-keys";
 
 // Type for API key with relations
 type ApiKeyWithRelations = ApiKey & {
@@ -217,6 +218,22 @@ router.openapi(createRunRoute, async (c) => {
         console.error("Failed to create run:", error);
         return c.json({ error: "Failed to create run" }, 500);
       }
+    }
+  }
+
+  // Fire-and-forget: cache column keys for fast search
+  {
+    const parsedCfg = config && config !== "null" ? JSON.parse(config) : null;
+    const parsedSm = systemMetadata && systemMetadata !== "null" ? JSON.parse(systemMetadata) : null;
+    if (parsedCfg || parsedSm) {
+      extractAndUpsertColumnKeys(
+        ctx.prisma,
+        apiKey.organization.id,
+        project.id,
+        parsedCfg,
+        parsedSm,
+        run.id
+      ).catch(() => {});
     }
   }
 
@@ -505,6 +522,16 @@ router.openapi(updateConfigRoute, async (c) => {
       config: Object.keys(updatedConfig).length > 0 ? updatedConfig : Prisma.DbNull,
     },
   });
+
+  // Fire-and-forget: cache new column keys + field values from updated config
+  extractAndUpsertColumnKeys(
+    c.get("prisma"),
+    apiKey.organization.id,
+    run.projectId,
+    updatedConfig,
+    run.systemMetadata,
+    run.id
+  ).catch(() => {});
 
   return c.json({ success: true }, 200);
 });

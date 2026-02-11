@@ -1,5 +1,6 @@
 import { useMemo, useState, useCallback, useRef, useEffect } from "react";
 import type { Run } from "../../~queries/list-runs";
+import { useRunMetricNames, useMetricSummaries } from "../../~queries/metric-summaries";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -9,60 +10,13 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { ChevronDown, ChevronRight, Eye, EyeOff, Search, X, Code2, Text } from "lucide-react";
+import { formatValue } from "@/lib/flatten-object";
 
 interface SideBySideViewProps {
   selectedRunsWithColors: Record<string, { run: Run; color: string }>;
   onRemoveRun?: (runId: string) => void;
-}
-
-// Helper to flatten nested objects into dot-notation keys
-function flattenObject(obj: unknown, prefix = ""): Record<string, unknown> {
-  const result: Record<string, unknown> = {};
-
-  if (obj === null || obj === undefined) {
-    return result;
-  }
-
-  if (typeof obj !== "object" || Array.isArray(obj)) {
-    if (prefix) {
-      result[prefix] = obj;
-    }
-    return result;
-  }
-
-  for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
-    const newKey = prefix ? `${prefix}.${key}` : key;
-
-    if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-      Object.assign(result, flattenObject(value, newKey));
-    } else {
-      result[newKey] = value;
-    }
-  }
-
-  return result;
-}
-
-function formatValue(value: unknown): string {
-  if (value === null || value === undefined) {
-    return "-";
-  }
-  if (typeof value === "boolean") {
-    return value ? "true" : "false";
-  }
-  if (typeof value === "number") {
-    if (Number.isInteger(value)) {
-      return value.toLocaleString();
-    }
-    return value.toLocaleString(undefined, { maximumFractionDigits: 6 });
-  }
-  if (Array.isArray(value)) {
-    return JSON.stringify(value);
-  }
-  if (typeof value === "object") {
-    return JSON.stringify(value);
-  }
-  return String(value);
+  organizationId: string;
+  projectName: string;
 }
 
 const DEFAULT_COL_WIDTH = 200;
@@ -75,6 +29,14 @@ const KEY_COL_BORDER = "2px solid hsl(var(--border))";
 
 // Prefixes that identify imported (e.g. Neptune) metadata keys within the config object.
 const IMPORTED_KEY_PREFIXES = ["sys/", "source_code/"];
+
+// Priority ordering for import keys — Map for O(1) lookups in sort comparator
+const IMPORT_KEY_PRIORITY = new Map([
+  "sys/name", "sys/id", "sys/creation_time", "sys/custom_run_id",
+  "sys/owner", "sys/tags", "sys/modification_time", "sys/ping_time",
+  "sys/family", "sys/description", "sys/failed", "sys/state",
+  "sys/size", "sys/archived", "sys/trashed", "sys/group_tags",
+].map((key, i) => [key, i] as const));
 
 const COLLAPSED_MAX_HEIGHT = 60; // px - roughly 3 lines of monospace text
 
@@ -287,7 +249,110 @@ function rowMatchesSearch(
   return values.some((v) => v != null && formatValue(v).toLowerCase().includes(lower));
 }
 
-export function SideBySideView({ selectedRunsWithColors, onRemoveRun }: SideBySideViewProps) {
+const METRIC_AGGS = ["MIN", "MAX", "AVG", "LAST", "VARIANCE"] as const;
+
+// Sub-header background for metric name rows - slightly lighter than section header
+const METRIC_SUB_BG = "color-mix(in srgb, hsl(var(--primary)) 6%, hsl(var(--background)))";
+
+function formatMetricValue(value: number | undefined | null): string {
+  if (value == null) return "-";
+  // Use toPrecision for compact display of very large or very small numbers
+  if (Math.abs(value) >= 1e6 || (Math.abs(value) < 1e-4 && value !== 0)) {
+    return value.toExponential(4);
+  }
+  // Up to 6 significant digits for normal range
+  return Number(value.toPrecision(6)).toString();
+}
+
+// Renders a collapsible group for a single metric: sub-header row + 5 aggregation rows
+function MetricSubGroup({
+  metricName,
+  isExpanded,
+  onToggle,
+  selectedRuns,
+  summaries,
+  numRunCols,
+}: {
+  metricName: string;
+  isExpanded: boolean;
+  onToggle: () => void;
+  selectedRuns: { run: Run; color: string }[];
+  summaries: Record<string, Record<string, number>> | undefined;
+  numRunCols: number;
+}) {
+  return (
+    <>
+      {/* Metric name sub-header row */}
+      <tr
+        className="border-b border-border/50 cursor-pointer select-none hover:bg-accent/30 transition-colors"
+        style={{ background: METRIC_SUB_BG }}
+        onClick={onToggle}
+      >
+        <td
+          className="sticky left-0 z-10 px-3 py-1.5"
+          style={{ background: METRIC_SUB_BG, borderRight: KEY_COL_BORDER }}
+        >
+          <div className="flex items-center gap-1.5 pl-2">
+            {isExpanded ? (
+              <ChevronDown className="h-3 w-3 text-muted-foreground" />
+            ) : (
+              <ChevronRight className="h-3 w-3 text-muted-foreground" />
+            )}
+            <span className="break-all font-mono text-xs font-medium text-foreground">
+              {metricName}
+            </span>
+          </div>
+        </td>
+        {Array.from({ length: numRunCols }, (_, i) => (
+          <td
+            key={i}
+            className="px-3 py-1.5"
+            style={{ background: METRIC_SUB_BG }}
+          />
+        ))}
+      </tr>
+      {/* Aggregation rows (when expanded) */}
+      {isExpanded &&
+        METRIC_AGGS.map((agg, idx) => (
+          <tr
+            key={`${metricName}-${agg}`}
+            className={`border-b border-border/50 ${
+              idx % 2 === 0 ? "bg-background" : "bg-muted"
+            } hover:bg-accent/30 transition-colors`}
+          >
+            <td
+              style={{ borderRight: KEY_COL_BORDER }}
+              className={`sticky left-0 z-10 px-3 py-1.5 align-top ${
+                idx % 2 === 0 ? "bg-background" : "bg-muted"
+              }`}
+            >
+              <span className="pl-6 text-xs font-medium text-muted-foreground">
+                {agg}
+              </span>
+            </td>
+            {selectedRuns.map(({ run }) => {
+              const value = summaries?.[run.id]?.[`${metricName}|${agg}`];
+              const isEmpty = value == null;
+              return (
+                <td
+                  key={run.id}
+                  className={`border-r border-border/50 px-3 py-1.5 align-top last:border-r-0 ${
+                    isEmpty ? "text-muted-foreground/50" : "text-foreground"
+                  }`}
+                >
+                  <span className="break-all font-mono text-xs">
+                    {formatMetricValue(value)}
+                  </span>
+                </td>
+              );
+            })}
+          </tr>
+        ))}
+    </>
+  );
+}
+
+export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizationId, projectName }: SideBySideViewProps) {
   const selectedRuns = Object.values(selectedRunsWithColors);
 
   // Search state
@@ -343,6 +408,35 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun }: SideBySi
     setCollapsedSections((prev) => ({ ...prev, [section]: !prev[section] }));
   }, []);
 
+  // Per-metric collapse state (collapsed by default)
+  const [expandedMetrics, setExpandedMetrics] = useState<Record<string, boolean>>({});
+  const toggleMetric = useCallback((metricName: string) => {
+    setExpandedMetrics((prev) => ({ ...prev, [metricName]: !prev[metricName] }));
+  }, []);
+
+  // Fetch metric names scoped to selected runs (all names, no limit)
+  const selectedRunIds = useMemo(() => selectedRuns.map(({ run }) => run.id), [selectedRuns]);
+  const { data: metricNamesData } = useRunMetricNames(organizationId, projectName, selectedRunIds);
+  const allMetricNames = useMemo(() => metricNamesData?.metricNames ?? [], [metricNamesData]);
+
+  // Only fetch summaries for expanded metrics (lazy-load to avoid URL-too-long errors)
+  const expandedMetricNames = useMemo(
+    () => allMetricNames.filter((name) => expandedMetrics[name]),
+    [allMetricNames, expandedMetrics],
+  );
+
+  const metricSpecs = useMemo(
+    () => expandedMetricNames.flatMap((name) => METRIC_AGGS.map((agg) => ({ logName: name, aggregation: agg }))),
+    [expandedMetricNames],
+  );
+
+  const { data: metricSummariesData } = useMetricSummaries(
+    organizationId,
+    projectName,
+    selectedRunIds,
+    metricSpecs,
+  );
+
   const {
     allConfigKeys,
     runConfigs,
@@ -363,7 +457,8 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun }: SideBySi
     let anyImport = false;
 
     for (const { run } of selectedRuns) {
-      const flatConfig = flattenObject(run.config);
+      // Use pre-flattened data from the data layer (flattened once at load time)
+      const flatConfig: Record<string, unknown> = (run as any)._flatConfig ?? {};
       configs[run.id] = flatConfig;
 
       const runImport: Record<string, unknown> = {};
@@ -377,7 +472,7 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun }: SideBySi
       }
       importData[run.id] = runImport;
 
-      const flatSysMeta = flattenObject(run.systemMetadata);
+      const flatSysMeta: Record<string, unknown> = (run as any)._flatSystemMetadata ?? {};
       sysMeta[run.id] = flatSysMeta;
       for (const key of Object.keys(flatSysMeta)) {
         sysMetaKeySet.add(key);
@@ -385,34 +480,16 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun }: SideBySi
     }
 
     // Priority ordering for import keys: sys/ fields first in a specific order, then others
-    const importKeyPriority = [
-      "sys/name",
-      "sys/id",
-      "sys/creation_time",
-      "sys/custom_run_id",
-      "sys/owner",
-      "sys/tags",
-      "sys/modification_time",
-      "sys/ping_time",
-      "sys/family",
-      "sys/description",
-      "sys/failed",
-      "sys/state",
-      "sys/size",
-      "sys/archived",
-      "sys/trashed",
-      "sys/group_tags",
-    ];
     const sortedImportKeys = Array.from(importKeySet).sort((a, b) => {
-      const aIdx = importKeyPriority.indexOf(a);
-      const bIdx = importKeyPriority.indexOf(b);
-      const aSys = a.startsWith("sys/");
-      const bSys = b.startsWith("sys/");
+      const aIdx = IMPORT_KEY_PRIORITY.get(a) ?? -1;
+      const bIdx = IMPORT_KEY_PRIORITY.get(b) ?? -1;
       // Both in priority list
       if (aIdx !== -1 && bIdx !== -1) return aIdx - bIdx;
       // Only one in priority list
       if (aIdx !== -1) return -1;
       if (bIdx !== -1) return 1;
+      const aSys = a.startsWith("sys/");
+      const bSys = b.startsWith("sys/");
       // Both sys/ but not in priority list
       if (aSys && bSys) return a.localeCompare(b);
       // sys/ before non-sys/
@@ -443,9 +520,9 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun }: SideBySi
   function getPlutoOwner(run: Run): string {
     if (run.creator?.name) return run.creator.name;
     if (run.creator?.email) return run.creator.email;
-    // Fallback to git info from systemMetadata
-    if (run.systemMetadata && typeof run.systemMetadata === "object") {
-      const flat = flattenObject(run.systemMetadata);
+    // Fallback to git info from pre-flattened systemMetadata
+    const flat: Record<string, unknown> | undefined = (run as any)._flatSystemMetadata;
+    if (flat) {
       const gitName = flat["git.name"];
       if (gitName && typeof gitName === "string") return gitName;
       const gitEmail = flat["git.email"];
@@ -490,6 +567,10 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun }: SideBySi
     {
       key: "External Id",
       getValue: (run: Run) => run.externalId || "-",
+    },
+    {
+      key: "Notes",
+      getValue: (run: Run) => run.notes || "-",
     },
   ];
 
@@ -551,6 +632,49 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun }: SideBySi
       ),
     [nonImportConfigKeys, keyMatchesSearch, selectedRuns, runConfigs],
   );
+
+  // Filter metric names for search - match on metric name or aggregation labels
+  const filteredMetricNames = useMemo(() => {
+    if (!activeSearch) return allMetricNames;
+    return allMetricNames.filter((name) => {
+      // Match on metric name itself
+      if (isRegexMode) {
+        try {
+          const re = new RegExp(activeSearch, "i");
+          if (re.test(name)) return true;
+          // Also match on aggregation labels
+          if (METRIC_AGGS.some((agg) => re.test(agg))) return true;
+        } catch {
+          return true;
+        }
+      } else {
+        const lower = activeSearch.toLowerCase();
+        if (name.toLowerCase().includes(lower)) return true;
+        if (METRIC_AGGS.some((agg) => agg.toLowerCase().includes(lower))) return true;
+      }
+      // Match on values
+      const summaries = metricSummariesData?.summaries;
+      if (summaries) {
+        for (const { run } of selectedRuns) {
+          const runSummaries = summaries[run.id];
+          if (runSummaries) {
+            for (const agg of METRIC_AGGS) {
+              const val = runSummaries[`${name}|${agg}`];
+              if (val != null) {
+                const valStr = String(val);
+                if (isRegexMode) {
+                  try { if (new RegExp(activeSearch, "i").test(valStr)) return true; } catch {}
+                } else {
+                  if (valStr.toLowerCase().includes(activeSearch.toLowerCase())) return true;
+                }
+              }
+            }
+          }
+        }
+      }
+      return false;
+    });
+  }, [allMetricNames, activeSearch, isRegexMode, metricSummariesData, selectedRuns]);
 
   if (selectedRuns.length === 0) {
     return (
@@ -731,7 +855,7 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun }: SideBySi
                     </span>
                   </td>
                   {selectedRuns.map(({ run }) => {
-                    const tags = run.tags || [];
+                    const tags: string[] = (run.tags as string[]) || [];
                     return (
                       <td
                         key={run.id}
@@ -898,6 +1022,33 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun }: SideBySi
                       })}
                     </tr>
                   ))}
+              </>
+            )}
+
+            {/* ===== METRIC SUMMARIES section ===== */}
+            {filteredMetricNames.length > 0 && (
+              <>
+                <SectionHeader
+                  numRunCols={numRunCols}
+                  label="Metric Summaries"
+                  isCollapsed={!!collapsedSections["metrics"]}
+                  onToggle={() => toggleSection("metrics")}
+                />
+                {!collapsedSections["metrics"] &&
+                  filteredMetricNames.map((metricName) => {
+                    const isExpanded = !!expandedMetrics[metricName];
+                    return (
+                      <MetricSubGroup
+                        key={`metric-${metricName}`}
+                        metricName={metricName}
+                        isExpanded={isExpanded}
+                        onToggle={() => toggleMetric(metricName)}
+                        selectedRuns={selectedRuns}
+                        summaries={metricSummariesData?.summaries}
+                        numRunCols={numRunCols}
+                      />
+                    );
+                  })}
               </>
             )}
           </tbody>

@@ -72,8 +72,8 @@ export function TagBadge({ tag, className, truncate }: TagBadgeProps) {
 
   return (
     <Badge
-      variant="secondary"
-      className={cn("text-xs", truncate && "max-w-[80px] truncate", className)}
+      variant="outline"
+      className={cn("shrink-0 text-xs bg-primary/10", truncate && "max-w-[120px] truncate", className)}
     >
       {parsed.display}
     </Badge>

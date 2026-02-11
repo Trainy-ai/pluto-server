@@ -95,14 +95,5 @@
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.53.0",
     "vitest": "^2.1.8"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "@prisma/client",
-      "@prisma/engines",
-      "esbuild",
-      "prisma",
-      "sharp"
-    ]
   }
 }

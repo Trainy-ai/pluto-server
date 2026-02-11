@@ -12,6 +12,7 @@ import { scryptAsync } from '@noble/hashes/scrypt.js';
 import { createClient } from '@clickhouse/client-web';
 import crypto from 'crypto';
 import { nanoid } from 'nanoid';
+import { extractAndUpsertColumnKeys } from '../lib/extract-column-keys';
 
 const prisma = new PrismaClient();
 
@@ -691,6 +692,106 @@ async function seedClickHouseLogs(
   console.log(`   Seeded ${insertedCount.toLocaleString()} log entries in ${totalTime.toFixed(1)}s`);
 }
 
+/**
+ * Backfills mlop_metric_summaries from mlop_metrics via INSERT...SELECT.
+ * Only runs if summaries table is empty. Idempotent on repeat calls.
+ */
+async function backfillMetricSummaries(
+  tenantId: string,
+  projectName: string,
+): Promise<void> {
+  const clickhouseUrl = process.env.CLICKHOUSE_URL;
+  const clickhouseUser = process.env.CLICKHOUSE_USER || 'default';
+  const clickhousePassword = process.env.CLICKHOUSE_PASSWORD || '';
+
+  if (!clickhouseUrl) {
+    console.log('   CLICKHOUSE_URL not set, skipping metric summaries backfill');
+    return;
+  }
+
+  const clickhouse = createClient({
+    url: clickhouseUrl,
+    username: clickhouseUser,
+    password: clickhousePassword,
+  });
+
+  try {
+    const countResult = await clickhouse.query({
+      query: `SELECT count() as cnt FROM mlop_metric_summaries WHERE tenantId = {tenantId:String} AND projectName = {projectName:String}`,
+      query_params: { tenantId, projectName },
+      format: 'JSONEachRow',
+    });
+    const rows = (await countResult.json()) as Array<{ cnt: string }>;
+    const existingCount = parseInt(rows[0]?.cnt || '0', 10);
+
+    if (existingCount > 0) {
+      console.log(`   Metric summaries already populated (${existingCount} rows)`);
+      return;
+    }
+
+    console.log('   Backfilling metric summaries from mlop_metrics...');
+    const startTime = Date.now();
+
+    await clickhouse.command({
+      query: `INSERT INTO mlop_metric_summaries
+        SELECT tenantId, projectName, runId, logName,
+          min(value), max(value), sum(value),
+          toUInt64(count()),
+          argMaxState(value, step),
+          sum(value * value)
+        FROM mlop_metrics
+        WHERE tenantId = {tenantId:String} AND projectName = {projectName:String}
+        GROUP BY tenantId, projectName, runId, logName`,
+      query_params: { tenantId, projectName },
+    });
+
+    const newCountResult = await clickhouse.query({
+      query: `SELECT count() as cnt FROM mlop_metric_summaries WHERE tenantId = {tenantId:String} AND projectName = {projectName:String}`,
+      query_params: { tenantId, projectName },
+      format: 'JSONEachRow',
+    });
+    const newRows = (await newCountResult.json()) as Array<{ cnt: string }>;
+    const newCount = parseInt(newRows[0]?.cnt || '0', 10);
+
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`   Backfilled ${newCount} metric summary rows in ${elapsed}s`);
+  } finally {
+    await clickhouse.close();
+  }
+}
+
+/**
+ * Backfills ProjectColumnKey and RunFieldValue for all runs in a project.
+ * Uses the shared extractAndUpsertColumnKeys() which handles skipDuplicates.
+ */
+async function backfillColumnKeys(
+  runs: { id: bigint; config: unknown; systemMetadata: unknown }[],
+  orgId: string,
+  projectId: bigint,
+): Promise<void> {
+  console.log(`   Backfilling column keys and field values for ${runs.length} runs...`);
+  const startTime = Date.now();
+  let processed = 0;
+
+  for (const run of runs) {
+    await extractAndUpsertColumnKeys(
+      prisma,
+      orgId,
+      projectId,
+      run.config,
+      run.systemMetadata,
+      run.id,
+    );
+    processed++;
+    if (processed % 50 === 0) {
+      console.log(`   Column keys progress: ${processed}/${runs.length}`);
+    }
+  }
+
+  const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+  console.log(`   Backfilled column keys for ${processed} runs in ${elapsed}s`);
+}
+
 async function main() {
   console.log('Seeding development data...\n');
 
@@ -995,6 +1096,19 @@ async function main() {
 
   // Seed ClickHouse logs with story-driven patterns
   await seedClickHouseLogs(allRuns, org.id, project.name);
+
+  // Backfill metric summaries (MV only captures future inserts)
+  console.log('\n6. Backfilling metric summaries...');
+  await backfillMetricSummaries(org.id, project.name);
+
+  // Backfill column keys and field values for run table server-side filtering
+  console.log('\n7. Backfilling column keys and field values...');
+  const runsWithConfig = await prisma.runs.findMany({
+    where: { projectId: project.id, organizationId: org.id },
+    select: { id: true, config: true, systemMetadata: true },
+    orderBy: { id: 'asc' },
+  });
+  await backfillColumnKeys(runsWithConfig, org.id, project.id);
 
   console.log('\n' + '='.repeat(50));
   console.log('Development data seeded successfully!\n');
