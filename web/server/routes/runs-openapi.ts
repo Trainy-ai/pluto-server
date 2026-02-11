@@ -24,6 +24,11 @@ import {
   queryRunDetails,
   queryAllProjects,
 } from "../lib/queries";
+import {
+  queryDistinctMetrics,
+  queryMetricSortedRunIds,
+  type MetricAggregation,
+} from "../lib/queries/metric-summaries";
 import type { prisma } from "../lib/prisma";
 import type { ApiKey, Organization, User } from "@prisma/client";
 import { extractAndUpsertColumnKeys } from "../lib/extract-column-keys";
@@ -1511,6 +1516,243 @@ router.openapi(compareRunsRoute, async (c) => {
       bestRun,
       recommendation,
     },
+  }, 200);
+});
+
+// ============= List Metric Names =============
+const listMetricNamesRoute = createRoute({
+  method: "get",
+  path: "/metric-names",
+  tags: ["Runs"],
+  summary: "List distinct metric names in a project",
+  description: "Returns distinct metric names from the pre-computed metric summaries table. Useful for discovering available metrics before querying leaderboard or statistics. Optionally filter by a search substring or specific run IDs.",
+  security: [{ bearerAuth: [] }],
+  request: {
+    query: z.object({
+      projectName: z.string().openapi({ description: "Project name" }),
+      search: z.string().optional().openapi({ description: "Substring search to filter metric names (e.g., 'loss')" }),
+      runIds: z.string().optional().openapi({ description: "Comma-separated run IDs to scope the search (e.g., '1,2,5')" }),
+      limit: z.coerce.number().optional().default(500).openapi({ description: "Maximum number of metric names to return (default: 500)" }),
+    }),
+  },
+  responses: {
+    200: {
+      description: "List of distinct metric names",
+      content: {
+        "application/json": {
+          schema: z.object({
+            projectName: z.string(),
+            metricNames: z.array(z.string()),
+          }).openapi("ListMetricNamesResponse"),
+        },
+      },
+    },
+  },
+});
+
+router.use(listMetricNamesRoute.path, withApiKey);
+router.openapi(listMetricNamesRoute, async (c) => {
+  const apiKey = c.get("apiKey");
+  const { projectName, search, runIds: runIdsStr, limit } = c.req.valid("query");
+
+  let runIds: number[] | undefined;
+  if (runIdsStr) {
+    runIds = runIdsStr.split(",").map((id) => Number(id.trim())).filter((id) => !isNaN(id));
+    if (runIds.length === 0) {
+      runIds = undefined;
+    }
+  }
+
+  const metricNames = await queryDistinctMetrics(clickhouse, {
+    organizationId: apiKey.organization.id,
+    projectName,
+    search: search || undefined,
+    limit: Math.min(limit, 500),
+    runIds,
+  });
+
+  return c.json({
+    projectName,
+    metricNames,
+  }, 200);
+});
+
+// ============= Leaderboard =============
+const VALID_AGGREGATIONS = ["MIN", "MAX", "AVG", "LAST", "VARIANCE"] as const;
+
+const leaderboardRoute = createRoute({
+  method: "get",
+  path: "/leaderboard",
+  tags: ["Runs"],
+  summary: "Rank runs by a metric",
+  description: "Returns runs ranked by a metric aggregation (MIN, MAX, AVG, LAST, VARIANCE) using pre-computed metric summaries. Much faster than comparing individual runs. Useful for finding the best runs in a project by loss, accuracy, or any other metric.",
+  security: [{ bearerAuth: [] }],
+  request: {
+    query: z.object({
+      projectName: z.string().openapi({ description: "Project name" }),
+      logName: z.string().openapi({ description: "Metric name to rank by (e.g., 'train/loss', 'eval/accuracy')" }),
+      aggregation: z.enum(VALID_AGGREGATIONS).default("LAST").openapi({ description: "Aggregation type: MIN, MAX, AVG, LAST, VARIANCE (default: LAST)" }),
+      direction: z.enum(["ASC", "DESC"]).default("ASC").openapi({ description: "Sort direction: ASC (lowest first) or DESC (highest first). Default: ASC" }),
+      limit: z.coerce.number().optional().default(20).openapi({ description: "Number of runs to return (default: 20, max: 100)" }),
+      offset: z.coerce.number().optional().default(0).openapi({ description: "Offset for pagination (default: 0)" }),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Ranked list of runs with metric values",
+      content: {
+        "application/json": {
+          schema: z.object({
+            projectName: z.string(),
+            logName: z.string(),
+            aggregation: z.string(),
+            direction: z.string(),
+            runs: z.array(z.object({
+              rank: z.number().openapi({ description: "1-based rank position" }),
+              runId: z.number(),
+              runName: z.string(),
+              status: z.string(),
+              url: z.string().openapi({ description: "URL to view this run in the UI" }),
+              value: z.number().openapi({ description: "The aggregated metric value used for ranking" }),
+              config: z.any().nullable(),
+              tags: z.array(z.string()),
+              createdAt: z.string(),
+            })),
+            total: z.number().openapi({ description: "Total number of runs that have this metric" }),
+          }).openapi("LeaderboardResponse"),
+        },
+      },
+    },
+  },
+});
+
+router.use(leaderboardRoute.path, withApiKey);
+router.openapi(leaderboardRoute, async (c) => {
+  const apiKey = c.get("apiKey");
+  const prisma = c.get("prisma");
+  const { projectName, logName, aggregation, direction, limit: rawLimit, offset } = c.req.valid("query");
+
+  const limit = Math.min(rawLimit, 100);
+
+  // Fetch candidate run IDs from PostgreSQL first to ensure consistency
+  // between PG and ClickHouse (runs may be deleted from PG but still exist in CH)
+  const projectRuns = await prisma.runs.findMany({
+    where: {
+      organizationId: apiKey.organization.id,
+      project: { name: projectName },
+    },
+    select: { id: true },
+  });
+  const candidateRunIds = projectRuns.map((r) => Number(r.id));
+
+  if (candidateRunIds.length === 0) {
+    return c.json({
+      projectName,
+      logName,
+      aggregation,
+      direction,
+      runs: [],
+      total: 0,
+    }, 200);
+  }
+
+  // Get total count of runs with this metric (for pagination), scoped to valid PG runs
+  const countQuery = `
+    SELECT count(DISTINCT runId) as total
+    FROM mlop_metric_summaries
+    WHERE tenantId = {tenantId: String}
+      AND projectName = {projectName: String}
+      AND logName = {logName: String}
+      AND runId IN ({candidateRunIds: Array(UInt64)})
+  `;
+  const countResult = await clickhouse.query(countQuery, {
+    tenantId: apiKey.organization.id,
+    projectName,
+    logName,
+    candidateRunIds,
+  });
+  const countData = (await countResult.json()) as Array<{ total: string }>;
+  const total = Number(countData[0]?.total || 0);
+
+  if (total === 0) {
+    return c.json({
+      projectName,
+      logName,
+      aggregation,
+      direction,
+      runs: [],
+      total: 0,
+    }, 200);
+  }
+
+  // Query ClickHouse for sorted run IDs using pre-computed summaries, scoped to valid PG runs
+  const sortedRuns = await queryMetricSortedRunIds(clickhouse, {
+    organizationId: apiKey.organization.id,
+    projectName,
+    sortLogName: logName,
+    sortAggregation: aggregation as MetricAggregation,
+    sortDirection: direction,
+    limit,
+    offset,
+    candidateRunIds,
+  });
+
+  if (sortedRuns.length === 0) {
+    return c.json({
+      projectName,
+      logName,
+      aggregation,
+      direction,
+      runs: [],
+      total,
+    }, 200);
+  }
+
+  // Fetch run metadata from PostgreSQL
+  const runIds = sortedRuns.map((r) => r.runId);
+  const runs = await prisma.runs.findMany({
+    where: {
+      id: { in: runIds },
+    },
+    select: {
+      id: true,
+      name: true,
+      status: true,
+      config: true,
+      tags: true,
+      createdAt: true,
+    },
+  });
+
+  // Build a map for quick lookup
+  const runMap = new Map(runs.map((r) => [Number(r.id), r]));
+
+  // Combine and preserve ClickHouse sort order
+  const rankedRuns = sortedRuns
+    .map((sr, idx) => {
+      const run = runMap.get(sr.runId);
+      if (!run) return null;
+      return {
+        rank: offset + idx + 1,
+        runId: Number(run.id),
+        runName: run.name,
+        status: run.status,
+        url: `${env.BETTER_AUTH_URL}/o/${apiKey.organization.slug}/projects/${encodeURIComponent(projectName)}/${sqidEncode(Number(run.id))}`,
+        value: sr.sortValue,
+        config: run.config,
+        tags: run.tags,
+        createdAt: run.createdAt.toISOString(),
+      };
+    })
+    .filter((r) => r !== null);
+
+  return c.json({
+    projectName,
+    logName,
+    aggregation,
+    direction,
+    runs: rankedRuns,
+    total,
   }, 200);
 });
 

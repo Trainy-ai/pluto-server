@@ -3172,4 +3172,251 @@ describe('SDK API Endpoints (with API Key)', () => {
       }, { 'Cookie': sessionCookie }, 'POST');
     });
   });
+
+  // ============================================================================
+  // Test Suite 21: Metric Names Endpoint (ClickHouse Summaries)
+  // ============================================================================
+  describe.skip('Test Suite 21: Metric Names Endpoint', () => {
+    const hasApiKey = TEST_API_KEY.length > 0;
+
+    describe.skipIf(!hasApiKey)('Metric Names with Valid API Key', () => {
+      it('Test 21.1: List metric names for a project', async () => {
+        const response = await makeRequest(
+          `/api/runs/metric-names?projectName=${TEST_PROJECT_NAME}`,
+          {
+            headers: {
+              'Authorization': `Bearer ${TEST_API_KEY}`,
+            },
+          }
+        );
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.projectName).toBe(TEST_PROJECT_NAME);
+        expect(data.metricNames).toBeDefined();
+        expect(Array.isArray(data.metricNames)).toBe(true);
+      });
+
+      it('Test 21.2: List metric names with search filter', async () => {
+        const response = await makeRequest(
+          `/api/runs/metric-names?projectName=${TEST_PROJECT_NAME}&search=loss`,
+          {
+            headers: {
+              'Authorization': `Bearer ${TEST_API_KEY}`,
+            },
+          }
+        );
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.metricNames).toBeDefined();
+        expect(Array.isArray(data.metricNames)).toBe(true);
+        // If any results, all should contain 'loss'
+        for (const name of data.metricNames) {
+          expect(name.toLowerCase()).toContain('loss');
+        }
+      });
+
+      it('Test 21.3: List metric names with limit', async () => {
+        const response = await makeRequest(
+          `/api/runs/metric-names?projectName=${TEST_PROJECT_NAME}&limit=5`,
+          {
+            headers: {
+              'Authorization': `Bearer ${TEST_API_KEY}`,
+            },
+          }
+        );
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.metricNames.length).toBeLessThanOrEqual(5);
+      });
+
+      it('Test 21.4: Metric names without API key returns 401', async () => {
+        const response = await makeRequest(
+          `/api/runs/metric-names?projectName=${TEST_PROJECT_NAME}`
+        );
+
+        expect(response.status).toBe(401);
+      });
+
+      it('Test 21.5: SQL injection in search is handled safely', async () => {
+        const maliciousSearch = "loss'; DROP TABLE mlop_metric_summaries; --";
+        const response = await makeRequest(
+          `/api/runs/metric-names?projectName=${TEST_PROJECT_NAME}&search=${encodeURIComponent(maliciousSearch)}`,
+          {
+            headers: {
+              'Authorization': `Bearer ${TEST_API_KEY}`,
+            },
+          }
+        );
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.metricNames).toBeDefined();
+        expect(data.metricNames.length).toBe(0);
+      });
+    });
+  });
+
+  // ============================================================================
+  // Test Suite 22: Leaderboard Endpoint (ClickHouse Summaries)
+  // ============================================================================
+  describe.skip('Test Suite 22: Leaderboard Endpoint', () => {
+    const hasApiKey = TEST_API_KEY.length > 0;
+
+    describe.skipIf(!hasApiKey)('Leaderboard with Valid API Key', () => {
+      it('Test 22.1: Get leaderboard for a metric', async () => {
+        const response = await makeRequest(
+          `/api/runs/leaderboard?projectName=${TEST_PROJECT_NAME}&logName=train/metric_00`,
+          {
+            headers: {
+              'Authorization': `Bearer ${TEST_API_KEY}`,
+            },
+          }
+        );
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.projectName).toBe(TEST_PROJECT_NAME);
+        expect(data.logName).toBe('train/metric_00');
+        expect(data.aggregation).toBeDefined();
+        expect(data.direction).toBeDefined();
+        expect(data.runs).toBeDefined();
+        expect(Array.isArray(data.runs)).toBe(true);
+        expect(data.total).toBeDefined();
+      });
+
+      it('Test 22.2: Leaderboard with custom aggregation and direction', async () => {
+        const response = await makeRequest(
+          `/api/runs/leaderboard?projectName=${TEST_PROJECT_NAME}&logName=train/metric_00&aggregation=MIN&direction=ASC`,
+          {
+            headers: {
+              'Authorization': `Bearer ${TEST_API_KEY}`,
+            },
+          }
+        );
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.aggregation).toBe('MIN');
+        expect(data.direction).toBe('ASC');
+
+        // Verify runs are sorted ascending by value
+        if (data.runs.length > 1) {
+          for (let i = 1; i < data.runs.length; i++) {
+            expect(data.runs[i].value).toBeGreaterThanOrEqual(data.runs[i - 1].value);
+          }
+        }
+      });
+
+      it('Test 22.3: Leaderboard with DESC direction', async () => {
+        const response = await makeRequest(
+          `/api/runs/leaderboard?projectName=${TEST_PROJECT_NAME}&logName=train/metric_00&aggregation=MAX&direction=DESC`,
+          {
+            headers: {
+              'Authorization': `Bearer ${TEST_API_KEY}`,
+            },
+          }
+        );
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.aggregation).toBe('MAX');
+        expect(data.direction).toBe('DESC');
+
+        // Verify runs are sorted descending by value
+        if (data.runs.length > 1) {
+          for (let i = 1; i < data.runs.length; i++) {
+            expect(data.runs[i].value).toBeLessThanOrEqual(data.runs[i - 1].value);
+          }
+        }
+      });
+
+      it('Test 22.4: Leaderboard with limit and pagination', async () => {
+        const response = await makeRequest(
+          `/api/runs/leaderboard?projectName=${TEST_PROJECT_NAME}&logName=train/metric_00&limit=3&offset=0`,
+          {
+            headers: {
+              'Authorization': `Bearer ${TEST_API_KEY}`,
+            },
+          }
+        );
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.runs.length).toBeLessThanOrEqual(3);
+
+        // Verify rank starts at 1
+        if (data.runs.length > 0) {
+          expect(data.runs[0].rank).toBe(1);
+        }
+      });
+
+      it('Test 22.5: Leaderboard run entries have expected fields', async () => {
+        const response = await makeRequest(
+          `/api/runs/leaderboard?projectName=${TEST_PROJECT_NAME}&logName=train/metric_00&limit=1`,
+          {
+            headers: {
+              'Authorization': `Bearer ${TEST_API_KEY}`,
+            },
+          }
+        );
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        if (data.runs.length > 0) {
+          const run = data.runs[0];
+          expect(run.rank).toBeDefined();
+          expect(run.runId).toBeDefined();
+          expect(run.runName).toBeDefined();
+          expect(run.status).toBeDefined();
+          expect(run.url).toBeDefined();
+          expect(typeof run.value).toBe('number');
+          expect(run.tags).toBeDefined();
+          expect(run.createdAt).toBeDefined();
+        }
+      });
+
+      it('Test 22.6: Leaderboard for non-existent metric returns empty', async () => {
+        const response = await makeRequest(
+          `/api/runs/leaderboard?projectName=${TEST_PROJECT_NAME}&logName=nonexistent/metric_xyz`,
+          {
+            headers: {
+              'Authorization': `Bearer ${TEST_API_KEY}`,
+            },
+          }
+        );
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.runs).toHaveLength(0);
+        expect(data.total).toBe(0);
+      });
+
+      it('Test 22.7: Leaderboard without API key returns 401', async () => {
+        const response = await makeRequest(
+          `/api/runs/leaderboard?projectName=${TEST_PROJECT_NAME}&logName=train/metric_00`
+        );
+
+        expect(response.status).toBe(401);
+      });
+
+      it('Test 22.8: SQL injection in logName is handled safely', async () => {
+        const maliciousLogName = "train/loss' UNION SELECT * FROM system.tables --";
+        const response = await makeRequest(
+          `/api/runs/leaderboard?projectName=${TEST_PROJECT_NAME}&logName=${encodeURIComponent(maliciousLogName)}`,
+          {
+            headers: {
+              'Authorization': `Bearer ${TEST_API_KEY}`,
+            },
+          }
+        );
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.runs).toHaveLength(0);
+      });
+    });
+  });
 });
