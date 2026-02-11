@@ -54,6 +54,7 @@ model User {
   Feedback           Feedback[]
   Runs               Runs[]
   DashboardView      DashboardView[]
+  RunTableView       RunTableView[]
 
   @@unique([email])
   @@map("user")
@@ -169,6 +170,9 @@ model Organization {
   Notification             Notification[]
   OrganizationSubscription OrganizationSubscription?
   DashboardView            DashboardView[]
+  RunTableView             RunTableView[]
+  ProjectColumnKey         ProjectColumnKey[]
+  RunFieldValue            RunFieldValue[]
 
   @@unique([slug])
   @@map("organization")
@@ -242,7 +246,10 @@ model Projects {
   runs           Runs[]
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
-  DashboardView  DashboardView[]
+  DashboardView    DashboardView[]
+  RunTableView     RunTableView[]
+  ProjectColumnKey ProjectColumnKey[]
+  RunFieldValue    RunFieldValue[]
 
   // This unique constraint ensures we can efficiently look up projects by name + orgId
   @@unique([organizationId, name])
@@ -319,6 +326,11 @@ model Runs {
   @@index([projectId, organizationId])
   @@index([status])
   @@index([createdById])
+  RunFieldValue RunFieldValue[]
+
+  // Covering indexes for server-side sorting (avoids seq scans on sort queries)
+  @@index([organizationId, projectId, createdAt(sort: Desc)])
+  @@index([organizationId, projectId, name])
   @@map("runs")
 }
 
@@ -426,4 +438,62 @@ model DashboardView {
   @@unique([organizationId, projectId, name])
   @@index([organizationId, projectId])
   @@map("dashboard_views")
+}
+
+// Run Table Views for saved table column/filter/sorting configurations
+model RunTableView {
+  id             BigInt       @id @default(autoincrement())
+  name           String       @db.VarChar(255)
+  organizationId String
+  projectId      BigInt
+  createdById    String
+  config         Json         // Columns, baseOverrides, filters, sorting configuration
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project      Projects     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy    User         @relation(fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, projectId, name])
+  @@index([organizationId, projectId])
+  @@map("run_table_views")
+}
+
+// Cached distinct column keys per project for fast search
+model ProjectColumnKey {
+  id             BigInt       @id @default(autoincrement())
+  organizationId String
+  projectId      BigInt
+  source         String       @db.VarChar(20)  // "config" | "systemMetadata"
+  key            String       @db.VarChar(500)
+  dataType       String       @db.VarChar(10)  // "text" | "number" | "date"
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project      Projects     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, source, key])
+  @@index([projectId, organizationId])
+  @@map("project_column_keys")
+}
+
+// Flattened field values for fast server-side sorting and filtering
+model RunFieldValue {
+  id             BigInt    @id @default(autoincrement())
+  runId          BigInt
+  organizationId String
+  projectId      BigInt
+  source         String    @db.VarChar(20)   // "config" | "systemMetadata"
+  key            String    @db.VarChar(500)
+  textValue      String?
+  numericValue   Float?
+
+  run          Runs         @relation(fields: [runId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project      Projects     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, source, key])
+  @@index([projectId, source, key, numericValue])
+  @@index([runId])
+  @@map("run_field_values")
 }

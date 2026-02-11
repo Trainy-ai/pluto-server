@@ -1,11 +1,14 @@
 import { Link } from "@tanstack/react-router";
-import type { ColumnDef, Row } from "@tanstack/react-table";
+import type { ColumnDef, Row, SortingState } from "@tanstack/react-table";
 import { Eye, EyeOff } from "lucide-react";
 import { ColorPicker } from "@/components/ui/color-picker";
 import { SELECTED_RUNS_LIMIT } from "./config";
 import { StatusIndicator } from "@/components/layout/dashboard/sidebar";
 import type { Run } from "../../~queries/list-runs";
 import { TagsCell } from "./tags-cell";
+import type { ColumnConfig } from "../../~hooks/use-column-config";
+import type { BaseColumnOverrides } from "../../~hooks/use-column-config";
+import { formatValue } from "@/lib/flatten-object";
 import { NotesCell } from "./notes-cell";
 import {
   Tooltip,
@@ -14,6 +17,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useState, useEffect, useCallback, memo, type MutableRefObject } from "react";
 import { flushSync } from "react-dom";
+import { ColumnHeaderMenu } from "./column-header-menu";
 
 type RunId = string;
 type RunColor = string;
@@ -111,7 +115,22 @@ interface ColumnsProps {
   onNotesUpdate: (runId: RunId, notes: string | null) => void;
   /** Getter function for run colors - avoids column recreation on color changes */
   getRunColor: (runId: RunId) => RunColor | undefined;
-  allTags: string[];
+  /** Getter function for all tags - avoids column recreation on tag changes */
+  getAllTags: () => string[];
+  allTags?: never;
+  /** Custom columns from the column picker */
+  customColumns?: ColumnConfig[];
+  /** Column header dropdown callbacks */
+  onColumnRename?: (colId: string, source: string, newName: string, aggregation?: string) => void;
+  onColumnSetColor?: (colId: string, source: string, color: string | undefined, aggregation?: string) => void;
+  onColumnRemove?: (colId: string, source: string, aggregation?: string) => void;
+  /** Base column (Name) overrides */
+  nameOverrides?: BaseColumnOverrides;
+  onNameRename?: (newName: string) => void;
+  onNameSetColor?: (color: string | undefined) => void;
+  /** Sorting state — managed externally */
+  sorting?: SortingState;
+  onSortingChange?: (sorting: SortingState) => void;
 }
 
 function getRowRange<T>(rows: Array<Row<T>>, idA: string, idB: string) {
@@ -145,6 +164,68 @@ function getRowRange<T>(rows: Array<Row<T>>, idA: string, idB: string) {
 // Shared ref for tracking last selected row ID (for shift-click range selection)
 const lastSelectedIdRef = { current: "" };
 
+/** Extracts a value from a Run for a given custom column config */
+function getCustomColumnValue(run: Run, col: ColumnConfig): unknown {
+  if (col.source === "system") {
+    switch (col.id) {
+      case "runId":
+        return run.id;
+      case "createdAt":
+        return run.createdAt;
+      case "updatedAt":
+        return run.updatedAt;
+      case "statusUpdated":
+        return run.statusUpdated;
+      case "creator.name":
+        return run.creator?.name ?? run.creator?.email ?? "-";
+      case "notes":
+        return run.notes;
+      default:
+        return "-";
+    }
+  }
+
+  // Metric columns — look up from metricSummaries attached to the run
+  if (col.source === "metric" && col.aggregation) {
+    const summaries = (run as any).metricSummaries as Record<string, number> | undefined;
+    if (!summaries) return undefined;
+    const key = `${col.id}|${col.aggregation}`;
+    return summaries[key];
+  }
+
+  // Config and systemMetadata are pre-flattened once at data load time
+  const flat = col.source === "config"
+    ? (run as any)._flatConfig
+    : (run as any)._flatSystemMetadata;
+  return flat?.[col.id];
+}
+
+/** Formats a custom column value for display as a string */
+function formatCellValue(value: unknown, col: ColumnConfig): string {
+  if (value === null || value === undefined) return "-";
+  if (col.source === "system" && (col.id === "createdAt" || col.id === "updatedAt" || col.id === "statusUpdated")) {
+    try {
+      return new Date(value as string).toLocaleString(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    } catch {
+      return String(value);
+    }
+  }
+  // Metric values: format as short numbers
+  if (col.source === "metric" && typeof value === "number") {
+    if (Number.isInteger(value)) return String(value);
+    // Use toPrecision for very small/large values, toFixed for normal range
+    const abs = Math.abs(value);
+    if (abs < 0.001 || abs >= 1e6) return value.toPrecision(4);
+    return value.toFixed(4);
+  }
+  return formatValue(value);
+}
+
 export const columns = ({
   orgSlug,
   projectName,
@@ -153,9 +234,35 @@ export const columns = ({
   onTagsUpdate,
   onNotesUpdate,
   getRunColor,
-  allTags,
+  getAllTags,
+  customColumns = [],
+  onColumnRename,
+  onColumnSetColor,
+  onColumnRemove,
+  nameOverrides,
+  onNameRename,
+  onNameSetColor,
+  sorting = [],
+  onSortingChange,
 }: ColumnsProps): ColumnDef<Run>[] => {
-  return [
+  // Helper to get sort direction for a column
+  const getSortDirection = (colId: string): "asc" | "desc" | false => {
+    const sort = sorting.find((s) => s.id === colId);
+    if (!sort) return false;
+    return sort.desc ? "desc" : "asc";
+  };
+
+  // Helper to toggle sort on a column (single-column sort — replaces previous)
+  const handleSort = (colId: string, direction: "asc" | "desc" | false) => {
+    if (!onSortingChange) return;
+    if (direction === false) {
+      onSortingChange([]);
+    } else {
+      onSortingChange([{ id: colId, desc: direction === "desc" }]);
+    }
+  };
+  // Base columns (always shown)
+  const baseColumns: ColumnDef<Run>[] = [
     {
       id: "select",
       size: 40,
@@ -180,10 +287,40 @@ export const columns = ({
       enableHiding: false,
     },
     {
-      header: "Name",
+      id: "status",
+      header: "",
+      size: 36,
+      minSize: 36,
+      maxSize: 36,
+      enableResizing: false,
+      cell: ({ row }) => {
+        return (
+          <div className="flex items-center justify-end pr-1">
+            <StatusIndicator status={row.original.status} />
+          </div>
+        );
+      },
+    },
+    {
+      id: "name",
       accessorKey: "name",
+      header: () => (
+        <ColumnHeaderMenu
+          label={nameOverrides?.customLabel ?? "Name"}
+          columnId="name"
+          canRemove={false}
+          canSort={true}
+          sortDirection={getSortDirection("name")}
+          backgroundColor={nameOverrides?.backgroundColor}
+          onSort={(dir) => handleSort("name", dir)}
+          onRename={(newName) => onNameRename?.(newName)}
+          onSetColor={(color) => onNameSetColor?.(color)}
+        />
+      ),
+      meta: { backgroundColor: nameOverrides?.backgroundColor },
       size: 140,
       minSize: 100,
+      enableSorting: true,
       cell: ({ row }) => {
         const runId = row.original.id;
         const name = row.original.name;
@@ -217,55 +354,140 @@ export const columns = ({
         );
       },
     },
-    {
-      header: "Tags",
-      accessorKey: "tags",
-      size: 110,
-      minSize: 80,
-      cell: ({ row }) => {
-        const runId = row.original.id;
-        const tags = row.original.tags || [];
+  ];
 
-        return (
-          <TagsCell
-            tags={tags}
-            allTags={allTags}
-            onTagsUpdate={(newTags) => onTagsUpdate(runId, newTags)}
+  // Dynamic custom columns — accessorFn must return a primitive (string).
+  // Returning objects/arrays causes infinite re-render loops with column resize.
+  const dynamicColumns = customColumns.map((col): ColumnDef<Run> => {
+    const colTableId = col.source === "metric" && col.aggregation
+      ? `custom-${col.source}-${col.id}-${col.aggregation}`
+      : `custom-${col.source}-${col.id}`;
+    const displayLabel = col.customLabel ?? col.label;
+
+    // Tags column needs special rendering with TagsCell
+    if (col.source === "system" && col.id === "tags") {
+      return {
+        id: colTableId,
+        header: () => (
+          <ColumnHeaderMenu
+            label={displayLabel}
+            columnId={colTableId}
+            canRemove={true}
+            canSort={false}
+            sortDirection={false}
+            backgroundColor={col.backgroundColor}
+            onSort={() => {}}
+            onRename={(newName) => onColumnRename?.(col.id, col.source, newName, col.aggregation)}
+            onSetColor={(color) => onColumnSetColor?.(col.id, col.source, color, col.aggregation)}
+            onRemove={() => onColumnRemove?.(col.id, col.source, col.aggregation)}
           />
-        );
+        ),
+        meta: { backgroundColor: col.backgroundColor },
+        size: 180,
+        minSize: 100,
+        enableSorting: false,
+        cell: ({ row }: { row: Row<Run> }) => {
+          const runId = row.original.id;
+          const tags = row.original.tags || [];
+          return (
+            <TagsCell
+              tags={tags}
+              allTags={getAllTags()}
+              onTagsUpdate={(newTags) => onTagsUpdate(runId, newTags)}
+            />
+          );
+        },
+      };
+    }
+
+    // Notes column needs special rendering with NotesCell
+    if (col.source === "system" && col.id === "notes") {
+      return {
+        id: colTableId,
+        accessorFn: (row: Run) => row.notes ?? "",
+        header: () => (
+          <ColumnHeaderMenu
+            label={displayLabel}
+            columnId={colTableId}
+            canRemove={true}
+            canSort={true}
+            sortDirection={getSortDirection(colTableId)}
+            backgroundColor={col.backgroundColor}
+            onSort={(dir) => handleSort(colTableId, dir)}
+            onRename={(newName) => onColumnRename?.(col.id, col.source, newName, col.aggregation)}
+            onSetColor={(color) => onColumnSetColor?.(col.id, col.source, color, col.aggregation)}
+            onRemove={() => onColumnRemove?.(col.id, col.source, col.aggregation)}
+          />
+        ),
+        meta: { backgroundColor: col.backgroundColor },
+        size: 120,
+        minSize: 80,
+        enableSorting: true,
+        cell: ({ row }: { row: Row<Run> }) => {
+          const runId = row.original.id;
+          const notes = row.original.notes ?? null;
+          return (
+            <NotesCell
+              notes={notes}
+              onNotesUpdate={(newNotes) => onNotesUpdate(runId, newNotes)}
+            />
+          );
+        },
+      };
+    }
+
+    // Disable sorting for runId — displayed SQID strings don't preserve numeric order
+    const canSort = !(col.source === "system" && col.id === "runId");
+
+    return {
+      id: colTableId,
+      // accessorFn is required for TanStack Table's getCanSort() to return true.
+      // Must return a primitive (string) to avoid infinite re-render loops.
+      accessorFn: (row: Run) => {
+        const val = getCustomColumnValue(row, col);
+        if (val == null) return "";
+        return String(val);
       },
-    },
-    {
-      header: "Notes",
-      accessorKey: "notes",
+      header: () => (
+        <ColumnHeaderMenu
+          label={displayLabel}
+          columnId={colTableId}
+          canRemove={true}
+          canSort={canSort}
+          sortDirection={canSort ? getSortDirection(colTableId) : false}
+          backgroundColor={col.backgroundColor}
+          onSort={(dir) => canSort && handleSort(colTableId, dir)}
+          onRename={(newName) => onColumnRename?.(col.id, col.source, newName, col.aggregation)}
+          onSetColor={(color) => onColumnSetColor?.(col.id, col.source, color, col.aggregation)}
+          onRemove={() => onColumnRemove?.(col.id, col.source, col.aggregation)}
+        />
+      ),
+      meta: { backgroundColor: col.backgroundColor },
       size: 120,
       minSize: 80,
-      cell: ({ row }) => {
-        const runId = row.original.id;
-        const notes = row.original.notes ?? null;
+      enableSorting: canSort,
+      cell: ({ row }: { row: Row<Run> }) => {
+        const value = getCustomColumnValue(row.original, col);
+        const display = formatCellValue(value, col);
+        return (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span
+                className={`truncate text-xs ${display === "-" ? "text-muted-foreground/50" : ""}`}
+              >
+                {display}
+              </span>
+            </TooltipTrigger>
+            {display !== "-" && display.length > 20 && (
+              <TooltipContent side="top" sideOffset={4}>
+                <p className="max-w-xs break-all">{display}</p>
+              </TooltipContent>
+            )}
+          </Tooltip>
+        );
+      },
+    };
+  });
 
-        return (
-          <NotesCell
-            notes={notes}
-            onNotesUpdate={(newNotes) => onNotesUpdate(runId, newNotes)}
-          />
-        );
-      },
-    },
-    {
-      id: "status",
-      header: "",
-      size: 36,
-      minSize: 36,
-      maxSize: 36,
-      enableResizing: false,
-      cell: ({ row }) => {
-        return (
-          <div className="flex items-center justify-end pr-1">
-            <StatusIndicator status={row.original.status} />
-          </div>
-        );
-      },
-    },
-  ];
+  return [...baseColumns, ...dynamicColumns];
 };

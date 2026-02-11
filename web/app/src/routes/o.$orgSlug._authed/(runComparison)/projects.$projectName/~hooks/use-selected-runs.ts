@@ -48,11 +48,6 @@ interface UseSelectedRunsReturn {
   handleRunSelection: (runId: RunId, isSelected: boolean) => void;
   /** Handler for changing a run's color */
   handleColorChange: (runId: RunId, color: Color) => void;
-  /** Initial row selection state for the table
-   * this is the index of the run in the runs array
-   * mapped to a boolean value indicating if the run is selected
-   */
-  defaultRowSelection: Record<number, boolean>;
   /** Select the first N runs from the runs array */
   selectFirstN: (n: number) => void;
   /** Select all runs with the given IDs */
@@ -129,6 +124,9 @@ export function useSelectedRuns(
   const urlParamsAppliedRef = useRef(false);
   // Track the previous URL run IDs to detect changes
   const prevUrlRunIdsRef = useRef<string[] | undefined>(undefined);
+  // Track whether a URL change was triggered by our own selection update
+  // (to avoid round-trip overwriting the selection with a filtered subset)
+  const isLocalSelectionUpdateRef = useRef(false);
 
   // Ref for stable callback access to runs without dependency
   const runsRef = useRef(runs);
@@ -141,6 +139,12 @@ export function useSelectedRuns(
   useEffect(() => {
     runColorsRef.current = runColors;
   }, [runColors]);
+
+  // Ref for stable access to selectedRunsWithColors in effects
+  const selectedRunsRef = useRef(selectedRunsWithColors);
+  useEffect(() => {
+    selectedRunsRef.current = selectedRunsWithColors;
+  }, [selectedRunsWithColors]);
 
   // Generate the storage key for this org/project combination
   const storageKey = useMemo(
@@ -213,6 +217,15 @@ export function useSelectedRuns(
     // Update ref to track current value
     prevUrlRunIdsRef.current = urlRunIds;
 
+    // Skip if this URL change was triggered by our own selection update.
+    // The round-trip (selection → URL → back here) would overwrite the full
+    // selection with only the runs present in the current filtered `runs`
+    // array, losing selections for runs filtered out by view presets.
+    if (isLocalSelectionUpdateRef.current) {
+      isLocalSelectionUpdateRef.current = false;
+      return;
+    }
+
     // If we have runs loaded and URL params changed, apply the new selection
     if (runs?.length && urlRunIds && urlRunIds.length > 0) {
       const runsById = new Map(runs.map((r) => [r.id, r]));
@@ -234,12 +247,17 @@ export function useSelectedRuns(
     }
   }, [urlRunIds, runs, runColors]);
 
-  // Initialize or update colors when runs change
+  // Initialize or update colors when runs change.
+  // Uses refs for runColors/selectedRunsWithColors to avoid circular re-runs
+  // (this effect sets both of those values).
   useEffect(() => {
     if (!runs?.length) return;
 
+    const currentRunColors = runColorsRef.current;
+    const currentSelectedRuns = selectedRunsRef.current;
+
     // First run initialization - set initial colors and selections
-    if (Object.keys(runColors).length === 0) {
+    if (Object.keys(currentRunColors).length === 0) {
       const newColors = runs.reduce<Record<RunId, Color>>((acc, run) => {
         acc[run.id] = getColorForRun(run.id, chartColorsRef.current);
         return acc;
@@ -260,7 +278,7 @@ export function useSelectedRuns(
       };
 
       // Initialize selected runs only if none are selected yet
-      if (Object.keys(selectedRunsWithColors).length === 0) {
+      if (Object.keys(currentSelectedRuns).length === 0) {
         // If URL params provided, use those for initial selection
         if (urlRunIds && urlRunIds.length > 0 && !urlParamsAppliedRef.current) {
           urlParamsAppliedRef.current = true;
@@ -293,7 +311,7 @@ export function useSelectedRuns(
     // Handle subsequent runs loaded through pagination
     else {
       // Find runs that don't have colors assigned yet
-      const runsWithoutColors = runs.filter((run) => !runColors[run.id]);
+      const runsWithoutColors = runs.filter((run) => !currentRunColors[run.id]);
 
       if (runsWithoutColors.length > 0) {
         // Generate colors for new runs
@@ -312,11 +330,14 @@ export function useSelectedRuns(
         }));
       }
     }
-  }, [runs, runColors, selectedRunsWithColors, urlRunIds]); // Include runColors, selectedRunsWithColors, and urlRunIds in dependencies
+  }, [runs, urlRunIds]);
 
   // Notify parent when selection changes (for URL sync)
   useEffect(() => {
     if (onSelectionChange) {
+      // Mark that the upcoming URL change was triggered locally so the URL
+      // effect doesn't round-trip and overwrite the selection.
+      isLocalSelectionUpdateRef.current = true;
       const selectedIds = Object.keys(selectedRunsWithColors);
       onSelectionChange(selectedIds);
     }
@@ -399,30 +420,6 @@ export function useSelectedRuns(
     },
     [], // Stable - uses refs instead of direct dependencies
   );
-
-  // Generate defaultRowSelection based on current selectedRunsWithColors
-  const defaultRowSelection = useMemo(() => {
-    if (!runs?.length) return {};
-
-    // If no runs are selected, select the first 5 by default
-    if (Object.keys(selectedRunsWithColors).length === 0) {
-      return {
-        0: true,
-        1: true,
-        2: true,
-        3: true,
-        4: true,
-      };
-    }
-
-    // Otherwise, create selection based on currently selected runs
-    const selection: Record<number, boolean> = {};
-    runs.forEach((run, index) => {
-      selection[index] = !!selectedRunsWithColors[run.id];
-    });
-
-    return selection;
-  }, [runs, selectedRunsWithColors]);
 
   // Select the first N runs
   const selectFirstN = useCallback(
@@ -516,7 +513,6 @@ export function useSelectedRuns(
     selectedRunsWithColors,
     handleRunSelection,
     handleColorChange,
-    defaultRowSelection,
     selectFirstN,
     selectAllByIds,
     deselectAll,

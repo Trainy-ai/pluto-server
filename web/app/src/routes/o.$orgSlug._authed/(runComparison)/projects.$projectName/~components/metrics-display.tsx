@@ -39,7 +39,7 @@ interface MetricsDisplayProps {
  * Main component for displaying metrics groups with search and refresh capabilities
  * Handles the filtering of metrics based on search criteria
  */
-export function MetricsDisplay({
+export const MetricsDisplay = memo(function MetricsDisplay({
   groupedMetrics,
   onSearch,
   onRefresh,
@@ -261,4 +261,4 @@ export function MetricsDisplay({
       </div>
     </ChartSyncProvider>
   );
-}
+});
