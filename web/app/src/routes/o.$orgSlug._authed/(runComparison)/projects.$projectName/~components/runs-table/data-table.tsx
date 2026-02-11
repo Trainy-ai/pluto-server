@@ -628,6 +628,7 @@ export function DataTable({
             tableLayout: "fixed",
             borderCollapse: "separate",
             borderSpacing: 0,
+            minWidth: "100%",
             width: table.getHeaderGroups()[0]?.headers.reduce((sum, h) => {
               const def = h.column.columnDef;
               const isFixed = def.enableResizing === false;
