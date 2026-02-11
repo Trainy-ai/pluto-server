@@ -4,6 +4,12 @@ import react from "@vitejs/plugin-react";
 import path from "path";
 import { defineConfig } from "vite";
 
+const portOffset = parseInt(process.env.PORT_OFFSET || '0', 10);
+const appPort = 3000 + portOffset;
+const serverUrl = process.env.VITE_SERVER_URL || (portOffset
+  ? `http://localhost:${3001 + portOffset}`
+  : 'http://server:3001');
+
 export default defineConfig({
   appType: 'spa', // Enable SPA mode for client-side routing
   plugins: [
@@ -21,6 +27,7 @@ export default defineConfig({
   },
   server: {
     host: true,
+    port: appPort,
     strictPort: false,
     hmr: false, // Disable HMR in Docker to avoid WebSocket issues
     cors: true,
@@ -29,13 +36,13 @@ export default defineConfig({
       // Proxy API and tRPC requests to the backend server
       // This makes all requests appear to come from the same origin, fixing cookie issues
       '/api': {
-        target: process.env.VITE_SERVER_URL || 'http://server:3001',
+        target: serverUrl,
         changeOrigin: true,
         cookieDomainRewrite: '', // Remove domain from cookies so they work with proxy
         cookiePathRewrite: '/', // Ensure cookies work for all paths
       },
       '/trpc': {
-        target: process.env.VITE_SERVER_URL || 'http://server:3001',
+        target: serverUrl,
         changeOrigin: true,
         cookieDomainRewrite: '', // Remove domain from cookies so they work with proxy
         cookiePathRewrite: '/', // Ensure cookies work for all paths
