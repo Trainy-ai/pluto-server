@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import { PlusIcon, SaveIcon, XIcon, AlertTriangleIcon } from "lucide-react";
+import { PlusIcon, SaveIcon, XIcon, AlertTriangleIcon, GridIcon, SlidersHorizontalIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -51,6 +51,7 @@ export function DashboardBuilder({
   const [addWidgetSectionId, setAddWidgetSectionId] = useState<string | null>(null);
   const [editingWidget, setEditingWidget] = useState<Widget | null>(null);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+  const [coarseMode, setCoarseMode] = useState(true);
 
   const updateMutation = useUpdateDashboardView(organizationId, projectName);
 
@@ -228,6 +229,27 @@ export function DashboardBuilder({
         <div className="flex items-center gap-2">
           {isEditing ? (
             <>
+              {/* Coarse / Fine toggle */}
+              <div className="flex items-center rounded-md border">
+                <Button
+                  variant={coarseMode ? "secondary" : "ghost"}
+                  size="sm"
+                  className="rounded-r-none border-0"
+                  onClick={() => setCoarseMode(true)}
+                >
+                  <GridIcon className="mr-1.5 size-3.5" />
+                  Grid
+                </Button>
+                <Button
+                  variant={!coarseMode ? "secondary" : "ghost"}
+                  size="sm"
+                  className="rounded-l-none border-0"
+                  onClick={() => setCoarseMode(false)}
+                >
+                  <SlidersHorizontalIcon className="mr-1.5 size-3.5" />
+                  Free
+                </Button>
+              </div>
               <Button variant="outline" size="sm" onClick={handleCancel}>
                 <XIcon className="mr-2 size-4" />
                 Cancel
@@ -283,6 +305,7 @@ export function DashboardBuilder({
                 onEditWidget={(widget) => editWidget(section.id, widget)}
                 onDeleteWidget={(widgetId) => deleteWidget(section.id, widgetId)}
                 isEditing={isEditing}
+                coarseMode={coarseMode}
                 containerWidth={containerWidth - 48} // Account for padding
                 renderWidget={(widget) => (
                   <WidgetRenderer

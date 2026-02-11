@@ -54,10 +54,51 @@
   cursor: se-resize;
 }
 
+.widget-grid .react-grid-item > .react-resizable-handle.react-resizable-handle-e {
+  right: -4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 10px;
+  height: 40px;
+  cursor: ew-resize;
+}
+
+.widget-grid .react-grid-item > .react-resizable-handle.react-resizable-handle-e::after {
+  content: "";
+  position: absolute;
+  right: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 20px;
+  border-right: 2px solid rgba(128, 128, 128, 0.4);
+  border-bottom: none;
+}
+
 .widget-grid .react-grid-placeholder {
   background: hsl(var(--primary) / 0.2);
   border-radius: 8px;
   transition-duration: 100ms;
   z-index: 2;
   user-select: none;
+}
+
+/* Grid overlay shown during edit mode */
+.widget-grid-editing {
+  background-image:
+    repeating-linear-gradient(
+      90deg,
+      transparent,
+      transparent calc(var(--grid-col-width) - 1px),
+      rgba(128, 128, 128, 0.15) calc(var(--grid-col-width) - 1px),
+      rgba(128, 128, 128, 0.15) var(--grid-col-width)
+    ),
+    repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent calc(var(--grid-row-height) - 1px),
+      rgba(128, 128, 128, 0.15) calc(var(--grid-row-height) - 1px),
+      rgba(128, 128, 128, 0.15) var(--grid-row-height)
+    );
+  background-size: var(--grid-col-width) var(--grid-row-height);
 }
