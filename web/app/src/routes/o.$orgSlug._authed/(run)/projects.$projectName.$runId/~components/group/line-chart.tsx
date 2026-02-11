@@ -4,6 +4,7 @@ import { memo, useEffect, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import LineChart from "@/components/charts/line-wrapper";
+import { ChartCardWrapper } from "@/routes/o.$orgSlug._authed/(runComparison)/projects.$projectName/~components/multi-group/chart-card-wrapper";
 import { ensureGetGraph, useGetGraph } from "../../~queries/get-graph";
 import { useCheckDatabaseSize } from "@/lib/db/local-cache";
 import { metricsCache } from "@/lib/db/index";
@@ -440,21 +441,37 @@ export const LineChartWithFetch = memo(
       logYAxis: settings.yAxisLogScale,
     };
 
-    // Render appropriate chart based on configuration
-    return chartConfig.isSystem ? (
-      <LineChart
-        lines={chartConfig.lines}
-        title={chartConfig.title}
-        isDateTime={chartConfig.isDateTime}
-        xlabel={chartConfig.xlabel}
-      />
-    ) : (
-      <LineChart
-        {...commonProps}
-        lines={chartConfig.lines}
-        xlabel={chartConfig.xlabel}
-        isDateTime={chartConfig.isDateTime}
-        showLegend={chartConfig.showLegend}
+    // Render chart wrapped in ChartCardWrapper for fullscreen + Y-axis bounds
+    return (
+      <ChartCardWrapper
+        metricName={logName}
+        groupId={`run-${runId}`}
+        renderChart={(yMin, yMax, onDataRange, onResetBounds) =>
+          chartConfig.isSystem ? (
+            <LineChart
+              lines={chartConfig.lines}
+              title={chartConfig.title}
+              isDateTime={chartConfig.isDateTime}
+              xlabel={chartConfig.xlabel}
+              yMin={yMin}
+              yMax={yMax}
+              onDataRange={onDataRange}
+              onResetBounds={onResetBounds}
+            />
+          ) : (
+            <LineChart
+              {...commonProps}
+              lines={chartConfig.lines}
+              xlabel={chartConfig.xlabel}
+              isDateTime={chartConfig.isDateTime}
+              showLegend={chartConfig.showLegend}
+              yMin={yMin}
+              yMax={yMax}
+              onDataRange={onDataRange}
+              onResetBounds={onResetBounds}
+            />
+          )
+        }
       />
     );
   },

@@ -33,6 +33,14 @@ interface MultiLineChartProps {
   projectName: string;
   /** When true, all runs are in a terminal state and data won't change */
   allRunsCompleted?: boolean;
+  /** Manual Y-axis minimum bound */
+  yMin?: number;
+  /** Manual Y-axis maximum bound */
+  yMax?: number;
+  /** Callback fired when the actual data range (min/max of all Y values) is computed */
+  onDataRange?: (dataMin: number, dataMax: number) => void;
+  /** Callback fired on double-click to reset Y-axis bounds for this chart */
+  onResetBounds?: () => void;
 }
 
 // Helper to determine appropriate time unit based on max seconds
@@ -173,6 +181,10 @@ export const MultiLineChart = memo(
     organizationId,
     projectName,
     allRunsCompleted = false,
+    yMin,
+    yMax,
+    onDataRange,
+    onResetBounds,
   }: MultiLineChartProps) => {
     useCheckDatabaseSize(metricsCache);
 
@@ -603,6 +615,10 @@ export const MultiLineChart = memo(
         isDateTime={chartResult.isDateTime}
         logXAxis={settings.xAxisLogScale}
         logYAxis={settings.yAxisLogScale}
+        yMin={yMin}
+        yMax={yMax}
+        onDataRange={onDataRange}
+        onResetBounds={onResetBounds}
       />
     );
   },

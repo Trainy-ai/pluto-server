@@ -46,6 +46,14 @@ interface LineChartProps extends React.HTMLAttributes<HTMLDivElement> {
   showLegend?: boolean;
   /** Sync key for cross-chart cursor sync */
   syncKey?: string;
+  /** Manual Y-axis minimum bound. When set, overrides auto-scaling for min. */
+  yMin?: number;
+  /** Manual Y-axis maximum bound. When set, overrides auto-scaling for max. */
+  yMax?: number;
+  /** Callback fired when the actual data range (min/max of all Y values) is computed */
+  onDataRange?: (dataMin: number, dataMax: number) => void;
+  /** Callback fired on double-click to reset Y-axis bounds for this chart */
+  onResetBounds?: () => void;
 }
 
 /** Ref handle exposed to parent components */
@@ -651,6 +659,10 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       showYAxis = true,
       showLegend = false,
       syncKey,
+      yMin: yMinProp,
+      yMax: yMaxProp,
+      onDataRange,
+      onResetBounds,
       className,
       ...rest
     },
@@ -877,6 +889,34 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       return [yMin, yMax];
     }, [uplotData, logYAxis]);
 
+    // Ref for onResetBounds so dblclick handler always has latest callback
+    const onResetBoundsRef = useRef(onResetBounds);
+    onResetBoundsRef.current = onResetBounds;
+
+    // Fire onDataRange callback when data range changes
+    // This reports the actual data min/max (before any user-set bounds are applied)
+    const onDataRangeRef = useRef(onDataRange);
+    onDataRangeRef.current = onDataRange;
+    useEffect(() => {
+      if (!logYAxis && onDataRangeRef.current) {
+        // Compute raw data min/max from uplotData (same logic as yRange but without padding)
+        const allYValues: number[] = [];
+        for (let i = 1; i < uplotData.length; i++) {
+          const series = uplotData[i] as (number | null)[];
+          for (const v of series) {
+            if (v !== null && Number.isFinite(v)) {
+              allYValues.push(v);
+            }
+          }
+        }
+        if (allYValues.length > 0) {
+          const dataMin = Math.min(...allYValues);
+          const dataMax = Math.max(...allYValues);
+          onDataRangeRef.current(dataMin, dataMax);
+        }
+      }
+    }, [uplotData, logYAxis]);
+
     // Note: xRange calculation was removed - global X range is now computed server-side
     // and passed via ChartSyncContext. Single-point centering is handled by uPlot auto-scale.
 
@@ -1019,6 +1059,16 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       const axisColor = isDark ? "#fff" : "#000";
       const gridColor = isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.1)";
 
+      // Build a mapping from smoothed series to their "(original)" companion
+      // so the legend can show combined values like the tooltip: "value (rawValue)"
+      const companionDataIdx = new Map<number, number>();
+      for (let i = 0; i < processedLines.length; i++) {
+        if (!processedLines[i].hideFromLegend && processedLines[i + 1]?.hideFromLegend) {
+          // i+2 because uPlot data index 0 is x-axis, so line index i maps to data index i+1
+          companionDataIdx.set(i, i + 2);
+        }
+      }
+
       // Series configuration
       const series: uPlot.Series[] = [
         {
@@ -1096,6 +1146,19 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
                 ? applyAlpha(baseColor, line.opacity!)
                 : baseColor,
             },
+            // Legend value formatter: combine smoothed + original values like the tooltip
+            value: companionDataIdx.has(i)
+              ? (u: uPlot, val: number | null, _si: number, idx: number | null) => {
+                  if (val == null || idx == null) return "--";
+                  const rawVal = u.data[companionDataIdx.get(i)!]?.[idx] as number | null;
+                  if (rawVal != null) {
+                    return `${formatAxisLabel(val)} (${formatAxisLabel(rawVal)})`;
+                  }
+                  return formatAxisLabel(val);
+                }
+              : ((_u: uPlot, val: number | null) => {
+                  return val == null ? "--" : formatAxisLabel(val);
+                }),
           };
         }),
       ];
@@ -1112,9 +1175,21 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             ? { time: true, auto: true }
             : { auto: true },
         // For Y-axis: use auto:true to enable dynamic rescaling via setScale()
+        // When yMin/yMax props are set, use a fixed range function to enforce bounds
         y: logYAxis
           ? { distr: 3 }
-          : { auto: true },
+          : (yMinProp != null || yMaxProp != null)
+            ? {
+                auto: false,
+                range: (u: uPlot, dataMin: number, dataMax: number): uPlot.Range.MinMax => {
+                  const range = dataMax - dataMin;
+                  const padding = Math.max(range * 0.05, Math.abs(dataMax) * 0.02, 0.1);
+                  const autoMin = dataMin >= 0 ? Math.max(0, dataMin - padding) : dataMin - padding;
+                  const autoMax = dataMax + padding;
+                  return [yMinProp ?? autoMin, yMaxProp ?? autoMax];
+                },
+              }
+            : { auto: true },
       };
 
       // Axes configuration - compact sizes to fit within container
@@ -1342,8 +1417,12 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
                     const range = visibleYMax - visibleYMin;
                     // Add 5% padding, with minimum padding for flat lines
                     const padding = Math.max(range * 0.05, Math.abs(visibleYMax) * 0.02, 0.1);
-                    const newYMin = visibleYMin >= 0 ? Math.max(0, visibleYMin - padding) : visibleYMin - padding;
-                    const newYMax = visibleYMax + padding;
+                    let newYMin = visibleYMin >= 0 ? Math.max(0, visibleYMin - padding) : visibleYMin - padding;
+                    let newYMax = visibleYMax + padding;
+
+                    // Respect manual bounds if set
+                    if (yMinProp != null) newYMin = yMinProp;
+                    if (yMaxProp != null) newYMax = yMaxProp;
 
                     // Only update if meaningfully different to avoid infinite loops
                     const currentYMin = u.scales.y.min ?? 0;
@@ -1411,6 +1490,8 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       handleHoverChange,
       isActiveChart,
       chartLineWidth,
+      yMinProp,
+      yMaxProp,
     ]);
 
     // Store cleanup function ref for proper cleanup on unmount
@@ -1430,6 +1511,9 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
 
     // Track previous data reference to avoid unnecessary setData calls on resize
     const prevDataRef = useRef<uPlot.AlignedData | null>(null);
+
+    // Track previous options reference to detect options-only changes (e.g. Y bounds)
+    const prevOptionsRef = useRef<uPlot.Options | null>(null);
 
     // Store dimensions when first valid
     useEffect(() => {
@@ -1455,19 +1539,22 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       // If chart already exists and only dimensions changed (not data/options),
       // skip recreation - the separate setSize effect handles resize
       if (chartRef.current && chartCreatedRef.current) {
-        // Check if data actually changed (avoid unnecessary setData on resize)
-        if (prevDataRef.current === uplotData) {
-          // Data reference is the same - this is just a resize, skip
+        // Check if data AND options actually changed (avoid unnecessary recreation on resize)
+        if (prevDataRef.current === uplotData && prevOptionsRef.current === options) {
+          // Neither data nor options changed - this is just a resize, skip
           return;
         }
 
         // Check if we can use setData() instead of full recreation
         // setData() preserves zoom state and is more efficient
+        // But only if options haven't changed - uPlot bakes scale range functions
+        // into options at creation time, so options changes require full recreation
         if (
+          prevOptionsRef.current === options &&
           prevDataStructureRef.current &&
           prevDataStructureRef.current.seriesCount === currentSeriesCount
         ) {
-          // Structure is the same - use setData() to preserve zoom
+          // Structure and options are the same - use setData() to preserve zoom
           try {
             isProgrammaticScaleRef.current = true;
             chartRef.current.batch(() => {
@@ -1514,9 +1601,20 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       chartRef.current = chart;
       chartCreatedRef.current = true;
 
-      // Track data structure and reference for future setData() optimization
+      // Hide legend rows for "(original)" smoothing companion series
+      // so the legend matches the tooltip format (combined values per run)
+      // legendRows[0] is the x-axis, so data series start at index 1
+      const legendRows = chart.root.querySelectorAll(".u-series");
+      processedLines.forEach((line, idx) => {
+        if (line.hideFromLegend && legendRows[idx + 1]) {
+          (legendRows[idx + 1] as HTMLElement).style.display = "none";
+        }
+      });
+
+      // Track data structure, data reference, and options for future optimization
       prevDataStructureRef.current = { seriesCount: currentSeriesCount };
       prevDataRef.current = uplotData;
+      prevOptionsRef.current = options;
 
       // Set initial X-axis range based on priority:
       // 1. User's previous zoom state (if they had zoomed before chart recreation)
@@ -1681,6 +1779,8 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         } finally {
           isProgrammaticScaleRef.current = false;
         }
+        // Reset Y-axis bounds for this chart
+        onResetBoundsRef.current?.();
         // Clear saved zoom state so it doesn't get restored on next data update
         zoomStateRef.current = null;
         // Clear user zoom flag so global range can be applied again

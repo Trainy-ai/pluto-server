@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import { PlusIcon, SaveIcon, XIcon, AlertTriangleIcon, GridIcon, SlidersHorizontalIcon } from "lucide-react";
+import { PlusIcon, SaveIcon, XIcon, AlertTriangleIcon, RotateCcwIcon, GridIcon, SlidersHorizontalIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -9,6 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { ChartFullscreenDialog } from "@/components/charts/chart-fullscreen-dialog";
 import { SectionContainer, AddSectionButton } from "./section-container";
 import { WidgetGrid } from "./widget-grid";
 import { WidgetRenderer } from "./widget-renderer";
@@ -22,6 +23,7 @@ import {
   type DashboardViewConfig,
   type Section,
   type Widget,
+  type ChartWidgetConfig,
 } from "../../~types/dashboard-types";
 import type { GroupedMetrics } from "@/lib/grouping/types";
 import type { SelectedRunWithColor } from "../../~hooks/use-selected-runs";
@@ -51,6 +53,7 @@ export function DashboardBuilder({
   const [addWidgetSectionId, setAddWidgetSectionId] = useState<string | null>(null);
   const [editingWidget, setEditingWidget] = useState<Widget | null>(null);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+  const [fullscreenWidget, setFullscreenWidget] = useState<Widget | null>(null);
   const [coarseMode, setCoarseMode] = useState(true);
 
   const updateMutation = useUpdateDashboardView(organizationId, projectName);
@@ -187,6 +190,38 @@ export function DashboardBuilder({
     setEditingWidget(widget);
   }, []);
 
+  const updateWidgetBounds = useCallback((widgetId: string, yMin?: number, yMax?: number) => {
+    setConfig((prev) => ({
+      ...prev,
+      sections: prev.sections.map((s) => ({
+        ...s,
+        widgets: s.widgets.map((w) =>
+          w.id === widgetId
+            ? { ...w, config: { ...w.config, yMin, yMax } }
+            : w
+        ),
+      })),
+    }));
+    setHasChanges(true);
+  }, []);
+
+  const resetAllWidgetBounds = useCallback(() => {
+    setConfig((prev) => ({
+      ...prev,
+      sections: prev.sections.map((s) => ({
+        ...s,
+        widgets: s.widgets.map((w) => {
+          if (w.type === "chart") {
+            const { yMin, yMax, ...restConfig } = w.config as ChartWidgetConfig;
+            return { ...w, config: restConfig };
+          }
+          return w;
+        }),
+      })),
+    }));
+    setHasChanges(true);
+  }, []);
+
   const handleEditWidgetSave = useCallback(
     (widgetData: Omit<Widget, "id">) => {
       if (!editingWidget || !addWidgetSectionId) return;
@@ -227,6 +262,16 @@ export function DashboardBuilder({
           )}
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 text-xs text-muted-foreground"
+            onClick={resetAllWidgetBounds}
+            title="Reset all Y-axis bounds"
+          >
+            <RotateCcwIcon className="mr-1.5 size-3.5" />
+            Reset Bounds
+          </Button>
           {isEditing ? (
             <>
               {/* Coarse / Fine toggle */}
@@ -304,16 +349,20 @@ export function DashboardBuilder({
                 onLayoutChange={(widgets) => updateWidgets(section.id, widgets)}
                 onEditWidget={(widget) => editWidget(section.id, widget)}
                 onDeleteWidget={(widgetId) => deleteWidget(section.id, widgetId)}
+                onFullscreenWidget={setFullscreenWidget}
+                onUpdateWidgetBounds={updateWidgetBounds}
                 isEditing={isEditing}
                 coarseMode={coarseMode}
                 containerWidth={containerWidth - 48} // Account for padding
-                renderWidget={(widget) => (
+                renderWidget={(widget, onDataRange, onResetBounds) => (
                   <WidgetRenderer
                     widget={widget}
                     groupedMetrics={groupedMetrics}
                     selectedRuns={selectedRuns}
                     organizationId={organizationId}
                     projectName={projectName}
+                    onDataRange={onDataRange}
+                    onResetBounds={onResetBounds}
                   />
                 )}
               />
@@ -339,6 +388,42 @@ export function DashboardBuilder({
         groupedMetrics={groupedMetrics}
         editWidget={editingWidget ?? undefined}
       />
+
+      {/* Fullscreen Chart Dialog */}
+      {fullscreenWidget && (
+        <ChartFullscreenDialog
+          open={!!fullscreenWidget}
+          onOpenChange={(open) => {
+            if (!open) setFullscreenWidget(null);
+          }}
+          title={
+            fullscreenWidget.config.title ||
+            (fullscreenWidget.type === "chart"
+              ? (fullscreenWidget.config as ChartWidgetConfig).metrics[0] || "Chart"
+              : "Widget")
+          }
+          yMin={fullscreenWidget.type === "chart" ? (fullscreenWidget.config as ChartWidgetConfig).yMin : undefined}
+          yMax={fullscreenWidget.type === "chart" ? (fullscreenWidget.config as ChartWidgetConfig).yMax : undefined}
+          onBoundsChange={
+            fullscreenWidget.type === "chart"
+              ? (yMin, yMax) => {
+                  updateWidgetBounds(fullscreenWidget.id, yMin, yMax);
+                  setFullscreenWidget((prev) =>
+                    prev ? { ...prev, config: { ...prev.config, yMin, yMax } } : null
+                  );
+                }
+              : undefined
+          }
+        >
+          <WidgetRenderer
+            widget={fullscreenWidget}
+            groupedMetrics={groupedMetrics}
+            selectedRuns={selectedRuns}
+            organizationId={organizationId}
+            projectName={projectName}
+          />
+        </ChartFullscreenDialog>
+      )}
 
       {/* Cancel Confirmation Dialog */}
       <Dialog open={showCancelConfirm} onOpenChange={setShowCancelConfirm}>
