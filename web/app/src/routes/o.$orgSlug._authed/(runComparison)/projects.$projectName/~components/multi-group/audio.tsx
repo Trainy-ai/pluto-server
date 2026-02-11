@@ -15,8 +15,8 @@ import {
 } from "lucide-react";
 import { useRef, useEffect, useMemo, useState } from "react";
 import { Slider } from "@/components/ui/slider";
-import { StepNavigator } from "../../../../(run)/projects.$projectName.$runId/~components/shared/step-navigator";
-import { useStepNavigation } from "../../../../(run)/projects.$projectName.$runId/~hooks/use-step-navigation";
+import { StepNavigator } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/shared/step-navigator";
+import { useStepNavigation } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~hooks/use-step-navigation";
 
 interface MultiGroupAudioProps {
   logName: string;

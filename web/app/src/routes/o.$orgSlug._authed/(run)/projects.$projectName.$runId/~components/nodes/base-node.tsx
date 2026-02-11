@@ -1,25 +1,23 @@
 import React from "react";
 import { Handle, Position } from "@xyflow/react";
-import type { NodeProps } from "@xyflow/react";
+import type { Node, NodeProps } from "@xyflow/react";
 import { cn } from "@/lib/utils";
 
 // Define the shape of our node data
-interface NodeData {
+interface NodeData extends Record<string, unknown> {
   id: string;
   label: string;
   type?: string;
-  args?: any[];
-  params?: any;
-  kwargs?: Record<string, any>;
+  args?: unknown[];
+  params?: Record<string, unknown>;
+  kwargs?: Record<string, unknown>;
   originalKey?: string;
   key?: string;
-  module?: string; // Added to identify the module (assumed)
+  module?: string;
 }
 
-export default function BaseNode({ id, data, selected }: NodeProps) {
-  // @ts-ignore
-  const nodeData = data as NodeData;
-  const { label, type, args = [], kwargs = {}, originalKey, key } = nodeData;
+export default function BaseNode({ id, data, selected }: NodeProps<Node<NodeData>>) {
+  const { label, type, args = [], kwargs = {}, originalKey, key } = data;
 
   const isRoot = key === ".";
 

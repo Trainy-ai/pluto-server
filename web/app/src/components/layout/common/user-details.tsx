@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useParams } from "@tanstack/react-router";
 import { MoreHorizontalIcon, LogOutIcon } from "lucide-react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -34,6 +34,7 @@ export type UserDetailsProps = SidebarGroupProps & {};
 
 export function UserDetails({ ...other }: UserDetailsProps): React.JSX.Element {
   const navigate = useNavigate();
+  const { orgSlug } = useParams({ strict: false }) as { orgSlug?: string };
   const queryClient = useQueryClient();
   const { data: auth, isPending } = useAuth();
 
@@ -94,8 +95,10 @@ export function UserDetails({ ...other }: UserDetailsProps): React.JSX.Element {
                 <DropdownMenuItem
                   className="cursor-pointer"
                   onClick={() =>
-                    // @ts-ignore
-                    navigate({ to: "/o/$orgSlug/settings/account" })
+                    navigate({
+                      to: "/o/$orgSlug/settings/account",
+                      params: { orgSlug: orgSlug! },
+                    })
                   }
                 >
                   <RiUser3Fill className="mr-2 h-4 w-4" />
@@ -111,8 +114,10 @@ export function UserDetails({ ...other }: UserDetailsProps): React.JSX.Element {
                 <DropdownMenuItem
                   className="cursor-pointer"
                   onClick={() =>
-                    // @ts-ignore
-                    navigate({ to: "/o/$orgSlug/settings/org" })
+                    navigate({
+                      to: "/o/$orgSlug/settings/org",
+                      params: { orgSlug: orgSlug! },
+                    })
                   }
                 >
                   <RiSettingsFill className="mr-2 h-4 w-4" />

@@ -328,7 +328,6 @@ function useChartConfig(
         const { x, y } = alignAndUnzip(selectLogData, data);
 
         if (x.length === 0 || y.length === 0) {
-          console.log("No matching data points found, fall back to default");
           // No matching data points found, fall back to default
           setChartConfig(null);
           return;
