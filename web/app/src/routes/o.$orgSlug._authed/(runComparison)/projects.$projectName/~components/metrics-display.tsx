@@ -1,7 +1,10 @@
-import { useMemo, useRef, useEffect, useState, memo } from "react";
+import { useMemo, useRef, useEffect, useState, useCallback, memo } from "react";
 import { RefreshButton } from "@/components/core/refresh-button";
+import { RotateCcwIcon } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { LogSearch } from "./run-comparison/search";
 import { MemoizedMultiGroup } from "./multi-group/multi-group";
+import { clearAllChartBounds } from "./multi-group/chart-card-wrapper";
 import { sortGroups } from "@/lib/grouping/index";
 import type { GroupedMetrics } from "@/lib/grouping/types";
 import {
@@ -69,6 +72,13 @@ export function MetricsDisplay({
     updateSmoothingSettings,
     getSmoothingConfig,
   } = useLineSettings(organizationId, projectName, "full");
+
+  // Bounds reset key - incrementing forces all ChartCardWrappers to re-read from localStorage
+  const [boundsResetKey, setBoundsResetKey] = useState(0);
+  const handleResetAllBounds = useCallback(() => {
+    clearAllChartBounds();
+    setBoundsResetKey((k) => k + 1);
+  }, []);
 
   const uniqueLogNames = Object.keys(groupedMetrics)
     .map((group) =>
@@ -208,6 +218,16 @@ export function MetricsDisplay({
             </div>
           </div>
           <div className="flex items-center gap-3">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 text-xs text-muted-foreground"
+              onClick={handleResetAllBounds}
+              title="Reset all Y-axis bounds"
+            >
+              <RotateCcwIcon className="mr-1.5 size-3.5" />
+              Reset Bounds
+            </Button>
             <SmoothingSlider
               settings={settings}
               updateSmoothingSettings={updateSmoothingSettings}
@@ -235,6 +255,7 @@ export function MetricsDisplay({
             metrics={filteredMetricsPerGroup.get(group) ?? data.metrics}
             organizationId={organizationId}
             projectName={projectName}
+            boundsResetKey={boundsResetKey}
           />
         ))}
       </div>

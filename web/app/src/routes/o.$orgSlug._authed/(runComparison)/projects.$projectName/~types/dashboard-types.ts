@@ -29,6 +29,10 @@ export interface ChartWidgetConfig extends BaseWidgetConfig {
   smoothing?: SmoothingConfig;
   maxPoints?: number;
   showOriginal: boolean;
+  /** Manual Y-axis minimum bound */
+  yMin?: number;
+  /** Manual Y-axis maximum bound */
+  yMax?: number;
 }
 
 // Scatter widget config

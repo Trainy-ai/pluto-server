@@ -1,10 +1,10 @@
-import { useMemo, useCallback, useRef } from "react";
+import { useMemo, useCallback, useState, useRef } from "react";
 import GridLayout, { type Layout, type LayoutItem, verticalCompactor } from "react-grid-layout";
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
 import "./widget-grid.css";
 import { cn } from "@/lib/utils";
-import { MoreHorizontalIcon, PencilIcon, Trash2Icon, MoveIcon } from "lucide-react";
+import { MoreHorizontalIcon, PencilIcon, Trash2Icon, MoveIcon, Maximize2Icon, SlidersHorizontalIcon, TriangleAlertIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -12,14 +12,22 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import type { Widget, WidgetLayout } from "../../~types/dashboard-types";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { ChartBoundsPopover } from "@/components/charts/chart-bounds-popover";
+import type { Widget, WidgetLayout, ChartWidgetConfig } from "../../~types/dashboard-types";
 
 interface WidgetGridProps {
   widgets: Widget[];
   onLayoutChange: (widgets: Widget[]) => void;
   onEditWidget: (widget: Widget) => void;
   onDeleteWidget: (widgetId: string) => void;
-  renderWidget: (widget: Widget) => React.ReactNode;
+  renderWidget: (widget: Widget, onDataRange?: (dataMin: number, dataMax: number) => void, onResetBounds?: () => void) => React.ReactNode;
+  onFullscreenWidget?: (widget: Widget) => void;
+  onUpdateWidgetBounds?: (widgetId: string, yMin?: number, yMax?: number) => void;
   isEditing?: boolean;
   coarseMode?: boolean;
   cols?: number;
@@ -33,12 +41,25 @@ export function WidgetGrid({
   onEditWidget,
   onDeleteWidget,
   renderWidget,
+  onFullscreenWidget,
+  onUpdateWidgetBounds,
   isEditing = false,
   coarseMode = true,
   cols: colsProp = 12,
   rowHeight = 80,
   containerWidth = 1200,
 }: WidgetGridProps) {
+  // Track data ranges per widget for clipping indicators
+  const [dataRanges, setDataRanges] = useState<Record<string, { min: number; max: number }>>({});
+
+  const handleWidgetDataRange = useCallback((widgetId: string, dataMin: number, dataMax: number) => {
+    setDataRanges((prev) => {
+      const existing = prev[widgetId];
+      if (existing && existing.min === dataMin && existing.max === dataMax) return prev;
+      return { ...prev, [widgetId]: { min: dataMin, max: dataMax } };
+    });
+  }, []);
+
   const cols = coarseMode ? 6 : colsProp;
 
   // Refs for stable callback closures (avoid stale captures and unnecessary recreation)
@@ -241,62 +262,138 @@ export function WidgetGrid({
         handles: coarseMode ? ["se"] : ["se", "e"],
       }}
     >
-      {widgets.map((widget) => (
-        <div
-          key={widget.id}
-          className={cn(
-            "group relative rounded-lg border bg-card shadow-sm",
-            isEditing && "ring-1 ring-transparent hover:ring-primary/50"
-          )}
-        >
-          {/* Widget Header */}
-          <div className={cn(
-            "relative z-10 flex items-center justify-between border-b px-3 py-2 bg-card",
-            isEditing && "widget-drag-handle cursor-move"
-          )}>
-            <div className="flex items-center gap-2">
-              {isEditing && (
-                <MoveIcon className="size-4 text-muted-foreground" />
-              )}
-              <span className="text-sm font-medium truncate">
-                {widget.config.title || getWidgetTitle(widget)}
-              </span>
+      {widgets.map((widget) => {
+        // Compute clipping info for chart widgets
+        const chartConfig = widget.type === "chart" ? (widget.config as ChartWidgetConfig) : null;
+        const range = dataRanges[widget.id];
+        const clippingInfo = (() => {
+          if (!chartConfig || !range) return null;
+          if (chartConfig.yMin == null && chartConfig.yMax == null) return null;
+          const clippedBelow = chartConfig.yMin != null && range.min < chartConfig.yMin;
+          const clippedAbove = chartConfig.yMax != null && range.max > chartConfig.yMax;
+          if (!clippedBelow && !clippedAbove) return null;
+          const parts: string[] = [];
+          if (clippedBelow) parts.push("below Y Min");
+          if (clippedAbove) parts.push("above Y Max");
+          return `Data clipped: values exist ${parts.join(" and ")}`;
+        })();
+
+        return (
+          <div
+            key={widget.id}
+            className={cn(
+              "group relative rounded-lg border bg-card shadow-sm",
+              isEditing && "ring-1 ring-transparent hover:ring-primary/50"
+            )}
+          >
+            {/* Widget Header */}
+            <div className={cn(
+              "relative z-10 flex items-center justify-between border-b px-3 py-2 bg-card",
+              isEditing && "widget-drag-handle cursor-move"
+            )}>
+              <div className="flex items-center gap-2">
+                {isEditing && (
+                  <MoveIcon className="size-4 text-muted-foreground" />
+                )}
+                <span className="text-sm font-medium truncate">
+                  {widget.config.title || getWidgetTitle(widget)}
+                </span>
+                {clippingInfo && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <TriangleAlertIcon className="size-3.5 shrink-0 text-amber-500" />
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      <p className="text-xs">{clippingInfo}</p>
+                    </TooltipContent>
+                  </Tooltip>
+                )}
+              </div>
+
+              <div className="flex items-center gap-1">
+                {/* Chart-specific actions (visible on hover) */}
+                {widget.type === "chart" && (
+                  <>
+                    <ChartBoundsPopover
+                      yMin={(widget.config as ChartWidgetConfig).yMin}
+                      yMax={(widget.config as ChartWidgetConfig).yMax}
+                      onBoundsChange={(yMin, yMax) =>
+                        onUpdateWidgetBounds?.(widget.id, yMin, yMax)
+                      }
+                    >
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="widget-drag-cancel size-7 opacity-0 group-hover:opacity-100"
+                        data-testid="chart-bounds-btn"
+                      >
+                        <SlidersHorizontalIcon className="size-3.5" />
+                      </Button>
+                    </ChartBoundsPopover>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="widget-drag-cancel size-7 opacity-0 group-hover:opacity-100"
+                      data-testid="chart-fullscreen-btn"
+                      onClick={() => onFullscreenWidget?.(widget)}
+                    >
+                      <Maximize2Icon className="size-3.5" />
+                    </Button>
+                  </>
+                )}
+
+                {/* Edit mode actions */}
+                {isEditing && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="widget-drag-cancel size-7 opacity-0 group-hover:opacity-100"
+                      >
+                        <MoreHorizontalIcon className="size-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onClick={() => onEditWidget(widget)}>
+                        <PencilIcon className="mr-2 size-4" />
+                        Edit Widget
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        className="text-destructive"
+                        onClick={() => onDeleteWidget(widget.id)}
+                      >
+                        <Trash2Icon className="mr-2 size-4" />
+                        Delete Widget
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
+              </div>
             </div>
 
-            {isEditing && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="widget-drag-cancel size-7 opacity-0 group-hover:opacity-100"
-                  >
-                    <MoreHorizontalIcon className="size-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem onClick={() => onEditWidget(widget)}>
-                    <PencilIcon className="mr-2 size-4" />
-                    Edit Widget
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    className="text-destructive"
-                    onClick={() => onDeleteWidget(widget.id)}
-                  >
-                    <Trash2Icon className="mr-2 size-4" />
-                    Delete Widget
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
+            {/* Widget Content */}
+            <div
+              className="h-[calc(100%-40px)] overflow-hidden p-2"
+              onDoubleClick={
+                widget.type === "chart"
+                  ? () => onUpdateWidgetBounds?.(widget.id, undefined, undefined)
+                  : undefined
+              }
+            >
+              {renderWidget(
+                widget,
+                widget.type === "chart"
+                  ? (dataMin: number, dataMax: number) => handleWidgetDataRange(widget.id, dataMin, dataMax)
+                  : undefined,
+                widget.type === "chart"
+                  ? () => onUpdateWidgetBounds?.(widget.id, undefined, undefined)
+                  : undefined
+              )}
+            </div>
           </div>
-
-          {/* Widget Content */}
-          <div className="h-[calc(100%-40px)] overflow-hidden p-2">
-            {renderWidget(widget)}
-          </div>
-        </div>
-      ))}
+        );
+      })}
     </GridLayout>
   );
 }

@@ -6,6 +6,7 @@ import { MultiGroupAudio } from "./audio";
 import { MultiGroupImage } from "./image";
 import { MultiGroupVideo } from "./video";
 import { MultiHistogramView } from "./histogram-view";
+import { ChartCardWrapper } from "./chart-card-wrapper";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useMemo, useCallback, memo } from "react";
@@ -34,6 +35,8 @@ interface MultiGroupProps {
   className?: string;
   organizationId: string;
   projectName: string;
+  /** Incrementing this key forces all charts to re-read bounds from localStorage */
+  boundsResetKey?: number;
 }
 
 // Constants for responsive design
@@ -54,6 +57,7 @@ export const MultiGroup = ({
   className,
   organizationId,
   projectName,
+  boundsResetKey,
 }: MultiGroupProps) => {
   // Memoize lines arrays for each metric to prevent recreation
   const memoizedLines = useMemo(() => {
@@ -82,13 +86,24 @@ export const MultiGroup = ({
           );
 
           return () => (
-            <MultiLineChart
-              lines={lines}
-              title={metric.name}
-              xlabel="step"
-              organizationId={organizationId}
-              projectName={projectName}
-              allRunsCompleted={allRunsCompleted}
+            <ChartCardWrapper
+              metricName={metric.name}
+              groupId={groupId}
+              boundsResetKey={boundsResetKey}
+              renderChart={(yMin, yMax, onDataRange, onResetBounds) => (
+                <MultiLineChart
+                  lines={lines}
+                  title={metric.name}
+                  xlabel="step"
+                  organizationId={organizationId}
+                  projectName={projectName}
+                  allRunsCompleted={allRunsCompleted}
+                  yMin={yMin}
+                  yMax={yMax}
+                  onDataRange={onDataRange}
+                  onResetBounds={onResetBounds}
+                />
+              )}
             />
           );
         }
@@ -148,6 +163,7 @@ export const MultiGroup = ({
       className,
       organizationId,
       projectName,
+      boundsResetKey,
     ],
   );
 

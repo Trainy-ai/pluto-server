@@ -20,6 +20,10 @@ interface WidgetRendererProps {
   selectedRuns: Record<string, SelectedRunWithColor>;
   organizationId: string;
   projectName: string;
+  /** Callback fired when chart data range is computed (for clipping detection) */
+  onDataRange?: (dataMin: number, dataMax: number) => void;
+  /** Callback fired on double-click to reset Y-axis bounds for this chart */
+  onResetBounds?: () => void;
 }
 
 export function WidgetRenderer({
@@ -28,6 +32,8 @@ export function WidgetRenderer({
   selectedRuns,
   organizationId,
   projectName,
+  onDataRange,
+  onResetBounds,
 }: WidgetRendererProps) {
   switch (widget.type) {
     case "chart":
@@ -38,6 +44,8 @@ export function WidgetRenderer({
           selectedRuns={selectedRuns}
           organizationId={organizationId}
           projectName={projectName}
+          onDataRange={onDataRange}
+          onResetBounds={onResetBounds}
         />
       );
     case "scatter":
@@ -88,12 +96,16 @@ function ChartWidget({
   selectedRuns,
   organizationId,
   projectName,
+  onDataRange,
+  onResetBounds,
 }: {
   config: ChartWidgetConfig;
   groupedMetrics: GroupedMetrics;
   selectedRuns: Record<string, SelectedRunWithColor>;
   organizationId: string;
   projectName: string;
+  onDataRange?: (dataMin: number, dataMax: number) => void;
+  onResetBounds?: () => void;
 }) {
   // Build lines array from selected runs
   const lines = useMemo(() => {
@@ -144,6 +156,10 @@ function ChartWidget({
         organizationId={organizationId}
         projectName={projectName}
         allRunsCompleted={allRunsCompleted}
+        yMin={config.yMin}
+        yMax={config.yMax}
+        onDataRange={onDataRange}
+        onResetBounds={onResetBounds}
       />
     </div>
   );
