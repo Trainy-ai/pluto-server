@@ -29,7 +29,7 @@ import { useNormalizedHistogramData } from "./hooks/use-normalized-histogram";
 import { useHistogramCanvas } from "./hooks/use-histogram-canvas";
 import { useAnimationFrame } from "./hooks/use-animation-frame";
 import { AnimationControls } from "./components/animation-controls"; // retain or further break down as needed
-import { StepNavigator } from "../../../../(run)/projects.$projectName.$runId/~components/shared/step-navigator";
+import { StepNavigator } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/shared/step-navigator";
 
 // Configuration for animation speed etc.
 const ANIMATION_CONFIG = {

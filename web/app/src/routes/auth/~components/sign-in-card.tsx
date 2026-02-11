@@ -22,8 +22,6 @@ import {
   Loader2Icon,
 } from "lucide-react";
 
-// import { AuthErrorCode } from "@workspace/auth/errors";
-// import { routes } from "@workspace/routes";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
@@ -49,14 +47,7 @@ import { authClient } from "@/lib/auth/client";
 import { useQueryClient } from "@tanstack/react-query";
 import { InputWithAdornments } from "@/components/ui/input-with-adornments";
 import { InputPassword } from "./input-password";
-// import { continueWithGoogle } from "~/actions/auth/continue-with-google";
-// import { continueWithMicrosoft } from "~/actions/auth/continue-with-microsoft";
-// import { signInWithCredentials } from "~/actions/auth/sign-in-with-credentials";
 import { useZodForm } from "@/lib/hooks/use-zod-form";
-// import { authErrorLabels } from "~/lib/labels";
-
-// import GoogleLogo from "~/public/assets/logos/google-logo.svg";
-// import MicrosoftLogo from "~/public/assets/logos/microsoft-logo.svg";
 import { z } from "zod";
 import {
   passThroughCredentialsSchema,

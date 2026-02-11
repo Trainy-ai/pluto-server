@@ -52,14 +52,8 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 
-// import { continueWithGoogle } from "@/actions/auth/continue-with-google";
-// import { continueWithMicrosoft } from "@/actions/auth/continue-with-microsoft";
-// import { signUp } from "@/actions/auth/sign-up";
-
 import { PasswordFormMessage } from "./password-form-message";
 import { useZodForm } from "@/lib/hooks/use-zod-form";
-// import GoogleLogo from "~/public/assets/logos/google-logo.svg";
-// import MicrosoftLogo from "~/public/assets/logos/microsoft-logo.svg";
 import { signUpSchema, type SignUpSchema } from "./~schemas/sign-up";
 import { authClient } from "@/lib/auth/client";
 import { useQueryClient } from "@tanstack/react-query";

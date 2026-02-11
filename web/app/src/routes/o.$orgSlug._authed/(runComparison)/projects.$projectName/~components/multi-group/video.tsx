@@ -3,8 +3,8 @@ import { trpc } from "@/utils/trpc";
 import { useQueries } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
-import { VideoPlayer } from "../../../../(run)/projects.$projectName.$runId/~components/group/video";
-import { StepNavigator } from "../../../../(run)/projects.$projectName.$runId/~components/shared/step-navigator";
+import { VideoPlayer } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/group/video";
+import { StepNavigator } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/shared/step-navigator";
 
 interface Video {
   url: string;
@@ -63,16 +63,6 @@ export const MultiGroupVideo = ({
     [queriesWithRuns],
   );
 
-  // Debug logging for query states
-  console.log(
-    "Query States:",
-    queriesWithRuns.map((query) => ({
-      runName: query.run.runName,
-      isLoading: query.isLoading,
-      dataLength: query.data?.length || 0,
-    })),
-  );
-
   // Memoize the steps array and current step value
   const { steps, currentStepValue, totalStepValue, currentStepVideos } =
     useMemo(() => {
@@ -87,8 +77,6 @@ export const MultiGroupVideo = ({
         })
         .flat()
         .filter(Boolean);
-
-      console.log("All Videos:", allVideos.length);
 
       if (allVideos.length === 0) {
         return {
@@ -122,9 +110,6 @@ export const MultiGroupVideo = ({
         currentStepVideos: videosByStep[sortedSteps[currentStep] || 0] || [],
       };
 
-      console.log("Current Step:", currentStep);
-      console.log("Videos for current step:", result.currentStepVideos.length);
-
       return result;
     }, [queriesWithRuns, currentStep]);
 
@@ -139,14 +124,6 @@ export const MultiGroupVideo = ({
         videos: runVideos,
       };
     });
-
-    console.log(
-      "Videos by Run:",
-      result.map((item) => ({
-        runName: item.run.runName,
-        videoCount: item.videos.length,
-      })),
-    );
 
     return result;
   }, [runs, currentStepVideos]);
