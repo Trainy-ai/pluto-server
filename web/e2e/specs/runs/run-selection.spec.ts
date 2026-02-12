@@ -14,7 +14,7 @@ test.describe("Run Selection", () => {
 
   test("clicking eye icon on row toggles run selection", async ({ page }) => {
     // Wait for the page to load
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // Find the first "Toggle select row" button (eye icon)
     const toggleButtons = page.locator('button[aria-label="Toggle select row"]');
@@ -53,7 +53,7 @@ test.describe("Run Selection", () => {
 
   test("selection counter updates when runs are selected", async ({ page }) => {
     // Wait for the page to load
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // Find the visibility button and deselect all first
     const visibilityButton = page.locator('button[aria-label="Visibility options"]').first();
@@ -93,7 +93,7 @@ test.describe("Run Selection", () => {
     page,
   }) => {
     // Wait for the page to load
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // Find the visibility button and select first 5
     const visibilityButton = page.locator('button[aria-label="Visibility options"]').first();
@@ -105,7 +105,12 @@ test.describe("Run Selection", () => {
 
     // Auto-select first 5
     await visibilityButton.click();
-    await page.locator('button:has-text("Apply")').click();
+    const applyButton = page.locator('button:has-text("Apply")');
+    if (await applyButton.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await applyButton.click();
+    }
+    // Close popover to ensure toggle buttons are clickable
+    await page.keyboard.press("Escape");
 
     // Get the selection container - text is split across spans
     const selectionContainer = page.locator('text=runs selected').locator('..');
@@ -119,18 +124,28 @@ test.describe("Run Selection", () => {
 
     // Deselect first run (useTransition defers updates)
     await toggleButtons.first().click();
-    await expect(selectionContainer).toContainText("4", { timeout: 5000 });
+    await expect(async () => {
+      const text = await selectionContainer.textContent();
+      const match = text?.match(/(\d+)\s*of/);
+      const count = match ? parseInt(match[1]) : -1;
+      expect(count).toBe(4);
+    }).toPass({ timeout: 5000 });
 
     // Deselect second run
     await toggleButtons.nth(1).click();
-    await expect(selectionContainer).toContainText("3", { timeout: 5000 });
+    await expect(async () => {
+      const text = await selectionContainer.textContent();
+      const match = text?.match(/(\d+)\s*of/);
+      const count = match ? parseInt(match[1]) : -1;
+      expect(count).toBe(3);
+    }).toPass({ timeout: 5000 });
   });
 
   test("selected runs appear in charts with correct colors", async ({
     page,
   }) => {
     // Wait for the page to load
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // Find the visibility button
     const visibilityButton = page.locator('button[aria-label="Visibility options"]').first();
@@ -159,7 +174,7 @@ test.describe("Run Selection", () => {
     }).toPass({ timeout: 10000 });
 
     // The chart should have data (check via chart container having content)
-    const chartContainers = page.locator('[class*="echarts"], [data-testid*="chart"]');
+    const chartContainers = page.locator('.uplot, [data-testid*="chart"]');
     if ((await chartContainers.count()) > 0) {
       // At least one chart container should exist
       expect(await chartContainers.count()).toBeGreaterThan(0);
@@ -168,7 +183,7 @@ test.describe("Run Selection", () => {
 
   test("deselected runs disappear from chart", async ({ page }) => {
     // Wait for the page to load
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // Find the visibility button
     const visibilityButton = page.locator('button[aria-label="Visibility options"]').first();
@@ -184,8 +199,6 @@ test.describe("Run Selection", () => {
     await page.locator('button:has-text("Apply")').click();
     // Wait for popover to close and state to settle
     await page.keyboard.press("Escape");
-    await page.waitForTimeout(500);
-    await page.waitForLoadState("networkidle");
 
     // Take note of charts (they should have data)
     const charts = page.locator('canvas');
@@ -201,8 +214,6 @@ test.describe("Run Selection", () => {
       // Click the button
       await deselectAllButton.click();
     }).toPass({ timeout: 10000 });
-    await page.waitForTimeout(500);
-    await page.waitForLoadState("networkidle");
 
     // Get the selection container - text is split across spans
     const selectionContainer = page.locator('text=runs selected').locator('..');

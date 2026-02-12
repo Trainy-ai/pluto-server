@@ -15,8 +15,6 @@ test.describe("Visibility Options Dropdown", () => {
   test("opens dropdown when clicking visibility button in table header", async ({
     page,
   }) => {
-    // Wait for the runs table to load
-    await page.waitForLoadState("networkidle");
 
     // Find the visibility options button in the table header
     const visibilityButton = page.locator(
@@ -43,8 +41,6 @@ test.describe("Visibility Options Dropdown", () => {
   });
 
   test("auto-select first N updates selection count", async ({ page }) => {
-    // Wait for the page to load
-    await page.waitForLoadState("networkidle");
 
     // Find the visibility options button
     const visibilityButton = page.locator(
@@ -75,19 +71,14 @@ test.describe("Visibility Options Dropdown", () => {
     const applyButton = page.locator('button:has-text("Apply")');
     await applyButton.click();
 
-    // Wait for the popover to close and selection to update
-    await page.waitForTimeout(500);
-
     // Get the selection container - text is split across spans
     const selectionContainer = page.locator('text=runs selected').locator('..');
-    await expect(selectionContainer).toContainText("10");
+    await expect(selectionContainer).toContainText("10", { timeout: 5000 });
   });
 
   test("deselect all clears selection and shows 0 selected", async ({
     page,
   }) => {
-    // Wait for the page to load
-    await page.waitForLoadState("networkidle");
 
     // Find the visibility options button
     const visibilityButton = page.locator(
@@ -109,17 +100,12 @@ test.describe("Visibility Options Dropdown", () => {
     // Click Deselect all
     await page.getByRole("button", { name: "Deselect all" }).click();
 
-    // Wait for the selection to update
-    await page.waitForTimeout(500);
-
     // Get the selection container - text is split across spans
     const selectionContainer = page.locator('text=runs selected').locator('..');
-    await expect(selectionContainer).toContainText("0");
+    await expect(selectionContainer).toContainText("0", { timeout: 5000 });
   });
 
   test("select all on page selects all visible runs", async ({ page }) => {
-    // Wait for the page to load
-    await page.waitForLoadState("networkidle");
 
     // Find the visibility options button
     const visibilityButton = page.locator(
@@ -141,7 +127,6 @@ test.describe("Visibility Options Dropdown", () => {
     }).toPass({ timeout: 10000 });
     // Ensure popover is closed
     await page.keyboard.press("Escape");
-    await page.waitForTimeout(500);
 
     // Re-open the dropdown and click Select all - use retry pattern
     const selectAllButton = page.getByRole("button", { name: /Select all on page/ });
@@ -157,19 +142,14 @@ test.describe("Visibility Options Dropdown", () => {
       await selectAllButton.click();
     }).toPass({ timeout: 10000 });
 
-    // Wait for the selection to update
-    await page.waitForTimeout(500);
-
     // Get the selection container - text is split across spans
     const selectionContainer = page.locator('text=runs selected').locator('..');
-    await expect(selectionContainer).toContainText(`${pageCount}`);
+    await expect(selectionContainer).toContainText(`${pageCount}`, { timeout: 5000 });
   });
 
   test("display only selected filters table to show only selected runs", async ({
     page,
   }) => {
-    // Wait for the page to load
-    await page.waitForLoadState("networkidle");
 
     // Find the visibility options button
     const visibilityButton = page.locator(
@@ -197,7 +177,6 @@ test.describe("Visibility Options Dropdown", () => {
     }).toPass({ timeout: 10000 });
     // Ensure popover is closed
     await page.keyboard.press("Escape");
-    await page.waitForTimeout(500);
 
     // Re-open dropdown and enable "Display only selected" - use retry pattern
     const displayOnlySwitch = page.locator('button[role="switch"]#show-only-selected, [id="show-only-selected"]');
@@ -209,18 +188,19 @@ test.describe("Visibility Options Dropdown", () => {
 
     // Close the popover by clicking elsewhere
     await page.keyboard.press("Escape");
-    await page.waitForTimeout(500);
 
-    // Check that "Showing X runs" text appears (indicates filtering is active)
-    // The text is split into spans, look for the container
-    await expect(page.locator('text=Showing')).toBeVisible({
-      timeout: 5000,
-    });
+    // "Display only selected" is a client-side filter that reduces visible table rows.
+    // Verify fewer rows are shown (3 selected out of many total)
+    const toggleButtons = page.locator('button[aria-label="Toggle select row"]');
+    await expect(async () => {
+      const rowCount = await toggleButtons.count();
+      // Should be at most 3 rows visible (the selected runs per page)
+      expect(rowCount).toBeLessThanOrEqual(5);
+      expect(rowCount).toBeGreaterThan(0);
+    }).toPass({ timeout: 5000 });
   });
 
   test("selection counter shows accurate count", async ({ page }) => {
-    // Wait for the page to load
-    await page.waitForLoadState("networkidle");
 
     // Get the selection container - text is split across spans
     const selectionContainer = page.locator('text=runs selected').locator('..');

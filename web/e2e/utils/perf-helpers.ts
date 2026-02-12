@@ -65,8 +65,13 @@ export async function setupLCPMeasurement(page: Page): Promise<void> {
  * Gets the measured LCP value after page load.
  */
 export async function getLCP(page: Page): Promise<number> {
-  // Wait a bit for LCP to stabilize
-  await page.waitForTimeout(500);
+  // Wait for LCP to stabilize using requestAnimationFrame
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      })
+  );
   return await page.evaluate(() => (window as any).__LCP_VALUE__ ?? 0);
 }
 
@@ -218,16 +223,20 @@ export function formatMarkdownSummary(results: PerfResults): string {
 }
 
 /**
+ * CI environments are slower than local dev - apply a multiplier to thresholds.
+ */
+const CI_MULTIPLIER = process.env.CI ? 1.5 : 1.0;
+
+/**
  * Performance thresholds for various metrics.
  * Note: With 170 runs and many chart groups, these thresholds account for
  * the expensive re-renders triggered by selection and navigation.
  */
 export const PERF_THRESHOLDS = {
-  // Note: CI environments are slower than local dev, thresholds set accordingly
-  SINGLE_RUN_LOAD_MS: 12000, // Includes navigation + click + chart render (bumped for data volume)
-  COMPARISON_LOAD_MS: 12000, // Multiple runs with charts (bumped for data volume)
-  CHART_RENDER_MS: 500,
-  LCP_MS: 2500,
+  SINGLE_RUN_LOAD_MS: 12000 * CI_MULTIPLIER,
+  COMPARISON_LOAD_MS: 12000 * CI_MULTIPLIER,
+  CHART_RENDER_MS: 500 * CI_MULTIPLIER,
+  LCP_MS: 2500 * CI_MULTIPLIER,
   CHARTS_IN_DOM_INITIAL: 10,
   BACKEND_SAMPLE_SIZE: 2000,
 };

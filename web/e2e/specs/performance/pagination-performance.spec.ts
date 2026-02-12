@@ -58,7 +58,7 @@ test.describe("Pagination Performance Tests", () => {
     test("pagination controls respond without hanging", async ({ page }) => {
       // Navigate to project runs page
       await page.goto(`/o/${DEV_ORG_SLUG}/projects/${DEV_PROJECT}`);
-      await page.waitForLoadState("networkidle");
+      await page.waitForLoadState("domcontentloaded");
 
       // Wait for table
       await page.waitForSelector("table tbody tr", { timeout: PAGINATION_THRESHOLDS.MAX_TABLE_LOAD_MS });
@@ -104,7 +104,7 @@ test.describe("Pagination Performance Tests", () => {
     test("multiple rapid paginations do not cause hang", async ({ page }) => {
       // Navigate to project runs page
       await page.goto(`/o/${DEV_ORG_SLUG}/projects/${DEV_PROJECT}`);
-      await page.waitForLoadState("networkidle");
+      await page.waitForLoadState("domcontentloaded");
 
       // Wait for table
       await page.waitForSelector("table tbody tr", { timeout: PAGINATION_THRESHOLDS.MAX_TABLE_LOAD_MS });
@@ -139,7 +139,7 @@ test.describe("Pagination Performance Tests", () => {
       }
 
       // Wait for final state to settle
-      await page.waitForLoadState("networkidle");
+      await page.waitForLoadState("domcontentloaded");
 
       const totalTime = performance.now() - startTime;
       const avgTimePerPagination = totalTime / paginationCount;

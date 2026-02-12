@@ -8,7 +8,7 @@ test.describe("Paginator Visibility", () => {
   test.beforeEach(async ({ page }) => {
     // Navigate to the project runs page
     await page.goto(`/o/${orgSlug}/projects/${projectName}`);
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
   });
 
   test("paginator should be visible at small viewport height", async ({

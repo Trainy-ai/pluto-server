@@ -53,7 +53,7 @@ test.describe("Run Comparison URL Parameters", () => {
       // First, navigate to the project page to get run IDs
       await page.goto(`/o/${orgSlug}/projects/${projectName}`);
       await waitForTRPC(page);
-      await page.waitForLoadState("networkidle");
+      await page.waitForLoadState("domcontentloaded");
 
       // Get run IDs from table (requires data-run-id attribute on rows)
       const runIds = await getRunIdsFromTable(page, 2);
@@ -70,7 +70,7 @@ test.describe("Run Comparison URL Parameters", () => {
       // Now navigate with the runs URL parameter
       await page.goto(`/o/${orgSlug}/projects/${projectName}?runs=${runIds[0]},${runIds[1]}`);
       await waitForTRPC(page);
-      await page.waitForLoadState("networkidle");
+      await page.waitForLoadState("domcontentloaded");
 
       // Verify the selection counter shows exactly 2 runs selected
       // Use toPass() for resilience against selection state propagation delays
@@ -84,7 +84,7 @@ test.describe("Run Comparison URL Parameters", () => {
       // First, get a run ID
       await page.goto(`/o/${orgSlug}/projects/${projectName}`);
       await waitForTRPC(page);
-      await page.waitForLoadState("networkidle");
+      await page.waitForLoadState("domcontentloaded");
 
       const runIds = await getRunIdsFromTable(page, 1);
 
@@ -99,7 +99,7 @@ test.describe("Run Comparison URL Parameters", () => {
       // Navigate with single run in URL
       await page.goto(`/o/${orgSlug}/projects/${projectName}?runs=${runIds[0]}`);
       await waitForTRPC(page);
-      await page.waitForLoadState("networkidle");
+      await page.waitForLoadState("domcontentloaded");
 
       // Verify exactly 1 run is selected
       const selectionContainer = page.locator('text=runs selected').locator('..');
@@ -112,7 +112,7 @@ test.describe("Run Comparison URL Parameters", () => {
       // First, get a valid run ID
       await page.goto(`/o/${orgSlug}/projects/${projectName}`);
       await waitForTRPC(page);
-      await page.waitForLoadState("networkidle");
+      await page.waitForLoadState("domcontentloaded");
 
       const runIds = await getRunIdsFromTable(page, 1);
 
@@ -127,7 +127,7 @@ test.describe("Run Comparison URL Parameters", () => {
       // Navigate with one valid and one invalid run ID
       await page.goto(`/o/${orgSlug}/projects/${projectName}?runs=${runIds[0]},nonexistent-run-id-12345`);
       await waitForTRPC(page);
-      await page.waitForLoadState("networkidle");
+      await page.waitForLoadState("domcontentloaded");
 
       // Should only select the valid run (1 selected)
       const selectionContainer = page.locator('text=runs selected').locator('..');
@@ -140,7 +140,7 @@ test.describe("Run Comparison URL Parameters", () => {
       // Navigate with empty runs param
       await page.goto(`/o/${orgSlug}/projects/${projectName}?runs=`);
       await waitForTRPC(page);
-      await page.waitForLoadState("networkidle");
+      await page.waitForLoadState("domcontentloaded");
 
       // Should fall back to default (first 5 runs selected)
       const selectionContainer = page.locator('text=runs selected').locator('..');
@@ -160,7 +160,7 @@ test.describe("Run Comparison URL Parameters", () => {
       // Start fresh without runs param
       await page.goto(`/o/${orgSlug}/projects/${projectName}`);
       await waitForTRPC(page);
-      await page.waitForLoadState("networkidle");
+      await page.waitForLoadState("domcontentloaded");
 
       // Deselect all first
       const visibilityButton = page.locator('button[aria-label="Visibility options"]').first();
@@ -172,7 +172,6 @@ test.describe("Run Comparison URL Parameters", () => {
       await visibilityButton.click();
       await page.locator('button:has-text("Deselect all")').click();
       await page.keyboard.press("Escape");
-      await page.waitForTimeout(300);
 
       // Get run IDs from table
       const runIds = await getRunIdsFromTable(page, 1);
@@ -187,7 +186,7 @@ test.describe("Run Comparison URL Parameters", () => {
       await toggleButtons.first().click();
 
       // Wait for URL to update (debounced)
-      await page.waitForTimeout(600);
+      await expect.poll(() => page.url(), { timeout: 5000 }).toContain('runs=');
 
       // Verify URL contains the runs param
       const url = page.url();
@@ -199,7 +198,7 @@ test.describe("Run Comparison URL Parameters", () => {
       // First, get a run ID and navigate with it selected
       await page.goto(`/o/${orgSlug}/projects/${projectName}`);
       await waitForTRPC(page);
-      await page.waitForLoadState("networkidle");
+      await page.waitForLoadState("domcontentloaded");
 
       const runIds = await getRunIdsFromTable(page, 1);
 
@@ -211,7 +210,7 @@ test.describe("Run Comparison URL Parameters", () => {
       // Navigate with run selected
       await page.goto(`/o/${orgSlug}/projects/${projectName}?runs=${runIds[0]}`);
       await waitForTRPC(page);
-      await page.waitForLoadState("networkidle");
+      await page.waitForLoadState("domcontentloaded");
 
       // Deselect all
       const visibilityButton = page.locator('button[aria-label="Visibility options"]').first();
@@ -219,13 +218,8 @@ test.describe("Run Comparison URL Parameters", () => {
       await page.locator('button:has-text("Deselect all")').click();
       await page.keyboard.press("Escape");
 
-      // Wait for URL to update (debounced)
-      await page.waitForTimeout(600);
-
-      // URL should not contain runs param (or should be empty)
-      const url = page.url();
-      // Either no runs param, or runs= is empty
-      expect(url).not.toMatch(/runs=[^&]+/);
+      // Wait for URL to update (debounced) - runs param should be removed
+      await expect.poll(() => page.url(), { timeout: 5000 }).not.toMatch(/runs=[^&]+/);
     });
   });
 
@@ -234,7 +228,7 @@ test.describe("Run Comparison URL Parameters", () => {
       // Get a run ID first
       await page.goto(`/o/${orgSlug}/projects/${projectName}`);
       await waitForTRPC(page);
-      await page.waitForLoadState("networkidle");
+      await page.waitForLoadState("domcontentloaded");
 
       const runIds = await getRunIdsFromTable(page, 1);
 
@@ -249,7 +243,7 @@ test.describe("Run Comparison URL Parameters", () => {
       // Navigate with both runs and chart params
       await page.goto(`/o/${orgSlug}/projects/${projectName}?runs=${runIds[0]}&chart=some-chart-id`);
       await waitForTRPC(page);
-      await page.waitForLoadState("networkidle");
+      await page.waitForLoadState("domcontentloaded");
 
       // Verify 1 run is selected (runs param works)
       const selectionContainer = page.locator('text=runs selected').locator('..');
@@ -269,7 +263,7 @@ test.describe("Run Comparison URL Parameters", () => {
       // Get run IDs
       await page.goto(`/o/${orgSlug}/projects/${projectName}`);
       await waitForTRPC(page);
-      await page.waitForLoadState("networkidle");
+      await page.waitForLoadState("domcontentloaded");
 
       const runIds = await getRunIdsFromTable(page, 3);
 
@@ -289,7 +283,7 @@ test.describe("Run Comparison URL Parameters", () => {
 
       await newPage.goto(shareableUrl);
       await waitForTRPC(newPage);
-      await newPage.waitForLoadState("networkidle");
+      await newPage.waitForLoadState("domcontentloaded");
 
       // Verify exactly 3 runs are selected
       const selectionContainer = newPage.locator('text=runs selected').locator('..');

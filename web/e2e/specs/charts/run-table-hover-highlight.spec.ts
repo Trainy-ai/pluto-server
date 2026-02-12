@@ -27,8 +27,6 @@ async function navigateToProjectWithCharts(
 
   await page.goto(projectHref);
   await waitForTRPC(page);
-  await page.waitForLoadState("networkidle");
-  await page.waitForTimeout(2000);
 
   return projectHref;
 }
@@ -77,7 +75,7 @@ test.describe("Run Table Hover → Chart Highlight", () => {
 
     // Hover over the run row
     await firstSelectedRow.hover();
-    await page.waitForTimeout(200);
+    await page.evaluate(() => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
 
     // Verify the row has the hover highlight data attribute
     const hoveredRunName = await firstSelectedRow.getAttribute(
@@ -146,7 +144,7 @@ test.describe("Run Table Hover → Chart Highlight", () => {
 
     // Move mouse away from the row
     await page.mouse.move(0, 0);
-    await page.waitForTimeout(200);
+    await page.evaluate(() => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
 
     // Verify highlight is cleared - series widths should be back to default (2.5)
     const resetState = await page.evaluate(() => {
@@ -208,7 +206,7 @@ test.describe("Run Table Hover → Chart Highlight", () => {
 
     // Hover over non-selected row
     await firstNonSelectedRow.hover();
-    await page.waitForTimeout(200);
+    await page.evaluate(() => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
 
     // Verify no chart highlight was triggered - all widths should remain default
     const allDefault = await page.evaluate(() => {

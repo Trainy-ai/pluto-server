@@ -18,7 +18,7 @@ test.describe("Organization Creation", () => {
 
     // Verify slug auto-generates
     // (depends on implementation - may need to check if slug input exists)
-    await page.waitForTimeout(500); // Give time for slug to generate
+    await page.evaluate(() => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
 
     // Click next/continue button
     const nextButton = page.getByRole("button", { name: orgSelectors.nextButton });

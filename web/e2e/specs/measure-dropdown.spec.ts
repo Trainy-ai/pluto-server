@@ -6,7 +6,7 @@ test("measure visibility dropdown open time", async ({ page }) => {
   await page.waitForSelector("table tbody tr", { timeout: 30000 });
 
   // Wait for page to settle
-  await page.waitForTimeout(2000);
+  await page.evaluate(() => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
 
   // Find visibility button
   const visibilityButton = page.locator('button[aria-label="Visibility options"]');
@@ -21,7 +21,7 @@ test("measure visibility dropdown open time", async ({ page }) => {
     const isOpen = await page.locator('[data-radix-popper-content-wrapper]').count() > 0;
     if (isOpen) {
       await page.keyboard.press('Escape');
-      await page.waitForTimeout(100);
+      await page.evaluate(() => new Promise<void>(r => requestAnimationFrame(() => r())));
     }
 
     // Measure opening time using requestAnimationFrame for accuracy

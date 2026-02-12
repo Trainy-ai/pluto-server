@@ -106,7 +106,7 @@ test.describe("File Viewer (Summary Page)", () => {
   }) => {
     // Navigate to authenticated page to get session
     await page.goto(`/o/${orgSlug}/projects`);
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     const organizationId = await getOrganizationId(page, request);
     if (!organizationId) {
@@ -130,7 +130,7 @@ test.describe("File Viewer (Summary Page)", () => {
     await page.goto(
       `/o/${orgSlug}/projects/${projectName}/${runWithFiles.id}/summary`
     );
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // Verify the Files section exists
     const filesSection = page.locator("text=Files").first();
@@ -155,7 +155,7 @@ test.describe("File Viewer (Summary Page)", () => {
   }) => {
     // Navigate to authenticated page
     await page.goto(`/o/${orgSlug}/projects`);
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     const organizationId = await getOrganizationId(page, request);
     if (!organizationId) {
@@ -176,7 +176,7 @@ test.describe("File Viewer (Summary Page)", () => {
     await page.goto(
       `/o/${orgSlug}/projects/${projectName}/${runWithFiles.id}/summary`
     );
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // Find and click on the first file log item to expand it
     const filesCard = page.locator('[class*="border-l-cyan-500"]');
@@ -219,7 +219,7 @@ test.describe("File Viewer (Summary Page)", () => {
   }) => {
     // Navigate to authenticated page
     await page.goto(`/o/${orgSlug}/projects`);
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     const organizationId = await getOrganizationId(page, request);
     if (!organizationId) {
@@ -281,7 +281,7 @@ test.describe("File Viewer (Summary Page)", () => {
     await page.goto(
       `/o/${orgSlug}/projects/${projectName}/${runWithFiles.id}/summary`
     );
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // Find and expand the specific file log
     const filesCard = page.locator('[class*="border-l-cyan-500"]');
@@ -357,7 +357,7 @@ test.describe("File Viewer (Summary Page)", () => {
   }) => {
     // Navigate to authenticated page
     await page.goto(`/o/${orgSlug}/projects`);
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     const organizationId = await getOrganizationId(page, request);
     if (!organizationId) {
@@ -378,7 +378,7 @@ test.describe("File Viewer (Summary Page)", () => {
     await page.goto(
       `/o/${orgSlug}/projects/${projectName}/${runWithFiles.id}/summary`
     );
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // Find and expand a file log
     const filesCard = page.locator('[class*="border-l-cyan-500"]');
@@ -424,7 +424,7 @@ test.describe("File Viewer (Summary Page)", () => {
   }) => {
     // Navigate to authenticated page
     await page.goto(`/o/${orgSlug}/projects`);
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     const organizationId = await getOrganizationId(page, request);
     if (!organizationId) {
@@ -445,7 +445,7 @@ test.describe("File Viewer (Summary Page)", () => {
     await page.goto(
       `/o/${orgSlug}/projects/${projectName}/${runWithFiles.id}/summary`
     );
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // Find and expand a file log
     const filesCard = page.locator('[class*="border-l-cyan-500"]');

@@ -1,11 +1,67 @@
 import { Page, expect } from "@playwright/test";
 
 /**
- * Wait for tRPC calls to complete
- * Useful after actions that trigger API calls
+ * Wait for the page to be ready after navigation or action.
+ * Replaces the unreliable waitForLoadState("networkidle") pattern.
+ *
+ * Waits for:
+ * 1. DOM content to be loaded
+ * 2. Loading spinners to disappear
+ */
+export async function waitForPageReady(page: Page, timeout = 15000) {
+  await page.waitForLoadState("domcontentloaded");
+  // Wait for any loading indicators to disappear
+  await page
+    .locator('[data-loading="true"], .animate-spin')
+    .first()
+    .waitFor({ state: "hidden", timeout })
+    .catch(() => {
+      // No loading indicators found or they already disappeared
+    });
+}
+
+/**
+ * @deprecated Use waitForPageReady instead
  */
 export async function waitForTRPC(page: Page) {
-  await page.waitForLoadState("networkidle");
+  await waitForPageReady(page);
+}
+
+/**
+ * Wait for the runs table to be populated with rows.
+ */
+export async function waitForRunsTable(page: Page, timeout = 15000) {
+  await page
+    .locator('[aria-label="Toggle select row"]')
+    .first()
+    .waitFor({ state: "visible", timeout });
+}
+
+/**
+ * Wait for uPlot charts to render with actual canvas content.
+ */
+export async function waitForCharts(page: Page, timeout = 30000) {
+  // Wait for at least one uPlot render target with a canvas
+  await page.waitForSelector(".uplot canvas", {
+    state: "attached",
+    timeout,
+  });
+  // Ensure canvas has non-zero dimensions (chart actually rendered)
+  await page.waitForFunction(
+    () => {
+      const canvases = document.querySelectorAll(".uplot canvas");
+      for (const canvas of canvases) {
+        if (
+          (canvas as HTMLCanvasElement).width > 0 &&
+          (canvas as HTMLCanvasElement).height > 0
+        ) {
+          return true;
+        }
+      }
+      return false;
+    },
+    { timeout }
+  );
 }
 
 /**
@@ -13,7 +69,7 @@ export async function waitForTRPC(page: Page) {
  */
 export async function navigateToOrg(page: Page, orgSlug: string) {
   await page.goto(`/o/${orgSlug}`);
-  await waitForTRPC(page);
+  await waitForPageReady(page);
 }
 
 /**
@@ -21,7 +77,7 @@ export async function navigateToOrg(page: Page, orgSlug: string) {
  */
 export async function navigateToProjects(page: Page, orgSlug: string) {
   await page.goto(`/o/${orgSlug}/projects`);
-  await waitForTRPC(page);
+  await waitForPageReady(page);
 }
 
 /**
@@ -34,7 +90,7 @@ export async function navigateToRunGraph(
   runId: string
 ) {
   await page.goto(`/o/${orgSlug}/projects/${projectName}/${runId}/graph`);
-  await waitForTRPC(page);
+  await waitForPageReady(page);
 }
 
 /**
@@ -44,9 +100,6 @@ export async function navigateToRunGraph(
 export async function assertAuthenticated(page: Page) {
   // Wait for the page to be on an authenticated route (not /auth/*)
   await expect(page).not.toHaveURL(/\/auth\//);
-
-  // Could also check for user menu/avatar if needed
-  // await expect(page.getByRole('button', { name: /user menu/i })).toBeVisible();
 }
 
 /**
@@ -65,5 +118,5 @@ export async function waitForVisible(
  */
 export async function navigateToMembersSettings(page: Page, orgSlug: string) {
   await page.goto(`/o/${orgSlug}/settings/org/members`);
-  await waitForTRPC(page);
+  await waitForPageReady(page);
 }

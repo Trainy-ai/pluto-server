@@ -15,9 +15,8 @@ import * as path from "path";
 const DEV_ORG_SLUG = "dev-org";
 const DEV_PROJECT = "my-ml-project";
 
-// Chart selector
-const CHART_WRAPPER_SELECTOR = ".echarts-for-react";
-const CHART_SELECTOR = ".echarts-for-react canvas";
+// Chart selectors - uPlot (not ECharts)
+const CHART_WRAPPER_SELECTOR = ".uplot";
 
 // Cache performance thresholds (adjusted for Docker/CI environments)
 const CACHE_THRESHOLDS = {
@@ -40,18 +39,15 @@ async function waitForRenderedChart(
   });
   await page.locator(CHART_WRAPPER_SELECTOR).first().scrollIntoViewIfNeeded();
   await page.waitForFunction(
-    (selector) => {
-      const canvases = document.querySelectorAll(selector);
+    () => {
+      const canvases = document.querySelectorAll(".uplot canvas");
       for (const canvas of canvases) {
-        const width = canvas.getAttribute("width");
-        const height = canvas.getAttribute("height");
-        if (width && height && parseInt(width) > 0 && parseInt(height) > 0) {
+        if ((canvas as HTMLCanvasElement).width > 0 && (canvas as HTMLCanvasElement).height > 0) {
           return true;
         }
       }
       return false;
     },
-    CHART_SELECTOR,
     { timeout }
   );
 }
@@ -68,7 +64,7 @@ test.describe("Cache Performance Tests", () => {
 
       // Navigate to project page
       await page.goto(`/o/${DEV_ORG_SLUG}/projects/${DEV_PROJECT}`);
-      await page.waitForLoadState("networkidle");
+      await page.waitForLoadState("domcontentloaded");
 
       // Click on first run
       const runLink = page.locator('a[href*="/projects/"][href*="/"]').first();
@@ -84,7 +80,7 @@ test.describe("Cache Performance Tests", () => {
 
       // --- NAVIGATE AWAY ---
       await page.goto(`/o/${DEV_ORG_SLUG}/projects`);
-      await page.waitForLoadState("networkidle");
+      await page.waitForLoadState("domcontentloaded");
 
       // --- WARM LOAD (second visit, cache hit) ---
       await setupLCPMeasurement(page);
@@ -92,7 +88,7 @@ test.describe("Cache Performance Tests", () => {
 
       // Navigate directly to the same run
       await page.goto(runUrl);
-      await page.waitForLoadState("networkidle");
+      await page.waitForLoadState("domcontentloaded");
 
       // Wait for chart to render
       await waitForRenderedChart(page);
@@ -135,29 +131,12 @@ test.describe("Cache Performance Tests", () => {
 
       // Assertions
       expect(warmLoadTime).toBeLessThan(CACHE_THRESHOLDS.WARM_LOAD_MAX_MS);
-      // Note: improvement assertion is informational - caching helps but
-      // the actual improvement depends on network conditions and IndexedDB
     });
 
     test("repeated API calls benefit from cache", async ({ page }) => {
-      // This test measures tRPC response times directly
-      const responseTimes: { first: number[]; subsequent: number[] } = {
-        first: [],
-        subsequent: [],
-      };
-
-      // Track tRPC response timestamps
-      const responseTimestamps: number[] = [];
-      page.on("response", async (response) => {
-        const url = response.url();
-        if (url.includes("/trpc/") && url.includes("runs.data")) {
-          responseTimestamps.push(Date.now());
-        }
-      });
-
       // First visit - cache miss
       await page.goto(`/o/${DEV_ORG_SLUG}/projects/${DEV_PROJECT}`);
-      await page.waitForLoadState("networkidle");
+      await page.waitForLoadState("domcontentloaded");
 
       const runLink = page.locator('a[href*="/projects/"][href*="/"]').first();
       await runLink.click();
@@ -165,25 +144,21 @@ test.describe("Cache Performance Tests", () => {
 
       // Navigate away
       await page.goto(`/o/${DEV_ORG_SLUG}/projects`);
-      await page.waitForLoadState("networkidle");
+      await page.waitForLoadState("domcontentloaded");
 
       // Second visit - cache hit
       await page.goBack();
-      await page.waitForLoadState("networkidle");
+      await page.waitForLoadState("domcontentloaded");
       await waitForRenderedChart(page);
 
       // The main assertion is that the page loads without errors
-      // Cache performance is validated by the previous test
       expect(true).toBe(true);
     });
 
     test("comparison view benefits from cache", async ({ page }) => {
       // Navigate to comparison view with multiple runs
       await page.goto(`/o/${DEV_ORG_SLUG}/projects/${DEV_PROJECT}`);
-      await page.waitForLoadState("networkidle");
-
-      // Select multiple runs for comparison (if comparison feature exists)
-      // This test validates that cached data is shared across comparison views
+      await page.waitForLoadState("domcontentloaded");
 
       // --- COLD LOAD ---
       const coldStart = performance.now();
@@ -196,9 +171,8 @@ test.describe("Cache Performance Tests", () => {
       const coldTime = performance.now() - coldStart;
 
       // --- WARM LOAD (same data, different view) ---
-      // Navigate to comparison which may reuse the same graph data
       await page.goto(`/o/${DEV_ORG_SLUG}/projects/${DEV_PROJECT}`);
-      await page.waitForLoadState("networkidle");
+      await page.waitForLoadState("domcontentloaded");
 
       const warmStart = performance.now();
 

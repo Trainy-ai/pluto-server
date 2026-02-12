@@ -58,7 +58,7 @@ test.describe("Run Tags Management (tRPC API)", () => {
   test("should filter runs by tags via tRPC endpoint", async ({ page, request }) => {
     // Navigate to authenticated page to get session
     await page.goto(`/o/${orgSlug}/projects`);
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // Get session cookie
     const cookies = await page.context().cookies();
@@ -135,7 +135,7 @@ test.describe("Run Tags Management (tRPC API)", () => {
   test("should call tRPC list-runs with tag filter", async ({ page, request }) => {
     // Navigate to authenticated page
     await page.goto(`/o/${orgSlug}/projects`);
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // Get session cookie
     const cookies = await page.context().cookies();

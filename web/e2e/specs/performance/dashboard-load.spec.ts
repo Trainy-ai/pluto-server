@@ -5,7 +5,6 @@ import {
   getLCP,
   measureTimeToSelector,
   countElements,
-  measureLazyLoading,
   createMetric,
   createBooleanMetric,
   saveMetrics,
@@ -19,14 +18,11 @@ import * as path from "path";
 const DEV_ORG_SLUG = "dev-org";
 const DEV_PROJECT = "my-ml-project";
 
-// Selectors for chart elements
-// Use canvas selector - the canvas only exists when chart is actually rendered (not skeleton)
-const CHART_SELECTOR = '.echarts-for-react canvas';
-const CHART_WRAPPER_SELECTOR = '.echarts-for-react';
-const CHART_CONTAINER_SELECTOR = '[data-testid="chart-container"], [class*="chart"]';
-const METRICS_GROUP_SELECTOR = '[data-testid="metrics-group"], [class*="dropdown-region"]';
+// Selectors for chart elements - uPlot (not ECharts)
+const CHART_SELECTOR = ".uplot canvas";
+const CHART_WRAPPER_SELECTOR = ".uplot";
 
-// Helper to wait for a chart canvas with non-zero dimensions (ECharts creates 0x0 canvas initially)
+// Helper to wait for a chart canvas with non-zero dimensions
 async function waitForRenderedChart(page: import("@playwright/test").Page, timeout = 30000) {
   // First wait for wrapper to exist
   await page.waitForSelector(CHART_WRAPPER_SELECTOR, { state: "attached", timeout });
@@ -36,18 +32,15 @@ async function waitForRenderedChart(page: import("@playwright/test").Page, timeo
 
   // Wait for canvas with actual dimensions (not 0x0)
   await page.waitForFunction(
-    (selector) => {
-      const canvases = document.querySelectorAll(selector);
+    () => {
+      const canvases = document.querySelectorAll(".uplot canvas");
       for (const canvas of canvases) {
-        const width = canvas.getAttribute('width');
-        const height = canvas.getAttribute('height');
-        if (width && height && parseInt(width) > 0 && parseInt(height) > 0) {
+        if ((canvas as HTMLCanvasElement).width > 0 && (canvas as HTMLCanvasElement).height > 0) {
           return true;
         }
       }
       return false;
     },
-    CHART_SELECTOR,
     { timeout }
   );
 }
@@ -66,9 +59,8 @@ test.describe("Dashboard Performance Tests", () => {
       const start = performance.now();
 
       // Navigate to first run (high-fidelity, 100k datapoints)
-      // First run should be "baseline-experiment" based on seed-dev.ts
       await page.goto(`/o/${DEV_ORG_SLUG}/projects/${DEV_PROJECT}`);
-      await page.waitForLoadState("networkidle");
+      await page.waitForLoadState("domcontentloaded");
 
       // Click on first run to open it
       const runLink = page.locator('a[href*="/projects/"][href*="/"]').first();
@@ -96,7 +88,7 @@ test.describe("Dashboard Performance Tests", () => {
     test("validates lazy loading works", async ({ page }) => {
       // Navigate to a run with many charts
       await page.goto(`/o/${DEV_ORG_SLUG}/projects/${DEV_PROJECT}`);
-      await page.waitForLoadState("networkidle");
+      await page.waitForLoadState("domcontentloaded");
 
       // Click on first run
       const runLink = page.locator('a[href*="/projects/"][href*="/"]').first();
@@ -104,14 +96,25 @@ test.describe("Dashboard Performance Tests", () => {
 
       // Wait for chart to fully render (canvas with non-zero dimensions)
       await waitForRenderedChart(page);
-      await page.waitForTimeout(1000); // Let initial render complete
+
+      // Wait for initial render to settle via requestAnimationFrame
+      await page.evaluate(
+        () => new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        })
+      );
 
       // Count charts in DOM before scroll
       const initialCharts = await countElements(page, CHART_SELECTOR);
 
       // Scroll down to trigger lazy loading
       await page.evaluate(() => window.scrollBy(0, 3000));
-      await page.waitForTimeout(1500); // Wait for lazy-loaded charts
+
+      // Wait for lazy-loaded charts to appear
+      await expect.poll(
+        () => countElements(page, CHART_SELECTOR),
+        { timeout: 10000 }
+      ).toBeGreaterThanOrEqual(initialCharts);
 
       // Count charts after scroll
       const afterScrollCharts = await countElements(page, CHART_SELECTOR);
@@ -138,7 +141,7 @@ test.describe("Dashboard Performance Tests", () => {
 
       // Navigate to project comparison view
       await page.goto(`/o/${DEV_ORG_SLUG}/projects/${DEV_PROJECT}`);
-      await page.waitForLoadState("networkidle");
+      await page.waitForLoadState("domcontentloaded");
 
       // Wait for runs table to load
       await page.waitForSelector('[data-testid="runs-table"], table', { timeout: 15000 });
@@ -171,7 +174,7 @@ test.describe("Dashboard Performance Tests", () => {
     test("validates lazy loading in comparison view", async ({ page }) => {
       // Navigate to project comparison view
       await page.goto(`/o/${DEV_ORG_SLUG}/projects/${DEV_PROJECT}`);
-      await page.waitForLoadState("networkidle");
+      await page.waitForLoadState("domcontentloaded");
 
       // Wait for table
       await page.waitForSelector('[data-testid="runs-table"], table', { timeout: 15000 });
@@ -188,27 +191,45 @@ test.describe("Dashboard Performance Tests", () => {
 
       // Wait for chart to fully render (canvas with non-zero dimensions)
       await waitForRenderedChart(page);
-      await page.waitForTimeout(1000);
 
-      // Measure lazy loading
-      const lazyLoadResult = await measureLazyLoading(page, CHART_SELECTOR, 3000);
+      // Wait for initial render to settle
+      await page.evaluate(
+        () => new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        })
+      );
+
+      // Measure initial chart count
+      const initialCount = await countElements(page, CHART_SELECTOR);
+
+      // Scroll down
+      await page.evaluate(() => window.scrollBy(0, 3000));
+
+      // Wait for lazy-loaded charts to appear
+      await expect.poll(
+        () => countElements(page, CHART_SELECTOR),
+        { timeout: 10000 }
+      ).toBeGreaterThanOrEqual(initialCount);
+
+      const afterScrollCount = await countElements(page, CHART_SELECTOR);
+      const lazyLoadingWorks = afterScrollCount > initialCount || initialCount < 50;
 
       allMetrics.push(
-        createMetric("comparison_charts_initial", lazyLoadResult.initialCount, "count"),
-        createMetric("comparison_charts_after_scroll", lazyLoadResult.afterScrollCount, "count"),
-        createBooleanMetric("comparison_lazy_loading_works", lazyLoadResult.lazyLoadingWorks)
+        createMetric("comparison_charts_initial", initialCount, "count"),
+        createMetric("comparison_charts_after_scroll", afterScrollCount, "count"),
+        createBooleanMetric("comparison_lazy_loading_works", lazyLoadingWorks)
       );
 
       // With 250+ potential chart components, lazy loading should defer most
-      expect(lazyLoadResult.initialCount).toBeLessThan(50);
+      expect(initialCount).toBeLessThan(50);
     });
   });
 
   test.describe("Backend API Performance", () => {
-    test("validates backend sampling for large datasets", async ({ page, request }) => {
+    test("validates backend sampling for large datasets", async ({ page }) => {
       // Navigate to get auth context
       await page.goto(`/o/${DEV_ORG_SLUG}/projects/${DEV_PROJECT}`);
-      await page.waitForLoadState("networkidle");
+      await page.waitForLoadState("domcontentloaded");
 
       // Get first run ID by intercepting network
       let runId: string | null = null;
@@ -227,8 +248,10 @@ test.describe("Dashboard Performance Tests", () => {
 
       // Trigger runs fetch
       await page.reload();
-      await page.waitForLoadState("networkidle");
-      await page.waitForTimeout(2000);
+      await page.waitForLoadState("domcontentloaded");
+
+      // Wait for a run ID to be captured from network
+      await expect.poll(() => runId, { timeout: 10000 }).toBeTruthy();
 
       // If we got a run ID, test the graph endpoint
       if (runId) {

@@ -1,5 +1,4 @@
 import { test as setup, expect } from "@playwright/test";
-import { authSelectors } from "../utils/selectors";
 
 const authFile = "e2e/.auth/user.json";
 
@@ -14,7 +13,7 @@ const TEST_PASSWORD = "TestPassword123!";
 setup("authenticate via email/password", async ({ page }) => {
   // Navigate to sign-in page
   await page.goto("/auth/sign-in");
-  await page.waitForLoadState("networkidle");
+  await page.waitForLoadState("domcontentloaded");
 
   // Fill in email field
   const emailInput = page.getByRole("textbox", { name: /email/i });
@@ -33,14 +32,14 @@ setup("authenticate via email/password", async ({ page }) => {
   try {
     // Wait for redirect to dashboard, org page, or home page
     // The smoke test user has finished onboarding, so should go to org page
-    await page.waitForURL(/\/(dashboard|projects|o)/, { timeout: 10000 });
+    await page.waitForURL(/\/(dashboard|projects|o)/, { timeout: 15000 });
     console.log("Sign in successful, redirected to:", page.url());
-  } catch (error) {
+  } catch {
     console.log("Sign in may have failed, attempting to sign up...");
 
     // Navigate to sign-up page
     await page.goto("/auth/sign-up");
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // Fill in sign-up form
     const signUpEmailInput = page.getByRole("textbox", { name: /email/i });
@@ -71,8 +70,8 @@ setup("authenticate via email/password", async ({ page }) => {
     console.log("Sign up successful, redirected to:", page.url());
   }
 
-  // Wait for page to stabilize
-  await page.waitForLoadState("networkidle");
+  // Wait for page to stabilize - use domcontentloaded instead of networkidle
+  await page.waitForLoadState("domcontentloaded");
 
   // Save auth state
   await page.context().storageState({ path: authFile });

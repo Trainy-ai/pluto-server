@@ -59,13 +59,13 @@ test.describe("SAML Authentication via DummyIdP", () => {
     await page.waitForURL(/dummyidp\.com/, { timeout: 15000 });
 
     // Wait for page to fully load (dummyIdP is a Next.js app that needs JS to render)
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // Try to wait for any content to appear - dummyIdP might be client-side rendered
     try {
       // Wait for either user cards or an error message to appear
       await page.waitForSelector('body:not(:empty)', { timeout: 10000 });
-      await page.waitForTimeout(2000); // Extra time for React to render
+      await page.waitForLoadState("load");
     } catch (e) {
       console.log("Timeout waiting for dummyIdP content");
     }

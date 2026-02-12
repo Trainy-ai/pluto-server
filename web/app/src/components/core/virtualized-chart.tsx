@@ -89,6 +89,7 @@ export function VirtualizedChart({
   return (
     <div
       ref={ref}
+      data-testid="virtualized-chart"
       className={`flex flex-1 flex-col ${className}`}
       style={{ minHeight, position: "relative" }}
     >

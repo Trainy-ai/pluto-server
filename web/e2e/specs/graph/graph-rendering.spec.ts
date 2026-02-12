@@ -121,7 +121,7 @@ test.describe("Graph Visualization", () => {
           if (await minimizeButton.isVisible()) {
             await minimizeButton.click();
             // Should return to normal layout
-            await page.waitForTimeout(500);
+            await page.evaluate(() => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
           }
         }
       }

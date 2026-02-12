@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { waitForTRPC } from "../../utils/test-helpers";
+import { waitForPageReady, waitForCharts } from "../../utils/test-helpers";
 
 /**
  * E2E Tests for uPlot Chart Interactions
@@ -19,7 +19,7 @@ const orgSlug = "smoke-test-org";
 async function navigateToProjectWithCharts(page: import("@playwright/test").Page) {
   // Navigate to projects page to find any project
   await page.goto(`/o/${orgSlug}/projects`);
-  await waitForTRPC(page);
+  await waitForPageReady(page);
 
   // Find the first project link
   const firstProjectLink = page.locator('a[href*="/projects/"]').first();
@@ -33,11 +33,7 @@ async function navigateToProjectWithCharts(page: import("@playwright/test").Page
 
   // Navigate to the project comparison page
   await page.goto(projectHref);
-  await waitForTRPC(page);
-  await page.waitForLoadState("networkidle");
-
-  // Wait for charts to render (uPlot creates .uplot elements)
-  await page.waitForTimeout(2000); // Allow time for chart data fetching
+  await waitForPageReady(page);
 
   return projectHref;
 }
@@ -47,9 +43,21 @@ async function navigateToProjectWithCharts(page: import("@playwright/test").Page
  */
 async function waitForUPlotCharts(page: import("@playwright/test").Page) {
   // Wait for at least one uPlot chart to be rendered
-  const uplotSelector = ".uplot";
   try {
-    await page.waitForSelector(uplotSelector, { timeout: 10000 });
+    await page.waitForSelector(".uplot", { timeout: 15000 });
+    // Wait for canvas to have dimensions
+    await page.waitForFunction(
+      () => {
+        const canvases = document.querySelectorAll(".uplot canvas");
+        for (const canvas of canvases) {
+          if ((canvas as HTMLCanvasElement).width > 0 && (canvas as HTMLCanvasElement).height > 0) {
+            return true;
+          }
+        }
+        return false;
+      },
+      { timeout: 10000 }
+    );
     return true;
   } catch {
     return false;
@@ -81,9 +89,8 @@ test.describe("uPlot Chart Interactions", () => {
 
     // Scroll to ensure charts are visible
     await page.mouse.wheel(0, 300);
-    await page.waitForTimeout(1000);
 
-    // Find the chart overlay element (where zoom interactions happen)
+    // Wait for charts to be scrolled into view
     const chartOverlay = page.locator(".uplot .u-over").first();
     await expect(chartOverlay).toBeVisible({ timeout: 5000 });
 
@@ -97,7 +104,6 @@ test.describe("uPlot Chart Interactions", () => {
       const chartEl = document.querySelector(".uplot") as HTMLElement & {
         __uplot?: { scales: { x: { min: number; max: number } } };
       };
-      // uPlot stores instance on the element
       const uplotInstance = (chartEl as any)?._uplot;
       if (uplotInstance?.scales?.x) {
         return {
@@ -120,8 +126,12 @@ test.describe("uPlot Chart Interactions", () => {
     await page.mouse.move(endX, centerY, { steps: 10 });
     await page.mouse.up();
 
-    // Wait for zoom to apply
-    await page.waitForTimeout(500);
+    // Wait for zoom to apply via RAF
+    await page.evaluate(
+      () => new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      })
+    );
 
     // Verify the chart still exists (wasn't destroyed)
     await expect(chartOverlay).toBeVisible();
@@ -140,9 +150,6 @@ test.describe("uPlot Chart Interactions", () => {
     });
 
     console.log("Zoomed scale:", zoomedScale);
-
-    // Note: Even if we can't access internal scale values directly,
-    // the test passes if the chart remains stable and doesn't error
     console.log("Drag-to-zoom completed without errors");
   });
 
@@ -161,16 +168,14 @@ test.describe("uPlot Chart Interactions", () => {
       return;
     }
 
-    // Scroll to ensure charts are visible
-    await page.mouse.wheel(0, 300);
-    await page.waitForTimeout(1000);
+    // Scroll chart into view to ensure it's visible
+    const chartOverlay = page.locator(".uplot .u-over").first();
+    await chartOverlay.scrollIntoViewIfNeeded();
+    await expect(chartOverlay).toBeVisible({ timeout: 5000 });
 
     // Count initial charts
     const initialCount = await getChartInstanceCount(page);
     console.log("Initial chart count:", initialCount);
-
-    // Track if any charts are destroyed and recreated
-    let recreationDetected = false;
 
     // Set up mutation observer to detect chart recreation
     await page.evaluate(() => {
@@ -191,10 +196,6 @@ test.describe("uPlot Chart Interactions", () => {
       (window as any).__chartObserver = observer;
     });
 
-    // Find the chart overlay and perform hover movements
-    const chartOverlay = page.locator(".uplot .u-over").first();
-    await expect(chartOverlay).toBeVisible({ timeout: 5000 });
-
     const overlayBox = await chartOverlay.boundingBox();
     if (!overlayBox) {
       throw new Error("Could not get chart overlay bounding box");
@@ -206,14 +207,15 @@ test.describe("uPlot Chart Interactions", () => {
     for (let i = 0; i < 10; i++) {
       const x = overlayBox.x + overlayBox.width * (0.1 + i * 0.08);
       await page.mouse.move(x, centerY);
-      await page.waitForTimeout(100);
+      // Minimal wait - just enough for event processing
+      await page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => r())));
     }
 
     // Move mouse out and back in
     await page.mouse.move(0, 0);
-    await page.waitForTimeout(200);
+    await page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => r())));
     await page.mouse.move(overlayBox.x + overlayBox.width / 2, centerY);
-    await page.waitForTimeout(300);
+    await page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => r())));
 
     // Check if any recreations were detected
     const recreations = await page.evaluate(
@@ -252,7 +254,9 @@ test.describe("uPlot Chart Interactions", () => {
 
     // Scroll to see multiple charts
     await page.mouse.wheel(0, 300);
-    await page.waitForTimeout(1000);
+
+    // Wait for charts to be visible after scroll
+    await expect(page.locator(".uplot .u-over").first()).toBeVisible({ timeout: 5000 });
 
     // Check if we have at least 2 charts for meaningful test
     const chartCount = await getChartInstanceCount(page);
@@ -290,19 +294,17 @@ test.describe("uPlot Chart Interactions", () => {
       firstBox.x + firstBox.width / 2,
       firstBox.y + firstBox.height / 2
     );
-    await page.waitForTimeout(500);
+    await page.evaluate(
+      () => new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      })
+    );
 
-    // Check tooltips - uPlot tooltips are typically custom elements
-    // The tooltip structure varies by implementation
-    // Look for common tooltip patterns: [data-tooltip], .tooltip, .uplot-tooltip
+    // Check tooltips
     const visibleTooltips = await page.evaluate(() => {
-      // Check for various tooltip implementations
       const tooltipSelectors = [
-        "[data-tooltip]:not([data-tooltip=''])",
+        "[data-testid='uplot-tooltip']",
         ".uplot-tooltip:not(.hidden)",
-        ".tooltip:not(.hidden)",
-        // Our custom tooltip implementation uses a div with specific classes
-        ".absolute.z-50.pointer-events-none",
       ];
 
       let count = 0;
@@ -310,17 +312,13 @@ test.describe("uPlot Chart Interactions", () => {
         const elements = document.querySelectorAll(selector);
         for (const el of elements) {
           const style = window.getComputedStyle(el);
-          // Check if element is actually visible
           if (
             style.display !== "none" &&
             style.visibility !== "hidden" &&
             style.opacity !== "0" &&
             (el as HTMLElement).offsetParent !== null
           ) {
-            // Check if within a uplot container
-            if (el.closest(".uplot") || el.classList.contains("absolute")) {
-              count++;
-            }
+            count++;
           }
         }
       }
@@ -331,7 +329,6 @@ test.describe("uPlot Chart Interactions", () => {
 
     // The key assertion: when hovering one chart, we should not see
     // multiple tooltips (synced charts should hide their tooltips)
-    // Note: This is a soft check - the exact behavior depends on implementation
     if (visibleTooltips > 1) {
       console.warn(
         `Warning: Found ${visibleTooltips} visible tooltips, expected at most 1`
@@ -343,7 +340,11 @@ test.describe("uPlot Chart Interactions", () => {
       secondBox.x + secondBox.width / 2,
       secondBox.y + secondBox.height / 2
     );
-    await page.waitForTimeout(500);
+    await page.evaluate(
+      () => new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      })
+    );
 
     console.log("Tooltip test completed - check warnings above for issues");
   });
@@ -367,7 +368,7 @@ test.describe("uPlot Chart Interactions", () => {
 
     // Scroll to see multiple charts
     await page.mouse.wheel(0, 300);
-    await page.waitForTimeout(1000);
+    await expect(page.locator(".uplot .u-over").first()).toBeVisible({ timeout: 5000 });
 
     // Check if we have at least 2 charts
     const chartCount = await getChartInstanceCount(page);
@@ -390,7 +391,11 @@ test.describe("uPlot Chart Interactions", () => {
       firstBox.x + firstBox.width / 2,
       firstBox.y + firstBox.height / 2
     );
-    await page.waitForTimeout(500);
+    await page.evaluate(
+      () => new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      })
+    );
 
     // Check for cursor lines (uPlot uses .u-cursor elements)
     const cursorInfo = await page.evaluate(() => {
@@ -416,7 +421,6 @@ test.describe("uPlot Chart Interactions", () => {
     console.log("Cursor sync info:", cursorInfo);
 
     // With cursor sync, multiple charts should show cursor lines
-    // at the same relative position
     if (cursorInfo.visible < 2 && chartCount >= 2) {
       console.warn(
         `Expected cursor sync across ${chartCount} charts, but only ${cursorInfo.visible} visible cursors`

@@ -22,7 +22,7 @@ test.describe("Organization Switching - Runs Display", () => {
   test.beforeEach(async ({ page }) => {
     // Navigate to org 1 to establish session
     await page.goto(`/o/${org1Slug}`);
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
   });
 
   test("should display different runs when switching between organizations", async ({
@@ -30,7 +30,7 @@ test.describe("Organization Switching - Runs Display", () => {
   }) => {
     // Visit org 1 dashboard
     await page.goto(`/o/${org1Slug}`);
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // Wait for runs to load - try the test id first, fall back to waiting for network idle
     const recentRunsSelector = '[data-testid="recent-runs"]';
@@ -43,7 +43,7 @@ test.describe("Organization Switching - Runs Display", () => {
       });
     } else {
       // If no test id available, wait for network to settle
-      await page.waitForLoadState("networkidle");
+      await page.waitForLoadState("domcontentloaded");
     }
 
     // Get the content of the page for org 1
@@ -57,7 +57,7 @@ test.describe("Organization Switching - Runs Display", () => {
 
     // Navigate to org 2
     await page.goto(`/o/${org2Slug}`);
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // Wait for the UI to update - org1's runs should disappear when switching to org2
     // This is the core test: the cache should not show stale data from org1
@@ -103,18 +103,18 @@ test.describe("Organization Switching - Runs Display", () => {
   }) => {
     // Visit org 1
     await page.goto(`/o/${org1Slug}`);
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // Capture initial state
     const initialOrg1Content = await page.content();
 
     // Switch to org 2
     await page.goto(`/o/${org2Slug}`);
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // Switch back to org 1
     await page.goto(`/o/${org1Slug}`);
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // Page should show org 1 data, not org 2 data
     const finalOrg1Content = await page.content();
@@ -128,7 +128,7 @@ test.describe("Organization Switching - Runs Display", () => {
   }) => {
     // Visit org 1
     await page.goto(`/o/${org1Slug}`);
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // Check that the org switcher shows org 1
     const orgSwitcher = page.locator(
@@ -137,7 +137,7 @@ test.describe("Organization Switching - Runs Display", () => {
 
     // Navigate to org 2
     await page.goto(`/o/${org2Slug}`);
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // URL should reflect org 2
     expect(page.url()).toContain(org2Slug);
@@ -149,7 +149,7 @@ test.describe("Organization Switching - Runs Display", () => {
   }) => {
     // Get session cookie
     await page.goto(`/o/${org1Slug}`);
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     const cookies = await page.context().cookies();
     const sessionCookie = cookies.find(

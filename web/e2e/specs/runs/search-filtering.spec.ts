@@ -22,7 +22,7 @@ test.describe("Run Search and Tag Filtering", () => {
   test.beforeEach(async ({ page }) => {
     // Navigate to the project runs page
     await page.goto(`/o/${orgSlug}/projects/${projectName}`);
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
   });
 
   test("should find run via search input that is beyond first page", async ({
@@ -51,10 +51,10 @@ test.describe("Run Search and Tag Filtering", () => {
     await searchInput.fill("needle");
 
     // Wait for the search to process (debounced)
-    await page.waitForTimeout(500);
+    await page.evaluate(() => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
 
     // Wait for network to settle after search
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // The "hidden-needle-experiment" run should appear in results
     // It's at position 161+ so wouldn't appear without server-side search
@@ -117,7 +117,7 @@ test.describe("Run Search and Tag Filtering", () => {
     }
 
     // Wait for filter to apply
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // The "hidden-needle-experiment" run should appear (it has needle-tag)
     // Wait for the specific run to appear in the DOM (React may need time to render)
@@ -153,8 +153,8 @@ test.describe("Run Search and Tag Filtering", () => {
 
     // Search for something specific
     await searchInput.fill("bulk-run-001");
-    await page.waitForTimeout(500);
-    await page.waitForLoadState("networkidle");
+    await page.evaluate(() => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
+    await page.waitForLoadState("domcontentloaded");
 
     // Verify search results are filtered
     let pageContent = await page.content();
@@ -162,8 +162,8 @@ test.describe("Run Search and Tag Filtering", () => {
 
     // Clear the search
     await searchInput.clear();
-    await page.waitForTimeout(500);
-    await page.waitForLoadState("networkidle");
+    await page.evaluate(() => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
+    await page.waitForLoadState("domcontentloaded");
 
     // After clearing, should see more runs
     pageContent = await page.content();

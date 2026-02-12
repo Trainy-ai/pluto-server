@@ -344,6 +344,7 @@ function tooltipPlugin(opts: {
     overEl = u.over;
     tooltipEl = document.createElement("div");
     tooltipEl.className = "uplot-tooltip";
+    tooltipEl.dataset.testid = "uplot-tooltip";
     tooltipEl.style.cssText = `
       position: fixed;
       display: none;
@@ -1886,6 +1887,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
     return (
       <div
         ref={containerRef}
+        data-testid="line-chart-container"
         className={cn("p-1", className)}
         style={{
           position: "absolute",
@@ -1906,6 +1908,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         )}
         <div
           ref={chartContainerRef}
+          data-testid="uplot-render-target"
           style={{
             flex: 1,
             minHeight: 0,

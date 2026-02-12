@@ -41,7 +41,7 @@ test.describe("Resizable Panel Scroll", () => {
     await waitForTRPC(page);
 
     // Wait for the page to fully load with metrics
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // Find the metrics display container (has overflow-y-auto and overscroll-y-contain classes)
     const metricsContainer = page.locator(".overflow-y-auto.overscroll-y-contain").last();
@@ -131,7 +131,7 @@ test.describe("Resizable Panel Scroll", () => {
     // Navigate to the project comparison page
     await page.goto(projectHref);
     await waitForTRPC(page);
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // Find the resizable handle between panels
     // The handle is rendered with a specific structure: a separator with a grip icon inside
@@ -153,7 +153,7 @@ test.describe("Resizable Panel Scroll", () => {
     await page.mouse.up();
 
     // Wait for resize to complete
-    await page.waitForTimeout(500);
+    await page.evaluate(() => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
 
     // Verify metrics container still has correct scroll setup
     const metricsContainer = page.locator(".overflow-y-auto.overscroll-y-contain").last();
@@ -176,7 +176,7 @@ test.describe("Resizable Panel Scroll", () => {
       // Try to scroll using wheel event
       await metricsContainer.hover();
       await page.mouse.wheel(0, 100);
-      await page.waitForTimeout(200);
+      await page.evaluate(() => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
 
       const scrollTop = await metricsContainer.evaluate((el) => el.scrollTop);
       if (scrollTop > 0) {
@@ -208,7 +208,7 @@ test.describe("Resizable Panel Scroll", () => {
     // Navigate to the project comparison page
     await page.goto(projectHref);
     await waitForTRPC(page);
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // Find the metrics display container (the panel wrapper with scroll classes)
     const metricsContainer = page.locator(".overflow-y-auto.overscroll-y-contain").last();

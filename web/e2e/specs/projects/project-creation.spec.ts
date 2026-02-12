@@ -5,7 +5,7 @@ import { navigateToProjects, waitForTRPC } from "../../utils/test-helpers";
 // Helper to complete onboarding if needed
 async function ensureUserHasOrganization(page: import("@playwright/test").Page): Promise<string> {
   await page.goto("/");
-  await page.waitForLoadState("networkidle");
+  await page.waitForLoadState("domcontentloaded");
 
   // Keep trying until we're on an org page
   const maxAttempts = 5;
@@ -24,17 +24,16 @@ async function ensureUserHasOrganization(page: import("@playwright/test").Page):
       // Click on the combobox to open dropdown
       const locationCombobox = page.getByRole("combobox");
       await locationCombobox.click();
-      await page.waitForTimeout(500);
+      await page.evaluate(() => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
 
       // Click the first listbox option
       const option = page.locator('[role="listbox"] [role="option"]').first();
       await option.click({ timeout: 5000 });
-      await page.waitForTimeout(500);
+      await page.evaluate(() => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
 
       // Click Next
       await page.getByRole("button", { name: /next/i }).click();
-      await page.waitForLoadState("networkidle");
-      await page.waitForTimeout(1000);
+      await page.waitForLoadState("domcontentloaded");
       continue;
     }
 
@@ -47,26 +46,26 @@ async function ensureUserHasOrganization(page: import("@playwright/test").Page):
       // Fill org name
       const orgNameInput = page.getByLabel(/organization name/i);
       await orgNameInput.fill(orgName);
-      await page.waitForTimeout(500);
+      await page.evaluate(() => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
 
       // Click Next if present
       const nextBtn = page.getByRole("button", { name: /^next$/i });
       if (await nextBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
         await nextBtn.click();
-        await page.waitForLoadState("networkidle");
+        await page.waitForLoadState("domcontentloaded");
       }
 
       // Click create
       const createBtn = page.getByRole("button", { name: /create/i });
       if (await createBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
         await createBtn.click();
-        await page.waitForLoadState("networkidle");
+        await page.waitForLoadState("domcontentloaded");
       }
       continue;
     }
 
     // Wait and retry
-    await page.waitForTimeout(2000);
+    await page.waitForLoadState("domcontentloaded");
   }
 
   // Final wait for org page

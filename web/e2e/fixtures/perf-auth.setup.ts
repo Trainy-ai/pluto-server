@@ -9,10 +9,12 @@ const authFile = "e2e/.auth/perf-user.json";
 setup("authenticate for performance tests", async ({ page }) => {
   // Go to sign-in page
   await page.goto("/auth/sign-in");
-  await page.waitForLoadState("networkidle");
+  await page.waitForLoadState("domcontentloaded");
 
   // Fill login form with dev credentials
-  await page.getByRole("textbox", { name: /email/i }).fill(DEV_EMAIL);
+  const emailInput = page.getByRole("textbox", { name: /email/i });
+  await expect(emailInput).toBeVisible({ timeout: 10000 });
+  await emailInput.fill(DEV_EMAIL);
   await page.getByRole("textbox", { name: /password/i }).fill(DEV_PASSWORD);
   await page.getByRole("button", { name: /sign in/i }).click();
 

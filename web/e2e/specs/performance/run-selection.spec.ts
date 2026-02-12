@@ -22,7 +22,7 @@ const SELECTION_THRESHOLDS = {
 
 // Selector for run toggle buttons (eye icon buttons)
 const RUN_TOGGLE_SELECTOR = 'button[aria-label="Toggle select row"]';
-const CHART_SELECTOR = ".echarts-for-react canvas";
+const CHART_SELECTOR = ".uplot canvas";
 
 // Collect all metrics across tests
 const allMetrics: PerfMetric[] = [];
@@ -102,7 +102,7 @@ test.describe("Run Selection Performance Tests", () => {
   test.beforeEach(async ({ page }) => {
     // Navigate to project page with runs
     await page.goto(`/o/${DEV_ORG_SLUG}/projects/${DEV_PROJECT}`);
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // Wait for runs table to load
     await page.waitForSelector(RUN_TOGGLE_SELECTOR, { timeout: 15000 });
@@ -235,8 +235,12 @@ test.describe("Run Selection Performance Tests", () => {
       }
     }
 
-    // Wait for charts to update
-    await page.waitForTimeout(1000);
+    // Wait for charts to update after selecting runs
+    await page.evaluate(
+      () => new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      })
+    );
 
     // Now measure toggling one more run
     const lastUnselected = page.locator(

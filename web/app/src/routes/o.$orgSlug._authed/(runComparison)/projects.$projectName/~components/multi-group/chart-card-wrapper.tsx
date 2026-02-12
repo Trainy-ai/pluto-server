@@ -117,7 +117,7 @@ export function ChartCardWrapper({
 
   return (
     <>
-      <div className="relative h-full w-full" onDoubleClick={handleResetBounds}>
+      <div className="relative h-full w-full" data-testid="chart-card" onDoubleClick={handleResetBounds}>
         {/* Chart content */}
         {renderChart(bounds.yMin, bounds.yMax, handleDataRange, handleResetBounds)}
 
