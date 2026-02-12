@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { waitForTRPC, navigateToProjects } from "../../utils/test-helpers";
+import { waitForPageReady, navigateToProjects } from "../../utils/test-helpers";
 
 test.describe("Tags Editor Dropdown UI", () => {
   const orgSlug = "smoke-test-org";
@@ -21,14 +21,13 @@ test.describe("Tags Editor Dropdown UI", () => {
     }
 
     await page.goto(projectHref);
-    await waitForTRPC(page);
+    await waitForPageReady(page);
 
     // Find the tags edit button (Pencil icon with title "Edit tags")
     const editTagsButton = page.locator('button[title="Edit tags"]').first();
 
     // If no edit button exists, skip (no runs in table)
     if ((await editTagsButton.count()) === 0) {
-      console.log("No tags edit button found, skipping test");
       test.skip();
       return;
     }

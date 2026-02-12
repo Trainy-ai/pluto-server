@@ -1,12 +1,12 @@
 import { test, expect } from "@playwright/test";
-import { waitForTRPC } from "../../utils/test-helpers";
+import { waitForPageReady } from "../../utils/test-helpers";
 import { TEST_ORG } from "../../fixtures/test-data";
 
 test.describe("Member Management", () => {
   test.beforeEach(async ({ page }) => {
     // Navigate to organization members settings page
     await page.goto(`/o/${TEST_ORG.slug}/settings/org/members`);
-    await waitForTRPC(page);
+    await waitForPageReady(page);
   });
 
   test("should display members list", async ({ page }) => {

@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { TEST_ORG, TEST_PROJECT } from "../../fixtures/test-data";
-import { waitForTRPC } from "../../utils/test-helpers";
+import { waitForRunsData } from "../../utils/test-helpers";
 
 test.describe("Run Selection", () => {
   const orgSlug = TEST_ORG.slug;
@@ -9,7 +9,7 @@ test.describe("Run Selection", () => {
   test.beforeEach(async ({ page }) => {
     // Navigate to the project runs page
     await page.goto(`/o/${orgSlug}/projects/${projectName}`);
-    await waitForTRPC(page);
+    await waitForRunsData(page);
   });
 
   test("clicking eye icon on row toggles run selection", async ({ page }) => {
@@ -28,6 +28,19 @@ test.describe("Run Selection", () => {
     // Get initial selection count - the text is split across spans, find the container
     const selectionContainer = page.locator('text=runs selected').locator('..');
     await expect(selectionContainer).toBeVisible({ timeout: 5000 });
+
+    // Wait for data to load (total > 0), then read the initial selected count
+    await expect
+      .poll(
+        async () => {
+          const text = await selectionContainer.textContent();
+          const match = text?.match(/(\d+)\s*of\s*(\d+)/);
+          if (!match || parseInt(match[2]) === 0) return -1;
+          return parseInt(match[2]);
+        },
+        { timeout: 10000, message: "Waiting for runs data to load" }
+      )
+      .toBeGreaterThan(0);
 
     const initialText = await selectionContainer.textContent();
     const initialMatch = initialText?.match(/(\d+)\s*of/);
@@ -104,19 +117,29 @@ test.describe("Run Selection", () => {
     }
 
     // Auto-select first 5
-    await visibilityButton.click();
-    const applyButton = page.locator('button:has-text("Apply")');
-    if (await applyButton.isVisible({ timeout: 2000 }).catch(() => false)) {
+    await expect(async () => {
+      await visibilityButton.click();
+      const applyButton = page.locator('button:has-text("Apply")');
+      await expect(applyButton).toBeVisible({ timeout: 2000 });
       await applyButton.click();
-    }
+    }).toPass({ timeout: 10000 });
     // Close popover to ensure toggle buttons are clickable
     await page.keyboard.press("Escape");
 
     // Get the selection container - text is split across spans
     const selectionContainer = page.locator('text=runs selected').locator('..');
 
-    // Verify counter shows 5 (useTransition defers updates, use longer timeout)
-    await expect(selectionContainer).toContainText("5", { timeout: 5000 });
+    // Wait for counter to show exactly 5 selected
+    await expect
+      .poll(
+        async () => {
+          const text = await selectionContainer.textContent();
+          const match = text?.match(/(\d+)\s*of/);
+          return match ? parseInt(match[1]) : -1;
+        },
+        { timeout: 10000, message: "Waiting for 5 runs to be selected" }
+      )
+      .toBe(5);
 
     // Find toggle buttons for selected runs (they have Eye icon, not EyeOff)
     // Since runs are selected, clicking will deselect them
@@ -124,21 +147,29 @@ test.describe("Run Selection", () => {
 
     // Deselect first run (useTransition defers updates)
     await toggleButtons.first().click();
-    await expect(async () => {
-      const text = await selectionContainer.textContent();
-      const match = text?.match(/(\d+)\s*of/);
-      const count = match ? parseInt(match[1]) : -1;
-      expect(count).toBe(4);
-    }).toPass({ timeout: 5000 });
+    await expect
+      .poll(
+        async () => {
+          const text = await selectionContainer.textContent();
+          const match = text?.match(/(\d+)\s*of/);
+          return match ? parseInt(match[1]) : -1;
+        },
+        { timeout: 10000 }
+      )
+      .toBe(4);
 
     // Deselect second run
     await toggleButtons.nth(1).click();
-    await expect(async () => {
-      const text = await selectionContainer.textContent();
-      const match = text?.match(/(\d+)\s*of/);
-      const count = match ? parseInt(match[1]) : -1;
-      expect(count).toBe(3);
-    }).toPass({ timeout: 5000 });
+    await expect
+      .poll(
+        async () => {
+          const text = await selectionContainer.textContent();
+          const match = text?.match(/(\d+)\s*of/);
+          return match ? parseInt(match[1]) : -1;
+        },
+        { timeout: 10000 }
+      )
+      .toBe(3);
   });
 
   test("selected runs appear in charts with correct colors", async ({

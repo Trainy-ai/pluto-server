@@ -1,28 +1,15 @@
 import { test, expect } from "@playwright/test";
 import { TEST_ORG, TEST_PROJECT } from "../../fixtures/test-data";
+import { waitForRunsData, getServerUrl, getSessionCookie } from "../../utils/test-helpers";
 
 test.describe("Run Search and Tag Filtering", () => {
   const orgSlug = TEST_ORG.slug;
   const projectName = TEST_PROJECT.name;
 
-  // Server URL for direct API calls
-  // In Buildkite, the 'server' hostname is available via /etc/hosts
-  // In local dev, we use localhost:3001
-  const getServerUrl = () => {
-    const baseUrl = process.env.BASE_URL || "http://localhost:3000";
-    // If BASE_URL is an IP address (Buildkite), use the 'server' hostname
-    // because the app and server have different IPs in Docker
-    if (baseUrl.match(/^https?:\/\/\d+\.\d+\.\d+\.\d+:/)) {
-      return "http://server:3001";
-    }
-    // Otherwise (localhost), derive from BASE_URL by replacing port
-    return baseUrl.replace(":3000", ":3001");
-  };
-
   test.beforeEach(async ({ page }) => {
     // Navigate to the project runs page
     await page.goto(`/o/${orgSlug}/projects/${projectName}`);
-    await page.waitForLoadState("domcontentloaded");
+    await waitForRunsData(page);
   });
 
   test("should find run via search input that is beyond first page", async ({
@@ -50,10 +37,8 @@ test.describe("Run Search and Tag Filtering", () => {
     // Type "needle" in the search box
     await searchInput.fill("needle");
 
-    // Wait for the search to process (debounced)
-    await page.evaluate(() => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
-
-    // Wait for network to settle after search
+    // Wait for the search to process (debounced) and network to settle
+    await page.waitForTimeout(500);
     await page.waitForLoadState("domcontentloaded");
 
     // The "hidden-needle-experiment" run should appear in results
@@ -153,7 +138,7 @@ test.describe("Run Search and Tag Filtering", () => {
 
     // Search for something specific
     await searchInput.fill("bulk-run-001");
-    await page.evaluate(() => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
+    await page.waitForTimeout(500);
     await page.waitForLoadState("domcontentloaded");
 
     // Verify search results are filtered
@@ -162,7 +147,7 @@ test.describe("Run Search and Tag Filtering", () => {
 
     // Clear the search
     await searchInput.clear();
-    await page.evaluate(() => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
+    await page.waitForTimeout(500);
     await page.waitForLoadState("domcontentloaded");
 
     // After clearing, should see more runs
@@ -175,11 +160,7 @@ test.describe("Run Search and Tag Filtering", () => {
     page,
     request,
   }) => {
-    // Get session cookie
-    const cookies = await page.context().cookies();
-    const sessionCookie = cookies.find(
-      (c) => c.name === "better-auth.session_token"
-    );
+    const sessionCookie = await getSessionCookie(page);
 
     if (!sessionCookie) {
       test.skip();

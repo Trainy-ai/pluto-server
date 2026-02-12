@@ -1,23 +1,10 @@
 import { test, expect } from "@playwright/test";
 import { TEST_ORG, TEST_ORG_2 } from "../../fixtures/test-data";
+import { getServerUrl, getSessionCookie } from "../../utils/test-helpers";
 
 test.describe("Organization Switching - Runs Display", () => {
   const org1Slug = TEST_ORG.slug;
   const org2Slug = TEST_ORG_2.slug;
-
-  // Server URL for direct API calls
-  // In Buildkite, the 'server' hostname is available via /etc/hosts
-  // In local dev, we use localhost:3001
-  const getServerUrl = () => {
-    const baseUrl = process.env.BASE_URL || "http://localhost:3000";
-    // If BASE_URL is an IP address (Buildkite), use the 'server' hostname
-    // because the app and server have different IPs in Docker
-    if (baseUrl.match(/^https?:\/\/\d+\.\d+\.\d+\.\d+:/)) {
-      return "http://server:3001";
-    }
-    // Otherwise (localhost), derive from BASE_URL by replacing port
-    return baseUrl.replace(":3000", ":3001");
-  };
 
   test.beforeEach(async ({ page }) => {
     // Navigate to org 1 to establish session
@@ -147,14 +134,10 @@ test.describe("Organization Switching - Runs Display", () => {
     page,
     request,
   }) => {
-    // Get session cookie
     await page.goto(`/o/${org1Slug}`);
     await page.waitForLoadState("domcontentloaded");
 
-    const cookies = await page.context().cookies();
-    const sessionCookie = cookies.find(
-      (c) => c.name === "better-auth.session_token"
-    );
+    const sessionCookie = await getSessionCookie(page);
 
     if (!sessionCookie) {
       test.skip();

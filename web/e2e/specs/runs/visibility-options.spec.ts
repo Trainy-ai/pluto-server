@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { TEST_ORG, TEST_PROJECT } from "../../fixtures/test-data";
-import { waitForTRPC } from "../../utils/test-helpers";
+import { waitForRunsData } from "../../utils/test-helpers";
 
 test.describe("Visibility Options Dropdown", () => {
   const orgSlug = TEST_ORG.slug;
@@ -9,7 +9,7 @@ test.describe("Visibility Options Dropdown", () => {
   test.beforeEach(async ({ page }) => {
     // Navigate to the project runs page
     await page.goto(`/o/${orgSlug}/projects/${projectName}`);
-    await waitForTRPC(page);
+    await waitForRunsData(page);
   });
 
   test("opens dropdown when clicking visibility button in table header", async ({
@@ -208,22 +208,31 @@ test.describe("Visibility Options Dropdown", () => {
     // Should be visible
     await expect(selectionContainer).toBeVisible({ timeout: 5000 });
 
-    // The counter text is in the parent container
-    const counterText = await selectionContainer.textContent();
+    // Wait for the counter to show valid data (non-zero total) using polling
+    await expect
+      .poll(
+        async () => {
+          const text = await selectionContainer.textContent();
+          const m = text?.match(/(\d+)\s*of\s*(\d+)\s*runs selected/);
+          if (!m) return 0;
+          return parseInt(m[2]);
+        },
+        { timeout: 10000, message: "Waiting for selection counter to show valid data" }
+      )
+      .toBeGreaterThan(0);
 
-    // Parse the numbers - the text has spaces between span elements
+    // Now read the final values
+    const counterText = await selectionContainer.textContent();
     const match = counterText?.match(/(\d+)\s*of\s*(\d+)\s*runs selected/);
     expect(match).not.toBeNull();
 
-    if (match) {
-      const selected = parseInt(match[1]);
-      const total = parseInt(match[2]);
+    const selected = parseInt(match![1]);
+    const total = parseInt(match![2]);
 
-      // Selected should be <= total
-      expect(selected).toBeLessThanOrEqual(total);
+    // Selected should be <= total
+    expect(selected).toBeLessThanOrEqual(total);
 
-      // Total should be > 0 (we have seeded runs)
-      expect(total).toBeGreaterThan(0);
-    }
+    // Total should be > 0 (we have seeded runs)
+    expect(total).toBeGreaterThan(0);
   });
 });

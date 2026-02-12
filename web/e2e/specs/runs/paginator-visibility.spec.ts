@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { TEST_ORG, TEST_PROJECT } from "../../fixtures/test-data";
+import { waitForRunsData } from "../../utils/test-helpers";
 
 test.describe("Paginator Visibility", () => {
   const orgSlug = TEST_ORG.slug;
@@ -8,7 +9,7 @@ test.describe("Paginator Visibility", () => {
   test.beforeEach(async ({ page }) => {
     // Navigate to the project runs page
     await page.goto(`/o/${orgSlug}/projects/${projectName}`);
-    await page.waitForLoadState("domcontentloaded");
+    await waitForRunsData(page);
   });
 
   test("paginator should be visible at small viewport height", async ({

@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { TEST_ORG, TEST_PROJECT } from "../../fixtures/test-data";
-import { waitForTRPC } from "../../utils/test-helpers";
+import { waitForRunsData } from "../../utils/test-helpers";
 
 /**
  * Tests for URL parameter-based run selection in the run comparison view.
@@ -52,7 +52,7 @@ test.describe("Run Comparison URL Parameters", () => {
     test("navigating with ?runs= param pre-selects specified runs", async ({ page }) => {
       // First, navigate to the project page to get run IDs
       await page.goto(`/o/${orgSlug}/projects/${projectName}`);
-      await waitForTRPC(page);
+      await waitForRunsData(page);
       await page.waitForLoadState("domcontentloaded");
 
       // Get run IDs from table (requires data-run-id attribute on rows)
@@ -69,7 +69,7 @@ test.describe("Run Comparison URL Parameters", () => {
 
       // Now navigate with the runs URL parameter
       await page.goto(`/o/${orgSlug}/projects/${projectName}?runs=${runIds[0]},${runIds[1]}`);
-      await waitForTRPC(page);
+      await waitForRunsData(page);
       await page.waitForLoadState("domcontentloaded");
 
       // Verify the selection counter shows exactly 2 runs selected
@@ -83,7 +83,7 @@ test.describe("Run Comparison URL Parameters", () => {
     test("?runs= param with single run ID selects that run", async ({ page }) => {
       // First, get a run ID
       await page.goto(`/o/${orgSlug}/projects/${projectName}`);
-      await waitForTRPC(page);
+      await waitForRunsData(page);
       await page.waitForLoadState("domcontentloaded");
 
       const runIds = await getRunIdsFromTable(page, 1);
@@ -98,7 +98,7 @@ test.describe("Run Comparison URL Parameters", () => {
 
       // Navigate with single run in URL
       await page.goto(`/o/${orgSlug}/projects/${projectName}?runs=${runIds[0]}`);
-      await waitForTRPC(page);
+      await waitForRunsData(page);
       await page.waitForLoadState("domcontentloaded");
 
       // Verify exactly 1 run is selected
@@ -111,7 +111,7 @@ test.describe("Run Comparison URL Parameters", () => {
     test("invalid run IDs in ?runs= param are gracefully ignored", async ({ page }) => {
       // First, get a valid run ID
       await page.goto(`/o/${orgSlug}/projects/${projectName}`);
-      await waitForTRPC(page);
+      await waitForRunsData(page);
       await page.waitForLoadState("domcontentloaded");
 
       const runIds = await getRunIdsFromTable(page, 1);
@@ -126,7 +126,7 @@ test.describe("Run Comparison URL Parameters", () => {
 
       // Navigate with one valid and one invalid run ID
       await page.goto(`/o/${orgSlug}/projects/${projectName}?runs=${runIds[0]},nonexistent-run-id-12345`);
-      await waitForTRPC(page);
+      await waitForRunsData(page);
       await page.waitForLoadState("domcontentloaded");
 
       // Should only select the valid run (1 selected)
@@ -139,7 +139,7 @@ test.describe("Run Comparison URL Parameters", () => {
     test("empty ?runs= param falls back to default selection", async ({ page }) => {
       // Navigate with empty runs param
       await page.goto(`/o/${orgSlug}/projects/${projectName}?runs=`);
-      await waitForTRPC(page);
+      await waitForRunsData(page);
       await page.waitForLoadState("domcontentloaded");
 
       // Should fall back to default (first 5 runs selected)
@@ -147,11 +147,17 @@ test.describe("Run Comparison URL Parameters", () => {
       // Default behavior selects up to 5 runs
       await expect(selectionContainer).toBeVisible({ timeout: 5000 });
 
-      // The count should be > 0 (default selection)
-      const text = await selectionContainer.textContent();
-      const match = text?.match(/(\d+)\s*of/);
-      const count = match ? parseInt(match[1]) : 0;
-      expect(count).toBeGreaterThan(0);
+      // The count should be > 0 (default selection) — use polling to wait for data
+      await expect
+        .poll(
+          async () => {
+            const text = await selectionContainer.textContent();
+            const match = text?.match(/(\d+)\s*of/);
+            return match ? parseInt(match[1]) : 0;
+          },
+          { timeout: 10000, message: "Waiting for default selection count > 0" }
+        )
+        .toBeGreaterThan(0);
     });
   });
 
@@ -159,7 +165,7 @@ test.describe("Run Comparison URL Parameters", () => {
     test("selecting a run updates the URL with runs param", async ({ page }) => {
       // Start fresh without runs param
       await page.goto(`/o/${orgSlug}/projects/${projectName}`);
-      await waitForTRPC(page);
+      await waitForRunsData(page);
       await page.waitForLoadState("domcontentloaded");
 
       // Deselect all first
@@ -197,7 +203,7 @@ test.describe("Run Comparison URL Parameters", () => {
     test("deselecting all runs removes runs param from URL", async ({ page }) => {
       // First, get a run ID and navigate with it selected
       await page.goto(`/o/${orgSlug}/projects/${projectName}`);
-      await waitForTRPC(page);
+      await waitForRunsData(page);
       await page.waitForLoadState("domcontentloaded");
 
       const runIds = await getRunIdsFromTable(page, 1);
@@ -209,7 +215,7 @@ test.describe("Run Comparison URL Parameters", () => {
 
       // Navigate with run selected
       await page.goto(`/o/${orgSlug}/projects/${projectName}?runs=${runIds[0]}`);
-      await waitForTRPC(page);
+      await waitForRunsData(page);
       await page.waitForLoadState("domcontentloaded");
 
       // Deselect all
@@ -227,7 +233,7 @@ test.describe("Run Comparison URL Parameters", () => {
     test("?runs= works together with ?chart= param", async ({ page }) => {
       // Get a run ID first
       await page.goto(`/o/${orgSlug}/projects/${projectName}`);
-      await waitForTRPC(page);
+      await waitForRunsData(page);
       await page.waitForLoadState("domcontentloaded");
 
       const runIds = await getRunIdsFromTable(page, 1);
@@ -242,7 +248,7 @@ test.describe("Run Comparison URL Parameters", () => {
 
       // Navigate with both runs and chart params
       await page.goto(`/o/${orgSlug}/projects/${projectName}?runs=${runIds[0]}&chart=some-chart-id`);
-      await waitForTRPC(page);
+      await waitForRunsData(page);
       await page.waitForLoadState("domcontentloaded");
 
       // Verify 1 run is selected (runs param works)
@@ -251,10 +257,9 @@ test.describe("Run Comparison URL Parameters", () => {
         await expect(selectionContainer).toContainText("1", { timeout: 2000 });
       }).toPass({ timeout: 10000 });
 
-      // Verify URL still has both params
-      const url = page.url();
-      expect(url).toContain('runs=');
-      expect(url).toContain('chart=');
+      // Verify URL still has both params (use auto-retrying assertion — URL sync is debounced)
+      await expect(page).toHaveURL(/runs=/, { timeout: 5000 });
+      await expect(page).toHaveURL(/chart=/, { timeout: 5000 });
     });
   });
 
@@ -262,7 +267,7 @@ test.describe("Run Comparison URL Parameters", () => {
     test("copied URL with runs param can be shared and reproduced", async ({ page, context }) => {
       // Get run IDs
       await page.goto(`/o/${orgSlug}/projects/${projectName}`);
-      await waitForTRPC(page);
+      await waitForRunsData(page);
       await page.waitForLoadState("domcontentloaded");
 
       const runIds = await getRunIdsFromTable(page, 3);
@@ -282,7 +287,7 @@ test.describe("Run Comparison URL Parameters", () => {
       await clearSelectionCache(newPage);
 
       await newPage.goto(shareableUrl);
-      await waitForTRPC(newPage);
+      await waitForRunsData(newPage);
       await newPage.waitForLoadState("domcontentloaded");
 
       // Verify exactly 3 runs are selected

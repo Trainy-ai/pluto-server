@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { projectSelectors, orgSelectors } from "../../utils/selectors";
-import { navigateToProjects, waitForTRPC } from "../../utils/test-helpers";
+import { navigateToProjects, waitForPageReady } from "../../utils/test-helpers";
 
 // Helper to complete onboarding if needed
 async function ensureUserHasOrganization(page: import("@playwright/test").Page): Promise<string> {
@@ -19,34 +19,32 @@ async function ensureUserHasOrganization(page: import("@playwright/test").Page):
 
     // Complete user onboarding (location selection)
     if (currentUrl.includes("/onboard/user")) {
-      console.log("On user onboarding step, selecting location...");
 
       // Click on the combobox to open dropdown
       const locationCombobox = page.getByRole("combobox");
       await locationCombobox.click();
-      await page.evaluate(() => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
+      await page.waitForTimeout(200);
 
       // Click the first listbox option
       const option = page.locator('[role="listbox"] [role="option"]').first();
       await option.click({ timeout: 5000 });
-      await page.evaluate(() => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
+      await page.waitForTimeout(200);
 
       // Click Next
       await page.getByRole("button", { name: /next/i }).click();
       await page.waitForLoadState("domcontentloaded");
-      continue;
+        continue;
     }
 
     // Complete org creation
     if (currentUrl.includes("/onboard/org") || currentUrl.includes("/onboard/organization")) {
-      console.log("On org creation step...");
       const timestamp = Date.now();
       const orgName = `E2E Test Org ${timestamp}`;
 
       // Fill org name
       const orgNameInput = page.getByLabel(/organization name/i);
       await orgNameInput.fill(orgName);
-      await page.evaluate(() => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
+      await page.waitForTimeout(200);
 
       // Click Next if present
       const nextBtn = page.getByRole("button", { name: /^next$/i });
@@ -104,16 +102,8 @@ test.describe("Project Management", () => {
       name: projectSelectors.createButton,
     });
 
-    // Debug: log all buttons and links on the page
-    const allButtons = await page.getByRole("button").allTextContents();
-    console.log("All buttons on projects page:", allButtons);
-
-    const allLinks = await page.getByRole("link").allTextContents();
-    console.log("All links on projects page:", allLinks);
-
     // Check if button exists and is visible
     const isVisible = await createButton.isVisible().catch(() => false);
-    console.log("Create button visible:", isVisible);
 
     if (isVisible) {
       await createButton.click();
@@ -133,7 +123,7 @@ test.describe("Project Management", () => {
       await submitButton.click();
 
       // Wait for project creation
-      await waitForTRPC(page);
+      await waitForPageReady(page);
 
       // Project should appear in the list
       // Use flexible text matching to find the project
@@ -154,10 +144,6 @@ test.describe("Project Management", () => {
     const paginationButtons = page.getByRole("button", {
       name: /next|previous|page/i,
     });
-
-    // We don't assert this must exist - just check if it's there
-    const count = await paginationButtons.count();
-    console.log(`Found ${count} pagination buttons`);
 
     // This test just ensures the page loads without errors
     await expect(page).toHaveURL(new RegExp(`/o/${orgSlug}/projects`));
