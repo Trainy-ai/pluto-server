@@ -2,39 +2,7 @@ import { z } from "zod";
 import { protectedOrgProcedure } from "../../../../../../lib/trpc";
 import { sqidDecode } from "../../../../../../lib/sqid";
 import { withCache } from "../../../../../../lib/cache";
-
-const numberOrStringSchema = z.union([z.number(), z.string()]);
-const dTypeSchema = z.union([
-  z.literal("int"),
-  z.literal("float"),
-  z.literal("str"),
-]);
-
-const rowcolSchema = z.array(
-  z.object({
-    name: z.string(), // label
-    dtype: dTypeSchema, // data type
-  })
-);
-
-// 2D matrix of numberOrStringSchema
-const tableInnerSchema = z.array(z.array(numberOrStringSchema));
-
-const tableSchema = z.object({
-  row: rowcolSchema.optional(), // labels, these can be optional
-  col: rowcolSchema.optional(), // labels and data types, these can be optional
-  table: tableInnerSchema,
-});
-
-const tableDataRow = z.object({
-  logName: z.string(),
-  time: z.string().transform((str) => new Date(str + "Z")),
-  step: z.string().transform((str) => parseInt(str, 10)),
-  tableData: z.string().transform((str) => {
-    const parsed = JSON.parse(str);
-    return tableSchema.parse(parsed);
-  }),
-});
+import { tableDataRow } from "./table.schema";
 
 type TableData = z.infer<typeof tableDataRow>[];
 
