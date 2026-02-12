@@ -1,119 +1,182 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
-# Multi-port dev runner
-# Usage: ./scripts/dev.sh [--offset N] [--env ENV] <service>
+# Spin up a frontend+backend pair from any worktree.
+# Auto-finds available port pairs starting at 4000/4001.
+# Generated files are stored in .agent/ inside the worktree (gitignored).
 #
-# Services: app, server, ingest, py
+# Usage:
+#   ./scripts/dev.sh          # auto-pick ports
+#   ./scripts/dev.sh 5000     # explicit frontend port (backend = port+1)
 #
-# Examples:
-#   ./scripts/dev.sh app                  # default ports (3000/3001/3003/3004)
-#   ./scripts/dev.sh --offset 10 app      # offset ports (3010/3011/3013/3014)
-#   ./scripts/dev.sh --offset 10 server
-#   ./scripts/dev.sh --offset 10 ingest
-#   ./scripts/dev.sh --offset 10 py
-#
-# Port mapping (default → offset 10):
-#   app:    3000 → 3010
-#   server: 3001 → 3011
-#   ingest: 3003 → 3013
-#   py:     3004 → 3014
+# After starting (replace 4000 with your assigned port):
+#   Rebuild all:      docker compose -f .agent/compose.yml -p agent-4000 up --build -d
+#   Frontend only:    docker compose -f .agent/compose.yml -p agent-4000 up --build -d frontend-4000
+#   Backend only:     docker compose -f .agent/compose.yml -p agent-4000 up --build -d backend-4000
+#   Logs:             docker compose -f .agent/compose.yml -p agent-4000 logs -f
+#   Stop:             docker compose -f .agent/compose.yml -p agent-4000 down
+#   List all stacks:  docker compose ls
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-OFFSET=0
-ENV_NAME="local"
-SERVICE=""
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$SCRIPT_DIR"
 
-while [[ $# -gt 0 ]]; do
-  case $1 in
-    --offset|-o)
-      OFFSET="$2"
-      shift 2
-      ;;
-    --env|-e)
-      ENV_NAME="$2"
-      shift 2
-      ;;
-    -*)
-      echo "Unknown option: $1" >&2
-      exit 1
-      ;;
-    *)
-      SERVICE="$1"
-      shift
-      ;;
-  esac
-done
-
-if [[ -z "$SERVICE" ]]; then
-  echo "Usage: $0 [--offset N] [--env ENV] <app|server|ingest|py>" >&2
+# Verify shared network exists
+if ! docker network inspect mlop_network &>/dev/null; then
+  echo "ERROR: mlop_network does not exist."
+  echo "Start the main stack first:  cd ~/server-private && docker compose --env-file .env up -d"
   exit 1
 fi
 
-APP_PORT=$((3000 + OFFSET))
-SERVER_PORT=$((3001 + OFFSET))
-INGEST_PORT=$((3003 + OFFSET))
-PY_PORT=$((3004 + OFFSET))
+# Find available port pair (frontend, frontend+1)
+find_available_port() {
+  local port=$1
+  while true; do
+    local backend_port=$((port + 1))
+    if ss -tln | awk -v p1="$port" -v p2="$backend_port" 'NR>1 {addr=$4; sub(/.*:/, "", addr)} addr==p1 || addr==p2 {exit 1}'; then
+      echo "$port"
+      return
+    fi
+    port=$((port + 1000))
+    if [ "$port" -gt 9000 ]; then
+      echo "ERROR: No available port pairs found (tried 4000-9000)" >&2
+      exit 1
+    fi
+  done
+}
 
-if [[ "$OFFSET" -ne 0 ]]; then
-  echo "Port mapping (offset $OFFSET):"
-  echo "  app:    $APP_PORT"
-  echo "  server: $SERVER_PORT"
-  echo "  ingest: $INGEST_PORT"
-  echo "  py:     $PY_PORT"
-  echo ""
+if [ "${1:-}" != "" ]; then
+  if [[ ! "$1" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: Port must be a number" >&2
+    exit 1
+  fi
+  FRONTEND_PORT="$1"
+else
+  FRONTEND_PORT=$(find_available_port 4000)
+fi
+BACKEND_PORT=$((FRONTEND_PORT + 1))
+
+PROJECT_NAME="agent-${FRONTEND_PORT}"
+
+# Store generated files in .agent/ inside the worktree
+AGENT_DIR="${SCRIPT_DIR}/.agent"
+mkdir -p "$AGENT_DIR"
+
+# Gitignore the .agent directory
+if [ ! -f "${AGENT_DIR}/.gitignore" ]; then
+  echo "*" > "${AGENT_DIR}/.gitignore"
 fi
 
-case "$SERVICE" in
-  app)
-    # Vite reads PORT_OFFSET and computes port + proxy target automatically
-    # VITE_SERVER_URL is set explicitly so the frontend env.ts also picks it up
-    APP_ENV_FILE="$ROOT/web/app/.env.${ENV_NAME}"
-    if [[ ! -f "$APP_ENV_FILE" ]]; then
-      echo "Error: $APP_ENV_FILE not found" >&2
-      exit 1
-    fi
-    cd "$ROOT/web"
-    export PORT_OFFSET="$OFFSET"
-    export VITE_SERVER_URL="http://localhost:$SERVER_PORT"
-    exec pnpm dotenv -e "app/.env.${ENV_NAME}" -- pnpm vite --port "$APP_PORT"
-    ;;
+echo "Ports:   frontend=$FRONTEND_PORT  backend=$BACKEND_PORT"
+echo "Project: $PROJECT_NAME"
+echo "Source:  $SCRIPT_DIR"
+echo ""
 
-  server)
-    # For the server env, "local" maps to ".env.locals", others map to ".env.<name>"
-    if [[ "$ENV_NAME" == "local" ]]; then
-      SERVER_ENV_FILE="$ROOT/web/server/.env.locals"
-    else
-      SERVER_ENV_FILE="$ROOT/web/server/.env.${ENV_NAME}"
-    fi
-    if [[ ! -f "$SERVER_ENV_FILE" ]]; then
-      echo "Error: $SERVER_ENV_FILE not found" >&2
-      exit 1
-    fi
-    cd "$ROOT/web"
-    # Generate Prisma client first
-    pnpm dotenv -e "$SERVER_ENV_FILE" prisma generate --schema=server/prisma/schema.prisma
-    # Override URL env vars with offset ports
-    export PUBLIC_URL="http://localhost:$APP_PORT"
-    export BETTER_AUTH_URL="http://localhost:$SERVER_PORT"
-    exec pnpm dotenv -e "$SERVER_ENV_FILE" -- pnpm next dev --dir server -p "$SERVER_PORT"
-    ;;
+# Generate compose file
+COMPOSE_FILE="${AGENT_DIR}/compose.yml"
+NGINX_CONF="${AGENT_DIR}/nginx.conf"
 
-  ingest)
-    cd "$ROOT/ingest"
-    export PORT_OFFSET="$OFFSET"
-    exec cargo run -- --env "$ENV_NAME"
-    ;;
+cat > "$COMPOSE_FILE" <<YAML
+services:
+  backend-${FRONTEND_PORT}:
+    build:
+      context: ${REPO_ROOT}/web
+      dockerfile: server/Dockerfile
+    ports:
+      - "${BACKEND_PORT}:${BACKEND_PORT}"
+    networks:
+      - mlop_network
+    entrypoint: [ "/bin/sh", "-c", "prisma migrate deploy && node server/server.js" ]
+    restart: unless-stopped
+    environment:
+      - MALLOC_ARENA_MAX=4
+      - PORT=${BACKEND_PORT}
+      - IS_DOCKER=true
+      - PUBLIC_URL=http://localhost:${BACKEND_PORT}
+      - BETTER_AUTH_URL=http://localhost:${FRONTEND_PORT}
+      - BETTER_AUTH_SECRET=DONTUSETHISACTUALLYINPRODFORDEVTESTINGONLY
+      - DATABASE_URL=postgresql://postgres:nope@db:5432/postgres
+      - DATABASE_DIRECT_URL=postgresql://postgres:nope@db:5432/postgres
+      - CLICKHOUSE_URL=http://clickhouse:8123
+      - CLICKHOUSE_USER=nope
+      - CLICKHOUSE_PASSWORD=nope
+      - REDIS_URL=redis://redis:6379
+      - STORAGE_ACCESS_KEY_ID=nope
+      - STORAGE_SECRET_ACCESS_KEY=minioadmin
+      - STORAGE_ENDPOINT=http://minio:9000
+      - STORAGE_BUCKET=nope
+      - STORAGE_REGION=auto
+      - GITHUB_CLIENT_ID=nope
+      - GITHUB_CLIENT_SECRET=nope
+      - GOOGLE_CLIENT_ID=nope
+      - GOOGLE_CLIENT_SECRET=nope
 
-  py)
-    cd "$ROOT/py"
-    export PORT_OFFSET="$OFFSET"
-    exec python server.py
-    ;;
+  frontend-${FRONTEND_PORT}:
+    build:
+      context: ${REPO_ROOT}/web/app
+      dockerfile: Dockerfile
+    ports:
+      - "${FRONTEND_PORT}:${FRONTEND_PORT}"
+    networks:
+      - mlop_network
+    depends_on:
+      - backend-${FRONTEND_PORT}
+    environment:
+      - VITE_IS_DOCKER=true
+      - VITE_SERVER_URL=http://localhost:${BACKEND_PORT}
+    volumes:
+      - ${NGINX_CONF}:/etc/nginx/conf.d/default.conf:ro
 
-  *)
-    echo "Unknown service: $SERVICE" >&2
-    echo "Available: app, server, ingest, py" >&2
-    exit 1
-    ;;
-esac
+networks:
+  mlop_network:
+    external: true
+YAML
+
+# Generate nginx config pointing to the right backend
+cat > "$NGINX_CONF" <<NGINX
+server {
+    listen       ${FRONTEND_PORT};
+    server_name  localhost;
+    root   /usr/share/nginx/html;
+    index  index.html;
+
+    location /trpc {
+        proxy_pass http://backend-${FRONTEND_PORT}:${BACKEND_PORT}/trpc;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_http_version 1.1;
+        proxy_buffering off;
+    }
+
+    location ~ ^/api/ {
+        proxy_pass http://backend-${FRONTEND_PORT}:${BACKEND_PORT};
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_http_version 1.1;
+        proxy_buffering off;
+    }
+
+    location / {
+        try_files \$uri \$uri/ /index.html;
+    }
+}
+NGINX
+
+echo "Building and starting..."
+docker compose -f "$COMPOSE_FILE" -p "$PROJECT_NAME" up --build -d
+
+echo ""
+echo "====================================="
+echo "  Frontend: http://localhost:${FRONTEND_PORT}"
+echo "  Backend:  http://localhost:${BACKEND_PORT}"
+echo "====================================="
+echo ""
+echo "Rebuild:  docker compose -f .agent/compose.yml -p $PROJECT_NAME up --build -d"
+echo "Frontend: docker compose -f .agent/compose.yml -p $PROJECT_NAME up --build -d frontend-${FRONTEND_PORT}"
+echo "Backend:  docker compose -f .agent/compose.yml -p $PROJECT_NAME up --build -d backend-${FRONTEND_PORT}"
+echo "Logs:     docker compose -f .agent/compose.yml -p $PROJECT_NAME logs -f"
+echo "Stop:     docker compose -f .agent/compose.yml -p $PROJECT_NAME down"
