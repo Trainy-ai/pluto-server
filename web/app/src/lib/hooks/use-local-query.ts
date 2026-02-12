@@ -94,7 +94,7 @@ export function useLocalQuery<T>({
     queryKey: queryKey,
     queryFn: () => cachedQueryFn(),
     staleTime,
-    // @ts-ignore No fucking clue on how to fix this.
+    // @ts-expect-error TanStack Query v5 NonFunctionGuard<T> rejects generic T for placeholderData; safe since T is always API response data
     placeholderData,
     ...rest,
   });
@@ -155,7 +155,6 @@ export function useSuspenseLocalQuery<T>({
     queryKey: queryKey,
     queryFn: () => cachedQueryFn(),
     staleTime,
-    // @ts-ignore No fucking clue on how to fix this.
     placeholderData,
     ...rest,
   });
@@ -335,7 +334,8 @@ interface LocalInfiniteQueryOptions<T> {
   queryFn: ({ pageParam }: { pageParam?: unknown }) => Promise<T>;
   staleTime: number;
   localCache: LocalCache<InfiniteData<T>>;
-  getNextPageParam?: (lastPage: T, pages: T[]) => unknown;
+  getNextPageParam: (lastPage: T, allPages: T[], lastPageParam: unknown, allPageParams: unknown[]) => unknown;
+  initialPageParam: unknown;
 }
 
 export function useLocalInfiniteQuery<T>({
@@ -344,6 +344,7 @@ export function useLocalInfiniteQuery<T>({
   queryFn,
   localCache,
   getNextPageParam,
+  initialPageParam,
 }: LocalInfiniteQueryOptions<T>) {
   const storageKey = stringifyQueryKey(queryKey);
 
@@ -374,8 +375,8 @@ export function useLocalInfiniteQuery<T>({
   const { data, ...rest } = useInfiniteQuery({
     queryKey,
     queryFn,
-    // @ts-ignore No clue why this is complaining.
     getNextPageParam,
+    initialPageParam,
     staleTime,
     placeholderData,
   });
