@@ -59,6 +59,7 @@ const LineChartWrapper = forwardRef<LineChartUPlotRef, LineChartWrapperProps>(
     return (
       <div
         key={chartKey}
+        data-testid="line-chart-wrapper"
         className={className}
         style={{
           position: "relative",
