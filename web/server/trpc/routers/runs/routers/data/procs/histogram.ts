@@ -2,28 +2,7 @@ import { z } from "zod";
 import { protectedOrgProcedure } from "../../../../../../lib/trpc";
 import { sqidDecode } from "../../../../../../lib/sqid";
 import { withCache } from "../../../../../../lib/cache";
-
-const histogramSchema = z.object({
-  freq: z.array(z.number().int()),
-  bins: z.object({
-    min: z.number(),
-    max: z.number(),
-    num: z.number().int(),
-  }),
-  shape: z.literal("uniform"), // Only allows the string "uniform"
-  type: z.literal("Histogram"), // Only allows the string "Histogram"
-  maxFreq: z.number().int(),
-});
-
-const histogramDataRow = z.object({
-  logName: z.string(),
-  time: z.string().transform((str) => new Date(str + "Z")),
-  step: z.string().transform((str) => parseInt(str, 10)),
-  histogramData: z.string().transform((str) => {
-    const parsed = JSON.parse(str);
-    return histogramSchema.parse(parsed);
-  }),
-});
+import { histogramDataRow } from "./histogram.schema";
 
 type HistogramData = z.infer<typeof histogramDataRow>[];
 

@@ -3419,4 +3419,29 @@ describe('SDK API Endpoints (with API Key)', () => {
       });
     });
   });
+
+  // ============================================================================
+  // Test Suite 23: Data Procedures (Histogram & Table) - Auth Guards
+  // ============================================================================
+  describe('Test Suite 23: Data Procedures Auth Guards', () => {
+    it('Test 23.1: Histogram - Unauthorized without session', async () => {
+      const response = await makeTrpcRequest('runs.data.histogram', {
+        runId: 'test',
+        projectName: 'test-project',
+        logName: 'train/weights',
+      });
+
+      expect(response.status).toBe(401);
+    });
+
+    it('Test 23.2: Table - Unauthorized without session', async () => {
+      const response = await makeTrpcRequest('runs.data.table', {
+        runId: 'test',
+        projectName: 'test-project',
+        logName: 'eval/confusion_matrix',
+      });
+
+      expect(response.status).toBe(401);
+    });
+  });
 });
