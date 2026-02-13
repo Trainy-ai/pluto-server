@@ -11,9 +11,9 @@ import { isEduEmail } from '../lib/edu';
 // Mock env module to avoid requiring actual environment variables
 vi.mock('../lib/env', () => ({
   env: {
-    STRIPE_SECRET_KEY: undefined,
-    STRIPE_WEBHOOK_SECRET: undefined,
-    STRIPE_PRO_PRICE_ID: undefined,
+    STRIPE_SECRET_KEY: 'sk_test_fake_key',
+    STRIPE_WEBHOOK_SECRET: 'whsec_test_fake',
+    STRIPE_PRO_PRICE_ID: 'price_test_fake',
   },
 }));
 
@@ -90,3 +90,4 @@ describe('Active Stripe Subscription Detection', () => {
     });
   });
 });
+
