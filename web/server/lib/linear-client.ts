@@ -10,7 +10,7 @@ async function linearRequest<T>(token: string, query: string, variables?: Record
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: token,
+      Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify({ query, variables }),
   });

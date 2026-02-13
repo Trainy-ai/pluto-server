@@ -1,6 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
-import { decrypt } from "./encryption";
 import { createComment, updateComment, getIssueByIdentifier, getIssueComments } from "./linear-client";
+import { getValidToken } from "./linear-oauth";
 import { sqidEncode } from "./sqid";
 import { env } from "./env";
 
@@ -132,13 +132,6 @@ async function syncRunsToLinearIssueInternal({ prisma, organizationId, issueIden
       return { bail: true as const, result: { success: false, error: "Linear integration not configured or disabled" } };
     }
 
-    let token: string;
-    try {
-      token = decrypt(integration.encryptedToken);
-    } catch {
-      return { bail: true as const, result: { success: false, error: "Failed to decrypt Linear API token" } };
-    }
-
     const org = await tx.organization.findUnique({
       where: { id: organizationId },
       select: { slug: true },
@@ -170,7 +163,6 @@ async function syncRunsToLinearIssueInternal({ prisma, organizationId, issueIden
 
     return {
       bail: false as const,
-      token,
       orgSlug: org.slug,
       runs,
       metadata,
@@ -184,13 +176,19 @@ async function syncRunsToLinearIssueInternal({ prisma, organizationId, issueIden
     return txResult.result;
   }
 
-  const { token, orgSlug, runs, metadata, commentIds, existingCommentId } = txResult;
+  const { orgSlug, runs, metadata, commentIds, existingCommentId } = txResult;
 
   console.log(`[linear-sync] issue=${issueIdentifier} runs=${runs.length} storedCommentId=${existingCommentId ?? "none"} runNames=[${runs.map((r: SyncRun) => r.name).join(", ")}]`);
 
   // ---------------------------------------------------------------------------
-  // Phase 2: Build comment body and call Linear API (outside transaction)
+  // Phase 2: Get valid token and call Linear API (outside transaction)
   // ---------------------------------------------------------------------------
+  let token: string;
+  try {
+    token = await getValidToken(prisma, organizationId);
+  } catch {
+    return { success: false, error: "Failed to get valid Linear token" };
+  }
 
   // If no runs are tagged, update the comment to reflect that
   if (runs.length === 0) {

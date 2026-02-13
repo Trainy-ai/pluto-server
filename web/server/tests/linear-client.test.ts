@@ -61,7 +61,7 @@ describe("Linear Client", () => {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: "lin_api_test",
+          Authorization: "Bearer lin_api_test",
         },
         body: expect.any(String),
       });
@@ -329,7 +329,7 @@ describe("Linear Client", () => {
       const [url, init] = mockFetch.mock.calls[0];
       expect(url).toBe("https://api.linear.app/graphql");
       expect(init.headers["Content-Type"]).toBe("application/json");
-      expect(init.headers.Authorization).toBe("lin_api_mytoken");
+      expect(init.headers.Authorization).toBe("Bearer lin_api_mytoken");
     });
   });
 });

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { protectedOrgProcedure } from "../../../../../../lib/trpc";
-import { decrypt } from "../../../../../../lib/encryption";
+import { getValidToken } from "../../../../../../lib/linear-oauth";
 import { searchIssues } from "../../../../../../lib/linear-client";
 
 export const searchLinearIssuesProcedure = protectedOrgProcedure
@@ -28,7 +28,7 @@ export const searchLinearIssuesProcedure = protectedOrgProcedure
       });
     }
 
-    const token = decrypt(integration.encryptedToken);
+    const token = await getValidToken(ctx.prisma, input.organizationId);
     const issues = await searchIssues(token, input.query, input.limit);
 
     return issues.map((issue) => ({
