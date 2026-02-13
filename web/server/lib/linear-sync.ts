@@ -74,11 +74,20 @@ export function triggerLinearSyncForTags(
     }
   }
 
+  console.log(`[linear-sync] triggerLinearSyncForTags: orgId=${organizationId} linearTags=[${[...linearTags].join(", ")}]`);
+
   for (const tag of linearTags) {
     const issueIdentifier = tag.slice("linear:".length);
     if (issueIdentifier) {
       void syncRunsToLinearIssue({ prisma, organizationId, issueIdentifier })
-        .catch((err) => console.error("Linear sync failed:", err));
+        .then((result) => {
+          if (!result.success) {
+            console.error(`[linear-sync] sync failed for ${issueIdentifier}:`, result.error);
+          } else {
+            console.log(`[linear-sync] sync succeeded for ${issueIdentifier}`);
+          }
+        })
+        .catch((err) => console.error("[linear-sync] sync threw for", issueIdentifier, err));
     }
   }
 }
@@ -91,11 +100,13 @@ export function syncRunsToLinearIssue(options: SyncOptions): Promise<SyncResult>
 /** Look up an existing Pluto comment on the issue; update it if found, create if not. */
 async function findOrCreatePlutoComment(token: string, issueId: string, body: string): Promise<string> {
   const existingIds = await getIssueComments(token, issueId);
+  console.log(`[linear-sync] findOrCreatePlutoComment: issueId=${issueId} existingPlutoComments=${existingIds.length} ids=[${existingIds.join(", ")}]`);
   if (existingIds.length > 0) {
     await updateComment(token, existingIds[0], body);
     return existingIds[0];
   }
   const comment = await createComment(token, issueId, body);
+  console.log(`[linear-sync] created new comment: ${comment.id}`);
   return comment.id;
 }
 
@@ -175,6 +186,8 @@ async function syncRunsToLinearIssueInternal({ prisma, organizationId, issueIden
 
   const { token, orgSlug, runs, metadata, commentIds, existingCommentId } = txResult;
 
+  console.log(`[linear-sync] issue=${issueIdentifier} runs=${runs.length} storedCommentId=${existingCommentId ?? "none"} runNames=[${runs.map((r: SyncRun) => r.name).join(", ")}]`);
+
   // ---------------------------------------------------------------------------
   // Phase 2: Build comment body and call Linear API (outside transaction)
   // ---------------------------------------------------------------------------
@@ -238,6 +251,8 @@ async function syncRunsToLinearIssueInternal({ prisma, organizationId, issueIden
     "_Auto-updated by Pluto_",
   ].join("\n");
 
+  console.log(`[linear-sync] built comment for ${issueIdentifier}: ${rows.length} table rows, body length=${body.length}`);
+
   // Resolve the issue identifier to an ID
   let issue;
   try {
@@ -260,13 +275,17 @@ async function syncRunsToLinearIssueInternal({ prisma, organizationId, issueIden
 
     if (existingCommentId) {
       try {
+        console.log(`[linear-sync] updating stored comment ${existingCommentId} for ${issueIdentifier}`);
         await updateComment(token, existingCommentId, body);
         commentId = existingCommentId;
-      } catch {
+        console.log(`[linear-sync] updated stored comment successfully`);
+      } catch (updateErr) {
+        console.log(`[linear-sync] stored comment update failed, recovering:`, updateErr);
         // Stored comment may have been deleted — recover or create
         commentId = await findOrCreatePlutoComment(token, issue.id, body);
       }
     } else {
+      console.log(`[linear-sync] no stored comment ID for ${issueIdentifier}, looking up or creating`);
       // No stored ID — recover orphaned comment or create new
       commentId = await findOrCreatePlutoComment(token, issue.id, body);
     }
