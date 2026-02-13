@@ -1,6 +1,7 @@
-use axum::{extract::State, routing::get, Json, Router};
+use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
 use serde::Serialize;
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::dlq;
 use crate::routes::AppState;
@@ -15,17 +16,101 @@ pub struct VersionInfo {
     build_time: String,
 }
 
+#[derive(Serialize)]
+pub struct CheckResult {
+    pub status: &'static str,
+    pub latency_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct ReadinessResponse {
+    pub status: &'static str,
+    pub checks: ReadinessChecks,
+}
+
+#[derive(Serialize)]
+pub struct ReadinessChecks {
+    pub clickhouse: CheckResult,
+    pub postgres: CheckResult,
+}
+
 // Defines the router for the /health endpoint
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/health", get(health_check))
+        .route("/health/ready", get(readiness_check))
         .route("/health/dlq", get(dlq_health))
         .route("/version", get(version_info))
 }
 
-// Simple health check handler that returns "OK"
+// Liveness probe - always returns OK if the process is alive
 async fn health_check() -> &'static str {
     "OK"
+}
+
+// Readiness probe - verifies database connectivity
+async fn readiness_check(
+    State(state): State<Arc<AppState>>,
+) -> (StatusCode, Json<ReadinessResponse>) {
+    // Run checks in parallel
+    let (ch_result, pg_result) = tokio::join!(
+        async {
+            let start = Instant::now();
+            let result = state.clickhouse_client.query("SELECT 1").execute().await;
+            let latency = start.elapsed().as_millis() as u64;
+            match result {
+                Ok(_) => CheckResult {
+                    status: "up",
+                    latency_ms: latency,
+                    error: None,
+                },
+                Err(_) => CheckResult {
+                    status: "down",
+                    latency_ms: latency,
+                    error: Some("ClickHouse health check failed".to_string()),
+                },
+            }
+        },
+        async {
+            let start = Instant::now();
+            let result = state.db.ping().await;
+            let latency = start.elapsed().as_millis() as u64;
+            match result {
+                Ok(_) => CheckResult {
+                    status: "up",
+                    latency_ms: latency,
+                    error: None,
+                },
+                Err(_) => CheckResult {
+                    status: "down",
+                    latency_ms: latency,
+                    error: Some("PostgreSQL health check failed".to_string()),
+                },
+            }
+        }
+    );
+    let clickhouse = ch_result;
+    let postgres = pg_result;
+
+    let all_healthy = clickhouse.status == "up" && postgres.status == "up";
+    let status_code = if all_healthy {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+
+    (
+        status_code,
+        Json(ReadinessResponse {
+            status: if all_healthy { "healthy" } else { "unhealthy" },
+            checks: ReadinessChecks {
+                clickhouse,
+                postgres,
+            },
+        }),
+    )
 }
 
 // DLQ health check handler that returns statistics

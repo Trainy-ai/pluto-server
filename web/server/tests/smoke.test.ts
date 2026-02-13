@@ -53,10 +53,32 @@ describe('Backend Smoke Tests', () => {
       expect(text).toBe('OK');
     });
 
-    it('Test 1.2: Database Connections', async () => {
-      // This test verifies the server is running and can connect to databases
-      // If health check passes, databases should be connected
+    it('Test 1.2: Readiness Check Endpoint', async () => {
+      const response = await makeRequest('/api/health/ready');
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.status).toBe('healthy');
+      expect(body.checks).toBeDefined();
+      expect(body.checks.postgres).toBeDefined();
+      expect(body.checks.postgres.status).toBe('up');
+      expect(typeof body.checks.postgres.latency_ms).toBe('number');
+      expect(body.checks.clickhouse).toBeDefined();
+      expect(body.checks.clickhouse.status).toBe('up');
+      expect(typeof body.checks.clickhouse.latency_ms).toBe('number');
+    });
+
+    it('Test 1.3: Liveness endpoint still returns OK', async () => {
       const response = await makeRequest('/api/health');
+      expect(response.status).toBe(200);
+      const text = await response.text();
+      expect(text).toBe('OK');
+    });
+
+    it('Test 1.4: Database Connections', async () => {
+      // This test verifies the server is running and can connect to databases
+      // If readiness check passes, databases should be connected
+      const response = await makeRequest('/api/health/ready');
       expect(response.status).toBe(200);
 
       // Additional check: Try to make a simple tRPC call that requires DB
