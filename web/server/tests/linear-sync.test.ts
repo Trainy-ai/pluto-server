@@ -20,8 +20,8 @@ vi.mock("../lib/linear-client", () => ({
   getIssueComments: vi.fn(),
 }));
 
-vi.mock("../lib/encryption", () => ({
-  decrypt: vi.fn((encrypted: string) => `decrypted:${encrypted}`),
+vi.mock("../lib/linear-oauth", () => ({
+  getValidToken: vi.fn().mockResolvedValue("mock-oauth-token"),
 }));
 
 vi.mock("../lib/sqid", () => ({

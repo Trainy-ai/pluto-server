@@ -12,7 +12,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
@@ -23,7 +22,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { ExternalLink, Loader2, Trash2 } from "lucide-react";
+import { ExternalLink, Loader2, Trash2, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 
 export const Route = createFileRoute(
@@ -64,7 +63,6 @@ function RouteComponent() {
 
 function LinearIntegrationCard({ organizationId }: { organizationId: string }) {
   const queryClient = useQueryClient();
-  const [apiKeyInput, setApiKeyInput] = useState("");
   const [disconnectOpen, setDisconnectOpen] = useState(false);
 
   const { data: integration, isLoading } = useQuery(
@@ -73,8 +71,8 @@ function LinearIntegrationCard({ organizationId }: { organizationId: string }) {
     }),
   );
 
-  const saveMutation = useMutation(
-    trpc.organization.integrations.saveLinearApiKey.mutationOptions(),
+  const oauthUrlMutation = useMutation(
+    trpc.organization.integrations.getLinearOAuthUrl.mutationOptions(),
   );
 
   const removeMutation = useMutation(
@@ -88,16 +86,11 @@ function LinearIntegrationCard({ organizationId }: { organizationId: string }) {
   }
 
   function handleConnect() {
-    if (!apiKeyInput.trim()) {
-      return;
-    }
-    saveMutation.mutate(
-      { organizationId, apiKey: apiKeyInput.trim() },
+    oauthUrlMutation.mutate(
+      { organizationId },
       {
         onSuccess: (data) => {
-          toast.success(`Connected to Linear workspace: ${data.workspaceName}`);
-          setApiKeyInput("");
-          invalidate();
+          window.location.href = data.url;
         },
         onError: (err) => {
           toast.error(err.message);
@@ -142,6 +135,8 @@ function LinearIntegrationCard({ organizationId }: { organizationId: string }) {
   }
 
   const isConnected = integration?.configured;
+  const isOAuth = integration?.isOAuth;
+  const isLegacy = isConnected && !isOAuth;
 
   return (
     <Card>
@@ -152,7 +147,11 @@ function LinearIntegrationCard({ organizationId }: { organizationId: string }) {
             <div>
               <CardTitle>Linear</CardTitle>
               <CardDescription>
-                Link experiments to Linear issues for automatic backlinks and tracking.
+                Link experiments to Linear issues for automatic backlinks and tracking.{" "}
+                <a href="https://linear.app/settings/api/applications" target="_blank" rel="noopener noreferrer" className="underline">
+                  Set up a Linear OAuth app
+                </a>{" "}
+                to get started.
               </CardDescription>
             </div>
           </div>
@@ -169,6 +168,30 @@ function LinearIntegrationCard({ organizationId }: { organizationId: string }) {
       <CardContent>
         {isConnected ? (
           <div className="space-y-4">
+            {isLegacy && (
+              <div className="flex items-start gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-4">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-amber-600 dark:text-amber-400">
+                    Legacy API key detected
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    This integration uses a personal API key. Re-authenticate with OAuth
+                    to ensure reliable syncing across token rotations.
+                  </p>
+                  <Button
+                    size="sm"
+                    onClick={handleConnect}
+                    disabled={oauthUrlMutation.isPending}
+                  >
+                    {oauthUrlMutation.isPending ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : null}
+                    Re-authenticate with OAuth
+                  </Button>
+                </div>
+              </div>
+            )}
             <div className="rounded-lg border p-4">
               <div className="flex items-center justify-between">
                 <div>
@@ -231,41 +254,17 @@ function LinearIntegrationCard({ organizationId }: { organizationId: string }) {
               Connect your Linear workspace to automatically sync experiment data
               to Linear issues when runs are tagged.
             </p>
-            <div className="flex gap-2">
-              <Input
-                type="password"
-                placeholder="lin_api_..."
-                value={apiKeyInput}
-                onChange={(e) => setApiKeyInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    handleConnect();
-                  }
-                }}
-                className="max-w-sm"
-              />
-              <Button
-                onClick={handleConnect}
-                disabled={!apiKeyInput.trim() || saveMutation.isPending}
-              >
-                {saveMutation.isPending ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : null}
-                Connect
-              </Button>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Create a personal API key at{" "}
-              <a
-                href="https://linear.app/settings/account/security"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 text-primary underline underline-offset-4 hover:text-primary/80"
-              >
-                linear.app/settings/account/security
-                <ExternalLink className="h-3 w-3" />
-              </a>
-            </p>
+            <Button
+              onClick={handleConnect}
+              disabled={oauthUrlMutation.isPending}
+            >
+              {oauthUrlMutation.isPending ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <ExternalLink className="mr-2 h-4 w-4" />
+              )}
+              Connect with Linear
+            </Button>
           </div>
         )}
       </CardContent>

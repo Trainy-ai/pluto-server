@@ -43,6 +43,10 @@ const envSchema = z.object({
   // Redis (optional - graceful degradation if not available)
   REDIS_URL: z.string().url().optional(),
 
+  // Linear OAuth (optional - required for Linear integration)
+  LINEAR_OAUTH_CLIENT_ID: z.string().min(1).optional(),
+  LINEAR_OAUTH_CLIENT_SECRET: z.string().min(1).optional(),
+
   // Stripe (optional - required for billing features)
   STRIPE_SECRET_KEY: z.string().min(1).optional(),
   STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),

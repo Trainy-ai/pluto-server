@@ -21,16 +21,19 @@ export const getLinearIntegrationProcedure = protectedOrgProcedure
       return {
         configured: false,
         enabled: false,
+        isOAuth: false,
         workspaceSlug: null as string | null,
         workspaceName: null as string | null,
       };
     }
 
     const config = integration.config as Record<string, unknown>;
+    const isOAuth = !!config.encryptedRefreshToken;
 
     return {
       configured: true,
       enabled: integration.enabled,
+      isOAuth,
       workspaceSlug: ((config.workspaceSlug as string) ?? null) as string | null,
       workspaceName: ((config.workspaceName as string) ?? null) as string | null,
     };
