@@ -49,7 +49,7 @@ export function getLinearOAuthUrl(state: string): string {
     response_type: "code",
     scope: "read,write",
     state,
-    actor: "application",
+    actor: "app",
     prompt: "consent",
   });
   return `${LINEAR_AUTHORIZE_URL}?${params.toString()}`;
