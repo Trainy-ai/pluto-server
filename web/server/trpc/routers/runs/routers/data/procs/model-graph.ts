@@ -1,6 +1,6 @@
 import { protectedOrgProcedure } from "../../../../../../lib/trpc";
 import { z } from "zod";
-import { sqidDecode } from "../../../../../../lib/sqid";
+import { resolveRunId } from "../../../../../../lib/resolve-run-id";
 
 interface NodeJson {
   type: string;
@@ -26,7 +26,7 @@ export const modelGraphProcedure = protectedOrgProcedure
   .query(async ({ ctx, input }) => {
     const { runId: encodedRunId, organizationId } = input;
 
-    const runId = sqidDecode(encodedRunId);
+    const runId = await resolveRunId(ctx.prisma, encodedRunId, organizationId);
 
     // check if they own the run
     const run = await ctx.prisma.runs.findUnique({

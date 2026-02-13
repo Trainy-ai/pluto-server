@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { protectedOrgProcedure } from "../../../../lib/trpc";
-import { sqidDecode } from "../../../../lib/sqid";
+import { resolveRunId } from "../../../../lib/resolve-run-id";
 
 export const updateTagsProcedure = protectedOrgProcedure
   .input(
@@ -14,14 +14,7 @@ export const updateTagsProcedure = protectedOrgProcedure
   .mutation(async ({ ctx, input }) => {
     const { runId: encodedRunId, projectName, tags, organizationId } = input;
 
-    const runId = sqidDecode(encodedRunId);
-
-    if (runId === undefined) {
-      throw new TRPCError({
-        code: "BAD_REQUEST",
-        message: "Invalid run ID format.",
-      });
-    }
+    const runId = await resolveRunId(ctx.prisma, encodedRunId, organizationId, projectName);
 
     // Perform authorization check and update in a single atomic operation
     // to avoid TOCTOU vulnerability

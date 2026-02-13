@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { protectedOrgProcedure } from "../../../../../../lib/trpc";
-import { sqidDecode } from "../../../../../../lib/sqid";
+import { resolveRunId } from "../../../../../../lib/resolve-run-id";
 import { getLogGroupName } from "../../../../../../lib/utilts";
 import { withCache } from "../../../../../../lib/cache";
 import { queryRunFilesByLogName } from "../../../../../../lib/queries";
@@ -28,7 +28,7 @@ export const filesProcedure = protectedOrgProcedure
   .query(async ({ ctx, input }) => {
     const { runId: encodedRunId, projectName, organizationId, logName } = input;
 
-    const runId = sqidDecode(encodedRunId);
+    const runId = await resolveRunId(ctx.prisma, encodedRunId, organizationId, projectName);
     const logGroup = getLogGroupName(logName);
 
     return withCache<FileData>(

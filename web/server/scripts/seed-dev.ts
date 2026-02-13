@@ -953,10 +953,18 @@ async function main() {
       data: {
         name: DEV_PROJECT,
         organizationId: org.id,
+        runPrefix: 'MML',
       },
     });
     console.log(`   Created project: ${DEV_PROJECT}`);
   } else {
+    // Backfill prefix if not set
+    if (!project.runPrefix) {
+      project = await prisma.projects.update({
+        where: { id: project.id },
+        data: { runPrefix: 'MML' },
+      });
+    }
     console.log(`   Project exists: ${DEV_PROJECT}`);
   }
 
@@ -1005,6 +1013,7 @@ async function main() {
       const tags = i === 10 ? [uniqueTag, NEEDLE_TAG] : [uniqueTag]; // Index 10 = hidden-needle-experiment
       return {
         name: i < runNames.length ? runNames[i] : `experiment-${String(i).padStart(3, '0')}`,
+        number: i + 1, // Sequential run number starting at 1
         organizationId: org.id,
         projectId: project.id,
         createdById: user.id,
@@ -1057,6 +1066,12 @@ async function main() {
       }
     }
     console.log(`   Created ${runsToCreate} new runs (total: ${RUNS_COUNT})`);
+
+    // Update the project's nextRunNumber counter
+    await prisma.projects.update({
+      where: { id: project.id },
+      data: { nextRunNumber: RUNS_COUNT + 1 },
+    });
   } else {
     console.log(`   ${existingRunCount} runs already exist (target: ${RUNS_COUNT})`);
   }

@@ -139,6 +139,10 @@ export const Layout = ({
     [organizationId, projectName, runId, updateTagsMutation]
   );
 
+  const displayId = run.number != null && run.project?.runPrefix
+    ? `${run.project.runPrefix}-${run.number}`
+    : null;
+
   return (
     <RunsLayout>
       <PageLayout
@@ -150,12 +154,17 @@ export const Layout = ({
                 { title: "Projects", to: "/o/$orgSlug/projects" },
                 { title: projectName, to: "/o/$orgSlug/projects/$projectName" },
                 {
-                  title: runId,
+                  title: displayId ?? runId,
                   to: "/o/$orgSlug/projects/$projectName/$runId",
                 },
               ]}
               title={title}
             />
+            {displayId && (
+              <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs font-medium text-muted-foreground">
+                {displayId}
+              </span>
+            )}
             <RunStatusBadge run={run} />
             <RunTags
               tags={run.tags || []}
