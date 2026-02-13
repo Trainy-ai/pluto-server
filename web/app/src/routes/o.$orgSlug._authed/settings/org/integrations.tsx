@@ -257,12 +257,12 @@ function LinearIntegrationCard({ organizationId }: { organizationId: string }) {
             <p className="text-xs text-muted-foreground">
               Create a personal API key at{" "}
               <a
-                href="https://linear.app/settings/api"
+                href="https://linear.app/settings/account/security"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1 text-primary underline underline-offset-4 hover:text-primary/80"
               >
-                linear.app/settings/api
+                linear.app/settings/account/security
                 <ExternalLink className="h-3 w-3" />
               </a>
             </p>
