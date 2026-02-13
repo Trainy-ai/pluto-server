@@ -15,6 +15,14 @@ interface SyncResult {
   error?: string;
 }
 
+interface SyncRun {
+  id: bigint;
+  name: string;
+  status: string;
+  createdAt: Date;
+  project: { name: string };
+}
+
 // ---------------------------------------------------------------------------
 // Per-issue lock to prevent concurrent syncs from racing and creating
 // duplicate comments on the same Linear issue.
@@ -87,7 +95,7 @@ async function syncRunsToLinearIssueInternal({ prisma, organizationId, issueIden
   const lockKey = `linear-sync:${organizationId}:${issueIdentifier}`;
 
   return prisma.$transaction(async (tx: any) => {
-    await tx.$queryRawUnsafe(`SELECT pg_advisory_xact_lock(hashtext($1))`, lockKey);
+    await tx.$executeRawUnsafe(`SELECT pg_advisory_xact_lock(hashtext($1))`, lockKey);
 
     // Get the org's Linear integration
     const integration = await tx.integration.findUnique({
@@ -122,7 +130,7 @@ async function syncRunsToLinearIssueInternal({ prisma, organizationId, issueIden
 
     // Find all runs in this org tagged with this issue
     const tagValue = `linear:${issueIdentifier}`;
-    const runs = await tx.runs.findMany({
+    const runs: SyncRun[] = await tx.runs.findMany({
       where: {
         organizationId,
         tags: { has: tagValue },
@@ -163,7 +171,7 @@ async function syncRunsToLinearIssueInternal({ prisma, organizationId, issueIden
     }
 
     // Build the markdown comment — run names are hyperlinked, sorted oldest-first
-    const rows = runs.map((run: any) => {
+    const rows = runs.map((run) => {
       const encodedId = sqidEncode(Number(run.id));
       const projectName = run.project.name;
       const url = `${env.BETTER_AUTH_URL}/o/${org.slug}/projects/${encodeURIComponent(projectName)}/${encodedId}`;
