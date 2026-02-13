@@ -52,6 +52,18 @@ impl Database {
         Ok(Self { pool })
     }
 
+    // Executes a simple query to verify the database connection is alive
+    pub async fn ping(&self) -> Result<(), AppError> {
+        sqlx::query("SELECT 1")
+            .execute(&self.pool)
+            .await
+            .map_err(|e| {
+                error!(error = %e, "Database health check failed");
+                AppError::new(ErrorCode::DatabaseError, "Database health check failed")
+            })?;
+        Ok(())
+    }
+
     // Hashes an API key using SHA256
     // Skips hashing if the key already starts with "mlpi_" (assumed pre-hashed or special format)
     // This prefix is used internally to identify keys that might have a different hashing mechanism or origin.
