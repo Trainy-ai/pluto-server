@@ -78,7 +78,6 @@ export async function createCheckoutSession(
 
   const sessionParams: Stripe.Checkout.SessionCreateParams = {
     mode: "subscription",
-    payment_method_types: ["card"],
     line_items: [
       {
         price: env.STRIPE_PRO_PRICE_ID,
@@ -89,6 +88,8 @@ export async function createCheckoutSession(
     cancel_url: params.cancelUrl,
     // Allow users to enter promotion codes (e.g., YC cohort discounts)
     allow_promotion_codes: true,
+    // Skip payment method collection when total is $0 (e.g., 100% off promo code)
+    payment_method_collection: "if_required",
     metadata: {
       organizationId: params.organizationId,
     },
