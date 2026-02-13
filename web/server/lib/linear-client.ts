@@ -109,6 +109,29 @@ export async function updateComment(token: string, commentId: string, body: stri
 }
 
 /**
+ * Fetches comments on a Linear issue and returns IDs of any that contain
+ * the "## Pluto Experiments" heading (i.e. comments created by our sync).
+ */
+export async function getIssueComments(token: string, issueId: string): Promise<string[]> {
+  const data = await linearRequest<{
+    issue: { comments: { nodes: Array<{ id: string; body: string }> } };
+  }>(
+    token,
+    `query GetIssueComments($issueId: String!) {
+      issue(id: $issueId) {
+        comments(last: 50) {
+          nodes { id body }
+        }
+      }
+    }`,
+    { issueId }
+  );
+  return data.issue.comments.nodes
+    .filter((c) => c.body.includes("## Pluto Experiments"))
+    .map((c) => c.id);
+}
+
+/**
  * Resolves an issue identifier (e.g., "TRA-1") to a Linear issue ID.
  */
 export async function getIssueByIdentifier(token: string, identifier: string): Promise<{ id: string; identifier: string } | null> {

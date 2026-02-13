@@ -17,6 +17,7 @@ vi.mock("../lib/linear-client", () => ({
   createComment: vi.fn(),
   updateComment: vi.fn(),
   getIssueByIdentifier: vi.fn(),
+  getIssueComments: vi.fn(),
 }));
 
 vi.mock("../lib/encryption", () => ({
@@ -32,7 +33,7 @@ vi.mock("../lib/env", () => ({
 }));
 
 import { triggerLinearSyncForTags, syncRunsToLinearIssue, _resetIssueLocks } from "../lib/linear-sync";
-import { createComment, updateComment, getIssueByIdentifier } from "../lib/linear-client";
+import { createComment, updateComment, getIssueByIdentifier, getIssueComments } from "../lib/linear-client";
 
 // ---------------------------------------------------------------------------
 // Prisma mock helper
@@ -160,6 +161,7 @@ describe("syncRunsToLinearIssue", () => {
       id: "linear-issue-1",
       identifier: "TRA-1",
     });
+    vi.mocked(getIssueComments).mockResolvedValue([]);
     vi.mocked(createComment).mockResolvedValue({ id: "new-comment-1" });
 
     const result = await syncRunsToLinearIssue({
@@ -221,7 +223,7 @@ describe("syncRunsToLinearIssue", () => {
     expect(createComment).not.toHaveBeenCalled();
   });
 
-  it("should fall back to createComment when update fails (deleted comment)", async () => {
+  it("should fall back to createComment when update fails and no Pluto comment found on issue", async () => {
     const runs = [
       {
         id: BigInt(1),
@@ -247,6 +249,7 @@ describe("syncRunsToLinearIssue", () => {
       identifier: "TRA-1",
     });
     vi.mocked(updateComment).mockRejectedValue(new Error("Comment not found"));
+    vi.mocked(getIssueComments).mockResolvedValue([]); // No orphaned comment found
     vi.mocked(createComment).mockResolvedValue({ id: "new-comment-id" });
 
     const result = await syncRunsToLinearIssue({
@@ -257,7 +260,104 @@ describe("syncRunsToLinearIssue", () => {
 
     expect(result.success).toBe(true);
     expect(updateComment).toHaveBeenCalledOnce();
+    expect(getIssueComments).toHaveBeenCalledOnce();
     expect(createComment).toHaveBeenCalledOnce();
+  });
+
+  it("should recover orphaned comment when update fails but Pluto comment exists on issue", async () => {
+    const runs = [
+      {
+        id: BigInt(1),
+        name: "run-1",
+        status: "COMPLETED",
+        createdAt: new Date("2026-02-09"),
+        project: { name: "proj" },
+      },
+    ];
+
+    const prisma = createMockPrisma({
+      integration: {
+        id: "int-1",
+        enabled: true,
+        encryptedToken: "enc_tok",
+        metadata: { commentIds: { "TRA-1": "deleted-comment-id" } },
+      },
+      runs,
+    });
+
+    vi.mocked(getIssueByIdentifier).mockResolvedValue({
+      id: "linear-issue-1",
+      identifier: "TRA-1",
+    });
+    // First update call fails (stored ID is stale)
+    vi.mocked(updateComment)
+      .mockRejectedValueOnce(new Error("Comment not found"))
+      // Second update call succeeds (orphaned comment found)
+      .mockResolvedValueOnce({ id: "orphaned-comment-id" });
+    vi.mocked(getIssueComments).mockResolvedValue(["orphaned-comment-id"]);
+
+    const result = await syncRunsToLinearIssue({
+      prisma,
+      organizationId: "org-1",
+      issueIdentifier: "TRA-1",
+    });
+
+    expect(result.success).toBe(true);
+    // Should NOT create a new comment — should update the orphaned one
+    expect(createComment).not.toHaveBeenCalled();
+    expect(updateComment).toHaveBeenCalledTimes(2);
+    // The saved comment ID should be the orphaned one
+    expect(prisma.integration.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          metadata: expect.objectContaining({
+            commentIds: { "TRA-1": "orphaned-comment-id" },
+          }),
+        }),
+      })
+    );
+  });
+
+  it("should find orphaned Pluto comment when no stored ID exists (idempotent)", async () => {
+    const runs = [
+      {
+        id: BigInt(1),
+        name: "run-1",
+        status: "COMPLETED",
+        createdAt: new Date("2026-02-09"),
+        project: { name: "proj" },
+      },
+    ];
+
+    const prisma = createMockPrisma({ runs }); // metadata has empty commentIds
+
+    vi.mocked(getIssueByIdentifier).mockResolvedValue({
+      id: "linear-issue-1",
+      identifier: "TRA-1",
+    });
+    // An orphaned comment exists from a previous failed sync
+    vi.mocked(getIssueComments).mockResolvedValue(["orphaned-comment-id"]);
+    vi.mocked(updateComment).mockResolvedValue({ id: "orphaned-comment-id" });
+
+    const result = await syncRunsToLinearIssue({
+      prisma,
+      organizationId: "org-1",
+      issueIdentifier: "TRA-1",
+    });
+
+    expect(result.success).toBe(true);
+    // Should update the orphaned comment, NOT create a new one
+    expect(createComment).not.toHaveBeenCalled();
+    expect(updateComment).toHaveBeenCalledOnce();
+    expect(prisma.integration.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          metadata: expect.objectContaining({
+            commentIds: { "TRA-1": "orphaned-comment-id" },
+          }),
+        }),
+      })
+    );
   });
 
   it("should hyperlink run names (not a separate Link column)", async () => {
@@ -277,6 +377,7 @@ describe("syncRunsToLinearIssue", () => {
       id: "iss-1",
       identifier: "TRA-1",
     });
+    vi.mocked(getIssueComments).mockResolvedValue([]);
     vi.mocked(createComment).mockResolvedValue({ id: "c1" });
 
     await syncRunsToLinearIssue({
@@ -319,6 +420,7 @@ describe("syncRunsToLinearIssue", () => {
       id: "iss-1",
       identifier: "TRA-1",
     });
+    vi.mocked(getIssueComments).mockResolvedValue([]);
     vi.mocked(createComment).mockResolvedValue({ id: "c1" });
 
     await syncRunsToLinearIssue({
@@ -461,6 +563,7 @@ describe("syncRunsToLinearIssue", () => {
       id: "iss-1",
       identifier: "TRA-1",
     });
+    vi.mocked(getIssueComments).mockResolvedValue([]);
     vi.mocked(createComment).mockResolvedValue({ id: "new-c-1" });
 
     await syncRunsToLinearIssue({
@@ -508,6 +611,7 @@ describe("syncRunsToLinearIssue", () => {
       id: "iss-1",
       identifier: "TRA-1",
     });
+    vi.mocked(getIssueComments).mockResolvedValue([]);
     vi.mocked(createComment).mockResolvedValue({ id: "c1" });
 
     await syncRunsToLinearIssue({
@@ -575,6 +679,7 @@ describe("syncRunsToLinearIssue", () => {
       identifier: "TRA-1",
     });
 
+    vi.mocked(getIssueComments).mockResolvedValue([]);
     vi.mocked(createComment).mockImplementation(async () => {
       callCount++;
       return { id: `comment-${callCount}` };
@@ -612,6 +717,7 @@ describe("syncRunsToLinearIssue", () => {
       id: "linear-issue-1",
       identifier: "TRA-1",
     });
+    vi.mocked(getIssueComments).mockResolvedValue([]);
     vi.mocked(createComment).mockResolvedValue({ id: "c1" });
 
     // Fire two syncs for DIFFERENT issues — both should create independently
@@ -651,6 +757,7 @@ describe("syncRunsToLinearIssue", () => {
       id: "iss-1",
       identifier: "TRA-1",
     });
+    vi.mocked(getIssueComments).mockResolvedValue([]);
     vi.mocked(createComment).mockResolvedValue({ id: "c1" });
 
     await syncRunsToLinearIssue({
