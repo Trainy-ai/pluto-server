@@ -1,7 +1,7 @@
 import { RunTriggerType } from "@prisma/client";
 import { z } from "zod";
 import { protectedOrgProcedure } from "../../../../../../lib/trpc";
-import { sqidDecode } from "../../../../../../lib/sqid";
+import { resolveRunId } from "../../../../../../lib/resolve-run-id";
 
 export const createTrigger = protectedOrgProcedure
   .input(
@@ -12,9 +12,9 @@ export const createTrigger = protectedOrgProcedure
     })
   )
   .mutation(async ({ ctx, input }) => {
-    const { runId: encodedRunId, projectName, triggerType } = input;
+    const { runId: encodedRunId, projectName, triggerType, organizationId } = input;
 
-    const runId = sqidDecode(encodedRunId);
+    const runId = await resolveRunId(ctx.prisma, encodedRunId, organizationId, projectName);
 
     await ctx.prisma.runTriggers.create({
       data: {

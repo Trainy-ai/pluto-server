@@ -14,6 +14,8 @@ export interface QueryRunDetailsParams {
 export interface RunDetails {
   id: number;
   name: string;
+  number: number | null;
+  displayId: string | null;
   status: string;
   tags: string[];
   config: unknown;
@@ -57,7 +59,7 @@ export async function queryRunDetails(
   const run = await prisma.runs.findFirst({
     where: whereClause,
     include: {
-      project: { select: { name: true } },
+      project: { select: { name: true, runPrefix: true } },
       logs: {
         select: { logName: true, logType: true, logGroup: true },
         // Limit to 1000 unique log names - sufficient for all practical use cases.
@@ -71,9 +73,15 @@ export async function queryRunDetails(
     return null;
   }
 
+  const displayId = run.number != null && run.project.runPrefix
+    ? `${run.project.runPrefix}-${run.number}`
+    : null;
+
   return {
     id: Number(run.id),
     name: run.name,
+    number: run.number,
+    displayId,
     status: run.status,
     tags: run.tags,
     config: run.config,

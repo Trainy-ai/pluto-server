@@ -20,6 +20,10 @@ export function RunCard({ run, orgSlug }: RunCardProps) {
     runStatus: run.status,
   });
 
+  const displayId = run.number != null && run.project.runPrefix
+    ? `${run.project.runPrefix}-${run.number}`
+    : null;
+
   return (
     <Card className="group relative overflow-hidden transition-all hover:shadow-md">
       <CardHeader className="space-y-3 p-4 sm:p-6">
@@ -38,12 +42,17 @@ export function RunCard({ run, orgSlug }: RunCardProps) {
                 {run.project.name}
               </Link>
               <span className="text-muted-foreground">/</span>
+              {displayId && (
+                <span className="rounded bg-muted px-1 py-0.5 text-[10px] font-medium text-muted-foreground">
+                  {displayId}
+                </span>
+              )}
               <Link
                 to={`/o/$orgSlug/projects/$projectName/$runId`}
                 params={{
                   orgSlug,
                   projectName: run.project.name,
-                  runId: run.id,
+                  runId: displayId ?? run.id,
                 }}
                 preload="intent"
                 className="max-w-[120px] truncate hover:underline sm:max-w-none"
@@ -67,7 +76,7 @@ export function RunCard({ run, orgSlug }: RunCardProps) {
             params={{
               orgSlug,
               projectName: run.project.name,
-              runId: run.id,
+              runId: displayId ?? run.id,
             }}
             className="flex items-center gap-1 text-xs text-primary transition-colors hover:text-primary/80 sm:text-sm"
           >

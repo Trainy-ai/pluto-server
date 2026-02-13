@@ -32,6 +32,7 @@ import {
 import type { prisma } from "../lib/prisma";
 import type { ApiKey, Organization, User } from "@prisma/client";
 import { extractAndUpsertColumnKeys } from "../lib/extract-column-keys";
+import { generateRunPrefix } from "../lib/run-prefix";
 
 // Type for API key with relations
 type ApiKeyWithRelations = ApiKey & {
@@ -92,6 +93,8 @@ const createRunRoute = createRoute({
         "application/json": {
           schema: z.object({
             runId: z.number().openapi({ description: "Numeric ID of the created run" }),
+            number: z.number().nullable().openapi({ description: "Sequential run number within the project (for display IDs)" }),
+            displayId: z.string().nullable().openapi({ description: "Human-readable display ID (e.g., 'MMP-1')" }),
             projectName: z.string().openapi({ description: "Name of the project" }),
             organizationSlug: z.string().openapi({ description: "Organization slug" }),
             url: z.string().openapi({ description: "URL to view the run" }),
@@ -123,6 +126,8 @@ router.openapi(createRunRoute, async (c) => {
   const ctx = await createContext({ hono: c });
 
   // Upsert project first (needed for both new and resumed runs)
+  // Generate prefix on creation; existing projects keep their prefix
+  const generatedPrefix = generateRunPrefix(projectName);
   const project = await ctx.prisma.projects.upsert({
     where: {
       organizationId_name: {
@@ -134,12 +139,24 @@ router.openapi(createRunRoute, async (c) => {
     create: {
       name: projectName,
       organizationId: apiKey.organization.id,
+      runPrefix: generatedPrefix,
       createdAt: createdAt ? new Date(createdAt) : new Date(),
       updatedAt: updatedAt ? new Date(updatedAt) : new Date(),
     },
+    select: { id: true, runPrefix: true, nextRunNumber: true },
   });
 
-  let run: { id: bigint } | null = null;
+  // Backfill prefix for existing projects that don't have one
+  let projectRunPrefix = project.runPrefix;
+  if (!projectRunPrefix) {
+    await ctx.prisma.projects.update({
+      where: { id: project.id },
+      data: { runPrefix: generatedPrefix },
+    });
+    projectRunPrefix = generatedPrefix;
+  }
+
+  let run: { id: bigint; number: number | null } | null = null;
   let resumed = false;
 
   // If externalId is provided, check if a run with this ID already exists (Neptune-style resume)
@@ -150,6 +167,7 @@ router.openapi(createRunRoute, async (c) => {
         organizationId: apiKey.organization.id,
         projectId: project.id,
       },
+      select: { id: true, number: true },
     });
 
     if (existingRun) {
@@ -178,9 +196,18 @@ router.openapi(createRunRoute, async (c) => {
       const parsedSystemMetadata = systemMetadata && systemMetadata !== "null" ? JSON.parse(systemMetadata) : Prisma.DbNull;
       const parsedConfig = config && config !== "null" ? JSON.parse(config) : Prisma.DbNull;
 
+      // Atomically increment the project's run counter and create the run
+      const updatedProject = await ctx.prisma.projects.update({
+        where: { id: project.id },
+        data: { nextRunNumber: { increment: 1 } },
+        select: { nextRunNumber: true },
+      });
+      const runNumber = updatedProject.nextRunNumber - 1;
+
       run = await ctx.prisma.runs.create({
         data: {
           name: runName,
+          number: runNumber,
           externalId: externalId || null,
           projectId: project.id,
           organizationId: apiKey.organization.id,
@@ -192,6 +219,7 @@ router.openapi(createRunRoute, async (c) => {
           createdById: apiKey.user.id,
           creatorApiKeyId: apiKey.id,
         },
+        select: { id: true, number: true },
       });
     } catch (error) {
       if (error instanceof SyntaxError) {
@@ -212,6 +240,7 @@ router.openapi(createRunRoute, async (c) => {
             organizationId: apiKey.organization.id,
             projectId: project.id,
           },
+          select: { id: true, number: true },
         });
         if (existingRun) {
           run = existingRun;
@@ -243,11 +272,17 @@ router.openapi(createRunRoute, async (c) => {
   }
 
   const encodedRunId = sqidEncode(run.id);
-  const runUrl = `${env.BETTER_AUTH_URL}/o/${apiKey.organization.slug}/projects/${encodeURIComponent(project.name)}/${encodedRunId}`;
+  const runUrl = `${env.BETTER_AUTH_URL}/o/${apiKey.organization.slug}/projects/${encodeURIComponent(projectName)}/${encodedRunId}`;
+
+  const displayId = run.number != null && projectRunPrefix
+    ? `${projectRunPrefix}-${run.number}`
+    : null;
 
   return c.json({
     runId: Number(run.id),
-    projectName: project.name,
+    number: run.number,
+    displayId,
+    projectName,
     organizationSlug: apiKey.organization.slug,
     url: runUrl,
     resumed,
@@ -566,6 +601,8 @@ const listRunsRoute = createRoute({
             runs: z.array(z.object({
               id: z.number().openapi({ description: "Numeric run ID" }),
               name: z.string().openapi({ description: "Run name" }),
+              number: z.number().nullable().openapi({ description: "Sequential run number within the project" }),
+              displayId: z.string().nullable().openapi({ description: "Human-readable display ID (e.g., 'MMP-1')" }),
               status: z.string().openapi({ description: "Run status" }),
               tags: z.array(z.string()).openapi({ description: "Run tags" }),
               createdAt: z.string().openapi({ description: "Creation timestamp" }),
@@ -597,7 +634,7 @@ router.openapi(listRunsRoute, async (c) => {
       name: projectName,
       organizationId: apiKey.organization.id,
     },
-    select: { id: true },
+    select: { id: true, runPrefix: true },
   });
 
   if (!project) {
@@ -639,6 +676,7 @@ router.openapi(listRunsRoute, async (c) => {
     select: {
       id: true,
       name: true,
+      number: true,
       status: true,
       tags: true,
       createdAt: true,
@@ -649,6 +687,10 @@ router.openapi(listRunsRoute, async (c) => {
     runs: runs.map((run) => ({
       id: Number(run.id),
       name: run.name,
+      number: run.number,
+      displayId: run.number != null && project?.runPrefix
+        ? `${project.runPrefix}-${run.number}`
+        : null,
       status: run.status,
       tags: run.tags,
       createdAt: run.createdAt.toISOString(),
@@ -846,6 +888,8 @@ const getRunDetailsRoute = createRoute({
           schema: z.object({
             id: z.number(),
             name: z.string(),
+            number: z.number().nullable().openapi({ description: "Sequential run number within the project" }),
+            displayId: z.string().nullable().openapi({ description: "Human-readable display ID (e.g., 'MMP-1')" }),
             status: z.string(),
             tags: z.array(z.string()),
             config: z.any().nullable(),
@@ -891,6 +935,8 @@ router.openapi(getRunDetailsRoute, async (c) => {
   return c.json({
     id: run.id,
     name: run.name,
+    number: run.number,
+    displayId: run.displayId,
     status: run.status,
     tags: run.tags,
     config: run.config,
@@ -903,6 +949,122 @@ router.openapi(getRunDetailsRoute, async (c) => {
     projectName: run.projectName,
     externalId: run.externalId,
     logNames: run.logNames,
+  }, 200);
+});
+
+// ============= Get Run Details by Display ID =============
+const getRunByDisplayIdRoute = createRoute({
+  method: "get",
+  path: "/details/by-display-id/{displayId}",
+  tags: ["Runs"],
+  summary: "Get run details by display ID",
+  description: "Resolves a human-readable display ID (e.g., 'MMP-1') to a run and returns its details.",
+  security: [{ bearerAuth: [] }],
+  request: {
+    params: z.object({
+      displayId: z.string().openapi({ description: "Display ID in PREFIX-NUMBER format (e.g., 'MMP-1')" }),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Run details",
+      content: {
+        "application/json": {
+          schema: z.object({
+            id: z.number(),
+            name: z.string(),
+            number: z.number().nullable(),
+            displayId: z.string().nullable(),
+            status: z.string(),
+            tags: z.array(z.string()),
+            config: z.any().nullable(),
+            systemMetadata: z.any().nullable(),
+            loggerSettings: z.any().nullable(),
+            statusMetadata: z.any().nullable(),
+            createdAt: z.string(),
+            updatedAt: z.string(),
+            statusUpdated: z.string().nullable(),
+            projectName: z.string(),
+            externalId: z.string().nullable(),
+            logNames: z.array(z.object({
+              logName: z.string(),
+              logType: z.string(),
+              logGroup: z.string().nullable(),
+            })),
+          }).openapi("RunDetailsByDisplayIdResponse"),
+        },
+      },
+    },
+    400: {
+      description: "Invalid display ID format",
+      content: { "application/json": { schema: ErrorSchema } },
+    },
+    404: {
+      description: "Run not found",
+      content: { "application/json": { schema: ErrorSchema } },
+    },
+  },
+});
+
+router.use("/details/by-display-id/:displayId", withApiKey);
+router.openapi(getRunByDisplayIdRoute, async (c) => {
+  const apiKey = c.get("apiKey");
+  const { displayId } = c.req.valid("param");
+  const prismaClient = c.get("prisma");
+  const organizationId = apiKey.organization.id;
+
+  const match = displayId.match(/^([A-Za-z0-9]+)-(\d+)$/);
+  if (!match) {
+    return c.json({ error: "Invalid display ID format. Expected PREFIX-NUMBER (e.g., 'MMP-1')" }, 400);
+  }
+
+  const [, prefix, numberStr] = match;
+  const run = await prismaClient.runs.findFirst({
+    where: {
+      number: parseInt(numberStr, 10),
+      organizationId,
+      project: {
+        runPrefix: prefix.toUpperCase(),
+      },
+    },
+    include: {
+      project: { select: { name: true, runPrefix: true } },
+      logs: {
+        select: { logName: true, logType: true, logGroup: true },
+        take: 1000,
+      },
+    },
+  });
+
+  if (!run) {
+    return c.json({ error: "Run not found" }, 404);
+  }
+
+  const computedDisplayId = run.number != null && run.project.runPrefix
+    ? `${run.project.runPrefix}-${run.number}`
+    : null;
+
+  return c.json({
+    id: Number(run.id),
+    name: run.name,
+    number: run.number,
+    displayId: computedDisplayId,
+    status: run.status,
+    tags: run.tags,
+    config: run.config,
+    systemMetadata: run.systemMetadata,
+    loggerSettings: run.loggerSettings,
+    statusMetadata: run.statusMetadata,
+    createdAt: run.createdAt.toISOString(),
+    updatedAt: run.updatedAt.toISOString(),
+    statusUpdated: run.statusUpdated?.toISOString() ?? null,
+    projectName: run.project.name,
+    externalId: run.externalId,
+    logNames: run.logs.map((log) => ({
+      logName: log.logName,
+      logType: log.logType,
+      logGroup: log.logGroup,
+    })),
   }, 200);
 });
 

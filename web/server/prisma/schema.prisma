@@ -242,6 +242,8 @@ model Projects {
   name           String          @db.VarChar(255)
   organizationId String
   tags           String[]        @default([])
+  runPrefix      String?         @db.VarChar(10) // Auto-generated short prefix for display IDs (e.g., "MMP")
+  nextRunNumber  Int             @default(1)     // Counter for sequential run numbering
   organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   runs           Runs[]
   createdAt      DateTime        @default(now())
@@ -295,6 +297,7 @@ model Runs {
   id              BigInt    @id @default(autoincrement())
   externalId      String?   @db.VarChar(255) // User-provided run ID for multi-node distributed training
   name            String    @db.VarChar(255)
+  number          Int?      // Sequential run number within the project (for display IDs like "MMP-1")
   organizationId  String
   tags            String[]  @default([])
   loggerSettings  Json?
@@ -322,6 +325,8 @@ model Runs {
 
   // Unique constraint for external run ID within a project (allows multi-node to share same run)
   @@unique([organizationId, projectId, externalId])
+  // Unique constraint for run number within a project (ensures sequential IDs are unique)
+  @@unique([projectId, number])
   // Add compound index on projectId and organizationId to efficiently find runs for a project
   @@index([projectId, organizationId])
   @@index([status])

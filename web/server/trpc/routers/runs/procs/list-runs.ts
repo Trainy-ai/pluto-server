@@ -162,7 +162,7 @@ async function defaultCursorQuery(
       ...dateWhere,
     },
     orderBy: { createdAt: input.direction === "forward" ? "desc" : "asc" },
-    include: { creator: { select: { name: true, email: true } } },
+    include: { creator: { select: { name: true, email: true } }, project: { select: { runPrefix: true } } },
     take: input.limit,
     skip: input.cursor ? 1 : 0,
     cursor: input.cursor ? { id: input.cursor } : undefined,
@@ -288,7 +288,7 @@ async function defaultCursorQueryWithFieldFilters(
 
   const runs = await ctx.prisma.runs.findMany({
     where: { id: { in: rows.map((r) => r.id) } },
-    include: { creator: { select: { name: true, email: true } } },
+    include: { creator: { select: { name: true, email: true } }, project: { select: { runPrefix: true } } },
   });
 
   const idOrder = new Map(rows.map((r, i) => [r.id, i]));
@@ -436,7 +436,7 @@ async function systemColumnSortQuery(
   // Fetch full records
   const runs = await ctx.prisma.runs.findMany({
     where: { id: { in: rows.map((r) => r.id) } },
-    include: { creator: { select: { name: true, email: true } } },
+    include: { creator: { select: { name: true, email: true } }, project: { select: { runPrefix: true } } },
   });
 
   // Re-sort to match SQL order
@@ -602,7 +602,7 @@ async function jsonFieldSortQuery(
   // Fetch full records
   const runs = await ctx.prisma.runs.findMany({
     where: { id: { in: sortedIds.map((r) => r.id) } },
-    include: { creator: { select: { name: true, email: true } } },
+    include: { creator: { select: { name: true, email: true } }, project: { select: { runPrefix: true } } },
   });
 
   // Re-sort to match SQL order
@@ -678,7 +678,7 @@ async function metricSortQuery(
   const sortedRunIds = sortedRows.map((r) => BigInt(r.runId));
   const runs = await ctx.prisma.runs.findMany({
     where: { id: { in: sortedRunIds } },
-    include: { creator: { select: { name: true, email: true } } },
+    include: { creator: { select: { name: true, email: true } }, project: { select: { runPrefix: true } } },
   });
 
   // Re-sort to match ClickHouse order

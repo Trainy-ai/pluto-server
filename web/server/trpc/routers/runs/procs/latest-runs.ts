@@ -40,11 +40,13 @@ export const latestRunsProcedure = protectedOrgProcedure
         project: {
           select: {
             name: true,
+            runPrefix: true,
           },
         },
         id: true,
         createdAt: true,
         name: true,
+        number: true,
         status: true,
         updatedAt: true,
         statusUpdated: true,

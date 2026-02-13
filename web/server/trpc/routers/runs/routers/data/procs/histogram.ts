@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { protectedOrgProcedure } from "../../../../../../lib/trpc";
-import { sqidDecode } from "../../../../../../lib/sqid";
+import { resolveRunId } from "../../../../../../lib/resolve-run-id";
 import { withCache } from "../../../../../../lib/cache";
 import { histogramDataRow } from "./histogram.schema";
 
@@ -16,7 +16,7 @@ export const histogramProcedure = protectedOrgProcedure
   )
   .query(async ({ ctx, input }) => {
     const { runId: encodedRunId, projectName, organizationId, logName } = input;
-    const runId = sqidDecode(encodedRunId);
+    const runId = await resolveRunId(ctx.prisma, encodedRunId, organizationId, projectName);
 
     return withCache<HistogramData>(
       ctx,

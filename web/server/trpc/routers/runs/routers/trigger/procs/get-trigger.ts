@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { protectedOrgProcedure } from "../../../../../../lib/trpc";
-import { sqidDecode } from "../../../../../../lib/sqid";
+import { resolveRunId } from "../../../../../../lib/resolve-run-id";
 
 export const getTrigger = protectedOrgProcedure
   .input(
@@ -10,8 +10,8 @@ export const getTrigger = protectedOrgProcedure
     })
   )
   .query(async ({ ctx, input }) => {
-    const { runId: encodedRunId, projectName } = input;
-    const runId = sqidDecode(encodedRunId);
+    const { runId: encodedRunId, projectName, organizationId } = input;
+    const runId = await resolveRunId(ctx.prisma, encodedRunId, organizationId, projectName);
 
     const triggers = await ctx.prisma.runTriggers.findMany({
       where: {

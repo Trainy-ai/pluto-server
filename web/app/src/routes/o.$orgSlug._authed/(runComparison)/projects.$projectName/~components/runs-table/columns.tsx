@@ -168,8 +168,11 @@ const lastSelectedIdRef = { current: "" };
 function getCustomColumnValue(run: Run, col: ColumnConfig): unknown {
   if (col.source === "system") {
     switch (col.id) {
-      case "runId":
-        return run.id;
+      case "runId": {
+        const prefix = (run as any).project?.runPrefix;
+        const num = run.number;
+        return num != null && prefix ? `${prefix}-${num}` : run.id;
+      }
       case "createdAt":
         return run.createdAt;
       case "updatedAt":
@@ -325,7 +328,11 @@ export const columns = ({
         const runId = row.original.id;
         const name = row.original.name;
         const color = getRunColor(runId);
-
+        const runNumber = row.original.number;
+        const runPrefix = (row.original as Run & { project?: { runPrefix: string | null } }).project?.runPrefix;
+        const displayId = runNumber != null && runPrefix
+          ? `${runPrefix}-${runNumber}`
+          : null;
         return (
           <div className="flex w-full items-center gap-2 overflow-hidden">
             <ColorPicker
@@ -339,7 +346,7 @@ export const columns = ({
                   to="/o/$orgSlug/projects/$projectName/$runId"
                   preload="intent"
                   className="group flex min-w-0 flex-1 items-center rounded-md transition-colors hover:bg-accent/50"
-                  params={{ orgSlug, projectName, runId }}
+                  params={{ orgSlug, projectName, runId: displayId ?? runId }}
                 >
                   <span className="truncate text-sm font-medium group-hover:underline">
                     {name}

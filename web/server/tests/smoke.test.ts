@@ -3420,11 +3420,229 @@ describe('SDK API Endpoints (with API Key)', () => {
     });
   });
 
+  describe('Test Suite 23: Run Display IDs (Sequential Numbering)', () => {
+    const hasApiKey = TEST_API_KEY.length > 0;
+    const displayIdProject = `display-id-test-${Date.now()}`;
+
+    describe.skipIf(!hasApiKey)('Run Number Assignment', () => {
+      it('Test 23.1: First run in project gets number 1 and displayId', async () => {
+        const response = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: displayIdProject,
+            runName: `first-run-${Date.now()}`,
+          }),
+        });
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.runId).toBeDefined();
+        expect(data.number).toBe(1);
+        expect(data.displayId).toBeDefined();
+        expect(data.displayId).toMatch(/^[A-Z0-9]+-1$/);
+      });
+
+      it('Test 23.2: Second run gets number 2 (sequential)', async () => {
+        const response = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: displayIdProject,
+            runName: `second-run-${Date.now()}`,
+          }),
+        });
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.number).toBe(2);
+        expect(data.displayId).toMatch(/^[A-Z0-9]+-2$/);
+      });
+
+      it('Test 23.3: Third run gets number 3 (sequential)', async () => {
+        const response = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: displayIdProject,
+            runName: `third-run-${Date.now()}`,
+          }),
+        });
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.number).toBe(3);
+        expect(data.displayId).toMatch(/^[A-Z0-9]+-3$/);
+      });
+
+      it('Test 23.4: Resumed run (externalId) keeps same number', async () => {
+        const externalId = `display-id-resume-${Date.now()}`;
+
+        // Create first
+        const createResponse = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: displayIdProject,
+            runName: `resume-test-${Date.now()}`,
+            externalId,
+          }),
+        });
+
+        expect(createResponse.status).toBe(200);
+        const createData = await createResponse.json();
+        expect(createData.number).toBe(4);
+        expect(createData.resumed).toBe(false);
+
+        // Resume with same externalId
+        const resumeResponse = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: displayIdProject,
+            runName: `resume-test-${Date.now()}`,
+            externalId,
+          }),
+        });
+
+        expect(resumeResponse.status).toBe(200);
+        const resumeData = await resumeResponse.json();
+        expect(resumeData.resumed).toBe(true);
+        expect(resumeData.number).toBe(4); // Same number as original
+        expect(resumeData.displayId).toBe(createData.displayId); // Same displayId
+      });
+
+      it('Test 23.5: Different projects get independent numbering', async () => {
+        const otherProject = `display-id-other-${Date.now()}`;
+
+        const response = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: otherProject,
+            runName: `other-project-run-${Date.now()}`,
+          }),
+        });
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.number).toBe(1); // Starts at 1 for new project
+      });
+
+      it('Test 23.6: Display ID prefix is derived from project name', async () => {
+        const prefixProject = `my-cool-project-${Date.now()}`;
+
+        const response = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: prefixProject,
+            runName: `prefix-test-${Date.now()}`,
+          }),
+        });
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.displayId).toBeDefined();
+        // Display ID format: PREFIX-NUMBER
+        expect(data.displayId).toMatch(/^[A-Z0-9]+-\d+$/);
+      });
+
+      it('Test 23.7: GET /details/{runId} returns displayId', async () => {
+        // Create a run first
+        const createResponse = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: displayIdProject,
+            runName: `details-test-${Date.now()}`,
+          }),
+        });
+
+        expect(createResponse.status).toBe(200);
+        const createData = await createResponse.json();
+        const numericRunId = createData.runId;
+        const expectedDisplayId = createData.displayId;
+
+        // Fetch run details by numeric ID
+        const detailsResponse = await makeRequest(`/api/runs/details/${numericRunId}`, {
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+        });
+
+        expect(detailsResponse.status).toBe(200);
+        const details = await detailsResponse.json();
+        expect(details.displayId).toBe(expectedDisplayId);
+        expect(details.number).toBeDefined();
+        expect(details.name).toBeDefined();
+        expect(details.status).toBeDefined();
+      });
+
+      it('Test 23.8: GET /details/by-display-id resolves display ID to run', async () => {
+        // Create a run first
+        const createResponse = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: displayIdProject,
+            runName: `lookup-test-${Date.now()}`,
+          }),
+        });
+
+        expect(createResponse.status).toBe(200);
+        const createData = await createResponse.json();
+        const displayId = createData.displayId;
+        const numericRunId = createData.runId;
+
+        // Fetch run details by display ID
+        const lookupResponse = await makeRequest(`/api/runs/details/by-display-id/${displayId}`, {
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+        });
+
+        expect(lookupResponse.status).toBe(200);
+        const details = await lookupResponse.json();
+        expect(details.id).toBe(numericRunId);
+        expect(details.displayId).toBe(displayId);
+      });
+
+      it('Test 23.9: GET /details/by-display-id returns 404 for nonexistent display ID', async () => {
+        const lookupResponse = await makeRequest(`/api/runs/details/by-display-id/ZZZZZ-99999`, {
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+        });
+
+        expect(lookupResponse.status).toBe(404);
+      });
+    });
+  });
+
   // ============================================================================
-  // Test Suite 23: Data Procedures (Histogram & Table) - Auth Guards
+  // Test Suite 24: Data Procedures (Histogram & Table) - Auth Guards
   // ============================================================================
-  describe('Test Suite 23: Data Procedures Auth Guards', () => {
-    it('Test 23.1: Histogram - Unauthorized without session', async () => {
+  describe('Test Suite 24: Data Procedures Auth Guards', () => {
+    it('Test 24.1: Histogram - Unauthorized without session', async () => {
       const response = await makeTrpcRequest('runs.data.histogram', {
         runId: 'test',
         projectName: 'test-project',
@@ -3434,7 +3652,7 @@ describe('SDK API Endpoints (with API Key)', () => {
       expect(response.status).toBe(401);
     });
 
-    it('Test 23.2: Table - Unauthorized without session', async () => {
+    it('Test 24.2: Table - Unauthorized without session', async () => {
       const response = await makeTrpcRequest('runs.data.table', {
         runId: 'test',
         projectName: 'test-project',
