@@ -45,7 +45,7 @@ describe("getLinearOAuthUrl", () => {
     expect(parsed.searchParams.get("response_type")).toBe("code");
     expect(parsed.searchParams.get("scope")).toBe("read,write");
     expect(parsed.searchParams.get("state")).toBe("encrypted-state");
-    expect(parsed.searchParams.get("actor")).toBe("application");
+    expect(parsed.searchParams.get("actor")).toBe("app");
     expect(parsed.searchParams.get("prompt")).toBe("consent");
   });
 });
