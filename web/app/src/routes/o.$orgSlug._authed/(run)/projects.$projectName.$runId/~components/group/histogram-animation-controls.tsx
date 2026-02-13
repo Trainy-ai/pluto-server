@@ -26,7 +26,7 @@ interface AnimationControlsProps {
   onPlayPause: () => void;
   onStepChange: (step: number) => void;
   onSpeedChange: (speed: number) => void;
-  onExport: (type: "snapshot" | "gif") => void;
+  onExport: (type: "snapshot" | "gif") => void | Promise<void>;
 }
 
 export const AnimationControls: React.FC<AnimationControlsProps> = ({

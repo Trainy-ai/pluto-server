@@ -4,8 +4,9 @@ import { TRPCError } from "@trpc/server";
 import { nanoid } from "nanoid";
 import { OrganizationRole, SubscriptionPlan } from "@prisma/client";
 import { getLimits } from "../../../../lib/limits";
+import { isEduEmail } from "../../../../lib/edu";
+import { EDU_SUBSCRIPTION_ID, PRO_PLAN_CONFIG } from "../../../../lib/stripe";
 
-// TODO: this only allows for free organizations for now
 export const createOrgProcedure = protectedProcedure
   .input(
     z.object({
@@ -29,6 +30,9 @@ export const createOrgProcedure = protectedProcedure
     }
 
     const userId = ctx.user.id;
+    const userEmail = ctx.user.email;
+    const isEdu = ctx.user.emailVerified && isEduEmail(userEmail);
+
     const existingOrgs = await ctx.prisma.organization.findMany({
       where: {
         members: {
@@ -45,9 +49,13 @@ export const createOrgProcedure = protectedProcedure
       (org) => org.OrganizationSubscription?.plan === SubscriptionPlan.FREE
     );
 
-    console.log("hasAFreeOrg", hasAFreeOrg);
+    const hasAnEduProOrg = existingOrgs.some(
+      (org) =>
+        org.OrganizationSubscription?.plan === SubscriptionPlan.PRO &&
+        org.OrganizationSubscription?.stripeSubscriptionId === EDU_SUBSCRIPTION_ID
+    );
 
-    if (hasAFreeOrg) {
+    if (hasAFreeOrg || hasAnEduProOrg) {
       throw new TRPCError({
         code: "FORBIDDEN",
         message:
@@ -55,9 +63,11 @@ export const createOrgProcedure = protectedProcedure
       });
     }
 
-    // Empty strings for new free organizations - Stripe IDs will be set when they upgrade
+    // .edu email users get PRO for free; everyone else starts on FREE
+    const plan = isEdu ? SubscriptionPlan.PRO : SubscriptionPlan.FREE;
     const stripeCustomerId = "";
-    const stripeSubscriptionId = "";
+    const stripeSubscriptionId = isEdu ? EDU_SUBSCRIPTION_ID : "";
+    const seats = isEdu ? PRO_PLAN_CONFIG.seats : 2;
 
     // 1. Create the Organization first
     const newOrgId = nanoid();
@@ -89,12 +99,12 @@ export const createOrgProcedure = protectedProcedure
         data: {
           id: nanoid(),
           organizationId: newOrgId,
-          plan: SubscriptionPlan.FREE,
+          plan,
           createdAt: new Date(),
           stripeCustomerId,
           stripeSubscriptionId,
-          seats: 2,
-          usageLimits: getLimits(SubscriptionPlan.FREE),
+          seats,
+          usageLimits: getLimits(plan),
         },
       });
 
