@@ -31,7 +31,7 @@ vi.mock("../lib/env", () => ({
   env: { BETTER_AUTH_URL: "http://localhost:3000" },
 }));
 
-import { triggerLinearSyncForTags, syncRunsToLinearIssue } from "../lib/linear-sync";
+import { triggerLinearSyncForTags, syncRunsToLinearIssue, _resetIssueLocks } from "../lib/linear-sync";
 import { createComment, updateComment, getIssueByIdentifier } from "../lib/linear-client";
 
 // ---------------------------------------------------------------------------
@@ -43,7 +43,8 @@ function createMockPrisma(overrides: {
   org?: unknown;
   runs?: unknown[];
 } = {}) {
-  return {
+  const mock: any = {
+    $queryRawUnsafe: vi.fn().mockResolvedValue([]),
     integration: {
       findUnique: vi.fn().mockResolvedValue(
         overrides.integration !== undefined
@@ -67,7 +68,10 @@ function createMockPrisma(overrides: {
     runs: {
       findMany: vi.fn().mockResolvedValue(overrides.runs ?? []),
     },
-  } as any;
+  };
+  // $transaction calls the callback with the mock itself as the tx client
+  mock.$transaction = vi.fn((fn: any) => fn(mock));
+  return mock;
 }
 
 // ---------------------------------------------------------------------------
@@ -76,6 +80,7 @@ function createMockPrisma(overrides: {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  _resetIssueLocks();
 });
 
 afterEach(() => {
@@ -517,6 +522,109 @@ describe("syncRunsToLinearIssue", () => {
         orderBy: { createdAt: "desc" },
       })
     );
+  });
+
+  it("should serialize concurrent syncs for the same issue (no duplicate comments)", async () => {
+    // Simulate two concurrent syncs for the same issue — the second should
+    // see the comment ID saved by the first and update instead of creating.
+    let callCount = 0;
+    const runs = [
+      {
+        id: BigInt(1),
+        name: "run-1",
+        status: "COMPLETED" as const,
+        createdAt: new Date("2026-02-09"),
+        project: { name: "proj" },
+      },
+    ];
+
+    // Build a mock prisma where integration.findUnique returns the latest
+    // metadata (including comment IDs saved by previous calls).
+    let storedMetadata: Record<string, unknown> = { commentIds: {} };
+
+    const prisma: any = {
+      $queryRawUnsafe: vi.fn().mockResolvedValue([]),
+      integration: {
+        findUnique: vi.fn().mockImplementation(() =>
+          Promise.resolve({
+            id: "int-1",
+            organizationId: "org-1",
+            provider: "linear",
+            enabled: true,
+            encryptedToken: "enc_tok",
+            metadata: storedMetadata,
+          })
+        ),
+        update: vi.fn().mockImplementation(({ data }: any) => {
+          // Persist metadata so the next call sees the stored comment ID
+          storedMetadata = data.metadata;
+          return Promise.resolve({});
+        }),
+      },
+      organization: {
+        findUnique: vi.fn().mockResolvedValue({ slug: "dev-org" }),
+      },
+      runs: {
+        findMany: vi.fn().mockResolvedValue(runs),
+      },
+    };
+    prisma.$transaction = vi.fn((fn: any) => fn(prisma));
+
+    vi.mocked(getIssueByIdentifier).mockResolvedValue({
+      id: "linear-issue-1",
+      identifier: "TRA-1",
+    });
+
+    vi.mocked(createComment).mockImplementation(async () => {
+      callCount++;
+      return { id: `comment-${callCount}` };
+    });
+    vi.mocked(updateComment).mockResolvedValue({ id: "comment-1" });
+
+    // Fire two syncs concurrently for the SAME issue
+    const [r1, r2] = await Promise.all([
+      syncRunsToLinearIssue({ prisma, organizationId: "org-1", issueIdentifier: "TRA-1" }),
+      syncRunsToLinearIssue({ prisma, organizationId: "org-1", issueIdentifier: "TRA-1" }),
+    ]);
+
+    expect(r1.success).toBe(true);
+    expect(r2.success).toBe(true);
+
+    // First call creates, second call should update (not create again)
+    expect(createComment).toHaveBeenCalledOnce();
+    expect(updateComment).toHaveBeenCalledOnce();
+  });
+
+  it("should allow concurrent syncs for different issues to run in parallel", async () => {
+    const runs = [
+      {
+        id: BigInt(1),
+        name: "run-1",
+        status: "COMPLETED" as const,
+        createdAt: new Date("2026-02-09"),
+        project: { name: "proj" },
+      },
+    ];
+
+    const prisma = createMockPrisma({ runs });
+
+    vi.mocked(getIssueByIdentifier).mockResolvedValue({
+      id: "linear-issue-1",
+      identifier: "TRA-1",
+    });
+    vi.mocked(createComment).mockResolvedValue({ id: "c1" });
+
+    // Fire two syncs for DIFFERENT issues — both should create independently
+    const [r1, r2] = await Promise.all([
+      syncRunsToLinearIssue({ prisma, organizationId: "org-1", issueIdentifier: "TRA-1" }),
+      syncRunsToLinearIssue({ prisma, organizationId: "org-1", issueIdentifier: "TRA-2" }),
+    ]);
+
+    expect(r1.success).toBe(true);
+    expect(r2.success).toBe(true);
+
+    // Both should create (different issues, no locking between them)
+    expect(createComment).toHaveBeenCalledTimes(2);
   });
 
   it("should handle runs across multiple projects in comparison links", async () => {
