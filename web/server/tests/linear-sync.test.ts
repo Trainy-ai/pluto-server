@@ -44,7 +44,7 @@ function createMockPrisma(overrides: {
   runs?: unknown[];
 } = {}) {
   const mock: any = {
-    $queryRawUnsafe: vi.fn().mockResolvedValue([]),
+    $executeRawUnsafe: vi.fn().mockResolvedValue(0),
     integration: {
       findUnique: vi.fn().mockResolvedValue(
         overrides.integration !== undefined
@@ -543,7 +543,7 @@ describe("syncRunsToLinearIssue", () => {
     let storedMetadata: Record<string, unknown> = { commentIds: {} };
 
     const prisma: any = {
-      $queryRawUnsafe: vi.fn().mockResolvedValue([]),
+      $executeRawUnsafe: vi.fn().mockResolvedValue(0),
       integration: {
         findUnique: vi.fn().mockImplementation(() =>
           Promise.resolve({
