@@ -6,9 +6,10 @@ import { TagBadge } from "@/components/tag-badge";
 interface RunTagsProps {
   tags: string[];
   onTagsUpdate: (tags: string[]) => void;
+  organizationId?: string;
 }
 
-export function RunTags({ tags, onTagsUpdate }: RunTagsProps) {
+export function RunTags({ tags, onTagsUpdate, organizationId }: RunTagsProps) {
   return (
     <div className="flex items-center gap-2">
       <div className="flex flex-wrap items-center gap-1">
@@ -22,6 +23,7 @@ export function RunTags({ tags, onTagsUpdate }: RunTagsProps) {
       <TagsEditorPopover
         tags={tags}
         onTagsUpdate={onTagsUpdate}
+        organizationId={organizationId}
         emptyText="No tags found. Type to create a new tag."
         trigger={
           <Button variant="ghost" size="sm" className="h-7 gap-1">

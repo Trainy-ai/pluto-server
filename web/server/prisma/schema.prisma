@@ -55,6 +55,7 @@ model User {
   Runs               Runs[]
   DashboardView      DashboardView[]
   RunTableView       RunTableView[]
+  Integration        Integration[]
 
   @@unique([email])
   @@map("user")
@@ -173,6 +174,7 @@ model Organization {
   RunTableView             RunTableView[]
   ProjectColumnKey         ProjectColumnKey[]
   RunFieldValue            RunFieldValue[]
+  Integration              Integration[]
 
   @@unique([slug])
   @@map("organization")
@@ -501,4 +503,23 @@ model RunFieldValue {
   @@index([projectId, source, key, numericValue])
   @@index([runId])
   @@map("run_field_values")
+}
+
+model Integration {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  provider       String       // "linear"
+  enabled        Boolean      @default(true)
+  config         Json         @default("{}")
+  encryptedToken String
+  metadata       Json         @default("{}")
+  createdById    String
+  createdBy      User         @relation(fields: [createdById], references: [id])
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([organizationId, provider])
+  @@index([organizationId])
+  @@map("integrations")
 }

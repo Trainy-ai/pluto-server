@@ -679,6 +679,7 @@ function RouteComponent() {
                 runs={runs}
                 orgSlug={organizationSlug}
                 projectName={projectName}
+                organizationId={organizationId}
                 onColorChange={handleColorChange}
                 onSelectionChange={handleRunSelection}
                 onTagsUpdate={handleTagsUpdate}

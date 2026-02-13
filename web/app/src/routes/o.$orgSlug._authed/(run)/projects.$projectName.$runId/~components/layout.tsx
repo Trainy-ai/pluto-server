@@ -169,6 +169,7 @@ export const Layout = ({
             <RunTags
               tags={run.tags || []}
               onTagsUpdate={handleTagsUpdate}
+              organizationId={organizationId}
             />
           </div>
         }

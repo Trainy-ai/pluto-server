@@ -24,6 +24,7 @@ import {
   queryRunDetails,
   queryAllProjects,
 } from "../lib/queries";
+import { triggerLinearSyncForTags } from "../lib/linear-sync";
 import {
   queryDistinctMetrics,
   queryMetricSortedRunIds,
@@ -278,6 +279,11 @@ router.openapi(createRunRoute, async (c) => {
     ? `${projectRunPrefix}-${run.number}`
     : null;
 
+  // Fire-and-forget Linear sync for any linear: tags on new runs
+  if (!resumed && tags?.length) {
+    triggerLinearSyncForTags(ctx.prisma, apiKey.organization.id, tags);
+  }
+
   return c.json({
     runId: Number(run.id),
     number: run.number,
@@ -485,6 +491,13 @@ router.openapi(updateTagsRoute, async (c) => {
   const apiKey = c.get("apiKey");
   const { runId, tags } = c.req.valid("json");
 
+  // Fetch old tags before update so we can sync removed linear: tags
+  const existingRun = await c.get("prisma").runs.findFirst({
+    where: { id: runId, organizationId: apiKey.organization.id },
+    select: { tags: true },
+  });
+  const previousTags = existingRun?.tags ?? [];
+
   const result = await c.get("prisma").runs.updateMany({
     where: { id: runId, organizationId: apiKey.organization.id },
     data: { tags },
@@ -493,6 +506,9 @@ router.openapi(updateTagsRoute, async (c) => {
   if (result.count === 0) {
     return c.json({ error: "Run not found" }, 404);
   }
+
+  // Fire-and-forget Linear sync for any linear: tags (including removed ones)
+  triggerLinearSyncForTags(c.get("prisma"), apiKey.organization.id, tags, previousTags);
 
   return c.json({ success: true }, 200);
 });

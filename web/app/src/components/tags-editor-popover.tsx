@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, type ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -16,6 +17,8 @@ import {
 } from "@/components/ui/command";
 import { Check, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { trpc } from "@/utils/trpc";
+import { LinearIssuePicker } from "@/components/linear-issue-picker";
 
 interface TagsEditorPopoverProps {
   /** Current tags */
@@ -32,6 +35,8 @@ interface TagsEditorPopoverProps {
   emptyText?: string;
   /** Alignment of the popover */
   align?: "start" | "center" | "end";
+  /** Organization ID for Linear integration (optional) */
+  organizationId?: string;
 }
 
 export function TagsEditorPopover({
@@ -42,6 +47,7 @@ export function TagsEditorPopover({
   stopPropagation = false,
   emptyText = "No tags found.",
   align = "start",
+  organizationId,
 }: TagsEditorPopoverProps) {
   const [open, setOpen] = useState(false);
   const [inputValue, setInputValue] = useState("");
@@ -101,6 +107,16 @@ export function TagsEditorPopover({
     setHasChanges(false);
     setOpen(false);
   }, [tags]);
+
+  // Check if Linear integration is configured
+  const { data: linearIntegration } = useQuery(
+    trpc.organization.integrations.getLinearIntegration.queryOptions(
+      { organizationId: organizationId! },
+      { enabled: !!organizationId },
+    ),
+  );
+
+  const linearConfigured = linearIntegration?.configured && linearIntegration?.enabled;
 
   // Combine all tags with current tags for the dropdown
   const availableTags = [...new Set([...allTags, ...tags, ...pendingTags])].sort();
@@ -172,6 +188,20 @@ export function TagsEditorPopover({
                 );
               })}
             </CommandGroup>
+            {linearConfigured && organizationId && inputValue.trim() && (
+              <LinearIssuePicker
+                organizationId={organizationId}
+                searchQuery={inputValue.trim()}
+                selectedTags={pendingTags}
+                onSelectIssue={(identifier) => {
+                  const tag = `linear:${identifier}`;
+                  if (!pendingTags.includes(tag)) {
+                    setPendingTags([...pendingTags, tag]);
+                  }
+                  setInputValue("");
+                }}
+              />
+            )}
           </CommandList>
         </Command>
         {pendingTags.length > 0 && (

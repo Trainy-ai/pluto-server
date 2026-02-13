@@ -8,9 +8,10 @@ interface TagsCellProps {
   tags: string[];
   allTags: string[];
   onTagsUpdate: (tags: string[]) => void;
+  organizationId?: string;
 }
 
-export function TagsCell({ tags, allTags, onTagsUpdate }: TagsCellProps) {
+export function TagsCell({ tags, allTags, onTagsUpdate, organizationId }: TagsCellProps) {
   return (
     <div className="flex items-center gap-1 overflow-hidden">
       <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
@@ -27,6 +28,7 @@ export function TagsCell({ tags, allTags, onTagsUpdate }: TagsCellProps) {
         tags={tags}
         allTags={allTags}
         onTagsUpdate={onTagsUpdate}
+        organizationId={organizationId}
         stopPropagation
         trigger={
           <Button
