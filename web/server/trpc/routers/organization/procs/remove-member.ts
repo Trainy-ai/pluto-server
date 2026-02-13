@@ -5,7 +5,7 @@ import {
   protectedProcedure,
 } from "../../../../lib/trpc";
 import { z } from "zod";
-import { syncSubscriptionSeats, CANCELLED_SUBSCRIPTION_ID } from "../../../../lib/stripe";
+import { syncSubscriptionSeats, isActiveStripeSubscription } from "../../../../lib/stripe";
 
 export const removeMemberProcedure = protectedOrgProcedure
   .input(z.object({ memberId: z.string() }))
@@ -75,7 +75,7 @@ export const removeMemberProcedure = protectedOrgProcedure
     if (
       orgSub?.plan === SubscriptionPlan.PRO &&
       orgSub.stripeSubscriptionId &&
-      orgSub.stripeSubscriptionId !== CANCELLED_SUBSCRIPTION_ID
+      isActiveStripeSubscription(orgSub.stripeSubscriptionId)
     ) {
       const newMemberCount = await ctx.prisma.member.count({
         where: { organizationId: input.organizationId },

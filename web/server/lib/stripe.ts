@@ -39,6 +39,21 @@ export const PRO_PLAN_CONFIG = {
 // Sentinel value for cancelled subscriptions (field is non-nullable in schema)
 export const CANCELLED_SUBSCRIPTION_ID = "cancelled";
 
+// Sentinel value for education (.edu) sponsored PRO subscriptions
+export const EDU_SUBSCRIPTION_ID = "edu";
+
+/**
+ * Check if a subscription ID represents an active Stripe subscription
+ * (not a sentinel value like cancelled, edu, or empty string).
+ */
+export function isActiveStripeSubscription(subscriptionId: string): boolean {
+  return (
+    subscriptionId !== "" &&
+    subscriptionId !== CANCELLED_SUBSCRIPTION_ID &&
+    subscriptionId !== EDU_SUBSCRIPTION_ID
+  );
+}
+
 // Per-seat pricing: $250/seat/month
 export const SEAT_PRICE_DOLLARS = 250;
 

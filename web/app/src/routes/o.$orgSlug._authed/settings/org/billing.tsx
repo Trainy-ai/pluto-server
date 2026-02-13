@@ -1,6 +1,6 @@
 import { SettingsLayout } from "@/components/layout/settings/layout";
 import { createFileRoute } from "@tanstack/react-router";
-import { Check, Zap, CreditCard } from "lucide-react";
+import { Check, Zap, CreditCard, GraduationCap } from "lucide-react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { trpc } from "@/utils/trpc";
 import { Usage } from "./~components/usage";
@@ -50,6 +50,7 @@ function RouteComponent() {
   const { organizationId, orgSubscription, canManageBilling } = Route.useRouteContext();
   const search = Route.useSearch();
   const isPro = orgSubscription.plan === "PRO";
+  const isEducationPlan = orgSubscription.isEducationPlan;
 
   // Check if Stripe billing is configured and get seat price
   const { data: billingConfig, isLoading: isBillingConfigLoading } = useQuery(
@@ -148,23 +149,37 @@ function RouteComponent() {
                   <CardTitle className="text-lg">Pro</CardTitle>
                   <Zap className="h-4 w-4 text-yellow-500" />
                 </div>
-                {isPro && <Badge variant="secondary">Current Plan</Badge>}
+                {isPro && isEducationPlan && (
+                  <Badge variant="secondary" className="flex items-center gap-1">
+                    <GraduationCap className="h-3 w-3" />
+                    Education Plan
+                  </Badge>
+                )}
+                {isPro && !isEducationPlan && <Badge variant="secondary">Current Plan</Badge>}
               </div>
               <CardDescription>For growing teams with advanced needs</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div>
-                <div className="text-3xl font-bold">
-                  {seatPrice !== undefined ? (
-                    <>${seatPrice}<span className="text-sm font-normal text-muted-foreground">/seat/month</span></>
-                  ) : (
-                    <span className="inline-block h-9 w-24 animate-pulse rounded bg-muted" />
-                  )}
-                </div>
-                {isPro && seatPrice !== undefined && (
-                  <p className="text-sm text-muted-foreground mt-1">
-                    {orgSubscription.seats} {orgSubscription.seats === 1 ? "seat" : "seats"} × ${seatPrice} = ${orgSubscription.seats * seatPrice}/month
-                  </p>
+                {isEducationPlan ? (
+                  <div className="text-3xl font-bold">
+                    $0<span className="text-sm font-normal text-muted-foreground">/month</span>
+                  </div>
+                ) : (
+                  <>
+                    <div className="text-3xl font-bold">
+                      {seatPrice !== undefined ? (
+                        <>${seatPrice}<span className="text-sm font-normal text-muted-foreground">/seat/month</span></>
+                      ) : (
+                        <span className="inline-block h-9 w-24 animate-pulse rounded bg-muted" />
+                      )}
+                    </div>
+                    {isPro && seatPrice !== undefined && (
+                      <p className="text-sm text-muted-foreground mt-1">
+                        {orgSubscription.seats} {orgSubscription.seats === 1 ? "seat" : "seats"} × ${seatPrice} = ${orgSubscription.seats * seatPrice}/month
+                      </p>
+                    )}
+                  </>
                 )}
               </div>
               <ul className="space-y-2">
@@ -175,6 +190,11 @@ function RouteComponent() {
                   </li>
                 ))}
               </ul>
+              {isEducationPlan && (
+                <p className="text-sm text-muted-foreground text-center">
+                  Free Pro access for educational institutions.
+                </p>
+              )}
               {!isPro && canManageBilling && isStripeConfigured && (
                 <Button
                   className="w-full"
@@ -196,7 +216,7 @@ function RouteComponent() {
                   to upgrade to Pro
                 </p>
               )}
-              {isPro && canManageBilling && isStripeConfigured && (
+              {isPro && !isEducationPlan && canManageBilling && isStripeConfigured && (
                 <Button
                   variant="outline"
                   className="w-full"
@@ -207,7 +227,7 @@ function RouteComponent() {
                   Manage Subscription
                 </Button>
               )}
-              {!canManageBilling && (
+              {!canManageBilling && !isEducationPlan && (
                 <p className="text-sm text-muted-foreground text-center">
                   Contact an admin to manage billing
                 </p>

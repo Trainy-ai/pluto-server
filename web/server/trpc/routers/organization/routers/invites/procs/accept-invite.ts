@@ -5,7 +5,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { protectedProcedure } from "../../../../../../lib/trpc";
 import { nanoid } from "nanoid";
-import { syncSubscriptionSeats, CANCELLED_SUBSCRIPTION_ID, FREE_PLAN_CONFIG, PRO_PLAN_CONFIG } from "../../../../../../lib/stripe";
+import { syncSubscriptionSeats, isActiveStripeSubscription, FREE_PLAN_CONFIG, PRO_PLAN_CONFIG } from "../../../../../../lib/stripe";
 
 export const acceptInviteProcedure = protectedProcedure
   .input(z.object({ invitationId: z.string() }))
@@ -73,7 +73,7 @@ export const acceptInviteProcedure = protectedProcedure
     if (
       orgSub?.plan === SubscriptionPlan.PRO &&
       orgSub.stripeSubscriptionId &&
-      orgSub.stripeSubscriptionId !== CANCELLED_SUBSCRIPTION_ID
+      isActiveStripeSubscription(orgSub.stripeSubscriptionId)
     ) {
       const newMemberCount = await ctx.prisma.member.count({
         where: { organizationId: invitation.organizationId },

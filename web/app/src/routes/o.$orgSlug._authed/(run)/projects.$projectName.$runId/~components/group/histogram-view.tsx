@@ -281,9 +281,6 @@ export const HistogramView = ({
               onStepChange={setCurrentStepIndex}
               onSpeedChange={setAnimationSpeed}
               onExport={handleExport}
-              isExporting={isExporting}
-              currentStepValue={currentStep}
-              maxStepValue={maxStep}
             />
           </>
         )}
