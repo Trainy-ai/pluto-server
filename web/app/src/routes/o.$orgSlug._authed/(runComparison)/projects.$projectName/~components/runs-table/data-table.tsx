@@ -198,6 +198,7 @@ interface DataTableProps {
   runs: Run[];
   orgSlug: string;
   projectName: string;
+  organizationId?: string;
   onColorChange: (runId: string, color: string) => void;
   onSelectionChange: (runId: string, isSelected: boolean) => void;
   onTagsUpdate: (runId: string, tags: string[]) => void;
@@ -262,6 +263,7 @@ export function DataTable({
   runs,
   orgSlug,
   projectName,
+  organizationId,
   onColorChange,
   onSelectionChange,
   onTagsUpdate,
@@ -394,6 +396,7 @@ export function DataTable({
       columns({
         orgSlug,
         projectName,
+        organizationId,
         onColorChange,
         onSelectionChange,
         onTagsUpdate,
@@ -413,6 +416,7 @@ export function DataTable({
     [
       orgSlug,
       projectName,
+      organizationId,
       onColorChange,
       onSelectionChange,
       onTagsUpdate,

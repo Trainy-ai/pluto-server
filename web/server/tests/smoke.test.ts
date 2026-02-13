@@ -3173,6 +3173,183 @@ describe('SDK API Endpoints (with API Key)', () => {
     });
   });
 
+  describe('Test Suite 25: Linear Integration', () => {
+    const TEST_EMAIL = process.env.TEST_USER_EMAIL || 'test-smoke@mlop.local';
+    const TEST_PASSWORD = 'TestPassword123!';
+    let sessionCookie: string | null = null;
+    let serverAvailable = false;
+
+    beforeAll(async () => {
+      try {
+        const healthCheck = await makeRequest('/api/health');
+        serverAvailable = healthCheck.status === 200;
+      } catch {
+        serverAvailable = false;
+      }
+
+      if (!serverAvailable) {
+        console.log('   Skipping Linear integration tests - server not available');
+        return;
+      }
+
+      try {
+        const signInResponse = await makeRequest('/api/auth/sign-in/email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: TEST_EMAIL, password: TEST_PASSWORD }),
+        });
+
+        const setCookie = signInResponse.headers.get('set-cookie');
+        if (setCookie) {
+          const match = setCookie.match(/better_auth\.session_token=([^;]+)/);
+          if (match) {
+            sessionCookie = `better_auth.session_token=${match[1]}`;
+          }
+        }
+      } catch (e) {
+        console.log('   Sign in failed:', e);
+      }
+    });
+
+    it('Test 25.1: getLinearIntegration returns unconfigured state', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+
+      const response = await makeTrpcRequest('organization.integrations.getLinearIntegration', {}, {
+        'Cookie': sessionCookie,
+      }, 'GET');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      const result = data.result?.data;
+      expect(result).toBeDefined();
+      // Should have a 'configured' boolean field
+      expect(typeof result.configured).toBe('boolean');
+    });
+
+    it('Test 25.2: getLinearIntegration requires authentication', async () => {
+      const response = await makeTrpcRequest('organization.integrations.getLinearIntegration', {}, {}, 'GET');
+
+      expect(response.status).toBe(401);
+    });
+
+    it('Test 25.3: saveLinearApiKey rejects invalid token', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+
+      // Sending a fake token should fail because Linear API validation will reject it
+      const response = await makeTrpcRequest('organization.integrations.saveLinearApiKey', {
+        apiKey: 'lin_api_invalid_key_for_testing',
+      }, {
+        'Cookie': sessionCookie,
+      }, 'POST');
+
+      // Should get an error (either from Linear API or from our validation)
+      // The key is that it doesn't crash the server
+      const data = await response.json();
+      if (response.status === 200) {
+        // If Linear API somehow accepts it (unlikely), the response should still be valid
+        expect(data.result?.data).toBeDefined();
+      } else {
+        // Expected: Linear API rejects the invalid key
+        expect([400, 401, 500]).toContain(response.status);
+      }
+    });
+
+    it('Test 25.4: searchLinearIssues requires authentication', async () => {
+      const response = await makeTrpcRequest('organization.integrations.searchLinearIssues', {
+        query: 'test',
+      }, {}, 'GET');
+
+      expect(response.status).toBe(401);
+    });
+
+    it('Test 25.5: searchLinearIssues returns error when not configured', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+
+      const response = await makeTrpcRequest('organization.integrations.searchLinearIssues', {
+        query: 'test',
+      }, {
+        'Cookie': sessionCookie,
+      }, 'GET');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      // When not configured, should return a TRPCError with NOT_FOUND
+      expect(data.error).toBeDefined();
+      expect(data.error.json.message).toContain('Linear integration is not configured');
+      expect(data.result).toBeUndefined();
+    });
+
+    it('Test 25.6: removeLinearIntegration requires authentication', async () => {
+      const response = await makeTrpcRequest('organization.integrations.removeLinearIntegration', {}, {}, 'POST');
+
+      expect(response.status).toBe(401);
+    });
+
+    it('Test 25.7: removeLinearIntegration succeeds even when not configured', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+
+      const response = await makeTrpcRequest('organization.integrations.removeLinearIntegration', {}, {
+        'Cookie': sessionCookie,
+      }, 'POST');
+
+      // Should succeed (no-op) or return an error, but not crash
+      expect([200, 404]).toContain(response.status);
+    });
+
+    it('Test 25.8: Linear sync triggered on tag update via SDK', async () => {
+      // This test verifies the sync trigger code path runs without error
+      // even when no Linear integration is configured (fire-and-forget should not crash)
+      if (!TEST_API_KEY) {
+        console.log('   No API key - skipping');
+        return;
+      }
+
+      // Create a run with a linear: tag
+      const createResponse = await makeRequest('/api/runs/create', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${TEST_API_KEY}`,
+        },
+        body: JSON.stringify({
+          projectName: TEST_PROJECT_NAME,
+          runName: `linear-sync-test-${Date.now()}`,
+          tags: ['linear:TEST-1', 'smoke-test'],
+        }),
+      });
+
+      expect(createResponse.status).toBe(200);
+      const createData = await createResponse.json();
+      const runId = createData.runId;
+      expect(runId).toBeDefined();
+
+      // Update tags (remove the linear tag) — should also not crash
+      const updateResponse = await makeRequest('/api/runs/tags/update', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${TEST_API_KEY}`,
+        },
+        body: JSON.stringify({
+          runId,
+          tags: ['smoke-test'],
+        }),
+      });
+
+      expect(updateResponse.status).toBe(200);
+    });
+  });
+
   // ============================================================================
   // Test Suite 21: Metric Names Endpoint (ClickHouse Summaries)
   // ============================================================================

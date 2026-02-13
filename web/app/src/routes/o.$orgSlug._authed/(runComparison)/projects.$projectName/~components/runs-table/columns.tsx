@@ -109,6 +109,7 @@ const SelectionCell = memo(function SelectionCell({
 interface ColumnsProps {
   orgSlug: string;
   projectName: string;
+  organizationId?: string;
   onSelectionChange: (runId: RunId, isSelected: boolean) => void;
   onColorChange: (runId: RunId, color: RunColor) => void;
   onTagsUpdate: (runId: RunId, tags: string[]) => void;
@@ -232,6 +233,7 @@ function formatCellValue(value: unknown, col: ColumnConfig): string {
 export const columns = ({
   orgSlug,
   projectName,
+  organizationId,
   onSelectionChange,
   onColorChange,
   onTagsUpdate,
@@ -401,6 +403,7 @@ export const columns = ({
               tags={tags}
               allTags={getAllTags()}
               onTagsUpdate={(newTags) => onTagsUpdate(runId, newTags)}
+              organizationId={organizationId}
             />
           );
         },

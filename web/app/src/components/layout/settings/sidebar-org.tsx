@@ -17,6 +17,7 @@ import { useAuth } from "@/lib/auth/client";
 import {
   RiBankCardFill,
   RiGroupFill,
+  RiPuzzleFill,
   RiSettings3Fill,
   RiTerminalBoxFill,
   RiUser3Fill,
@@ -37,6 +38,11 @@ const mainNavItems = [
     title: "Developers",
     href: "/settings/org/developers",
     icon: RiTerminalBoxFill,
+  },
+  {
+    title: "Integrations",
+    href: "/settings/org/integrations",
+    icon: RiPuzzleFill,
   },
   {
     title: "Billing",

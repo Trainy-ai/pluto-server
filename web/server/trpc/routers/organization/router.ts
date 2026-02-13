@@ -4,6 +4,7 @@ import { notificationsRouter } from "./routers/notifications/router";
 import { apiKeyRouter } from "./routers/api-key/router";
 import { usageRouter } from "./routers/usage/router";
 import { billingRouter } from "./routers/billing/router";
+import { integrationsRouter } from "./routers/integrations/router";
 import { listMembersProcedure } from "./procs/list-members";
 import { createOrgProcedure } from "./procs/create-org";
 import { deleteOrgProcedure } from "./procs/delete-org";
@@ -25,4 +26,5 @@ export const organizationRouter = router({
   usage: usageRouter,
   apiKey: apiKeyRouter,
   billing: billingRouter,
+  integrations: integrationsRouter,
 });

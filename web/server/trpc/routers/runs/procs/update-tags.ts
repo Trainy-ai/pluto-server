@@ -2,6 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { protectedOrgProcedure } from "../../../../lib/trpc";
 import { resolveRunId } from "../../../../lib/resolve-run-id";
+import { triggerLinearSyncForTags } from "../../../../lib/linear-sync";
 
 export const updateTagsProcedure = protectedOrgProcedure
   .input(
@@ -15,6 +16,13 @@ export const updateTagsProcedure = protectedOrgProcedure
     const { runId: encodedRunId, projectName, tags, organizationId } = input;
 
     const runId = await resolveRunId(ctx.prisma, encodedRunId, organizationId, projectName);
+
+    // Fetch old tags before update so we can sync removed linear: tags
+    const existingRun = await ctx.prisma.runs.findFirst({
+      where: { id: runId, organizationId },
+      select: { tags: true },
+    });
+    const previousTags = existingRun?.tags ?? [];
 
     // Perform authorization check and update in a single atomic operation
     // to avoid TOCTOU vulnerability
@@ -48,6 +56,9 @@ export const updateTagsProcedure = protectedOrgProcedure
         message: "Failed to retrieve the updated run.",
       });
     }
+
+    // Fire-and-forget Linear sync for any linear: tags (including removed ones)
+    triggerLinearSyncForTags(ctx.prisma, organizationId, tags, previousTags);
 
     return updatedRun;
   });
