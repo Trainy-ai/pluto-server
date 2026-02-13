@@ -21,6 +21,7 @@ vi.mock("../lib/linear-client", () => ({
   createComment: vi.fn(),
   updateComment: vi.fn(),
   getIssueByIdentifier: vi.fn(),
+  getIssueComments: vi.fn(),
 }));
 
 vi.mock("../lib/encryption", () => ({
@@ -36,7 +37,7 @@ vi.mock("../lib/env", () => ({
 }));
 
 import { syncRunsToLinearIssue } from "../lib/linear-sync";
-import { createComment, updateComment, getIssueByIdentifier } from "../lib/linear-client";
+import { createComment, updateComment, getIssueByIdentifier, getIssueComments } from "../lib/linear-client";
 
 // ---------------------------------------------------------------------------
 // Skip entire suite when no DATABASE_URL (e.g. local dev without Docker)
@@ -197,6 +198,7 @@ describeIfDb("Linear Sync Integration (real Postgres)", () => {
       id: "linear-issue-integ",
       identifier: TEST_ISSUE,
     });
+    vi.mocked(getIssueComments).mockResolvedValue([]);
     vi.mocked(createComment).mockResolvedValue({ id: "new-comment-integ" });
 
     // Execute sync
@@ -252,6 +254,7 @@ describeIfDb("Linear Sync Integration (real Postgres)", () => {
       id: "linear-issue-integ",
       identifier: TEST_ISSUE,
     });
+    vi.mocked(getIssueComments).mockResolvedValue([]);
     vi.mocked(createComment).mockImplementation(async () => {
       callCount++;
       return { id: `comment-${callCount}` };

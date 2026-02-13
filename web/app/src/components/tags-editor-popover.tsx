@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, type ReactNode } from "react";
+import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -54,6 +54,9 @@ export function TagsEditorPopover({
   // Local state for pending tag changes (batch updates)
   const [pendingTags, setPendingTags] = useState<string[]>(tags);
   const [hasChanges, setHasChanges] = useState(false);
+  // Guard against double-fire: handleApply calls onTagsUpdate then closes,
+  // which would trigger onOpenChange to call onTagsUpdate again.
+  const appliedRef = useRef(false);
 
   // Sync pendingTags with tags prop when popover opens or tags change externally
   useEffect(() => {
@@ -97,6 +100,7 @@ export function TagsEditorPopover({
 
   const handleApply = useCallback(() => {
     if (hasChanges) {
+      appliedRef.current = true;
       onTagsUpdate(pendingTags);
     }
     setOpen(false);
@@ -125,9 +129,12 @@ export function TagsEditorPopover({
     <Popover
       open={open}
       onOpenChange={(isOpen) => {
-        if (!isOpen && hasChanges) {
-          // Apply changes when closing the popover
+        if (!isOpen && hasChanges && !appliedRef.current) {
+          // Apply changes when closing the popover (but not if handleApply already fired)
           onTagsUpdate(pendingTags);
+        }
+        if (isOpen) {
+          appliedRef.current = false;
         }
         setOpen(isOpen);
       }}

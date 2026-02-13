@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { validateApiKey, searchIssues, createComment, updateComment, getIssueByIdentifier } from "../lib/linear-client";
+import { validateApiKey, searchIssues, createComment, updateComment, getIssueByIdentifier, getIssueComments } from "../lib/linear-client";
 
 const mockFetch = vi.fn();
 
@@ -195,6 +195,74 @@ describe("Linear Client", () => {
       const body = JSON.parse(mockFetch.mock.calls[0][1].body);
       expect(body.variables.commentId).toBe("comment-1");
       expect(body.variables.body).toBe("Updated text");
+    });
+  });
+
+  describe("getIssueComments", () => {
+    it("should return IDs of comments containing '## Pluto Experiments'", async () => {
+      mockGraphQLResponse({
+        issue: {
+          comments: {
+            nodes: [
+              { id: "c-1", body: "## Pluto Experiments\n| Run | Project |..." },
+              { id: "c-2", body: "Some unrelated comment" },
+              { id: "c-3", body: "## Pluto Experiments\n_No runs linked_" },
+            ],
+          },
+        },
+      });
+
+      const result = await getIssueComments("token", "issue-1");
+
+      expect(result).toEqual(["c-1", "c-3"]);
+    });
+
+    it("should return empty array when no Pluto comments exist", async () => {
+      mockGraphQLResponse({
+        issue: {
+          comments: {
+            nodes: [
+              { id: "c-1", body: "A regular comment" },
+            ],
+          },
+        },
+      });
+
+      const result = await getIssueComments("token", "issue-1");
+
+      expect(result).toEqual([]);
+    });
+
+    it("should return empty array when issue has no comments", async () => {
+      mockGraphQLResponse({
+        issue: {
+          comments: { nodes: [] },
+        },
+      });
+
+      const result = await getIssueComments("token", "issue-1");
+
+      expect(result).toEqual([]);
+    });
+
+    it("should send correct query with issueId variable", async () => {
+      mockGraphQLResponse({
+        issue: { comments: { nodes: [] } },
+      });
+
+      await getIssueComments("token", "issue-42");
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.query).toContain("issue(id: $issueId)");
+      expect(body.variables).toEqual({ issueId: "issue-42" });
+    });
+
+    it("should throw on GraphQL error", async () => {
+      mockGraphQLError("Issue not found");
+
+      await expect(getIssueComments("token", "bad-id")).rejects.toThrow(
+        "Linear GraphQL error: Issue not found"
+      );
     });
   });
 
