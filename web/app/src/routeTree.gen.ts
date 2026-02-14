@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as SplatRouteImport } from './routes/$'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as OnboardIndexRouteImport } from './routes/onboard/index'
 import { Route as OIndexRouteImport } from './routes/o/index'
@@ -43,6 +44,11 @@ import { Route as OOrgSlugAuthedrunProjectsProjectNameRunIdLogsRouteImport } fro
 import { Route as OOrgSlugAuthedrunProjectsProjectNameRunIdGraphRouteImport } from './routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/graph'
 import { Route as OOrgSlugAuthedrunProjectsProjectNameRunIdSummaryIndexRouteImport } from './routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/summary/index'
 
+const SplatRoute = SplatRouteImport.update({
+  id: '/$',
+  path: '/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -230,6 +236,7 @@ const OOrgSlugAuthedrunProjectsProjectNameRunIdSummaryIndexRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/$': typeof SplatRoute
   '/api-keys': typeof indexApiKeysRoute
   '/auth/forgot-password': typeof AuthForgotPasswordRoute
   '/auth/sign-in': typeof AuthSignInRoute
@@ -264,6 +271,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/$': typeof SplatRoute
   '/api-keys': typeof indexApiKeysRoute
   '/auth/forgot-password': typeof AuthForgotPasswordRoute
   '/auth/sign-in': typeof AuthSignInRoute
@@ -298,6 +306,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/$': typeof SplatRoute
   '/(index)/_authed': typeof indexAuthedRouteWithChildren
   '/(index)/api-keys': typeof indexApiKeysRoute
   '/auth/forgot-password': typeof AuthForgotPasswordRoute
@@ -335,6 +344,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/$'
     | '/api-keys'
     | '/auth/forgot-password'
     | '/auth/sign-in'
@@ -369,6 +379,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/$'
     | '/api-keys'
     | '/auth/forgot-password'
     | '/auth/sign-in'
@@ -402,6 +413,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/$'
     | '/(index)/_authed'
     | '/(index)/api-keys'
     | '/auth/forgot-password'
@@ -438,6 +450,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  SplatRoute: typeof SplatRoute
   indexAuthedRoute: typeof indexAuthedRouteWithChildren
   indexApiKeysRoute: typeof indexApiKeysRoute
   AuthForgotPasswordRoute: typeof AuthForgotPasswordRoute
@@ -454,6 +467,13 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/$': {
+      id: '/$'
+      path: '/$'
+      fullPath: '/$'
+      preLoaderRoute: typeof SplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
@@ -762,6 +782,7 @@ const OOrgSlugAuthedRouteWithChildren = OOrgSlugAuthedRoute._addFileChildren(
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  SplatRoute: SplatRoute,
   indexAuthedRoute: indexAuthedRouteWithChildren,
   indexApiKeysRoute: indexApiKeysRoute,
   AuthForgotPasswordRoute: AuthForgotPasswordRoute,
