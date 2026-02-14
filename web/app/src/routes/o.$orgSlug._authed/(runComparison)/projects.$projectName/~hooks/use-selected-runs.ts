@@ -154,9 +154,11 @@ export function useSelectedRuns(
 
   // Load cached data on initial render or when org/project changes
   useEffect(() => {
-    // Reset state first to clear any stale data from previous project
+    // Reset state and refs to clear stale data from previous project
     setRunColors({});
     setSelectedRunsWithColors({});
+    urlParamsAppliedRef.current = false;
+    prevUrlRunIdsRef.current = undefined;
 
     const loadCachedData = async () => {
       try {
@@ -351,6 +353,12 @@ export function useSelectedRuns(
   // Notify parent when selection changes (for URL sync)
   useEffect(() => {
     if (onSelectionChange) {
+      // Don't sync selection to URL if we have URL params that haven't been
+      // applied yet. This prevents the IndexedDB cache (which loads before API
+      // data) from overwriting the URL with stale cached selections.
+      if (urlRunIds && urlRunIds.length > 0 && !urlParamsAppliedRef.current) {
+        return;
+      }
       // Mark that the upcoming URL change was triggered locally so the URL
       // effect doesn't round-trip and overwrite the selection.
       isLocalSelectionUpdateRef.current = true;
