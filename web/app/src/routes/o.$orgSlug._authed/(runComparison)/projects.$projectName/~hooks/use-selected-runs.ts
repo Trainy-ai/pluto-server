@@ -203,6 +203,30 @@ export function useSelectedRuns(
     }
   }, [runColors, selectedRunsWithColors, debouncedSaveToCache, storageKey]);
 
+  // Build a selection map from URL run IDs, matching against available runs.
+  // Returns null if urlRunIds is empty or no matching runs are found.
+  const buildSelectionFromUrlParams = useCallback(
+    (availableRuns: Run[], colorMap: Record<RunId, Color>): Record<RunId, { run: Run; color: Color }> | null => {
+      if (!urlRunIds?.length) return null;
+
+      const runsById = new Map(availableRuns.map((r) => [r.id, r]));
+      const selected: Record<RunId, { run: Run; color: Color }> = {};
+
+      urlRunIds.forEach((runId) => {
+        const run = runsById.get(runId);
+        if (run) {
+          selected[runId] = {
+            run,
+            color: colorMap[runId] || getColorForRun(runId, chartColorsRef.current),
+          };
+        }
+      });
+
+      return Object.keys(selected).length > 0 ? selected : null;
+    },
+    [urlRunIds],
+  );
+
   // Handle URL param changes (when navigating with different ?runs= param)
   useEffect(() => {
     // Check if URL params actually changed
@@ -214,7 +238,14 @@ export function useSelectedRuns(
       return; // No change
     }
 
-    // Update ref to track current value
+    // Don't mark URL params as "seen" until runs are loaded so we can actually
+    // apply them. Otherwise the first render (before data arrives) consumes
+    // the change and when runs finally load, the effect sees no diff.
+    if (!runs?.length) {
+      return;
+    }
+
+    // Update ref to track current value — only after we know runs are loaded
     prevUrlRunIdsRef.current = urlRunIds;
 
     // Skip if this URL change was triggered by our own selection update.
@@ -227,25 +258,12 @@ export function useSelectedRuns(
     }
 
     // If we have runs loaded and URL params changed, apply the new selection
-    if (runs?.length && urlRunIds && urlRunIds.length > 0) {
-      const runsById = new Map(runs.map((r) => [r.id, r]));
-      const newSelectedRuns: Record<RunId, { run: Run; color: Color }> = {};
-
-      urlRunIds.forEach((runId) => {
-        const run = runsById.get(runId);
-        if (run) {
-          const color = runColors[runId] || getColorForRun(runId, chartColorsRef.current);
-          newSelectedRuns[runId] = { run, color };
-        }
-      });
-
-      // Apply the selection from URL params (replaces existing selection)
-      if (Object.keys(newSelectedRuns).length > 0) {
-        setSelectedRunsWithColors(newSelectedRuns);
-        urlParamsAppliedRef.current = true;
-      }
+    const newSelection = buildSelectionFromUrlParams(runs, runColors);
+    if (newSelection) {
+      setSelectedRunsWithColors(newSelection);
+      urlParamsAppliedRef.current = true;
     }
-  }, [urlRunIds, runs, runColors]);
+  }, [urlRunIds, runs, runColors, buildSelectionFromUrlParams]);
 
   // Initialize or update colors when runs change.
   // Uses refs for runColors/selectedRunsWithColors to avoid circular re-runs
@@ -282,22 +300,9 @@ export function useSelectedRuns(
         // If URL params provided, use those for initial selection
         if (urlRunIds && urlRunIds.length > 0 && !urlParamsAppliedRef.current) {
           urlParamsAppliedRef.current = true;
-          const runsById = new Map(runs.map((r) => [r.id, r]));
-          const newSelectedRuns: Record<RunId, { run: Run; color: Color }> = {};
-
-          urlRunIds.forEach((runId) => {
-            const run = runsById.get(runId);
-            if (run) {
-              newSelectedRuns[runId] = {
-                run,
-                color: newColors[runId] || getColorForRun(runId, chartColorsRef.current),
-              };
-            }
-          });
-
-          // Only set if we found at least one valid run
-          if (Object.keys(newSelectedRuns).length > 0) {
-            setSelectedRunsWithColors(newSelectedRuns);
+          const newSelection = buildSelectionFromUrlParams(runs, newColors);
+          if (newSelection) {
+            setSelectedRunsWithColors(newSelection);
           } else {
             // Fall back to default: select first 5 runs
             setSelectedRunsWithColors(selectDefaultRuns());
@@ -308,8 +313,19 @@ export function useSelectedRuns(
         }
       }
     }
-    // Handle subsequent runs loaded through pagination
+    // Handle subsequent runs loaded through pagination, or cache loaded before runs
     else {
+      // If URL params exist and haven't been applied yet, override cached selections.
+      // This handles the race where IndexedDB cache restores stale selections before
+      // runs data arrives from the API.
+      if (urlRunIds && urlRunIds.length > 0 && !urlParamsAppliedRef.current) {
+        urlParamsAppliedRef.current = true;
+        const newSelection = buildSelectionFromUrlParams(runs, currentRunColors);
+        if (newSelection) {
+          setSelectedRunsWithColors(newSelection);
+        }
+      }
+
       // Find runs that don't have colors assigned yet
       const runsWithoutColors = runs.filter((run) => !currentRunColors[run.id]);
 
@@ -330,7 +346,7 @@ export function useSelectedRuns(
         }));
       }
     }
-  }, [runs, urlRunIds]);
+  }, [runs, urlRunIds, buildSelectionFromUrlParams]);
 
   // Notify parent when selection changes (for URL sync)
   useEffect(() => {
