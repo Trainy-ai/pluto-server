@@ -15,6 +15,7 @@ interface FilterValueInputProps {
   values: unknown[];
   onChange: (values: unknown[]) => void;
   options?: { label: string; value: string }[];
+  showValidation?: boolean;
 }
 
 export function FilterValueInput({
@@ -23,6 +24,7 @@ export function FilterValueInput({
   values,
   onChange,
   options,
+  showValidation,
 }: FilterValueInputProps) {
   // "exists" / "not exists" need no value input
   if (operator === "exists" || operator === "not exists") {
@@ -45,30 +47,38 @@ export function FilterValueInput({
 
     case "number":
       if (isBetween) {
+        const hasMin = values[0] != null && String(values[0]) !== "";
+        const hasMax = values[1] != null && String(values[1]) !== "";
+        const needsBoth = hasMin !== hasMax;
         return (
-          <div className="flex items-center gap-2">
-            <Input
-              type="number"
-              placeholder="Min"
-              value={values[0] != null ? String(values[0]) : ""}
-              onChange={(e) => {
-                const v = e.target.value === "" ? undefined : Number(e.target.value);
-                onChange([v, values[1]]);
-              }}
-              className="h-8"
-              autoFocus
-            />
-            <span className="text-xs text-muted-foreground">and</span>
-            <Input
-              type="number"
-              placeholder="Max"
-              value={values[1] != null ? String(values[1]) : ""}
-              onChange={(e) => {
-                const v = e.target.value === "" ? undefined : Number(e.target.value);
-                onChange([values[0], v]);
-              }}
-              className="h-8"
-            />
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <Input
+                type="number"
+                placeholder="Min"
+                value={hasMin ? String(values[0]) : ""}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  onChange([raw === "" ? undefined : raw, values[1]]);
+                }}
+                className="h-8"
+                autoFocus
+              />
+              <span className="text-xs text-muted-foreground">and</span>
+              <Input
+                type="number"
+                placeholder="Max"
+                value={hasMax ? String(values[1]) : ""}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  onChange([values[0], raw === "" ? undefined : raw]);
+                }}
+                className="h-8"
+              />
+            </div>
+            {showValidation && needsBoth && (
+              <p className="text-xs text-destructive">Both min and max values are required</p>
+            )}
           </div>
         );
       }
@@ -78,8 +88,8 @@ export function FilterValueInput({
           placeholder="Enter value..."
           value={values[0] != null ? String(values[0]) : ""}
           onChange={(e) => {
-            const v = e.target.value === "" ? undefined : Number(e.target.value);
-            onChange([v]);
+            const raw = e.target.value;
+            onChange([raw === "" ? undefined : raw]);
           }}
           className="h-8"
           autoFocus

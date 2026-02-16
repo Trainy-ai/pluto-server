@@ -69,6 +69,7 @@ export function FilterButton({
   const [extraConditions, setExtraConditions] = useState<FilterCondition[]>([]);
   const [isSearchActive, setIsSearchActive] = useState(false);
   const [expandedMetric, setExpandedMetric] = useState<string | null>(null);
+  const [showValidation, setShowValidation] = useState(false);
 
   // Stable key for activeColumnIds — avoids memo invalidation on array reference changes
   const activeColumnKey = useMemo(
@@ -159,8 +160,23 @@ export function FilterButton({
     handleSelectField(field);
   };
 
+  const isBetweenBoundsValid = (op: string, vals: unknown[]): boolean => {
+    if ((op === "is between" || op === "is not between") && selectedField?.dataType === "number") {
+      const hasMin = vals[0] != null && String(vals[0]) !== "";
+      const hasMax = vals[1] != null && String(vals[1]) !== "";
+      if (hasMin !== hasMax) return false;
+    }
+    return true;
+  };
+
   const handleApply = () => {
     if (!selectedField) return;
+    setShowValidation(true);
+    // Block apply if any between operator has incomplete bounds
+    if (!isBetweenBoundsValid(operator, values)) return;
+    for (const cond of extraConditions) {
+      if (!isBetweenBoundsValid(cond.operator, cond.values)) return;
+    }
     const filter: RunFilter = {
       id: crypto.randomUUID(),
       field: selectedField.id,
@@ -183,6 +199,7 @@ export function FilterButton({
     setOperator("");
     setValues([]);
     setExtraConditions([]);
+    setShowValidation(false);
     setOpen(false);
   };
 
@@ -497,7 +514,7 @@ export function FilterButton({
             </div>
 
             {/* Primary condition */}
-            <Select value={operator} onValueChange={setOperator}>
+            <Select value={operator} onValueChange={(v) => { setOperator(v); setShowValidation(false); }}>
               <SelectTrigger className="h-8">
                 <SelectValue />
               </SelectTrigger>
@@ -516,8 +533,9 @@ export function FilterButton({
               dataType={selectedField?.dataType ?? "text"}
               operator={operator}
               values={values}
-              onChange={setValues}
+              onChange={(v) => { setValues(v); setShowValidation(false); }}
               options={selectedField?.options}
+              showValidation={showValidation}
             />
 
             {/* Extra AND conditions */}
@@ -537,7 +555,7 @@ export function FilterButton({
                 </div>
                 <Select
                   value={cond.operator}
-                  onValueChange={(op) => handleUpdateCondition(idx, { operator: op })}
+                  onValueChange={(op) => { handleUpdateCondition(idx, { operator: op }); setShowValidation(false); }}
                 >
                   <SelectTrigger className="h-8">
                     <SelectValue />
@@ -556,8 +574,9 @@ export function FilterButton({
                   dataType={selectedField?.dataType ?? "text"}
                   operator={cond.operator}
                   values={cond.values}
-                  onChange={(v) => handleUpdateCondition(idx, { values: v })}
+                  onChange={(v) => { handleUpdateCondition(idx, { values: v }); setShowValidation(false); }}
                   options={selectedField?.options}
+                  showValidation={showValidation}
                 />
               </div>
             ))}

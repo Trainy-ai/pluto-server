@@ -86,7 +86,7 @@ export function ColumnHeaderMenu({
 
   return (
     <>
-      <div className="flex w-full items-center gap-1">
+      <div className="flex w-full items-center gap-1 pr-5">
         <span className="truncate text-xs font-medium">{label}</span>
         {sortDirection && (
           <span className="flex-shrink-0">
@@ -100,10 +100,10 @@ export function ColumnHeaderMenu({
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
-              className="ml-auto flex-shrink-0 rounded p-0.5 opacity-0 transition-opacity hover:bg-accent group-hover:opacity-100"
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 flex-shrink-0 rounded p-px opacity-0 transition-opacity group-hover:opacity-100 group-hover:bg-zinc-300 hover:bg-zinc-400 dark:group-hover:bg-zinc-600 dark:hover:bg-zinc-500 z-10"
               onClick={(e) => e.stopPropagation()}
             >
-              <MoreHorizontal className="h-3.5 w-3.5" />
+              <MoreHorizontal className="h-3 w-3" />
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-48">

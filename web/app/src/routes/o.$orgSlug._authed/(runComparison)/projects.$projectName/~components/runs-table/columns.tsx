@@ -219,14 +219,6 @@ function formatCellValue(value: unknown, col: ColumnConfig): string {
       return String(value);
     }
   }
-  // Metric values: format as short numbers
-  if (col.source === "metric" && typeof value === "number") {
-    if (Number.isInteger(value)) return String(value);
-    // Use toPrecision for very small/large values, toFixed for normal range
-    const abs = Math.abs(value);
-    if (abs < 0.001 || abs >= 1e6) return value.toPrecision(4);
-    return value.toFixed(4);
-  }
   return formatValue(value);
 }
 
