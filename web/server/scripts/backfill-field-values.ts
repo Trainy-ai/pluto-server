@@ -1,106 +1,79 @@
 /**
- * Backfill script to populate run_field_values table from existing runs.
- * Processes runs in batches and uses createMany with skipDuplicates.
+ * Backfill script to fix numericValue for run_field_values rows where
+ * textValue is a numeric string but numericValue is null.
+ *
+ * Config values stored as JSON strings (e.g. "0.001" instead of 0.001)
+ * were previously inferred as "text" with numericValue=null, causing them to
+ * sort to the bottom (NULLS LAST). This script detects numeric strings and
+ * sets numericValue for correct sorting. Excludes leading-zero integers
+ * like "007" (IDs) and hex strings like "0x1F".
  *
  * Usage:
- *   pnpm exec tsx scripts/backfill-field-values.ts
+ *   DATABASE_URL="..." pnpm exec tsx scripts/backfill-field-values.ts
  */
 
 import { PrismaClient } from "@prisma/client";
-import { flattenObject } from "../lib/flatten-object";
 
 const prisma = new PrismaClient();
 
-const BATCH_SIZE = 500;
-const IMPORTED_KEY_PREFIXES = ["sys/", "source_code/"];
-const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/;
+const BATCH_SIZE = 1000;
 
-function inferType(value: unknown): "text" | "number" | "date" {
-  if (typeof value === "number") return "number";
-  if (typeof value === "string" && ISO_DATE_REGEX.test(value)) return "date";
-  return "text";
+/** Returns true if the string is a valid numeric value that should have numericValue set.
+ * Excludes leading-zero integers like "007" (IDs) and hex "0x1F". */
+function isNumericString(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed === "" || trimmed.startsWith("0x") || trimmed.startsWith("0X")) return false;
+  if (/^0\d+$/.test(trimmed)) return false;
+  const num = Number(trimmed);
+  return !isNaN(num) && isFinite(num);
 }
 
 async function backfill() {
   let cursor: bigint | undefined;
   let totalProcessed = 0;
-  let totalValuesInserted = 0;
+  let totalUpdated = 0;
 
-  console.log("Starting backfill of run_field_values...");
+  console.log("Starting backfill of numericValue for numeric string rows...");
 
   while (true) {
-    const runs = await prisma.runs.findMany({
-      select: {
-        id: true,
-        organizationId: true,
-        projectId: true,
-        config: true,
-        systemMetadata: true,
+    const rows = await prisma.runFieldValue.findMany({
+      select: { id: true, textValue: true },
+      where: {
+        numericValue: null,
+        textValue: { not: null },
       },
       orderBy: { id: "asc" },
       take: BATCH_SIZE,
       ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
     });
 
-    if (runs.length === 0) break;
+    if (rows.length === 0) break;
 
-    const records: {
-      runId: bigint;
-      organizationId: string;
-      projectId: bigint;
-      source: string;
-      key: string;
-      textValue: string | null;
-      numericValue: number | null;
-    }[] = [];
-
-    for (const run of runs) {
-      const flatConfig = flattenObject(run.config);
-      for (const [key, value] of Object.entries(flatConfig)) {
-        if (IMPORTED_KEY_PREFIXES.some((prefix) => key.startsWith(prefix))) {
-          continue;
-        }
-        const dataType = inferType(value);
-        records.push({
-          runId: run.id,
-          organizationId: run.organizationId,
-          projectId: run.projectId,
-          source: "config",
-          key,
-          textValue: value != null ? String(value) : null,
-          numericValue: dataType === "number" ? Number(value) : null,
-        });
-      }
-
-      const flatSysMeta = flattenObject(run.systemMetadata);
-      for (const [key, value] of Object.entries(flatSysMeta)) {
-        const dataType = inferType(value);
-        records.push({
-          runId: run.id,
-          organizationId: run.organizationId,
-          projectId: run.projectId,
-          source: "systemMetadata",
-          key,
-          textValue: value != null ? String(value) : null,
-          numericValue: dataType === "number" ? Number(value) : null,
-        });
+    const updates: { id: bigint; numericValue: number }[] = [];
+    for (const row of rows) {
+      if (row.textValue && isNumericString(row.textValue)) {
+        updates.push({ id: row.id, numericValue: Number(row.textValue) });
       }
     }
 
-    if (records.length > 0) {
-      const result = await prisma.runFieldValue.createMany({
-        data: records,
-        skipDuplicates: true,
-      });
-      totalValuesInserted += result.count;
+    if (updates.length > 0) {
+      await Promise.all(
+        updates.map((u) =>
+          prisma.runFieldValue.update({
+            where: { id: u.id },
+            data: { numericValue: u.numericValue },
+          })
+        )
+      );
+      totalUpdated += updates.length;
     }
 
-    totalProcessed += runs.length;
-    cursor = runs[runs.length - 1].id;
-    console.log(`Processed ${totalProcessed} runs, ${totalValuesInserted} values inserted so far...`);
+    totalProcessed += rows.length;
+    cursor = rows[rows.length - 1].id;
+    console.log(`Processed ${totalProcessed} rows, updated ${totalUpdated} so far...`);
   }
 
-  console.log(`Done! Processed ${totalProcessed} runs, inserted ${totalValuesInserted} values.`);
+  console.log(`Done! Processed ${totalProcessed} rows, updated ${totalUpdated} with numericValue.`);
 }
 
 backfill()

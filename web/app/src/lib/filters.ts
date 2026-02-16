@@ -856,7 +856,7 @@ export function __numberFilterFn<TData>(
   }
 
   const value = inputData;
-  const filterVal = filterValue.values[0];
+  const filterVal = Number(filterValue.values[0]);
 
   switch (filterValue.operator) {
     case "is":
@@ -871,15 +871,13 @@ export function __numberFilterFn<TData>(
       return value < filterVal;
     case "is less than or equal to":
       return value <= filterVal;
-    case "is between": {
-      const lowerBound = filterValue.values[0];
-      const upperBound = filterValue.values[1];
-      return value >= lowerBound && value <= upperBound;
-    }
+    case "is between":
     case "is not between": {
-      const lowerBound = filterValue.values[0];
-      const upperBound = filterValue.values[1];
-      return value < lowerBound || value > upperBound;
+      const lowerBound = Number(filterValue.values[0]);
+      const upperBound = Number(filterValue.values[1]);
+      if (isNaN(lowerBound) || isNaN(upperBound)) return true;
+      const isBetween = value >= lowerBound && value <= upperBound;
+      return filterValue.operator === "is between" ? isBetween : !isBetween;
     }
     default:
       return true;
