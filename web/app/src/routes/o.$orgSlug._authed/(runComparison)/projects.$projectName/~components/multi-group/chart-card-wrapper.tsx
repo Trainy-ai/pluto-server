@@ -5,6 +5,7 @@ import { Maximize2Icon, SlidersHorizontalIcon, TriangleAlertIcon } from "lucide-
 import { Button } from "@/components/ui/button";
 import { ChartFullscreenDialog } from "@/components/charts/chart-fullscreen-dialog";
 import { ChartBoundsPopover } from "@/components/charts/chart-bounds-popover";
+import { ChartExportMenu } from "@/components/charts/chart-export-menu";
 import {
   Tooltip,
   TooltipContent,
@@ -115,9 +116,11 @@ export function ChartCardWrapper({
     return `Data clipped: values exist ${parts.join(" and ")}`;
   })();
 
+  const chartContainerRef = useRef<HTMLDivElement>(null);
+
   return (
     <>
-      <div className="relative h-full w-full" data-testid="chart-card" onDoubleClick={handleResetBounds}>
+      <div ref={chartContainerRef} className="relative h-full w-full" data-testid="chart-card" onDoubleClick={handleResetBounds}>
         {/* Chart content */}
         {renderChart(bounds.yMin, bounds.yMax, handleDataRange, handleResetBounds)}
 
@@ -135,6 +138,11 @@ export function ChartCardWrapper({
               </TooltipContent>
             </Tooltip>
           )}
+          <ChartExportMenu
+            getContainer={() => chartContainerRef.current}
+            fileName={metricName}
+            className="size-7 bg-background/80 backdrop-blur-sm hover:bg-background"
+          />
           <ChartBoundsPopover
             yMin={bounds.yMin}
             yMax={bounds.yMax}
