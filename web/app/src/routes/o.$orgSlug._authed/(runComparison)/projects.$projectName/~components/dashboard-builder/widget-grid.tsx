@@ -72,9 +72,10 @@ export function WidgetGrid({
   onLayoutChangeRef.current = onLayoutChange;
 
   // In coarse mode, derive uniform size from first widget (or defaults)
-  // Default: w=3 in 6-col grid = half width = 2 per row
+  // Single widget uses full width; multiple widgets use proportional width
   const uniformW = useMemo(() => {
     if (!coarseMode || widgets.length === 0) return 3;
+    if (widgets.length === 1) return cols;
     return Math.max(1, Math.min(cols, Math.floor(widgets[0].layout.w / 2)));
   }, [coarseMode, widgets, cols]);
 
