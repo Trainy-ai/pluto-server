@@ -1900,6 +1900,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       >
         {title && (
           <div
+            data-testid="chart-title"
             className="shrink-0 truncate text-center font-mono text-xs px-1"
             style={{ color: theme === "dark" ? "#fff" : "#000" }}
           >
