@@ -29,6 +29,7 @@ export function LinearIssuePicker({
       },
       {
         enabled: debouncedQuery.length > 0,
+        refetchOnWindowFocus: false,
       },
     ),
   );

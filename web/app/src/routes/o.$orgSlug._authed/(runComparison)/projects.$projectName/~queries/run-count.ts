@@ -14,6 +14,7 @@ export const useRunCount = (
   systemFilters?: SystemFilterParam[],
 ) => {
   return useQuery<number>({
+    placeholderData: (prev) => prev,
     queryKey: trpc.runs.count.queryKey({
       organizationId: orgId,
       projectName,

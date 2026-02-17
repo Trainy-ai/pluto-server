@@ -176,8 +176,7 @@ export const MetricsDisplay = memo(function MetricsDisplay({
               <RefreshButton
                 onRefresh={onRefresh}
                 lastRefreshed={lastRefreshed}
-                refreshInterval={10_000}
-                defaultAutoRefresh={false}
+                storageKey={`refresh-interval:metrics:${projectName}`}
               />
               <LineSettings
                 organizationId={organizationId}
@@ -237,8 +236,7 @@ export const MetricsDisplay = memo(function MetricsDisplay({
             <RefreshButton
               onRefresh={onRefresh}
               lastRefreshed={lastRefreshed}
-              refreshInterval={10_000}
-              defaultAutoRefresh={false}
+              storageKey={`refresh-interval:metrics:${projectName}`}
             />
             <LineSettings
               organizationId={organizationId}

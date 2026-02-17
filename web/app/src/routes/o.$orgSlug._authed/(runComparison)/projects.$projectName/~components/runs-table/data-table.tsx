@@ -29,7 +29,6 @@ import {
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import { columns } from "./columns";
 import type { Run } from "../../~queries/list-runs";
@@ -529,12 +528,6 @@ export function DataTable({
 
   return (
     <div className="relative flex h-full min-h-0 w-full min-w-[200px] flex-col overflow-hidden">
-      {/* Overlay spinner when refetching with existing data */}
-      {isFetching && runs.length > 0 && (
-        <div className="absolute inset-0 z-20 flex items-center justify-center bg-background/50">
-          <Spinner size="medium" />
-        </div>
-      )}
       {/* Header section - shrink-0 prevents shrinking */}
       <div className="mb-2 shrink-0 space-y-2">
         <div className="mt-2 flex items-center justify-between gap-x-3">

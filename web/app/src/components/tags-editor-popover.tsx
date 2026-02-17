@@ -116,7 +116,7 @@ export function TagsEditorPopover({
   const { data: linearIntegration } = useQuery(
     trpc.organization.integrations.getLinearIntegration.queryOptions(
       { organizationId: organizationId! },
-      { enabled: !!organizationId },
+      { enabled: !!organizationId, refetchOnWindowFocus: false },
     ),
   );
 

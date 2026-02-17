@@ -23,7 +23,6 @@ import { useRunCount } from "./~queries/run-count";
 import { useRunFilters } from "./~hooks/use-run-filters";
 import { SYSTEM_FILTERABLE_FIELDS, type FilterableField, type FieldFilterParam, type MetricFilterParam, type SystemFilterParam, type SortParam } from "@/lib/run-filters";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Spinner } from "@/components/ui/spinner";
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -279,7 +278,7 @@ function RouteComponent() {
     [updateDebouncedSearch],
   );
 
-  const { refresh, lastRefreshed, isRefreshing } = useRefresh({
+  const { refresh, lastRefreshed } = useRefresh({
     queries: [
       {
         predicate: (query) => {
@@ -317,7 +316,6 @@ function RouteComponent() {
     isLoading,
     isFetching,
     isError,
-    isPlaceholderData,
     error,
   } = useListRuns(organizationId, projectName, serverFilters.tags, serverFilters.status, debouncedSearch, serverFilters.dateFilters, sortParam, serverFilters.fieldFilters as FieldFilterParam[] | undefined, serverFilters.metricFilters as MetricFilterParam[] | undefined, serverFilters.systemFilters as SystemFilterParam[] | undefined);
 
@@ -686,7 +684,7 @@ function RouteComponent() {
                 onNotesUpdate={handleNotesUpdate}
                 selectedRunsWithColors={selectedRunsWithColors}
                 runColors={runColors}
-                isLoading={isLoading || runCountLoading || isPlaceholderData}
+                isLoading={(isLoading && !data) || (runCountLoading && runCount === undefined)}
                 isFetching={isFetching}
                 runCount={runCount || 0}
                 totalRunCount={totalRunCount || runCount || 0}
@@ -783,11 +781,6 @@ function RouteComponent() {
                       onViewChange={handleViewChange}
                       tableHighlightedRunId={hoveredRunId}
                     />
-                    {isRefreshing && (
-                      <div className="absolute inset-0 flex items-center justify-center bg-background/50">
-                        <Spinner size="large" />
-                      </div>
-                    )}
                   </div>
                 </>
               )}

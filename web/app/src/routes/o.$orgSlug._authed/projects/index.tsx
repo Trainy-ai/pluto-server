@@ -152,8 +152,7 @@ function RouteComponent() {
               <RefreshButton
                 onRefresh={refreshData}
                 lastRefreshed={lastRefreshed}
-                refreshInterval={REFRESH_INTERVAL}
-                defaultAutoRefresh={false}
+                storageKey="refresh-interval:projects"
               />
             </div>
           </div>

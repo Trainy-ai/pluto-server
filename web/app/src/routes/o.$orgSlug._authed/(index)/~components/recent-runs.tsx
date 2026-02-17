@@ -47,8 +47,7 @@ export function RecentRuns({ runs, orgSlug, orgId }: RecentRunsProps) {
         <RefreshButton
           onRefresh={refreshData}
           lastRefreshed={lastRefreshed}
-          refreshInterval={10_000}
-          defaultAutoRefresh={false}
+          storageKey="refresh-interval:recent-runs"
         />
       </div>
       <div className="rounded-lg border">

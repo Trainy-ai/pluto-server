@@ -11,6 +11,7 @@ export const useDistinctTags = (
   projectName: string,
 ) => {
   return useQuery<{ tags: string[] }>({
+    placeholderData: (prev) => prev,
     queryKey: trpc.runs.distinctTags.queryKey({
       organizationId: orgId,
       projectName,

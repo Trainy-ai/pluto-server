@@ -12,10 +12,15 @@ export type UpdateViewResponse = inferOutput<typeof trpc.dashboardViews.update>;
 // Hook to list all dashboard views for a project
 export const useDashboardViews = (organizationId: string, projectName: string) => {
   return useQuery(
-    trpc.dashboardViews.list.queryOptions({
-      organizationId,
-      projectName,
-    })
+    trpc.dashboardViews.list.queryOptions(
+      {
+        organizationId,
+        projectName,
+      },
+      {
+        placeholderData: (prev) => prev,
+      },
+    )
   );
 };
 
@@ -27,6 +32,7 @@ export const useDashboardView = (organizationId: string, viewId: string | null) 
       viewId: viewId ?? "",
     }),
     enabled: !!viewId,
+    placeholderData: (prev) => prev,
   });
 };
 

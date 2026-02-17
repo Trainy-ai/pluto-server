@@ -85,8 +85,8 @@ function RouteComponent() {
             <RefreshButton
               onRefresh={handleRefresh}
               lastRefreshed={lastRefreshTime || undefined}
-              defaultAutoRefresh={runData.status === "RUNNING"}
-              refreshInterval={10_000}
+              defaultInterval={runData.status === "RUNNING" ? 10_000 : null}
+              storageKey={`refresh-interval:system:${runId}`}
             />
           </div>
           <LogSearch
