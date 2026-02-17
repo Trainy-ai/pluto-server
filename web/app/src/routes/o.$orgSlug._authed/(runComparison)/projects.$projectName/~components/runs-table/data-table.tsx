@@ -256,6 +256,8 @@ interface DataTableProps {
   viewSelector?: React.ReactNode;
   /** Callback when a run row is hovered (for chart highlighting). Passes the run's unique SQID. */
   onRunHover?: (runId: string | null) => void;
+  /** Active chart view ID — passed as search param when navigating to a run */
+  activeChartViewId?: string | null;
 }
 
 export function DataTable({
@@ -314,6 +316,7 @@ export function DataTable({
   onPageSizeChange,
   viewSelector,
   onRunHover,
+  activeChartViewId,
 }: DataTableProps) {
   // Internal pagination state (pageIndex only — pageSize is controlled by parent)
   const [pageIndex, setPageIndex] = useState(0);
@@ -411,6 +414,7 @@ export function DataTable({
         onNameSetColor,
         sorting,
         onSortingChange,
+        activeChartViewId,
       }),
     [
       orgSlug,
@@ -431,6 +435,7 @@ export function DataTable({
       onNameSetColor,
       sorting,
       onSortingChange,
+      activeChartViewId,
     ],
   );
 

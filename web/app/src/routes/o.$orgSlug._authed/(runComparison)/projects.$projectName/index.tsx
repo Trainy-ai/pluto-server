@@ -749,6 +749,7 @@ function RouteComponent() {
                   />
                 }
                 onRunHover={setHoveredRunId}
+                activeChartViewId={chart ?? null}
               />
             </div>
           </ResizablePanel>

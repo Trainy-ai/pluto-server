@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from "react";
+import { useBlocker } from "@tanstack/react-router";
 import { PlusIcon, SaveIcon, XIcon, AlertTriangleIcon, RotateCcwIcon, GridIcon, SlidersHorizontalIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -77,6 +78,21 @@ export function DashboardBuilder({
     setConfig(view.config);
     setHasChanges(false);
   }, [view.config]);
+
+  // Warn on browser tab close/refresh with unsaved changes
+  useEffect(() => {
+    if (!isEditing || !hasChanges) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [isEditing, hasChanges]);
+
+  // Block in-app navigation with unsaved changes
+  const { proceed, reset, status } = useBlocker({
+    condition: isEditing && hasChanges,
+  });
 
   const handleSave = useCallback(() => {
     updateMutation.mutate(
@@ -448,6 +464,32 @@ export function DashboardBuilder({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Navigation Blocker Dialog */}
+      {status === "blocked" && (
+        <Dialog open onOpenChange={() => reset?.()}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <AlertTriangleIcon className="size-5 text-yellow-500" />
+                Leave without saving?
+              </DialogTitle>
+              <DialogDescription>
+                You have unsaved changes to this dashboard. If you leave now, your
+                changes will be lost.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => reset?.()}>
+                Stay on Page
+              </Button>
+              <Button variant="destructive" onClick={() => proceed?.()}>
+                Leave Page
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 }
