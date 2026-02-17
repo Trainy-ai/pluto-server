@@ -9,7 +9,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { ChevronDown, ChevronRight, Eye, EyeOff, Search, X, Code2, Text } from "lucide-react";
+import { ChevronDown, ChevronRight, Eye, EyeOff, Search, X, Code2, Text, GitCompareArrows } from "lucide-react";
 import { formatValue } from "@/lib/flatten-object";
 
 interface SideBySideViewProps {
@@ -39,6 +39,34 @@ const IMPORT_KEY_PRIORITY = new Map([
 ].map((key, i) => [key, i] as const));
 
 const COLLAPSED_MAX_HEIGHT = 60; // px - roughly 3 lines of monospace text
+
+// Diff highlight colors (git-style)
+const DIFF_ADDED_BG = "color-mix(in srgb, hsl(142 76% 36%) 25%, hsl(var(--background)))";
+const DIFF_REMOVED_BG = "color-mix(in srgb, hsl(0 72% 51%) 25%, hsl(var(--background)))";
+
+// Check if values differ across runs for a given row.
+// Returns true if at least two runs have different formatted values.
+function hasRowDiff(values: string[]): boolean {
+  if (values.length < 2) return false;
+  const first = values[0];
+  for (let i = 1; i < values.length; i++) {
+    if (values[i] !== first) return true;
+  }
+  return false;
+}
+
+// For a row of values, return which cells differ from the reference run.
+// Reference cell is highlighted as "removed" (red), differing cells as "added" (green).
+function getDiffHighlights(values: string[], refIndex: number): (string | undefined)[] {
+  if (values.length < 2) return values.map(() => undefined);
+  const ref = values[refIndex];
+  const anyDiff = values.some((v, i) => i !== refIndex && v !== ref);
+  if (!anyDiff) return values.map(() => undefined);
+  return values.map((v, i) => {
+    if (i === refIndex) return DIFF_REMOVED_BG; // reference run
+    return v !== ref ? DIFF_ADDED_BG : undefined;
+  });
+}
 
 // Column index: 0 = key column, 1+ = run columns
 // Uses useEffect for event listener cleanup to prevent memory leaks on unmount.
@@ -272,6 +300,8 @@ function MetricSubGroup({
   selectedRuns,
   summaries,
   numRunCols,
+  showOnlyDiffs,
+  referenceRunIndex,
 }: {
   metricName: string;
   isExpanded: boolean;
@@ -279,6 +309,8 @@ function MetricSubGroup({
   selectedRuns: { run: Run; color: string }[];
   summaries: Record<string, Record<string, number>> | undefined;
   numRunCols: number;
+  showOnlyDiffs: boolean;
+  referenceRunIndex: number;
 }) {
   return (
     <>
@@ -313,7 +345,10 @@ function MetricSubGroup({
       </tr>
       {/* Aggregation rows (when expanded) */}
       {isExpanded &&
-        METRIC_AGGS.map((agg, idx) => (
+        METRIC_AGGS.map((agg, idx) => {
+          const values = selectedRuns.map(({ run }) => formatMetricValue(summaries?.[run.id]?.[`${metricName}|${agg}`]));
+          const highlights = showOnlyDiffs ? getDiffHighlights(values, referenceRunIndex) : values.map(() => undefined);
+          return (
           <tr
             key={`${metricName}-${agg}`}
             className={`border-b border-border/50 ${
@@ -330,24 +365,25 @@ function MetricSubGroup({
                 {agg}
               </span>
             </td>
-            {selectedRuns.map(({ run }) => {
-              const value = summaries?.[run.id]?.[`${metricName}|${agg}`];
-              const isEmpty = value == null;
+            {selectedRuns.map(({ run }, colIdx) => {
+              const isEmpty = values[colIdx] === "-";
               return (
                 <td
                   key={run.id}
                   className={`border-r border-border/50 px-3 py-1.5 align-top last:border-r-0 ${
                     isEmpty ? "text-muted-foreground/50" : "text-foreground"
                   }`}
+                  style={highlights[colIdx] ? { background: highlights[colIdx] } : undefined}
                 >
                   <span className="break-all font-mono text-xs">
-                    {formatMetricValue(value)}
+                    {values[colIdx]}
                   </span>
                 </td>
               );
             })}
           </tr>
-        ))}
+          );
+        })}
     </>
   );
 }
@@ -360,6 +396,14 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
   const [isRegexMode, setIsRegexMode] = useState(false);
   const [isInvalidRegex, setIsInvalidRegex] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Diff-only mode: show only rows where values differ across runs
+  const [showOnlyDiffs, setShowOnlyDiffs] = useState(false);
+
+  // Index of the reference run for diff highlighting (default: first run)
+  const [referenceRunIndex, setReferenceRunIndex] = useState(0);
+  // Clamp reference index if runs change (e.g. a run is removed)
+  const clampedRefIndex = Math.min(referenceRunIndex, selectedRuns.length - 1);
 
   const handleSearchChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -588,49 +632,88 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
     [activeSearch, isRegexMode],
   );
 
-  // Filter pluto metadata rows
+  // Shared filter+precompute helper: filters keys by search & diff, pre-computes values and highlights.
+  // Addresses both code duplication and redundant value computation across filter and render phases.
+  const filterKeyedSection = useCallback(
+    <T,>(
+      keys: T[],
+      getKey: (item: T) => string,
+      getValues: (item: T) => string[],
+      getRawValues?: (item: T) => unknown[],
+    ): { item: T; values: string[]; highlights: (string | undefined)[] }[] => {
+      const diffEnabled = showOnlyDiffs && selectedRuns.length >= 2;
+      return keys.reduce<{ item: T; values: string[]; highlights: (string | undefined)[] }[]>((acc, item) => {
+        const key = getKey(item);
+        const values = getValues(item);
+        const rawValues = getRawValues ? getRawValues(item) : values;
+        if (!keyMatchesSearch(key, () => rawValues)) return acc;
+        if (diffEnabled && !hasRowDiff(values)) return acc;
+        const highlights = diffEnabled ? getDiffHighlights(values, clampedRefIndex) : values.map(() => undefined);
+        acc.push({ item, values, highlights });
+        return acc;
+      }, []);
+    },
+    [keyMatchesSearch, showOnlyDiffs, selectedRuns.length, clampedRefIndex],
+  );
+
+  // Filter pluto metadata rows (pre-compute values + highlights)
   const filteredPlutoRows = useMemo(
     () =>
-      plutoMetadataRows.filter((row) =>
-        keyMatchesSearch(row.key, () => selectedRuns.map(({ run }) => row.getValue(run))),
+      filterKeyedSection(
+        plutoMetadataRows,
+        (row) => row.key,
+        (row) => selectedRuns.map(({ run }) => row.getValue(run)),
       ),
-    [plutoMetadataRows, keyMatchesSearch, selectedRuns],
+    [plutoMetadataRows, filterKeyedSection, selectedRuns],
   );
 
-  // Check if Tags row matches
-  const tagsRowVisible = useMemo(() => {
-    if (!activeSearch) return true;
-    return rowMatchesSearch(
+  // Check if Tags row matches + pre-compute highlights
+  const tagsRow = useMemo(() => {
+    if (!rowMatchesSearch(
       "Tags",
       selectedRuns.flatMap(({ run }) => run.tags || []),
-      activeSearch,
+      activeSearch || "",
       isRegexMode,
-    );
-  }, [activeSearch, isRegexMode, selectedRuns]);
+    )) return null;
+    const tagStrings = selectedRuns.map(({ run }) => ((run.tags as string[]) || []).sort().join(","));
+    const diffEnabled = showOnlyDiffs && selectedRuns.length >= 2;
+    if (diffEnabled && !hasRowDiff(tagStrings)) return null;
+    const highlights = diffEnabled ? getDiffHighlights(tagStrings, clampedRefIndex) : tagStrings.map(() => undefined);
+    return { highlights };
+  }, [activeSearch, isRegexMode, selectedRuns, showOnlyDiffs, clampedRefIndex]);
 
-  // Filter keyed sections
-  const filteredImportKeys = useMemo(
+  // Filter keyed sections (pre-compute values + highlights for each)
+  const filteredImportRows = useMemo(
     () =>
-      importKeys.filter((key) =>
-        keyMatchesSearch(key, () => selectedRuns.map(({ run }) => runImportData[run.id]?.[key])),
+      filterKeyedSection(
+        importKeys,
+        (key) => key,
+        (key) => selectedRuns.map(({ run }) => formatValue(runImportData[run.id]?.[key])),
+        (key) => selectedRuns.map(({ run }) => runImportData[run.id]?.[key]),
       ),
-    [importKeys, keyMatchesSearch, selectedRuns, runImportData],
+    [importKeys, filterKeyedSection, selectedRuns, runImportData],
   );
 
-  const filteredSysMetaKeys = useMemo(
+  const filteredSysMetaRows = useMemo(
     () =>
-      allSysMetaKeys.filter((key) =>
-        keyMatchesSearch(key, () => selectedRuns.map(({ run }) => runSysMeta[run.id]?.[key])),
+      filterKeyedSection(
+        allSysMetaKeys,
+        (key) => key,
+        (key) => selectedRuns.map(({ run }) => formatValue(runSysMeta[run.id]?.[key])),
+        (key) => selectedRuns.map(({ run }) => runSysMeta[run.id]?.[key]),
       ),
-    [allSysMetaKeys, keyMatchesSearch, selectedRuns, runSysMeta],
+    [allSysMetaKeys, filterKeyedSection, selectedRuns, runSysMeta],
   );
 
-  const filteredConfigKeys = useMemo(
+  const filteredConfigRows = useMemo(
     () =>
-      nonImportConfigKeys.filter((key) =>
-        keyMatchesSearch(key, () => selectedRuns.map(({ run }) => runConfigs[run.id]?.[key])),
+      filterKeyedSection(
+        nonImportConfigKeys,
+        (key) => key,
+        (key) => selectedRuns.map(({ run }) => formatValue(runConfigs[run.id]?.[key])),
+        (key) => selectedRuns.map(({ run }) => runConfigs[run.id]?.[key]),
       ),
-    [nonImportConfigKeys, keyMatchesSearch, selectedRuns, runConfigs],
+    [nonImportConfigKeys, filterKeyedSection, selectedRuns, runConfigs],
   );
 
   // Filter metric names for search - match on metric name or aggregation labels
@@ -708,6 +791,23 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
             <p>{isRegexMode ? "Switch to normal search" : "Switch to regex search"}</p>
           </TooltipContent>
         </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => setShowOnlyDiffs((prev) => !prev)}
+              className={`shrink-0 h-8 w-8 ${showOnlyDiffs ? "bg-accent" : ""}`}
+              aria-label="Show only differences"
+              disabled={selectedRuns.length < 2}
+            >
+              <GitCompareArrows className="h-3.5 w-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>{showOnlyDiffs ? "Show all rows" : "Show only differences"}</p>
+          </TooltipContent>
+        </Tooltip>
         <div className="relative min-w-0 flex-1">
           <Search className="pointer-events-none absolute top-2 left-2 h-3.5 w-3.5 text-muted-foreground" />
           <Input
@@ -751,18 +851,27 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
                   className="absolute top-0 right-0 h-full w-1 cursor-col-resize bg-transparent transition-colors hover:bg-primary/50"
                 />
               </th>
-              {/* Run column headers with eye toggle */}
-              {selectedRuns.map(({ run, color }, i) => (
+              {/* Run column headers with eye toggle + reference selector */}
+              {selectedRuns.map(({ run, color }, i) => {
+                const isRef = showOnlyDiffs && i === clampedRefIndex;
+                return (
                 <th
                   key={run.id}
-                  className="relative border-r border-border bg-background px-3 py-2 text-left font-medium last:border-r-0"
-                  style={{ width: getWidth(i + 1) }}
+                  className={`relative border-r border-border bg-background px-3 py-2 text-left font-medium last:border-r-0 ${
+                    showOnlyDiffs && !isRef ? "cursor-pointer" : ""
+                  }`}
+                  style={{
+                    width: getWidth(i + 1),
+                    ...(isRef ? { background: DIFF_REMOVED_BG } : {}),
+                  }}
+                  onClick={showOnlyDiffs && !isRef ? () => setReferenceRunIndex(i) : undefined}
+                  title={showOnlyDiffs && !isRef ? "Click to set as reference" : undefined}
                 >
                   <div className="flex items-center gap-2">
                     {onRemoveRun ? (
                       <button
                         type="button"
-                        onClick={() => onRemoveRun(run.id)}
+                        onClick={(e) => { e.stopPropagation(); onRemoveRun(run.id); }}
                         className="group flex shrink-0 items-center justify-center rounded-sm p-0.5 transition-colors hover:bg-muted"
                         title="Remove from comparison"
                       >
@@ -783,13 +892,19 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
                     <span className="truncate text-xs" title={run.name}>
                       {run.name}
                     </span>
+                    {isRef && (
+                      <span className="shrink-0 rounded bg-destructive/20 px-1 py-0.5 text-[9px] font-bold uppercase leading-none text-destructive">
+                        ref
+                      </span>
+                    )}
                   </div>
                   <div
                     onMouseDown={(e) => handleMouseDown(i + 1, e)}
                     className="absolute top-0 right-0 h-full w-1 cursor-col-resize bg-transparent transition-colors hover:bg-primary/50"
                   />
                 </th>
-              ))}
+                );
+              })}
             </tr>
           </thead>
           <tbody>
@@ -802,7 +917,7 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
             />
             {!collapsedSections["pluto"] && (
               <>
-                {filteredPlutoRows.map((row, idx) => (
+                {filteredPlutoRows.map(({ item: row, values, highlights }, idx) => (
                   <tr
                     key={row.key}
                     className={`border-b border-border/50 ${
@@ -819,8 +934,8 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
                         {row.key}
                       </span>
                     </td>
-                    {selectedRuns.map(({ run }) => {
-                      const value = row.getValue(run);
+                    {selectedRuns.map(({ run }, colIdx) => {
+                      const value = values[colIdx];
                       const isEmpty = value === "-";
                       return (
                         <td
@@ -828,6 +943,7 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
                           className={`border-r border-border/50 px-3 py-1.5 align-top last:border-r-0 ${
                             isEmpty ? "text-muted-foreground/50" : "text-foreground"
                           }`}
+                          style={highlights[colIdx] ? { background: highlights[colIdx] } : undefined}
                         >
                           <span className="break-all font-mono text-xs">
                             {value}
@@ -838,7 +954,7 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
                   </tr>
                 ))}
                 {/* Pluto Tags row */}
-                {tagsRowVisible && (
+                {tagsRow && (
                 <tr
                   className={`border-b border-border/50 ${
                     filteredPlutoRows.length % 2 === 0 ? "bg-background" : "bg-muted"
@@ -854,12 +970,13 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
                       Tags
                     </span>
                   </td>
-                  {selectedRuns.map(({ run }) => {
+                  {selectedRuns.map(({ run }, colIdx) => {
                     const tags: string[] = (run.tags as string[]) || [];
                     return (
                       <td
                         key={run.id}
                         className="border-r border-border/50 px-3 py-1.5 align-top last:border-r-0"
+                        style={tagsRow.highlights[colIdx] ? { background: tagsRow.highlights[colIdx] } : undefined}
                       >
                         {tags.length > 0 ? (
                           <div className="flex flex-wrap items-center gap-1">
@@ -885,7 +1002,7 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
             )}
 
             {/* ===== IMPORTED METADATA section (Neptune sys/* keys from config) ===== */}
-            {hasAnyImportData && filteredImportKeys.length > 0 && (
+            {hasAnyImportData && filteredImportRows.length > 0 && (
               <>
                 <SectionHeader
                   numRunCols={numRunCols}
@@ -894,7 +1011,7 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
                   onToggle={() => toggleSection("import")}
                 />
                 {!collapsedSections["import"] &&
-                  filteredImportKeys.map((key, idx) => (
+                  filteredImportRows.map(({ item: key, values, highlights }, idx) => (
                     <tr
                       key={`imp-${key}`}
                       className={`border-b border-border/50 ${
@@ -911,16 +1028,16 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
                           {key}
                         </span>
                       </td>
-                      {selectedRuns.map(({ run }) => {
-                        const value = runImportData[run.id]?.[key];
-                        const displayValue = formatValue(value);
-                        const isEmpty = value === null || value === undefined;
+                      {selectedRuns.map(({ run }, colIdx) => {
+                        const displayValue = values[colIdx];
+                        const isEmpty = displayValue === "-";
                         return (
                           <td
                             key={run.id}
                             className={`border-r border-border/50 px-3 py-1.5 align-top last:border-r-0 ${
                               isEmpty ? "text-muted-foreground/50" : "text-foreground"
                             }`}
+                            style={highlights[colIdx] ? { background: highlights[colIdx] } : undefined}
                           >
                             <CollapsibleCell value={displayValue} isEmpty={isEmpty} />
                           </td>
@@ -932,7 +1049,7 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
             )}
 
             {/* ===== SYSTEM METADATA section ===== */}
-            {filteredSysMetaKeys.length > 0 && (
+            {filteredSysMetaRows.length > 0 && (
               <>
                 <SectionHeader
                   numRunCols={numRunCols}
@@ -941,7 +1058,7 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
                   onToggle={() => toggleSection("sysmeta")}
                 />
                 {!collapsedSections["sysmeta"] &&
-                  filteredSysMetaKeys.map((key, idx) => (
+                  filteredSysMetaRows.map(({ item: key, values, highlights }, idx) => (
                     <tr
                       key={`sys-${key}`}
                       className={`border-b border-border/50 ${
@@ -958,16 +1075,16 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
                           {key}
                         </span>
                       </td>
-                      {selectedRuns.map(({ run }) => {
-                        const value = runSysMeta[run.id]?.[key];
-                        const displayValue = formatValue(value);
-                        const isEmpty = value === null || value === undefined;
+                      {selectedRuns.map(({ run }, colIdx) => {
+                        const displayValue = values[colIdx];
+                        const isEmpty = displayValue === "-";
                         return (
                           <td
                             key={run.id}
                             className={`border-r border-border/50 px-3 py-1.5 align-top last:border-r-0 ${
                               isEmpty ? "text-muted-foreground/50" : "text-foreground"
                             }`}
+                            style={highlights[colIdx] ? { background: highlights[colIdx] } : undefined}
                           >
                             <CollapsibleCell value={displayValue} isEmpty={isEmpty} />
                           </td>
@@ -979,7 +1096,7 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
             )}
 
             {/* ===== CONFIG section (non-import keys only) ===== */}
-            {filteredConfigKeys.length > 0 && (
+            {filteredConfigRows.length > 0 && (
               <>
                 <SectionHeader
                   numRunCols={numRunCols}
@@ -988,7 +1105,7 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
                   onToggle={() => toggleSection("config")}
                 />
                 {!collapsedSections["config"] &&
-                  filteredConfigKeys.map((key, idx) => (
+                  filteredConfigRows.map(({ item: key, values, highlights }, idx) => (
                     <tr
                       key={`cfg-${key}`}
                       className={`border-b border-border/50 ${
@@ -1005,16 +1122,16 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
                           {key}
                         </span>
                       </td>
-                      {selectedRuns.map(({ run }) => {
-                        const value = runConfigs[run.id]?.[key];
-                        const displayValue = formatValue(value);
-                        const isEmpty = value === null || value === undefined;
+                      {selectedRuns.map(({ run }, colIdx) => {
+                        const displayValue = values[colIdx];
+                        const isEmpty = displayValue === "-";
                         return (
                           <td
                             key={run.id}
                             className={`border-r border-border/50 px-3 py-1.5 align-top last:border-r-0 ${
                               isEmpty ? "text-muted-foreground/50" : "text-foreground"
                             }`}
+                            style={highlights[colIdx] ? { background: highlights[colIdx] } : undefined}
                           >
                             <CollapsibleCell value={displayValue} isEmpty={isEmpty} />
                           </td>
@@ -1046,6 +1163,8 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
                         selectedRuns={selectedRuns}
                         summaries={metricSummariesData?.summaries}
                         numRunCols={numRunCols}
+                        showOnlyDiffs={showOnlyDiffs}
+                        referenceRunIndex={clampedRefIndex}
                       />
                     );
                   })}
