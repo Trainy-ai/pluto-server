@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import DashboardLayout from "@/components/layout/dashboard/layout";
 import PageLayout from "@/components/layout/page-layout";
 import { OrganizationPageTitle } from "@/components/layout/page-title";
@@ -30,17 +30,15 @@ function RouteComponent() {
     <DashboardLayout>
       <PageLayout headerLeft={<OrganizationPageTitle title="Home" />}>
         <div className="mx-auto max-w-7xl p-4 sm:p-6">
-          <div className="flex flex-col gap-8">
+          <div className="flex flex-col gap-6">
             {isLoading ? (
               <RecentRunsSkeleton />
             ) : runs && runs.length > 0 ? (
-              <>
-                <RecentRuns
-                  runs={visibility === "visible" ? runs.slice(0, 4) : runs}
-                  orgSlug={orgSlug}
-                  orgId={auth.activeOrganization.id}
-                />
-              </>
+              <RecentRuns
+                runs={runs}
+                orgSlug={orgSlug}
+                orgId={auth.activeOrganization.id}
+              />
             ) : (
               <>
                 {visibility !== "visible" && (

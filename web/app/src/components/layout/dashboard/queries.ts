@@ -11,7 +11,7 @@ const latestRunsCache = new LocalCache<LatestRunsData>(
   1000 * 10,
 );
 
-const LIMIT = 10;
+const LIMIT = 25;
 
 export const useLatestRuns = (orgId: string) =>
   useLocalQuery<LatestRunsData>({

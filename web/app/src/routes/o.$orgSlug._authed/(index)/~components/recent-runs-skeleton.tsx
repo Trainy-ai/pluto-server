@@ -1,47 +1,67 @@
-import { CardHeader } from "@/components/ui/card";
-import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 
-export const RecentRunsSkeleton = () => {
+export function RecentRunsSkeleton() {
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">
+          <h1 className="text-xl font-semibold tracking-tight">
             Recent Runs
           </h1>
-          <p className="mt-2 text-muted-foreground">
-            Your most recent experiment runs
-          </p>
+          <Skeleton className="mt-1 h-4 w-64" />
         </div>
-        <Skeleton className="h-10 w-10" />
+        <Skeleton className="h-9 w-9" />
       </div>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        {[...Array(4)].map((_, i) => (
-          <Card key={i} className="relative overflow-hidden">
-            <CardHeader className="space-y-4 p-4 sm:p-6">
-              <div className="flex flex-col space-y-2">
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="flex flex-wrap items-center gap-x-1">
-                    <Skeleton className="h-7 w-20 bg-muted sm:w-32" />
-                    <Skeleton className="h-7 w-4 bg-muted" />
-                    <Skeleton className="h-7 w-24 sm:w-48" />
+      <div className="rounded-lg border">
+        <Table>
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead className="w-10" />
+              <TableHead>Run</TableHead>
+              <TableHead className="w-[110px]">Status</TableHead>
+              <TableHead className="w-[100px]">Duration</TableHead>
+              <TableHead className="w-[140px]">Created</TableHead>
+              <TableHead className="w-[200px]">Tags</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {Array.from({ length: 10 }).map((_, i) => (
+              <TableRow key={i}>
+                <TableCell className="w-10 pr-0">
+                  <Skeleton className="h-2.5 w-2.5 rounded-full" />
+                </TableCell>
+                <TableCell>
+                  <div className="flex items-center gap-1">
+                    <Skeleton className="h-4 w-20" />
+                    <Skeleton className="h-4 w-2" />
+                    <Skeleton className="h-4 w-28" />
                   </div>
-                  <Skeleton className="h-7 w-16 sm:w-20" />
-                </div>
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                  <Skeleton className="h-5 w-28 bg-muted sm:w-48" />
-                  <Skeleton className="h-5 w-4 bg-muted" />
-                  <Skeleton className="h-5 w-20 bg-muted sm:w-32" />
-                </div>
-              </div>
-              <div className="flex items-center justify-end">
-                <Skeleton className="h-5 w-20 bg-primary/20 sm:w-24" />
-              </div>
-            </CardHeader>
-          </Card>
-        ))}
+                </TableCell>
+                <TableCell>
+                  <Skeleton className="h-5 w-16" />
+                </TableCell>
+                <TableCell>
+                  <Skeleton className="h-4 w-14" />
+                </TableCell>
+                <TableCell>
+                  <Skeleton className="h-4 w-20" />
+                </TableCell>
+                <TableCell>
+                  <Skeleton className="h-4 w-12" />
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
       </div>
     </div>
   );
-};
+}

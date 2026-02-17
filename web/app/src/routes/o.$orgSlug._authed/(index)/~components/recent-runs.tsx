@@ -1,9 +1,16 @@
-import { RunCard } from "./run-card";
+import { RunRow } from "./run-row";
 import { RefreshButton } from "@/components/core/refresh-button";
 import type { inferOutput } from "@trpc/tanstack-react-query";
 import { trpc } from "@/utils/trpc";
 import { queryClient } from "@/utils/trpc";
 import { useState } from "react";
+import {
+  Table,
+  TableBody,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 
 type Run = inferOutput<typeof trpc.runs.latest>[0];
 
@@ -27,14 +34,14 @@ export function RecentRuns({ runs, orgSlug, orgId }: RecentRunsProps) {
   };
 
   return (
-    <section className="space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+    <section className="space-y-4">
+      <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">
+          <h1 className="text-xl font-semibold tracking-tight">
             Recent Runs
           </h1>
-          <p className="mt-2 text-muted-foreground">
-            Your most recent experiment runs
+          <p className="mt-0.5 text-sm text-muted-foreground">
+            {runs.length} most recent experiment runs across all projects
           </p>
         </div>
         <RefreshButton
@@ -44,10 +51,24 @@ export function RecentRuns({ runs, orgSlug, orgId }: RecentRunsProps) {
           defaultAutoRefresh={false}
         />
       </div>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        {runs.map((run: Run) => (
-          <RunCard key={run.id} run={run} orgSlug={orgSlug} />
-        ))}
+      <div className="rounded-lg border">
+        <Table>
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead className="w-10" />
+              <TableHead>Run</TableHead>
+              <TableHead className="w-[110px]">Status</TableHead>
+              <TableHead className="w-[100px]">Duration</TableHead>
+              <TableHead className="w-[140px]">Created</TableHead>
+              <TableHead className="w-[200px]">Tags</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {runs.map((run: Run) => (
+              <RunRow key={run.id} run={run} orgSlug={orgSlug} />
+            ))}
+          </TableBody>
+        </Table>
       </div>
     </section>
   );
