@@ -132,6 +132,8 @@ interface ColumnsProps {
   /** Sorting state — managed externally */
   sorting?: SortingState;
   onSortingChange?: (sorting: SortingState) => void;
+  /** Active chart view ID — passed as search param when navigating to a run */
+  activeChartViewId?: string | null;
 }
 
 function getRowRange<T>(rows: Array<Row<T>>, idA: string, idB: string) {
@@ -241,6 +243,7 @@ export const columns = ({
   onNameSetColor,
   sorting = [],
   onSortingChange,
+  activeChartViewId,
 }: ColumnsProps): ColumnDef<Run>[] => {
   // Helper to get sort direction for a column
   const getSortDirection = (colId: string): "asc" | "desc" | false => {
@@ -341,6 +344,7 @@ export const columns = ({
                   preload="intent"
                   className="group flex min-w-0 flex-1 items-center rounded-md transition-colors hover:bg-accent/50"
                   params={{ orgSlug, projectName, runId: displayId ?? runId }}
+                  search={activeChartViewId ? { chart: activeChartViewId } : {}}
                 >
                   <span className="truncate text-sm font-medium group-hover:underline">
                     {name}

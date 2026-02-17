@@ -1,17 +1,10 @@
-import { queryClient, trpc } from "@/utils/trpc";
-import { useQuery } from "@tanstack/react-query";
-import { createFileRoute, redirect } from "@tanstack/react-router";
-import RunsLayout from "@/components/layout/run/layout";
-import PageLayout from "@/components/layout/page-layout";
-import { OrganizationPageTitle } from "@/components/layout/page-title";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { RunNotFound } from "@/components/layout/run/not-found";
-import { Skeleton } from "@/components/ui/skeleton";
 import { DataGroup } from "./~components/group/group";
 import { RefreshButton } from "@/components/core/refresh-button";
 import { useRefreshTime } from "./~hooks/use-refresh-time";
 import { useFilteredLogs } from "./~hooks/use-filtered-logs";
 import { LogSearch } from "../../(runComparison)/projects.$projectName/~components/run-comparison/search";
-import { RunStatusBadge } from "@/components/core/runs/run-status-badge";
 import type { LogGroup } from "./~hooks/use-filtered-logs";
 import { prefetchGetRun, useGetRun } from "./~queries/get-run";
 import { Layout, SkeletonLayout } from "./~components/layout";
@@ -19,12 +12,34 @@ import { refreshAllData } from "./~queries/refresh-all-data";
 import LineSettings from "./~components/line-settings";
 import { useLineSettings } from "./~components/use-line-settings";
 import { SmoothingSlider } from "@/components/charts/smoothing-slider";
+import {
+  DashboardViewSelector,
+  DashboardBuilder,
+} from "../../(runComparison)/projects.$projectName/~components/dashboard-builder";
+import {
+  useDashboardViews,
+  useDashboardView,
+} from "../../(runComparison)/projects.$projectName/~queries/dashboard-views";
+import { ChartSyncProvider } from "@/components/charts/context/chart-sync-context";
+import { useRunDashboardData } from "./~hooks/use-run-dashboard";
 
-import { useMemo } from "react";
+import { useMemo, useEffect, useRef, useCallback } from "react";
+
+// Search params for run route - supports ?chart=viewId to deep-link to a dashboard view
+interface RunSearchParams {
+  chart?: string;
+}
 
 export const Route = createFileRoute(
   "/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/",
 )({
+  validateSearch: (search): RunSearchParams => {
+    const result: RunSearchParams = {};
+    if (typeof search.chart === "string" && search.chart.trim()) {
+      result.chart = search.chart.trim();
+    }
+    return result;
+  },
   beforeLoad: async ({ context, params }) => {
     const auth = context.auth;
 
@@ -46,6 +61,7 @@ export const Route = createFileRoute(
 
 function RouteComponent() {
   const { organizationId, projectName, runId } = Route.useRouteContext();
+  const { chart } = Route.useSearch();
 
   const { data: runData, isLoading } = useGetRun(
     organizationId,
@@ -75,11 +91,61 @@ function RouteComponent() {
         (log) =>
           log.logType === "TEXT" ||
           log.logType === "FILE" ||
-          log.logType === "ARTIFACT"
+          log.logType === "ARTIFACT",
       ),
   });
 
-  // Memoize the rendered DataGroups to prevent recreation on every render
+  // --- Dashboard view integration ---
+  const navigate = useNavigate();
+  const { data: viewsData } = useDashboardViews(organizationId, projectName);
+
+  // Auto-select default dashboard view and update URL
+  const hasAutoSelected = useRef(false);
+  useEffect(() => {
+    if (hasAutoSelected.current || chart) return;
+    if (!viewsData?.views?.length) return;
+
+    const defaultView = viewsData.views.find(
+      (v: { isDefault: boolean }) => v.isDefault,
+    );
+    if (defaultView) {
+      hasAutoSelected.current = true;
+      void navigate({
+        to: ".",
+        search: (prev: Record<string, unknown>) => ({
+          ...prev,
+          chart: defaultView.id,
+        }),
+        replace: true,
+      });
+    }
+  }, [viewsData, chart, navigate]);
+
+  // URL is the source of truth for the selected view
+  const selectedViewId = chart ?? null;
+  const { data: selectedView } = useDashboardView(
+    organizationId,
+    selectedViewId,
+  );
+
+  const handleViewChange = useCallback(
+    (viewId: string | null) => {
+      void navigate({
+        to: ".",
+        search: (prev: Record<string, unknown>) => ({
+          ...prev,
+          chart: viewId || undefined,
+        }),
+        replace: true,
+      });
+    },
+    [navigate],
+  );
+
+  // Build dashboard data (groupedMetrics + selectedRuns) from single run
+  const { groupedMetrics, selectedRuns } = useRunDashboardData(runData, runId);
+
+  // Memoize the rendered DataGroups for "All Metrics" view
   const dataGroups = useMemo(() => {
     return filteredLogGroups.map((group: LogGroup) => (
       <DataGroup
@@ -94,9 +160,11 @@ function RouteComponent() {
 
   if (isLoading || !runData) {
     return (
-      <SkeletonLayout title={`${runData.name}`} projectName={projectName} />
+      <SkeletonLayout title={`${runData?.name}`} projectName={projectName} />
     );
   }
+
+  const isDashboardView = selectedViewId && selectedView;
 
   return (
     <Layout
@@ -109,7 +177,14 @@ function RouteComponent() {
       <div className="flex flex-col gap-4 p-4">
         <div className="flex flex-col gap-4">
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold">Run Metrics</h2>
+            <div className="flex items-center gap-4">
+              <DashboardViewSelector
+                organizationId={organizationId}
+                projectName={projectName}
+                selectedViewId={selectedViewId}
+                onViewChange={handleViewChange}
+              />
+            </div>
             <div className="flex items-center gap-3">
               <SmoothingSlider
                 settings={settings}
@@ -130,9 +205,24 @@ function RouteComponent() {
               />
             </div>
           </div>
-          <LogSearch onSearch={handleSearch} placeholder="Search metrics..." />
         </div>
-        {dataGroups}
+
+        {isDashboardView ? (
+          <ChartSyncProvider syncKey={`run-dashboard-${selectedViewId}`}>
+            <DashboardBuilder
+              view={selectedView}
+              groupedMetrics={groupedMetrics}
+              selectedRuns={selectedRuns}
+              organizationId={organizationId}
+              projectName={projectName}
+            />
+          </ChartSyncProvider>
+        ) : (
+          <>
+            <LogSearch onSearch={handleSearch} placeholder="Search metrics..." />
+            {dataGroups}
+          </>
+        )}
       </div>
     </Layout>
   );
