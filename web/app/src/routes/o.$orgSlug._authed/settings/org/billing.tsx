@@ -53,9 +53,10 @@ function RouteComponent() {
   const isEducationPlan = orgSubscription.isEducationPlan;
 
   // Check if Stripe billing is configured and get seat price
-  const { data: billingConfig, isLoading: isBillingConfigLoading } = useQuery(
-    trpc.organization.billing.isConfigured.queryOptions()
-  );
+  const { data: billingConfig, isLoading: isBillingConfigLoading } = useQuery({
+    ...trpc.organization.billing.isConfigured.queryOptions(),
+    refetchOnWindowFocus: false,
+  });
   const isStripeConfigured = billingConfig?.isConfigured ?? false;
   const seatPrice = billingConfig?.seatPriceDollars;
 

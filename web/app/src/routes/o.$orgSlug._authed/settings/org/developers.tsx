@@ -35,11 +35,12 @@ function RouteComponent() {
     data: keys,
     refetch,
     isLoading,
-  } = useQuery(
-    trpc.organization.apiKey.listApiKeys.queryOptions({
+  } = useQuery({
+    ...trpc.organization.apiKey.listApiKeys.queryOptions({
       organizationId: orgId,
     }),
-  );
+    refetchOnWindowFocus: false,
+  });
 
   return (
     <SettingsLayout>

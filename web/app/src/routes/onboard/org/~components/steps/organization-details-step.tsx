@@ -62,6 +62,7 @@ export default function OrganizationDetailsStep({
         staleTime: 30000,
         gcTime: 60000,
         retry: false,
+        refetchOnWindowFocus: false,
       },
     ),
   );

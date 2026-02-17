@@ -32,8 +32,9 @@ export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       retry: false,
-      refetchOnWindowFocus: false,
-      refetchOnReconnect: false,
+      refetchOnWindowFocus: true,
+      refetchOnReconnect: true,
+      staleTime: 30_000, // 30s — skip refetch on rapid tab switches
     },
   },
   queryCache: new QueryCache({

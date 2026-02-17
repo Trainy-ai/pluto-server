@@ -65,11 +65,12 @@ function LinearIntegrationCard({ organizationId }: { organizationId: string }) {
   const queryClient = useQueryClient();
   const [disconnectOpen, setDisconnectOpen] = useState(false);
 
-  const { data: integration, isLoading } = useQuery(
-    trpc.organization.integrations.getLinearIntegration.queryOptions({
+  const { data: integration, isLoading } = useQuery({
+    ...trpc.organization.integrations.getLinearIntegration.queryOptions({
       organizationId,
     }),
-  );
+    refetchOnWindowFocus: false,
+  });
 
   const oauthUrlMutation = useMutation(
     trpc.organization.integrations.getLinearOAuthUrl.mutationOptions(),

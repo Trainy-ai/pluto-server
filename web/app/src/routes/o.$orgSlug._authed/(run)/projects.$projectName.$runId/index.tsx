@@ -120,8 +120,8 @@ function RouteComponent() {
               <RefreshButton
                 onRefresh={handleRefresh}
                 lastRefreshed={lastRefreshTime || undefined}
-                defaultAutoRefresh={runData.status === "RUNNING"}
-                refreshInterval={5000}
+                defaultInterval={runData.status === "RUNNING" ? 5_000 : null}
+                storageKey={`refresh-interval:run:${runId}`}
               />
               <LineSettings
                 organizationId={organizationId}

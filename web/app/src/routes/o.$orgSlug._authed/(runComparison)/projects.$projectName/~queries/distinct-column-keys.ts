@@ -20,6 +20,7 @@ export const useDistinctColumnKeys = (
   projectName: string,
 ) => {
   return useQuery<DistinctColumnKeysResult>({
+    placeholderData: (prev) => prev,
     queryKey: trpc.runs.distinctColumnKeys.queryKey({
       organizationId: orgId,
       projectName,

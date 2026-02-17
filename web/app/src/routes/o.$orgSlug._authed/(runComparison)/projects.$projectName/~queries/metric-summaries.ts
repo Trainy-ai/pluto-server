@@ -73,6 +73,7 @@ export function useMetricSummaries(
       {
         enabled: runIds.length > 0 && metrics.length > 0,
         staleTime: 30 * 1000,
+        placeholderData: (prev) => prev,
       },
     )
   );
