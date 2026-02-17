@@ -18,6 +18,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { ChartBoundsPopover } from "@/components/charts/chart-bounds-popover";
+import { ChartExportMenu } from "@/components/charts/chart-export-menu";
 import type { Widget, WidgetLayout, ChartWidgetConfig } from "../../~types/dashboard-types";
 
 interface WidgetGridProps {
@@ -51,6 +52,8 @@ export function WidgetGrid({
 }: WidgetGridProps) {
   // Track data ranges per widget for clipping indicators
   const [dataRanges, setDataRanges] = useState<Record<string, { min: number; max: number }>>({});
+  // Refs for widget content containers (used by chart export)
+  const widgetContentRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const handleWidgetDataRange = useCallback((widgetId: string, dataMin: number, dataMax: number) => {
     setDataRanges((prev) => {
@@ -314,6 +317,11 @@ export function WidgetGrid({
                 {/* Chart-specific actions (visible on hover) */}
                 {widget.type === "chart" && (
                   <>
+                    <ChartExportMenu
+                      getContainer={() => widgetContentRefs.current[widget.id] ?? null}
+                      fileName={widget.config.title || getWidgetTitle(widget)}
+                      className="widget-drag-cancel size-7 opacity-0 group-hover:opacity-100"
+                    />
                     <ChartBoundsPopover
                       yMin={(widget.config as ChartWidgetConfig).yMin}
                       yMax={(widget.config as ChartWidgetConfig).yMax}
@@ -374,6 +382,7 @@ export function WidgetGrid({
 
             {/* Widget Content */}
             <div
+              ref={(el) => { widgetContentRefs.current[widget.id] = el; }}
               className="h-[calc(100%-40px)] overflow-hidden p-2"
               onDoubleClick={
                 widget.type === "chart"
