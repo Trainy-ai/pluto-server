@@ -73,9 +73,12 @@ export function DashboardBuilder({
     return () => observer.disconnect();
   }, []);
 
-  // Update config when view changes
+  // Update config when view changes — open all sections by default
   useEffect(() => {
-    setConfig(view.config);
+    setConfig({
+      ...view.config,
+      sections: view.config.sections.map((s) => ({ ...s, collapsed: false })),
+    });
     setHasChanges(false);
   }, [view.config]);
 
