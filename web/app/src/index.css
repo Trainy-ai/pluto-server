@@ -233,6 +233,15 @@ input[type="number"] {
   }
 }
 
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
+}
+
 /* uPlot zoom selection box styling - !important needed to override uPlot's inline styles */
 .uplot .u-select {
   background: rgba(100, 150, 255, 0.15) !important;

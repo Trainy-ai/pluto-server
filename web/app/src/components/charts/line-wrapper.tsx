@@ -2,10 +2,11 @@
 
 import React, { forwardRef, lazy, Suspense } from "react";
 // Import LineData type from uPlot component (canonical source)
-import type { LineData, LineChartUPlotRef } from "./line-uplot";
+import type { LineData, LineChartUPlotRef, RawLineData } from "./line-uplot";
+import type { TooltipInterpolation } from "@/lib/math/interpolation";
 
 // Re-export for external consumers
-export type { LineData, LineChartUPlotRef };
+export type { LineData, LineChartUPlotRef, RawLineData };
 
 // Lazy load chart implementation for code splitting
 const LineChartUPlot = lazy(() => import("./line-uplot"));
@@ -31,6 +32,18 @@ interface LineChartWrapperProps extends React.HTMLAttributes<HTMLDivElement> {
   onDataRange?: (dataMin: number, dataMax: number) => void;
   /** Callback fired on double-click to reset Y-axis bounds for this chart */
   onResetBounds?: () => void;
+  /** Tooltip interpolation mode for missing values */
+  tooltipInterpolation?: TooltipInterpolation;
+  /** Raw (pre-downsampled) data for zoom-aware re-downsampling */
+  rawLines?: RawLineData[];
+  /** Target points for re-downsampling on zoom */
+  downsampleTarget?: number;
+  /** Callback to reprocess raw data for a zoomed range */
+  reprocessForZoom?: (rawLines: RawLineData[], xMin: number, xMax: number) => LineData[];
+  /** Callback fired when zoom range changes, for server re-fetch of full-resolution data */
+  onZoomRangeChange?: (range: [number, number] | null) => void;
+  /** Enable IQR-based outlier detection for Y-axis scaling */
+  outlierDetection?: boolean;
 }
 
 // Loading fallback for lazy-loaded charts
@@ -52,7 +65,7 @@ function ChartLoadingFallback() {
  * - Cross-chart series highlighting
  */
 const LineChartWrapper = forwardRef<LineChartUPlotRef, LineChartWrapperProps>(
-  ({ syncKey, className, ...props }, ref) => {
+  ({ syncKey, className, tooltipInterpolation, rawLines, downsampleTarget, reprocessForZoom, onZoomRangeChange, outlierDetection, ...props }, ref) => {
     // Use title as key to force remount when switching between different charts
     // This ensures each chart gets a clean uPlot instance with correct data
     const chartKey = props.title || "uplot-chart";
@@ -73,6 +86,12 @@ const LineChartWrapper = forwardRef<LineChartUPlotRef, LineChartWrapperProps>(
           <LineChartUPlot
             ref={ref}
             syncKey={syncKey}
+            tooltipInterpolation={tooltipInterpolation}
+            rawLines={rawLines}
+            downsampleTarget={downsampleTarget}
+            reprocessForZoom={reprocessForZoom}
+            onZoomRangeChange={onZoomRangeChange}
+            outlierDetection={outlierDetection}
             {...props}
           />
         </Suspense>

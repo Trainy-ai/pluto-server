@@ -14,6 +14,8 @@ import {
 } from "../~lib/search-utils";
 import LineSettings from "./line-settings";
 import { SmoothingSlider } from "@/components/charts/smoothing-slider";
+import { InterpolationSelector } from "@/components/charts/interpolation-selector";
+import type { TooltipInterpolation } from "@/lib/math/interpolation";
 
 import { useLineSettings } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/use-line-settings";
 import { DashboardViewSelector, DashboardBuilder } from "./dashboard-builder";
@@ -167,6 +169,10 @@ export const MetricsDisplay = memo(function MetricsDisplay({
               </div>
             </div>
             <div className="flex items-center gap-3">
+              <InterpolationSelector
+                value={settings.tooltipInterpolation}
+                onChange={(v) => updateSettings("tooltipInterpolation", v)}
+              />
               <SmoothingSlider
                 settings={settings}
                 updateSmoothingSettings={updateSmoothingSettings}
@@ -227,6 +233,10 @@ export const MetricsDisplay = memo(function MetricsDisplay({
               <RotateCcwIcon className="mr-1.5 size-3.5" />
               Reset Bounds
             </Button>
+            <InterpolationSelector
+              value={settings.tooltipInterpolation}
+              onChange={(v) => updateSettings("tooltipInterpolation", v)}
+            />
             <SmoothingSlider
               settings={settings}
               updateSmoothingSettings={updateSmoothingSettings}

@@ -6,6 +6,7 @@ import {
 } from "@/lib/hooks/use-local-query";
 import { LocalCache } from "@/lib/db/local-cache";
 import type { inferOutput } from "@trpc/tanstack-react-query";
+import { useProgressiveGraph } from "@/lib/hooks/use-progressive-graph";
 
 type GetGraphData = inferOutput<typeof trpc.runs.data.graph>;
 
@@ -89,3 +90,14 @@ export const prefetchGetGraph = (
     localCache: getGraphCache,
     staleTime: 1000 * 5,
   });
+
+/**
+ * Progressive graph loading — 3-tier: preview (500pts) → standard (10k) → full (all).
+ * Use this instead of useGetGraph for progressive chart rendering.
+ */
+export const useGetGraphProgressive = (
+  orgId: string,
+  projectName: string,
+  runId: string,
+  logName: string,
+) => useProgressiveGraph(orgId, projectName, runId, logName);

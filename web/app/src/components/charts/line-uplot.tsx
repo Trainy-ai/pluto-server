@@ -5,16 +5,24 @@ import React, {
   forwardRef,
   useImperativeHandle,
   useId,
-  useState,
 } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import { useTheme } from "@/lib/hooks/use-theme";
 import { cn } from "@/lib/utils";
-import { applyAlpha } from "@/lib/math/color-alpha";
 import { useChartSyncContext, applySeriesHighlight } from "./context/chart-sync-context";
 import { useChartLineWidth } from "@/lib/hooks/use-chart-line-width";
 import { toast } from "sonner";
+import type { TooltipInterpolation } from "@/lib/math/interpolation";
+import { applyAlpha } from "@/lib/math/color-alpha";
+
+// Extracted modules
+import { formatAxisLabels, smartDateFormatter } from "./lib/format";
+import { arrayMin, arrayMax, filterDataForLogScale, alignDataForUPlot } from "./lib/data-processing";
+import { tooltipPlugin, type HoverState } from "./lib/tooltip-plugin";
+import { buildSeriesConfig } from "./lib/series-config";
+import { buildFocusDetectionHook, buildInterpolationDotsHook } from "./lib/cursor-hooks";
+import { useContainerSize } from "./hooks/use-container-size";
 
 
 // ============================
@@ -31,6 +39,19 @@ export interface LineData {
   dashed?: boolean;
   hideFromLegend?: boolean;
   opacity?: number;
+  /** If set, this series is an envelope boundary (min or max) for the named parent series */
+  envelopeOf?: string;
+  /** Whether this is the min or max boundary of an envelope */
+  envelopeBound?: "min" | "max";
+}
+
+/** Raw (pre-downsampled) data for a single series, used for zoom-aware re-downsampling */
+export interface RawLineData {
+  x: number[];
+  y: number[];
+  label: string;
+  color: string;
+  seriesId?: string;
 }
 
 interface LineChartProps extends React.HTMLAttributes<HTMLDivElement> {
@@ -54,6 +75,23 @@ interface LineChartProps extends React.HTMLAttributes<HTMLDivElement> {
   onDataRange?: (dataMin: number, dataMax: number) => void;
   /** Callback fired on double-click to reset Y-axis bounds for this chart */
   onResetBounds?: () => void;
+  /** Tooltip interpolation mode for series with missing values at the hovered step */
+  tooltipInterpolation?: TooltipInterpolation;
+  /** Optional raw (pre-downsampled) data for zoom-aware re-downsampling.
+   *  When provided, zooming will re-downsample the visible range for more detail. */
+  rawLines?: RawLineData[];
+  /** Target points for re-downsampling on zoom (defaults to 2000) */
+  downsampleTarget?: number;
+  /** Callback to reprocess raw data for a zoomed range. Called with the raw lines and
+   *  visible x-range, should return the same number of LineData[] as the initial processing.
+   *  This keeps all processing logic (downsampling + smoothing) in the parent. */
+  reprocessForZoom?: (rawLines: RawLineData[], xMin: number, xMax: number) => LineData[];
+  /** Callback fired when zoom range changes. The parent can use this to trigger
+   *  server re-fetch for full-resolution data in the zoomed range.
+   *  Called with [xMin, xMax] on zoom, or null on zoom reset. */
+  onZoomRangeChange?: (range: [number, number] | null) => void;
+  /** Enable IQR-based outlier detection for Y-axis scaling (default: false) */
+  outlierDetection?: boolean;
 }
 
 /** Ref handle exposed to parent components */
@@ -68,578 +106,6 @@ export interface LineChartUPlotRef {
  */
 const DEFAULT_SYNC_KEY = "uplot-global-sync";
 
-// ============================
-// Utility Functions
-// ============================
-
-const RESIZE_THROTTLE_MS = 200;
-
-function useContainerSize(ref: React.RefObject<HTMLDivElement | null>) {
-  const [size, setSize] = useState({ width: 0, height: 0 });
-  const lastUpdateRef = useRef<number>(0);
-  const pendingUpdateRef = useRef<NodeJS.Timeout | null>(null);
-
-  useEffect(() => {
-    if (!ref?.current) return;
-
-    const element = ref.current;
-    const measureElement = () => {
-      const rect = element.getBoundingClientRect();
-      const computedStyle = getComputedStyle(element);
-      const paddingLeft = parseFloat(computedStyle.paddingLeft) || 0;
-      const paddingRight = parseFloat(computedStyle.paddingRight) || 0;
-      const paddingTop = parseFloat(computedStyle.paddingTop) || 0;
-      const paddingBottom = parseFloat(computedStyle.paddingBottom) || 0;
-      const width = rect.width - paddingLeft - paddingRight;
-      const height = rect.height - paddingTop - paddingBottom;
-      return { width, height };
-    };
-
-    const { width: initialWidth, height: initialHeight } = measureElement();
-    if (initialWidth > 0 && initialHeight > 0) {
-      setSize({ width: initialWidth, height: initialHeight });
-    } else {
-      requestAnimationFrame(() => {
-        const { width, height } = measureElement();
-        if (width > 0 && height > 0) {
-          setSize({ width, height });
-        }
-      });
-    }
-
-    const observer = new ResizeObserver((entries) => {
-      const now = Date.now();
-      const entry = entries[0];
-      if (!entry) return;
-
-      const { width, height } = entry.contentRect;
-      if (width === 0 || height === 0) return;
-
-      if (now - lastUpdateRef.current >= RESIZE_THROTTLE_MS) {
-        lastUpdateRef.current = now;
-        setSize({ width, height });
-      } else {
-        if (pendingUpdateRef.current) {
-          clearTimeout(pendingUpdateRef.current);
-        }
-        pendingUpdateRef.current = setTimeout(() => {
-          lastUpdateRef.current = Date.now();
-          setSize({ width, height });
-          pendingUpdateRef.current = null;
-        }, RESIZE_THROTTLE_MS - (now - lastUpdateRef.current));
-      }
-    });
-
-    observer.observe(element);
-    return () => {
-      observer.disconnect();
-      if (pendingUpdateRef.current) {
-        clearTimeout(pendingUpdateRef.current);
-      }
-    };
-  }, [ref]);
-
-  return size;
-}
-
-// Format axis labels with SI units
-function formatAxisLabel(value: number): string {
-  if (value === 0) return "0";
-  if (Math.abs(value) < 0.0001) {
-    return value.toExponential(2).replace(/\.?0+e/, "e");
-  }
-  const units = [
-    { limit: 1e18, suffix: "E" },
-    { limit: 1e15, suffix: "P" },
-    { limit: 1e12, suffix: "T" },
-    { limit: 1e9, suffix: "G" },
-    { limit: 1e6, suffix: "M" },
-    { limit: 1e3, suffix: "k" },
-  ];
-  for (const { limit, suffix } of units) {
-    if (Math.abs(value) >= limit) {
-      return `${(value / limit).toPrecision(4).replace(/\.?0+$/, "")}${suffix}`;
-    }
-  }
-  return Number(value).toPrecision(4).replace(/\.?0+$/, "");
-}
-
-// Smart date formatter based on range
-function smartDateFormatter(value: number, range: number): string {
-  const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const localDate = new Date(value);
-
-  const oneMinute = 60000;
-  const oneHour = 3600000;
-  const oneDay = 86400000;
-  const oneWeek = 7 * oneDay;
-  const oneMonth = 30 * oneDay;
-  const oneYear = 365 * oneDay;
-
-  if (range < 10 * oneMinute) {
-    return localDate.toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      timeZone: userTimezone,
-    });
-  } else if (range < 2 * oneHour) {
-    return localDate.toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      timeZone: userTimezone,
-      hour12: false,
-    });
-  } else if (range < oneDay) {
-    return localDate.toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-      timeZone: userTimezone,
-      hour12: false,
-    });
-  } else if (range < oneWeek) {
-    return localDate.toLocaleDateString([], {
-      weekday: "short",
-      day: "numeric",
-      timeZone: userTimezone,
-    });
-  } else if (range < oneMonth) {
-    return localDate.toLocaleDateString([], {
-      month: "short",
-      day: "numeric",
-      timeZone: userTimezone,
-    });
-  } else if (range < oneYear) {
-    return localDate.toLocaleDateString([], {
-      month: "short",
-      day: "numeric",
-      timeZone: userTimezone,
-    });
-  } else if (range < 5 * oneYear) {
-    return localDate.toLocaleDateString([], {
-      month: "short",
-      year: "numeric",
-      timeZone: userTimezone,
-    });
-  } else {
-    return localDate.toLocaleDateString([], {
-      year: "numeric",
-      timeZone: userTimezone,
-    });
-  }
-}
-
-// Filter data for log scale (remove non-positive values)
-// Optimized to use single loop instead of multiple map/filter calls
-function filterDataForLogScale(
-  lines: LineData[],
-  logXAxis: boolean,
-  logYAxis: boolean
-): LineData[] {
-  if (!logXAxis && !logYAxis) return lines;
-
-  return lines
-    .map((line) => {
-      const x: number[] = [];
-      const y: number[] = [];
-      for (let i = 0; i < line.x.length; i++) {
-        const xVal = line.x[i];
-        const yVal = line.y[i];
-        if (logXAxis && xVal <= 0) continue;
-        if (logYAxis && yVal <= 0) continue;
-        x.push(xVal);
-        y.push(yVal);
-      }
-      return { ...line, x, y };
-    })
-    .filter((line) => line.x.length > 0);
-}
-
-// ============================
-// Tooltip Plugin
-// ============================
-
-// Helper to safely create tooltip row using DOM APIs (prevents XSS)
-function createTooltipRow(
-  name: string,
-  value: number,
-  color: string,
-  textColor: string,
-  isHighlighted: boolean = false,
-  rawValue?: number,
-): HTMLDivElement {
-  const row = document.createElement("div");
-  row.style.cssText = `padding: 1px 4px; display: flex; align-items: center; gap: 6px; white-space: nowrap${isHighlighted ? "; background: rgba(255,255,255,0.05)" : ""}`;
-
-  // Colored line indicator (horizontal bar)
-  const colorLine = document.createElement("span");
-  colorLine.style.cssText = `flex-shrink: 0; width: 12px; height: 3px; border-radius: 1px; background: ${color}`;
-  row.appendChild(colorLine);
-
-  const nameSpan = document.createElement("span");
-  nameSpan.style.cssText = `color: ${textColor}; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0${isHighlighted ? "; font-weight: 600" : ""}`;
-  nameSpan.textContent = name;
-  row.appendChild(nameSpan);
-
-  const valueSpan = document.createElement("span");
-  valueSpan.style.cssText = `color: ${textColor}; font-weight: 500; flex-shrink: 0`;
-  if (rawValue != null && rawValue !== value) {
-    valueSpan.textContent = `${formatAxisLabel(value)} (${formatAxisLabel(rawValue)})`;
-  } else {
-    valueSpan.textContent = formatAxisLabel(value);
-  }
-  row.appendChild(valueSpan);
-
-  return row;
-}
-
-/** Type for hover state that persists across chart recreations */
-interface HoverState {
-  isHovering: boolean;
-  lastIdx: number | null;
-  lastLeft: number | null;
-  lastTop: number | null;
-}
-
-function tooltipPlugin(opts: {
-  theme: string;
-  isDateTime: boolean;
-  timeRange: number;
-  lines: LineData[];
-  /** External hover state ref that survives chart recreation */
-  hoverStateRef?: { current: HoverState };
-  /** Callback when hover state changes (for context tracking) */
-  onHoverChange?: (isHovering: boolean) => void;
-  /** Function to check if this chart is the currently hovered chart */
-  isActiveChart?: () => boolean;
-  /** Ref to get currently highlighted series name */
-  highlightedSeriesRef?: { current: string | null };
-}): uPlot.Plugin {
-  const { theme, isDateTime, timeRange, lines, hoverStateRef, onHoverChange, isActiveChart, highlightedSeriesRef } = opts;
-
-  // DEBUG: Temporary logging to diagnose tooltip persistence issue
-  const DEBUG_TOOLTIP = false; // Set to true for debugging
-  const tooltipId = Math.random().toString(36).substring(7);
-  const log = (msg: string) => DEBUG_TOOLTIP && console.log(`[tooltip-${tooltipId}] ${msg}`);
-  log("tooltipPlugin created");
-
-  let tooltipEl: HTMLDivElement | null = null;
-  let overEl: HTMLElement | null = null;
-  // Restore ALL state from external ref (survives chart recreation)
-  let lastIdx: number | null = hoverStateRef?.current.lastIdx ?? null;
-  let lastLeft: number | null = hoverStateRef?.current.lastLeft ?? null;
-  let lastTop: number | null = hoverStateRef?.current.lastTop ?? null;
-  let isHovering = hoverStateRef?.current.isHovering ?? false;
-  let hideTimeoutId: ReturnType<typeof setTimeout> | null = null;
-
-  // Sync local state to external ref (includes cursor position now)
-  const syncHoverState = () => {
-    if (hoverStateRef) {
-      hoverStateRef.current = { isHovering, lastIdx, lastLeft, lastTop };
-    }
-  };
-
-  function init(u: uPlot) {
-    overEl = u.over;
-    tooltipEl = document.createElement("div");
-    tooltipEl.className = "uplot-tooltip";
-    tooltipEl.dataset.testid = "uplot-tooltip";
-    tooltipEl.style.cssText = `
-      position: fixed;
-      display: none;
-      pointer-events: none;
-      z-index: 9999;
-      font-family: ui-monospace, monospace;
-      font-size: 10px;
-      background: ${theme === "dark" ? "#161619" : "#fff"};
-      border: 1px solid ${theme === "dark" ? "#333" : "#e0e0e0"};
-      border-radius: 4px;
-      padding: 4px;
-      max-width: 300px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-    `;
-    // Append to body so tooltip can overflow chart boundaries
-    document.body.appendChild(tooltipEl);
-
-    // Following uPlot's official tooltips.html demo pattern EXACTLY:
-    // mouseenter -> show tooltip (cancel any pending hide)
-    // mouseleave -> hide tooltip (with small debounce to prevent spurious hides)
-    // setCursor -> just update content, never control visibility
-    const handleMouseEnter = () => {
-      log(`mouseenter - was isHovering=${isHovering}, hideTimeoutId=${hideTimeoutId !== null}`);
-      // Cancel any pending hide
-      if (hideTimeoutId !== null) {
-        clearTimeout(hideTimeoutId);
-        hideTimeoutId = null;
-        log("  cancelled pending hide");
-      }
-      isHovering = true;
-      syncHoverState();
-      // Notify context that this chart is now hovered
-      onHoverChange?.(true);
-      // Show tooltip immediately on mouseenter (uPlot demo pattern)
-      if (tooltipEl) {
-        tooltipEl.style.display = "block";
-        log("  set display=block");
-      }
-    };
-
-    const handleMouseLeave = () => {
-      log(`mouseleave - isHovering=${isHovering}, pendingHide=${hideTimeoutId !== null}`);
-      // Small debounce to prevent spurious mouseleave events from hiding tooltip
-      // This protects against edge cases like cursor sync updates or scroll events
-      // that might trigger false mouseleave events
-      if (hideTimeoutId !== null) {
-        clearTimeout(hideTimeoutId);
-      }
-      hideTimeoutId = setTimeout(() => {
-        log("  hide timeout fired - hiding tooltip");
-        isHovering = false;
-        lastIdx = null;
-        lastLeft = null;
-        lastTop = null;
-        syncHoverState();
-        // Notify context that this chart is no longer hovered
-        onHoverChange?.(false);
-        if (tooltipEl) {
-          tooltipEl.style.display = "none";
-        }
-        hideTimeoutId = null;
-      }, 50); // 50ms debounce - enough to filter spurious events but not noticeable to user
-    };
-
-    overEl.addEventListener("mouseenter", handleMouseEnter);
-    overEl.addEventListener("mouseleave", handleMouseLeave);
-
-    // Store cleanup function on the element for later removal
-    (overEl as HTMLElement & { _tooltipCleanup?: () => void })._tooltipCleanup = () => {
-      overEl?.removeEventListener("mouseenter", handleMouseEnter);
-      overEl?.removeEventListener("mouseleave", handleMouseLeave);
-      // Clear any pending hide timeout
-      if (hideTimeoutId !== null) {
-        clearTimeout(hideTimeoutId);
-        hideTimeoutId = null;
-      }
-    };
-
-    // CRITICAL: Check if we were hovering before chart recreation
-    // This handles the case where chart is recreated while mouse is stationary over it
-    // The external hoverStateRef preserves the hover state AND cursor position
-    if (isHovering && tooltipEl && lastIdx != null) {
-      log(`init: restoring hover state - idx=${lastIdx}, left=${lastLeft}, top=${lastTop}`);
-      tooltipEl.style.display = "block";
-      // Immediately update tooltip content with restored state
-      // Use requestAnimationFrame to ensure uPlot is fully initialized
-      requestAnimationFrame(() => {
-        if (lastIdx != null) {
-          updateTooltipContent(u, lastIdx);
-        }
-      });
-    }
-  }
-
-  function updateTooltipContent(u: uPlot, idx: number) {
-    if (!tooltipEl) return;
-
-    const xVal = u.data[0][idx];
-    // If no valid x value, just return - don't hide (mouseleave handles that)
-    if (xVal == null) return;
-
-    // Format x value
-    const xFormatted = isDateTime
-      ? smartDateFormatter(xVal, timeRange)
-      : formatAxisLabel(xVal);
-
-    // Gather series values
-    const textColor = theme === "dark" ? "#fff" : "#000";
-    const seriesItems: { name: string; value: number; color: string; hidden: boolean; rawValue?: number }[] = [];
-
-    // First pass: collect raw (original) values from hidden smoothing series
-    const rawValues = new Map<string, number>();
-    for (let i = 1; i < u.series.length; i++) {
-      const series = u.series[i];
-      const yVal = u.data[i][idx];
-      const lineData = lines[i - 1];
-      if (yVal != null && series.show !== false && lineData?.hideFromLegend) {
-        const labelText = typeof series.label === "string" ? series.label : "";
-        if (labelText.endsWith(" (original)")) {
-          rawValues.set(labelText.slice(0, -" (original)".length), yVal);
-        }
-      }
-    }
-
-    for (let i = 1; i < u.series.length; i++) {
-      const series = u.series[i];
-      const yVal = u.data[i][idx];
-      if (yVal != null && series.show !== false) {
-        const lineData = lines[i - 1];
-        // Handle label which can be string or HTMLElement
-        const labelText = typeof series.label === "string" ? series.label : `Series ${i}`;
-        // Get color from lineData (series.stroke is a function, not a string)
-        const seriesColor = lineData?.color || `hsl(${((i - 1) * 137) % 360}, 70%, 50%)`;
-        seriesItems.push({
-          name: labelText,
-          value: yVal,
-          color: seriesColor,
-          hidden: lineData?.hideFromLegend || false,
-          rawValue: rawValues.get(labelText),
-        });
-      }
-    }
-
-    // Get highlighted series name
-    const highlightedName = highlightedSeriesRef?.current ?? null;
-
-    // Sort: highlighted series first, then by value descending
-    seriesItems.sort((a, b) => {
-      // Highlighted series always comes first
-      if (highlightedName) {
-        if (a.name === highlightedName && b.name !== highlightedName) return -1;
-        if (b.name === highlightedName && a.name !== highlightedName) return 1;
-      }
-      // Then sort by value descending
-      return b.value - a.value;
-    });
-
-    // Filter out hidden series - show ALL series with scrolling
-    const visibleItems = seriesItems.filter((s) => !s.hidden);
-
-    // Clear tooltip content safely
-    tooltipEl.textContent = "";
-
-    // Create header using safe DOM APIs (prevents XSS)
-    const header = document.createElement("div");
-    header.style.cssText = `font-weight: bold; color: ${textColor}; padding: 2px 4px; border-bottom: 1px solid ${theme === "dark" ? "#333" : "#eee"}; margin-bottom: 2px; font-size: 10px`;
-    header.textContent = `${xFormatted} (${visibleItems.length} series)`;
-    tooltipEl.appendChild(header);
-
-    // Create scrollable content container for all series
-    const content = document.createElement("div");
-    content.style.cssText = "max-height: 40vh; overflow-y: auto; scrollbar-width: thin";
-
-    // Add ALL rows using safe DOM APIs - scrolling handles overflow
-    for (const s of visibleItems) {
-      const isHighlighted = highlightedName !== null && s.name === highlightedName;
-      content.appendChild(createTooltipRow(s.name, s.value, s.color, textColor, isHighlighted, s.rawValue));
-    }
-
-    tooltipEl.appendChild(content);
-
-    // Position tooltip following the cursor with offset to top-right
-    // Use viewport coordinates so tooltip can overflow chart boundaries
-    const tooltipWidth = tooltipEl.offsetWidth || 200;
-    const tooltipHeight = tooltipEl.offsetHeight || 100;
-
-    // Get cursor position from uPlot (relative to chart area)
-    // uPlot sets cursor.left/top to -10 when cursor is outside chart
-    // Use last known position if current is invalid (negative)
-    // Note: 0 is valid (left/top edge), so check >= 0
-    const cursorLeft = (u.cursor.left != null && u.cursor.left >= 0) ? u.cursor.left : (lastLeft ?? 0);
-    const cursorTop = (u.cursor.top != null && u.cursor.top >= 0) ? u.cursor.top : (lastTop ?? 0);
-
-    // Convert chart-relative coords to viewport coords
-    const chartRect = u.over.getBoundingClientRect();
-    const viewportX = chartRect.left + cursorLeft;
-    const viewportY = chartRect.top + cursorTop;
-
-    const offsetX = 15; // Offset to the right
-    const offsetY = 10; // Offset above
-
-    // Default position: to the right and above cursor (in viewport coords)
-    let left = viewportX + offsetX;
-    let top = viewportY - tooltipHeight - offsetY;
-
-    // If tooltip would go off right edge of VIEWPORT, position to the left
-    if (left + tooltipWidth > window.innerWidth - 10) {
-      left = viewportX - tooltipWidth - offsetX;
-    }
-
-    // If tooltip would go off top of VIEWPORT, position below cursor
-    if (top < 10) {
-      top = viewportY + offsetY;
-    }
-
-    // Ensure tooltip stays within viewport (but NOT clamped to chart bounds)
-    left = Math.max(10, Math.min(left, window.innerWidth - tooltipWidth - 10));
-    top = Math.max(10, Math.min(top, window.innerHeight - tooltipHeight - 10));
-
-    tooltipEl.style.left = `${left}px`;
-    tooltipEl.style.top = `${top}px`;
-    // Note: visibility controlled by mouseenter/mouseleave, not here
-  }
-
-  function setCursor(u: uPlot) {
-    if (!tooltipEl || !overEl) return;
-
-    // Check if this chart is the one being directly hovered
-    // This prevents synced charts from showing tooltips
-    const isActive = isActiveChart?.() ?? true; // Default to true if no context
-
-    // For non-active (synced) charts, HIDE the tooltip
-    // This prevents multiple tooltips from appearing on different charts
-    // With synchronous ref tracking in chart-sync-context, this is now safe
-    if (!isActive) {
-      log(`setCursor - hiding tooltip (not active chart)`);
-      tooltipEl.style.display = "none";
-      return;
-    }
-
-    // If not hovering, don't update content
-    if (!isHovering) return;
-
-    const { idx, left, top } = u.cursor;
-    log(`setCursor - idx=${idx}, left=${left?.toFixed(0)}, top=${top?.toFixed(0)}, lastIdx=${lastIdx}`);
-
-    // Store valid cursor data for tooltip persistence when mouse stops moving
-    // Only sync to ref when idx changes (not every mouse move) to reduce overhead
-    if (idx != null && idx !== lastIdx) {
-      lastIdx = idx;
-      // Also capture position at this point
-      if (left != null && left >= 0) {
-        lastLeft = left;
-      }
-      if (top != null && top >= 0) {
-        lastTop = top;
-      }
-      syncHoverState();
-    } else {
-      // Still update local position cache for tooltip positioning
-      if (left != null && left >= 0) {
-        lastLeft = left;
-      }
-      if (top != null && top >= 0) {
-        lastTop = top;
-      }
-    }
-
-    // Use the last valid index if current is null but we're still hovering
-    const displayIdx = idx ?? lastIdx;
-
-    // If no valid index, just return - don't hide (mouseleave handles that)
-    if (displayIdx == null) return;
-
-    updateTooltipContent(u, displayIdx);
-  }
-
-  return {
-    hooks: {
-      init,
-      setCursor,
-      destroy(u: uPlot) {
-        log(`destroy called - isHovering=${isHovering}, hideTimeoutId=${hideTimeoutId !== null}`);
-        // Cleanup event listeners
-        const cleanup = (overEl as HTMLElement & { _tooltipCleanup?: () => void })?._tooltipCleanup;
-        cleanup?.();
-
-        // Remove tooltip element
-        if (tooltipEl && tooltipEl.parentNode) {
-          tooltipEl.parentNode.removeChild(tooltipEl);
-        }
-      },
-    },
-  };
-}
 
 
 // ============================
@@ -664,6 +130,12 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       yMax: yMaxProp,
       onDataRange,
       onResetBounds,
+      tooltipInterpolation = "none",
+      rawLines,
+      downsampleTarget = 2000,
+      reprocessForZoom,
+      onZoomRangeChange,
+      outlierDetection = false,
       className,
       ...rest
     },
@@ -716,6 +188,24 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
 
     // Store chart instance ref for resetting alpha on mouseleave
     const chartInstanceRef = useRef<uPlot | null>(null);
+
+    // Store raw (pre-downsampled) data for zoom-aware re-downsampling
+    const rawLinesRef = useRef(rawLines);
+    rawLinesRef.current = rawLines;
+    const downsampleTargetRef = useRef(downsampleTarget);
+    downsampleTargetRef.current = downsampleTarget;
+
+    // Reprocess callback for zoom re-downsampling (stored in ref to avoid chart recreation)
+    const reprocessForZoomRef = useRef(reprocessForZoom);
+    reprocessForZoomRef.current = reprocessForZoom;
+    // Zoom range change callback for server re-fetch
+    const onZoomRangeChangeRef = useRef(onZoomRangeChange);
+    onZoomRangeChangeRef.current = onZoomRangeChange;
+
+    // Debounce timer for zoom re-downsampling
+    const zoomResampleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    // Separate debounce timer for zoom range change callback (server re-fetch)
+    const zoomRangeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     // Use context's syncKey, then prop, then default (in that priority order)
     const effectiveSyncKey = chartSyncContext?.syncKey ?? syncKey ?? DEFAULT_SYNC_KEY;
@@ -776,6 +266,13 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       // Skip if unchanged
       if (prevValue === tableHighlightName) return;
 
+      // Clear stale local focus so table highlight can take effect in stroke function.
+      // Without this, a leftover lastFocusedSeriesRef from a previous chart hover
+      // takes priority over tableId in the stroke function's 3-tier priority chain.
+      if (tableHighlightName !== null) {
+        lastFocusedSeriesRef.current = null;
+      }
+
       // Only trigger redraw if no chart hover is active (table highlight is lowest priority)
       const isActive = chartSyncContext?.hoveredChartIdRef?.current === chartId;
       const crossChartActive = chartSyncContext?.highlightedSeriesName !== null &&
@@ -794,47 +291,26 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       if (!isDateTime || processedLines.length === 0) return 1;
       const allX = processedLines.flatMap((l) => l.x);
       if (allX.length === 0) return 1;
-      const min = Math.min(...allX);
-      const max = Math.max(...allX);
+      const min = arrayMin(allX);
+      const max = arrayMax(allX);
       return max - min || 1;
     }, [isDateTime, processedLines]);
 
     // Convert LineData[] to uPlot data format
-    const uplotData = useMemo<uPlot.AlignedData>(() => {
-      if (processedLines.length === 0) {
-        return [[]] as uPlot.AlignedData;
-      }
+    const uplotData = useMemo<uPlot.AlignedData>(
+      () => alignDataForUPlot(processedLines),
+      [processedLines]
+    );
+    // Ref for imperative access to the full-range aligned data (e.g. resetZoom)
+    const uplotDataRef = useRef(uplotData);
+    uplotDataRef.current = uplotData;
 
-      // Collect all unique x values and sort them
-      const xSet = new Set<number>();
-      processedLines.forEach((line) => {
-        line.x.forEach((x) => xSet.add(x));
-      });
-      const xValues = Array.from(xSet).sort((a, b) => a - b);
-
-      // Create maps for efficient lookup
-      const lineMaps = processedLines.map((line) => {
-        const map = new Map<number, number>();
-        line.x.forEach((x, i) => map.set(x, line.y[i]));
-        return map;
-      });
-
-      // Build aligned data arrays
-      const data: uPlot.AlignedData = [xValues];
-      lineMaps.forEach((map) => {
-        const yValues = xValues.map((x) => map.get(x) ?? null);
-        data.push(yValues as (number | null)[]);
-      });
-
-      return data;
-    }, [processedLines]);
-
-    // Pre-calculate y-axis range from actual data
-    // This is done separately to avoid uPlot's yRangeFn timing issue where
-    // it gets called before all data is processed
-    const yRange = useMemo<[number, number]>(() => {
+    // Pre-calculate y-axis range from actual data, with IQR-based outlier detection.
+    // Returns [min, max, isOutlierAware] where isOutlierAware indicates the range
+    // was narrowed to exclude statistical outliers.
+    const yRange = useMemo<[number, number, boolean]>(() => {
       // Skip for log scale (handled by distr: 3)
-      if (logYAxis) return [0, 1];
+      if (logYAxis) return [0, 1, false];
 
       // Collect all y values from uplotData
       const allYValues: number[] = [];
@@ -849,13 +325,53 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
 
       // Default range if no valid data
       if (allYValues.length === 0) {
-        return [0, 1];
+        return [0, 1, false];
       }
 
-      const dataMin = Math.min(...allYValues);
-      const dataMax = Math.max(...allYValues);
-      const range = dataMax - dataMin;
-      const dataMagnitude = Math.max(Math.abs(dataMax), Math.abs(dataMin), 0.1);
+      const dataMin = arrayMin(allYValues);
+      const dataMax = arrayMax(allYValues);
+      const fullRange = dataMax - dataMin;
+
+      // IQR-based outlier detection: focus Y-axis on normal data range
+      // when extreme outliers (rare spikes) would otherwise squish the main data.
+      // Only active when outlierDetection prop is enabled.
+      let effectiveMin = dataMin;
+      let effectiveMax = dataMax;
+
+      if (outlierDetection && allYValues.length >= 20) {
+        const sorted = [...allYValues].sort((a, b) => a - b);
+        const n = sorted.length;
+        const q1 = sorted[Math.floor(n * 0.25)];
+        const q3 = sorted[Math.floor(n * 0.75)];
+        const iqr = q3 - q1;
+
+        if (iqr > 0) {
+          const lowerFence = q1 - 1.5 * iqr;
+          const upperFence = q3 + 1.5 * iqr;
+          const fencedRange = upperFence - lowerFence;
+
+          // Count outliers outside fences
+          let outlierCount = 0;
+          for (const v of allYValues) {
+            if (v < lowerFence || v > upperFence) {
+              outlierCount++;
+            }
+          }
+
+          const outlierRatio = outlierCount / allYValues.length;
+
+          // Activate outlier-aware range only when:
+          // - Full range is >3x the fenced range (spikes dominate the axis)
+          // - Outliers are <5% of data (truly rare spikes, not bimodal data)
+          if (fullRange > 3 * fencedRange && outlierRatio < 0.05) {
+            effectiveMin = lowerFence;
+            effectiveMax = upperFence;
+          }
+        }
+      }
+
+      const range = effectiveMax - effectiveMin;
+      const dataMagnitude = Math.max(Math.abs(effectiveMax), Math.abs(effectiveMin), 0.1);
 
       // Ensure minimum visible range of 10% of data magnitude
       // This prevents "super zoomed in" views for metrics with tiny variations
@@ -865,21 +381,23 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
 
       // If actual range is less than minimum, expand symmetrically
       if (range < minRange) {
-        const center = (dataMin + dataMax) / 2;
+        const center = (effectiveMin + effectiveMax) / 2;
         const halfRange = minRange / 2;
         yMin = center - halfRange;
         yMax = center + halfRange;
 
         // Don't show negative values if all data is non-negative
-        if (dataMin >= 0 && yMin < 0) {
+        if (effectiveMin >= 0 && yMin < 0) {
           yMin = 0;
           yMax = minRange;
         }
       } else {
-        // For normal ranges, add 5% padding
-        const padding = range * 0.05;
-        yMin = dataMin - padding;
-        yMax = dataMax + padding;
+        // Add 10% padding for outlier-aware range, 5% for normal range
+        const isOutlierAware = effectiveMin !== dataMin || effectiveMax !== dataMax;
+        const paddingFactor = isOutlierAware ? 0.10 : 0.05;
+        const padding = range * paddingFactor;
+        yMin = effectiveMin - padding;
+        yMax = effectiveMax + padding;
 
         // Don't show negative values if all data is non-negative
         if (dataMin >= 0 && yMin < 0) {
@@ -887,8 +405,9 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         }
       }
 
-      return [yMin, yMax];
-    }, [uplotData, logYAxis]);
+      const isOutlierAwareResult = effectiveMin !== dataMin || effectiveMax !== dataMax;
+      return [yMin, yMax, isOutlierAwareResult];
+    }, [uplotData, logYAxis, outlierDetection]);
 
     // Ref for onResetBounds so dblclick handler always has latest callback
     const onResetBoundsRef = useRef(onResetBounds);
@@ -911,8 +430,8 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           }
         }
         if (allYValues.length > 0) {
-          const dataMin = Math.min(...allYValues);
-          const dataMax = Math.max(...allYValues);
+          const dataMin = arrayMin(allYValues);
+          const dataMax = arrayMax(allYValues);
           onDataRangeRef.current(dataMin, dataMax);
         }
       }
@@ -955,8 +474,8 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
 
       // Get chart's data range for validation
       const xData = chart.data[0] as number[];
-      const dataMin = xData.length > 0 ? Math.min(...xData) : null;
-      const dataMax = xData.length > 0 ? Math.max(...xData) : null;
+      const dataMin = xData.length > 0 ? arrayMin(xData) : null;
+      const dataMax = xData.length > 0 ? arrayMax(xData) : null;
 
       // Determine which range to use
       // Priority: syncedZoomRange (user zoom) > globalXRange (default)
@@ -1060,111 +579,13 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       const axisColor = isDark ? "#fff" : "#000";
       const gridColor = isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.1)";
 
-      // Build a mapping from smoothed series to their "(original)" companion
-      // so the legend can show combined values like the tooltip: "value (rawValue)"
-      const companionDataIdx = new Map<number, number>();
-      for (let i = 0; i < processedLines.length; i++) {
-        if (!processedLines[i].hideFromLegend && processedLines[i + 1]?.hideFromLegend) {
-          // i+2 because uPlot data index 0 is x-axis, so line index i maps to data index i+1
-          companionDataIdx.set(i, i + 2);
-        }
-      }
+      // Series configuration (extracted to lib/series-config.ts)
+      const series = buildSeriesConfig(processedLines, xlabel, chartLineWidth, {
+        lastFocusedSeriesRef,
+        crossChartHighlightRef,
+        tableHighlightRef,
+      });
 
-      // Series configuration
-      const series: uPlot.Series[] = [
-        {
-          // X axis
-          label: xlabel || "x",
-        },
-        ...processedLines.map((line, i) => {
-          // Check if this series has only a single point - need to show as dot since lines need 2+ points
-          const isSinglePoint = line.x.length === 1;
-          const baseColor = line.color || `hsl(${(i * 137) % 360}, 70%, 50%)`;
-
-          return {
-            label: line.label,
-            _seriesId: line.seriesId ?? line.label,
-            // Use a function for stroke that checks both local and cross-chart focus
-            // and applies per-series opacity (used by smoothing to dim raw data)
-            stroke: (u: uPlot, seriesIdx: number) => {
-              const localFocusIdx = lastFocusedSeriesRef.current;
-              const crossChartLabel = crossChartHighlightRef.current;
-              const tableId = tableHighlightRef.current;
-              const thisSeriesLabel = u.series[seriesIdx]?.label;
-              const thisSeriesId = (u.series[seriesIdx] as any)?._seriesId;
-              const lineOpacity = line.opacity ?? 1;
-
-              // Determine if this series should be highlighted
-              // Priority: local chart hover > cross-chart hover > table row hover
-              let isHighlighted = false;
-              let highlightedLabel: string | null = null;
-
-              if (localFocusIdx !== null) {
-                // Local focus takes priority (this chart is being hovered)
-                isHighlighted = seriesIdx === localFocusIdx;
-                highlightedLabel = typeof u.series[localFocusIdx]?.label === "string"
-                  ? (u.series[localFocusIdx].label as string) : null;
-              } else if (crossChartLabel !== null) {
-                // Cross-chart highlight (another chart is being hovered)
-                isHighlighted = thisSeriesLabel === crossChartLabel;
-                highlightedLabel = crossChartLabel;
-              } else if (tableId !== null) {
-                // Table row hover highlight - match by unique seriesId to handle duplicate run names
-                isHighlighted = thisSeriesId === tableId;
-              }
-
-              const isFocusActive =
-                localFocusIdx !== null || crossChartLabel !== null || tableId !== null;
-
-              // Check if this is the raw/original companion of the highlighted series
-              const isRawOfHighlighted = isFocusActive && !isHighlighted &&
-                line.hideFromLegend &&
-                typeof thisSeriesLabel === "string" &&
-                thisSeriesLabel.endsWith(" (original)") &&
-                highlightedLabel !== null &&
-                thisSeriesLabel === highlightedLabel + " (original)";
-
-              if (!isFocusActive || isHighlighted) {
-                return lineOpacity < 1
-                  ? applyAlpha(baseColor, lineOpacity)
-                  : baseColor;
-              }
-              // Slightly boost raw companion of emphasized series
-              if (isRawOfHighlighted) {
-                return applyAlpha(baseColor, Math.min(lineOpacity * 2.5, 0.35));
-              }
-              // Dim unfocused series: combine line opacity with focus dimming
-              return applyAlpha(baseColor, lineOpacity * 0.15);
-            },
-            width: chartLineWidth,
-            dash: line.dashed ? [5, 5] : undefined,
-            spanGaps: true,
-            points: {
-              // Show points for single-point series since lines need 2+ points to be visible
-              show: isSinglePoint,
-              size: isSinglePoint ? 10 : 6,
-              fill: (line.opacity ?? 1) < 1
-                ? applyAlpha(baseColor, line.opacity!)
-                : baseColor,
-            },
-            // Legend value formatter: combine smoothed + original values like the tooltip
-            value: companionDataIdx.has(i)
-              ? (u: uPlot, val: number | null, _si: number, idx: number | null) => {
-                  if (val == null || idx == null) return "--";
-                  const rawVal = u.data[companionDataIdx.get(i)!]?.[idx] as number | null;
-                  if (rawVal != null) {
-                    return `${formatAxisLabel(val)} (${formatAxisLabel(rawVal)})`;
-                  }
-                  return formatAxisLabel(val);
-                }
-              : ((_u: uPlot, val: number | null) => {
-                  return val == null ? "--" : formatAxisLabel(val);
-                }),
-          };
-        }),
-      ];
-
-      // Scales configuration
       // Scales configuration
       // IMPORTANT: Always use auto:true for X-axis to allow zoom to work.
       // Global X range is applied AFTER chart creation via setScale(), not via range function.
@@ -1177,6 +598,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             : { auto: true },
         // For Y-axis: use auto:true to enable dynamic rescaling via setScale()
         // When yMin/yMax props are set, use a fixed range function to enforce bounds
+        // When outlier-aware range is active, constrain Y to exclude statistical outliers
         y: logYAxis
           ? { distr: 3 }
           : (yMinProp != null || yMaxProp != null)
@@ -1190,7 +612,12 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
                   return [yMinProp ?? autoMin, yMaxProp ?? autoMax];
                 },
               }
-            : { auto: true },
+            : yRange[2]
+              ? {
+                  auto: false,
+                  range: (): uPlot.Range.MinMax => [yRange[0], yRange[1]],
+                }
+              : { auto: true },
       };
 
       // Axes configuration - compact sizes to fit within container
@@ -1203,7 +630,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           ticks: { stroke: gridColor, size: 3 },
           values: isDateTime
             ? (u, vals) => vals.map((v) => smartDateFormatter(v, timeRange))
-            : (u, vals) => vals.map((v) => formatAxisLabel(v)),
+            : (u, vals) => formatAxisLabels(vals),
           label: xlabel,
           labelSize: xlabel ? 14 : 0,
           labelFont: "10px ui-monospace, monospace",
@@ -1217,7 +644,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           stroke: axisColor,
           grid: { stroke: gridColor, dash: [2, 2] },
           ticks: { stroke: gridColor, size: 3 },
-          values: (u, vals) => vals.map((v) => formatAxisLabel(v)),
+          values: (u, vals) => formatAxisLabels(vals),
           label: ylabel,
           labelSize: ylabel ? 14 : 0,
           labelFont: "10px ui-monospace, monospace",
@@ -1260,6 +687,53 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         height: 0,
       };
 
+      // Build setCursor hooks (extracted to lib/cursor-hooks.ts)
+      const focusDetectionHook = buildFocusDetectionHook({
+        processedLines,
+        tooltipInterpolation,
+        isActiveChart,
+        lastFocusedSeriesRef,
+        highlightedSeriesRef,
+        chartId,
+        chartSyncContextRef: chartSyncContextRef as any,
+      });
+
+      const interpolationDotsHook = buildInterpolationDotsHook({
+        processedLines,
+        tooltipInterpolation,
+        isActiveChart,
+      });
+
+      // Build bands for min/max envelope rendering
+      // Detects envelope companion series and creates fill between min/max pairs
+      const bands: uPlot.Band[] = [];
+      const envelopePairs = new Map<string, { minIdx?: number; maxIdx?: number; color?: string }>();
+      for (let i = 0; i < processedLines.length; i++) {
+        const line = processedLines[i];
+        if (line.envelopeOf && line.envelopeBound) {
+          const key = line.envelopeOf;
+          if (!envelopePairs.has(key)) {
+            envelopePairs.set(key, {});
+          }
+          const pair = envelopePairs.get(key)!;
+          // uPlot series index = line index + 1 (index 0 is x-axis)
+          if (line.envelopeBound === "min") {
+            pair.minIdx = i + 1;
+          } else {
+            pair.maxIdx = i + 1;
+          }
+          pair.color = line.color;
+        }
+      }
+      for (const pair of envelopePairs.values()) {
+        if (pair.minIdx != null && pair.maxIdx != null) {
+          bands.push({
+            series: [pair.maxIdx, pair.minIdx],
+            fill: applyAlpha(pair.color || "#888", 0.12),
+          });
+        }
+      }
+
       return {
         // Initial size - will be updated via setSize() on resize
         width: 400,
@@ -1270,6 +744,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         cursor,
         legend,
         select,
+        bands: bands.length > 0 ? bands : undefined,
         // Top-level focus configuration (required for series highlighting)
         // alpha < 1 dims unfocused series when one is focused
         focus: {
@@ -1285,6 +760,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             onHoverChange: handleHoverChange, // Notifies context of hover state
             isActiveChart, // Checks if this chart is the one being hovered
             highlightedSeriesRef, // For showing highlighted series at top of tooltip
+            tooltipInterpolation, // Interpolation mode for missing tooltip values
           }),
         ],
         hooks: {
@@ -1292,75 +768,24 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             (u) => {
               // Store chart instance for resetting emphasis on mouseleave
               chartInstanceRef.current = u;
+
+              // Create interpolation dot overlay elements (one per series)
+              if (tooltipInterpolation !== "none") {
+                const dots: HTMLDivElement[] = [];
+                for (let i = 1; i < u.series.length; i++) {
+                  const dot = document.createElement("div");
+                  dot.style.cssText =
+                    "position:absolute;width:8px;height:8px;border-radius:50%;border:2px solid;transform:translate(-50%,-50%);pointer-events:none;display:none;z-index:100;background:transparent;";
+                  u.over.appendChild(dot);
+                  dots.push(dot);
+                }
+                (u as any)._interpDots = dots;
+              }
             },
           ],
           setCursor: [
-            (u) => {
-              // Manual focus detection - uPlot's built-in focus doesn't work with cursor sync
-              // because synced charts receive bad Y coordinates
-
-              // Only run focus detection on the actively hovered chart
-              if (!isActiveChart()) return;
-
-              const idx = u.cursor.idx;
-              const top = u.cursor.top;
-
-              // Skip if cursor not on chart
-              if (idx == null || top == null || top < 0) return;
-
-              // Find the series closest to the cursor Y position
-              let closestSeriesIdx: number | null = null;
-              let closestDistance = Infinity;
-
-              const yScale = u.scales.y;
-
-              for (let si = 1; si < u.series.length; si++) {
-                const series = u.series[si];
-                if (!series.show) continue; // Skip hidden series
-
-                // Skip raw/original series from smoothing - only smoothed lines should compete for emphasis
-                const lineData = processedLines[si - 1];
-                if (lineData?.hideFromLegend) continue;
-
-                const yData = u.data[si] as (number | null)[];
-                const yVal = yData[idx];
-                if (yVal == null) continue;
-
-                // Convert data value to pixel position
-                if (yScale.min == null || yScale.max == null) continue;
-
-                const plotHeight = u.bbox.height / devicePixelRatio;
-                const yRange = yScale.max - yScale.min;
-                const yPx = plotHeight - ((yVal - yScale.min) / yRange) * plotHeight;
-
-                const distance = Math.abs(yPx - top);
-                if (distance < closestDistance) {
-                  closestDistance = distance;
-                  closestSeriesIdx = si;
-                }
-              }
-
-              // Skip if no change from last focus
-              if (closestSeriesIdx === lastFocusedSeriesRef.current) return;
-
-              // Apply emphasis (always pick closest, no threshold)
-              if (closestSeriesIdx != null && closestDistance < Infinity) {
-                // Update focus ref - stroke functions will read this during redraw
-                lastFocusedSeriesRef.current = closestSeriesIdx;
-
-                // Trigger redraw so stroke functions re-evaluate with new focus
-                u.redraw();
-
-                // CROSS-CHART highlighting
-                const seriesLabel = processedLines[closestSeriesIdx - 1]?.label ?? null;
-                if (seriesLabel) {
-                  // Update tooltip ref immediately (context state is async)
-                  highlightedSeriesRef.current = seriesLabel;
-                  chartSyncContextRef.current?.highlightUPlotSeries(chartId, seriesLabel);
-                  chartSyncContextRef.current?.setHighlightedSeriesName(seriesLabel);
-                }
-              }
-            },
+            focusDetectionHook,
+            interpolationDotsHook,
           ],
           setSeries: [
             (u, seriesIdx, opts) => {
@@ -1376,13 +801,20 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
                 const xMax = u.scales.x.max;
                 if (xMin == null || xMax == null) return;
 
+                // Capture sync state BEFORE syncXScale modifies it.
+                // syncXScale sets isSyncingZoomRef=true synchronously and resets it
+                // via setTimeout(0), so later code in this same hook invocation would
+                // see the flag as true and incorrectly skip. Snapshot it here.
+                const isProgrammatic = isProgrammaticScaleRef.current;
+                const isSyncing = chartSyncContextRef.current?.isSyncingZoomRef?.current ?? false;
+
                 // ZOOM SYNC: Broadcast X scale to other charts via context
                 // Only sync if this is a user-initiated zoom (drag), not a programmatic scale change.
                 // Programmatic changes (chart init, zoom sync from context, syncXScale propagation)
                 // must not broadcast back to context as that corrupts syncedZoomRange for other charts.
                 // Also skip when syncXScale is propagating to this chart (isSyncingZoomRef) -
                 // without this, target charts re-broadcast during scroll when isActiveChart() is true.
-                if (!isProgrammaticScaleRef.current && !chartSyncContextRef.current?.isSyncingZoomRef?.current && isActiveChart()) {
+                if (!isProgrammatic && !isSyncing && isActiveChart()) {
                   chartSyncContextRef.current?.syncXScale(chartId, xMin, xMax);
                   // Mark that user has manually zoomed (prevents global range from overwriting)
                   userHasZoomedRef.current = true;
@@ -1464,6 +896,58 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
                     });
                   }
                 }
+
+                // ZOOM RANGE CHANGE: Notify parent of zoom range for server re-fetch.
+                // This fires on any user zoom, independent of rawLines/reprocessForZoom.
+                // Uses captured isProgrammatic/isSyncing from before syncXScale modified the ref.
+                // Fire synchronously — drag.setScale:true only triggers on mouseup (not during drag),
+                // so debouncing is unnecessary and causes timer scheduling issues.
+                if (!isProgrammatic && !isSyncing) {
+                  // Cancel any pending timer from a previous zoom
+                  if (zoomRangeTimerRef.current) {
+                    clearTimeout(zoomRangeTimerRef.current);
+                    zoomRangeTimerRef.current = null;
+                  }
+                  onZoomRangeChangeRef.current?.([xMin, xMax]);
+                }
+
+                // ZOOM-AWARE RE-DOWNSAMPLING: When raw data and reprocess callback
+                // are available, re-downsample the visible range for more detail
+                const raw = rawLinesRef.current;
+                const reprocessFn = reprocessForZoomRef.current;
+                if (raw && raw.length > 0 && reprocessFn && !isProgrammatic && !isSyncing) {
+                  // Debounce to avoid frame-by-frame recomputation during drag
+                  if (zoomResampleTimerRef.current) {
+                    clearTimeout(zoomResampleTimerRef.current);
+                  }
+                  zoomResampleTimerRef.current = setTimeout(() => {
+                    zoomResampleTimerRef.current = null;
+                    const chart = u;
+                    const currentXMin = chart.scales.x.min;
+                    const currentXMax = chart.scales.x.max;
+                    if (currentXMin == null || currentXMax == null) return;
+
+                    const currentLines = processedLinesRef.current;
+                    // Delegate all processing (slicing + downsampling + smoothing) to parent
+                    const newLines = reprocessForZoomRef.current?.(raw, currentXMin, currentXMax);
+                    if (!newLines) return;
+
+                    // Only update if series count matches (setData can't change series count)
+                    if (newLines.length === currentLines.length) {
+                      const newAligned = alignDataForUPlot(newLines);
+                      try {
+                        isProgrammaticScaleRef.current = true;
+                        chart.batch(() => {
+                          chart.setData(newAligned);
+                          // Restore the zoom range since setData may reset it
+                          chart.setScale("x", { min: currentXMin, max: currentXMax });
+                        });
+                      } finally {
+                        isProgrammaticScaleRef.current = false;
+                      }
+                    }
+                  }, 150); // 150ms debounce
+                }
               }
             },
           ],
@@ -1473,7 +957,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       };
       // Note: width/height excluded from deps - size changes handled by separate setSize() effect
       // Note: xRange removed - global range is set via setScale() after chart creation, not in options
-      // Note: yRange removed - Y auto-scaling is handled by scale.auto:true and setScale hook
+      // Note: yRange included when outlier-aware (yRange[2]) to apply IQR-based Y constraints
     }, [
       processedLines,
       theme,
@@ -1493,6 +977,8 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       chartLineWidth,
       yMinProp,
       yMaxProp,
+      tooltipInterpolation,
+      yRange,
     ]);
 
     // Store cleanup function ref for proper cleanup on unmount
@@ -1633,8 +1119,8 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         // Validate that the saved zoom overlaps with current data
         const xData = uplotData[0] as number[];
         if (xData.length > 0) {
-          const dataMin = Math.min(...xData);
-          const dataMax = Math.max(...xData);
+          const dataMin = arrayMin(xData);
+          const dataMax = arrayMax(xData);
           if (xMin < dataMax && xMax > dataMin) {
             rangeToApply = [xMin, xMax];
             isUserZoom = true;
@@ -1658,8 +1144,8 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           // Validate synced zoom overlaps with data
           const xData = uplotData[0] as number[];
           if (xData.length > 0) {
-            const dataMin = Math.min(...xData);
-            const dataMax = Math.max(...xData);
+            const dataMin = arrayMin(xData);
+            const dataMax = arrayMax(xData);
             const hasOverlap = syncedZoom[0] < dataMax && syncedZoom[1] > dataMin;
             if (process.env.NODE_ENV === 'development') {
               console.log(`[uPlot ${chartId}] Zoom validation - syncedZoom: [${syncedZoom[0]}, ${syncedZoom[1]}], dataRange: [${dataMin}, ${dataMax}], hasOverlap: ${hasOverlap}`);
@@ -1736,6 +1222,30 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       // Use ref to avoid depending on context object (which changes on hover)
       chartSyncContextRef.current?.registerUPlot(chartId, chart);
 
+      // Register a reset callback that restores the original full-range data.
+      // This is called by context.resetZoom() on OTHER charts when one chart resets.
+      // Using uplotDataRef ensures we always have the latest full-range data.
+      chartSyncContextRef.current?.registerResetCallback(chartId, () => {
+        if (zoomResampleTimerRef.current) {
+          clearTimeout(zoomResampleTimerRef.current);
+          zoomResampleTimerRef.current = null;
+        }
+        if (zoomRangeTimerRef.current) {
+          clearTimeout(zoomRangeTimerRef.current);
+          zoomRangeTimerRef.current = null;
+        }
+        try {
+          isProgrammaticScaleRef.current = true;
+          chart.batch(() => {
+            chart.setData(uplotDataRef.current);
+          });
+        } finally {
+          isProgrammaticScaleRef.current = false;
+        }
+        userHasZoomedRef.current = false;
+        zoomStateRef.current = null;
+      });
+
       // Safety: Re-check synced zoom from context in next frame
       // This handles race conditions where context wasn't yet updated during chart creation
       if (!rangeToApply && !logXAxis && !isDateTime) {
@@ -1745,8 +1255,8 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           if (lateSyncedZoom && chart) {
             const xData = chart.data[0] as number[];
             if (xData && xData.length > 0) {
-              const dataMin = Math.min(...xData);
-              const dataMax = Math.max(...xData);
+              const dataMin = arrayMin(xData);
+              const dataMax = arrayMax(xData);
               const hasOverlap = lateSyncedZoom[0] < dataMax && lateSyncedZoom[1] > dataMin;
               if (hasOverlap && !lastAppliedGlobalRangeRef.current) {
                 if (process.env.NODE_ENV === 'development') {
@@ -1772,10 +1282,21 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
 
       // Double-click to reset zoom
       const handleDblClick = () => {
+        // Cancel any pending zoom timers so they don't overwrite the reset
+        if (zoomResampleTimerRef.current) {
+          clearTimeout(zoomResampleTimerRef.current);
+          zoomResampleTimerRef.current = null;
+        }
+        if (zoomRangeTimerRef.current) {
+          clearTimeout(zoomRangeTimerRef.current);
+          zoomRangeTimerRef.current = null;
+        }
         try {
           isProgrammaticScaleRef.current = true;
           chart.batch(() => {
-            chart.setData(chart.data);
+            // Restore the original full-range data (not chart.data which may be
+            // zoomed re-downsampled data)
+            chart.setData(uplotData);
           });
         } finally {
           isProgrammaticScaleRef.current = false;
@@ -1789,6 +1310,8 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         lastAppliedGlobalRangeRef.current = null;
         // Reset toast tracking so it can show again if needed
         noDataToastShownRef.current = null;
+        // Notify parent that zoom was reset (clear server re-fetch)
+        onZoomRangeChangeRef.current?.(null);
         // Clear synced zoom in context so all charts reset
         chartSyncContextRef.current?.setSyncedZoomRange(null);
         // Reset all other charts to global range
@@ -1818,6 +1341,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       // Store cleanup function
       cleanupRef.current = () => {
         chartSyncContextRef.current?.unregisterUPlot(chartId);
+        chartSyncContextRef.current?.unregisterResetCallback(chartId);
         container?.removeEventListener("dblclick", handleDblClick);
       };
 
@@ -1870,11 +1394,16 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       () => ({
         getChart: () => chartRef.current,
         resetZoom: () => {
-          // Reset by re-setting data which recalculates auto bounds
+          // Reset by restoring the original full-range data (not chart.data
+          // which may be zoomed re-downsampled data)
           if (chartRef.current) {
+            if (zoomResampleTimerRef.current) {
+              clearTimeout(zoomResampleTimerRef.current);
+              zoomResampleTimerRef.current = null;
+            }
             try {
               isProgrammaticScaleRef.current = true;
-              chartRef.current.setData(chartRef.current.data);
+              chartRef.current.setData(uplotDataRef.current);
             } finally {
               isProgrammaticScaleRef.current = false;
             }

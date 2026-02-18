@@ -55,6 +55,10 @@ interface ChartSyncContextValue {
   unregisterUPlot: (id: string) => void;
   getUPlotInstances: () => Map<string, uPlot>;
 
+  // Per-chart reset callbacks (restore original data + auto-scale)
+  registerResetCallback: (id: string, callback: () => void) => void;
+  unregisterResetCallback: (id: string) => void;
+
   // Sync key for uPlot built-in cursor sync
   syncKey: string;
 
@@ -127,6 +131,8 @@ export function ChartSyncProvider({
 }: ChartSyncProviderProps) {
   // Use refs for registries to avoid re-renders when charts register/unregister
   const uplotInstancesRef = useRef(new Map<string, uPlot>());
+  // Per-chart reset callbacks — each chart registers a function that restores its original data
+  const resetCallbacksRef = useRef(new Map<string, () => void>());
 
   // Flag to prevent infinite highlight loops
   const isHighlightingRef = useRef(false);
@@ -220,6 +226,16 @@ export function ChartSyncProvider({
 
   const unregisterUPlot = useCallback((id: string) => {
     uplotInstancesRef.current.delete(id);
+    resetCallbacksRef.current.delete(id);
+  }, []);
+
+  // Per-chart reset callback registration
+  const registerResetCallback = useCallback((id: string, callback: () => void) => {
+    resetCallbacksRef.current.set(id, callback);
+  }, []);
+
+  const unregisterResetCallback = useCallback((id: string) => {
+    resetCallbacksRef.current.delete(id);
   }, []);
 
   const getUPlotInstances = useCallback(() => {
@@ -316,17 +332,12 @@ export function ChartSyncProvider({
     isSyncingZoomRef.current = true;
 
     try {
-      uplotInstancesRef.current.forEach((chart, id) => {
+      // Use registered reset callbacks (which restore original full-range data)
+      // instead of reading chart.data (which may be re-downsampled for a zoomed range)
+      resetCallbacksRef.current.forEach((callback, id) => {
         if (id === sourceChartId) return; // Skip source chart
-
         try {
-          // Reset to auto scale by setting scale with no constraints
-          const xData = chart.data[0] as number[];
-          if (xData && xData.length > 0) {
-            const xMin = Math.min(...xData);
-            const xMax = Math.max(...xData);
-            chart.setScale("x", { min: xMin, max: xMax });
-          }
+          callback();
         } catch {
           // Ignore errors from destroyed charts
         }
@@ -361,6 +372,8 @@ export function ChartSyncProvider({
       registerUPlot,
       unregisterUPlot,
       getUPlotInstances,
+      registerResetCallback,
+      unregisterResetCallback,
       syncKey,
       highlightUPlotSeries,
       hoveredChartId,
@@ -380,6 +393,8 @@ export function ChartSyncProvider({
       registerUPlot,
       unregisterUPlot,
       getUPlotInstances,
+      registerResetCallback,
+      unregisterResetCallback,
       syncKey,
       highlightUPlotSeries,
       // hoveredChartId intentionally omitted - use hoveredChartIdRef instead
@@ -399,6 +414,7 @@ export function ChartSyncProvider({
   useEffect(() => {
     return () => {
       uplotInstancesRef.current.clear();
+      resetCallbacksRef.current.clear();
     };
   }, []);
 

@@ -657,7 +657,7 @@ export function DropdownRegion({
                   className={cn(styles.card, "group", "w-full")}
                   style={cardStyle}
                 >
-                  <VirtualizedChart minHeight={cardStyle.height?.toString() || "384px"}>
+                  <VirtualizedChart minHeight={cardStyle.height?.toString() || "384px"} loadMargin="600px">
                     {renderComponent()}
                   </VirtualizedChart>
                   <button
