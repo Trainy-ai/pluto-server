@@ -1,5 +1,6 @@
-import { useState, useMemo } from "react";
-import { CheckIcon, ChevronsUpDownIcon } from "lucide-react";
+import { useState, useMemo, useEffect } from "react";
+import { fuzzyFilter } from "@/lib/fuzzy-search";
+import { CheckIcon, ChevronsUpDownIcon, Loader2Icon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -16,10 +17,14 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Badge } from "@/components/ui/badge";
-import type { GroupedMetrics } from "@/lib/grouping/types";
+import {
+  useDistinctMetricNames,
+  useSearchMetricNames,
+} from "../../~queries/metric-summaries";
 
 interface MetricSelectorProps {
-  groupedMetrics: GroupedMetrics;
+  organizationId: string;
+  projectName: string;
   value: string | string[];
   onChange: (value: string | string[]) => void;
   placeholder?: string;
@@ -27,15 +32,9 @@ interface MetricSelectorProps {
   className?: string;
 }
 
-interface MetricOption {
-  value: string;
-  label: string;
-  group: string;
-  type: string;
-}
-
 export function MetricSelector({
-  groupedMetrics,
+  organizationId,
+  projectName,
   value,
   onChange,
   placeholder = "Select metric...",
@@ -44,65 +43,47 @@ export function MetricSelector({
 }: MetricSelectorProps) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
 
-  // Flatten grouped metrics into a list of options
-  const options = useMemo((): MetricOption[] => {
-    const result: MetricOption[] = [];
+  // Debounce search for server-side query
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [search]);
 
-    Object.entries(groupedMetrics).forEach(([groupKey, group]) => {
-      group.metrics.forEach((metric) => {
-        // Only include METRIC type for chart widgets
-        if (metric.type === "METRIC") {
-          result.push({
-            value: metric.name,
-            label: metric.name,
-            group: group.groupName,
-            type: metric.type,
-          });
-        }
-      });
-    });
+  // Fetch initial project-wide metrics (up to 500)
+  const { data: initialMetrics, isLoading: isLoadingInitial } =
+    useDistinctMetricNames(organizationId, projectName);
 
-    return result;
-  }, [groupedMetrics]);
+  // Server-side ILIKE search when user types
+  const { data: searchResults, isFetching: isSearching } =
+    useSearchMetricNames(organizationId, projectName, debouncedSearch);
 
-  // Filter options based on search (supports regex)
-  const filteredOptions = useMemo(() => {
-    if (!search) return options;
+  // Merge initial + search results, deduplicate, then Fuse.js filter
+  const filteredMetrics = useMemo(() => {
+    const initial = initialMetrics?.metricNames ?? [];
+    const searched = searchResults?.metricNames ?? [];
 
-    try {
-      // Try to use as regex if it looks like one
-      const isRegex = search.startsWith("/") || search.includes("*") || search.includes(".");
-      if (isRegex) {
-        const pattern = search.replace(/\*/g, ".*");
-        const regex = new RegExp(pattern, "i");
-        return options.filter((opt) => regex.test(opt.value));
+    // Merge and deduplicate
+    const seen = new Set<string>();
+    const merged: string[] = [];
+    for (const name of [...searched, ...initial]) {
+      if (!seen.has(name)) {
+        seen.add(name);
+        merged.push(name);
       }
-    } catch {
-      // Fall back to simple substring match
     }
 
-    const lowerSearch = search.toLowerCase();
-    return options.filter(
-      (opt) =>
-        opt.value.toLowerCase().includes(lowerSearch) ||
-        opt.group.toLowerCase().includes(lowerSearch)
-    );
-  }, [options, search]);
+    if (!search.trim()) {
+      // No search — show all initial metrics alphabetically
+      return merged.sort((a, b) => a.localeCompare(b));
+    }
 
-  // Group filtered options by their group
-  const groupedOptions = useMemo(() => {
-    const groups: Record<string, MetricOption[]> = {};
-
-    filteredOptions.forEach((opt) => {
-      if (!groups[opt.group]) {
-        groups[opt.group] = [];
-      }
-      groups[opt.group].push(opt);
-    });
-
-    return groups;
-  }, [filteredOptions]);
+    // Fuse.js narrows down the loose backend results
+    return fuzzyFilter(merged, search);
+  }, [initialMetrics, searchResults, search]);
 
   const selectedValues = Array.isArray(value) ? value : value ? [value] : [];
 
@@ -131,6 +112,8 @@ export function MetricSelector({
     return selectedValues[0];
   }, [selectedValues, multiple]);
 
+  const isLoading = isLoadingInitial || isSearching;
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -149,34 +132,46 @@ export function MetricSelector({
       <PopoverContent className="w-[400px] p-0" align="start">
         <Command shouldFilter={false}>
           <CommandInput
-            placeholder="Search metrics with regex..."
+            placeholder="Search metrics..."
             value={search}
             onValueChange={setSearch}
           />
           <CommandList className="max-h-[300px]">
-            <CommandEmpty>No metrics found.</CommandEmpty>
-            {Object.entries(groupedOptions).map(([groupName, groupOptions]) => (
-              <CommandGroup key={groupName} heading={groupName}>
-                {groupOptions.map((option) => (
+            {isLoading && filteredMetrics.length === 0 ? (
+              <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
+                <Loader2Icon className="size-4 animate-spin" />
+                Loading metrics...
+              </div>
+            ) : filteredMetrics.length === 0 ? (
+              <CommandEmpty>No metrics found.</CommandEmpty>
+            ) : (
+              <CommandGroup heading="Metrics (A-Z, max 500 — search for more)">
+                {filteredMetrics.map((metric) => (
                   <CommandItem
-                    key={option.value}
-                    value={option.value}
-                    onSelect={() => handleSelect(option.value)}
+                    key={metric}
+                    value={metric}
+                    onSelect={() => handleSelect(metric)}
                   >
                     <CheckIcon
                       className={cn(
                         "mr-2 size-4",
-                        selectedValues.includes(option.value)
+                        selectedValues.includes(metric)
                           ? "opacity-100"
                           : "opacity-0"
                       )}
                     />
-                    <span className="truncate">{option.label}</span>
+                    <span className="truncate">{metric}</span>
                   </CommandItem>
                 ))}
               </CommandGroup>
-            ))}
+            )}
           </CommandList>
+          {isLoading && filteredMetrics.length > 0 && (
+            <div className="flex items-center justify-center gap-2 border-t py-2 text-xs text-muted-foreground">
+              <Loader2Icon className="size-3 animate-spin" />
+              Searching...
+            </div>
+          )}
         </Command>
         {multiple && selectedValues.length > 0 && (
           <div className="border-t p-2">

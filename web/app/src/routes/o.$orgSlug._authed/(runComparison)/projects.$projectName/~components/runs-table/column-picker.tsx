@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
+import { fuzzyFilter } from "@/lib/fuzzy-search";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -72,6 +73,26 @@ export function ColumnPicker({
 
   const isSearchActive = searchValue.length > 0;
 
+  const filteredSystemCols = useMemo(
+    () => isSearchActive
+      ? ALL_SYSTEM_COLUMNS.filter((col) =>
+          fuzzyFilter([col.label], searchValue).length > 0)
+      : ALL_SYSTEM_COLUMNS,
+    [isSearchActive, searchValue],
+  );
+  const filteredMetrics = useMemo(
+    () => isSearchActive ? fuzzyFilter(metricNames, searchValue) : metricNames,
+    [isSearchActive, searchValue, metricNames],
+  );
+  const filteredConfigKeys = useMemo(
+    () => isSearchActive ? fuzzyFilter(configKeys, searchValue) : configKeys,
+    [isSearchActive, searchValue, configKeys],
+  );
+  const filteredSysMetaKeys = useMemo(
+    () => isSearchActive ? fuzzyFilter(systemMetadataKeys, searchValue) : systemMetadataKeys,
+    [isSearchActive, searchValue, systemMetadataKeys],
+  );
+
   const isSelected = (source: ColumnConfig["source"], id: string, aggregation?: MetricAggregation) =>
     columns.some((c) => c.source === source && c.id === id && c.aggregation === aggregation);
 
@@ -109,7 +130,7 @@ export function ColumnPicker({
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-auto min-w-[20rem] max-w-[36rem] p-0" align="end">
-        <Command>
+        <Command shouldFilter={false}>
           <div className="relative">
             <CommandInput
               placeholder="Search columns..."
@@ -128,7 +149,7 @@ export function ColumnPicker({
             {isSearchActive ? (
               /* Flat search results view — all matching columns in one list */
               <CommandGroup heading="Search Results">
-                {ALL_SYSTEM_COLUMNS.map((col) => {
+                {filteredSystemCols.map((col) => {
                   const selected = isSelected(col.source, col.id);
                   return (
                     <CommandItem
@@ -142,7 +163,7 @@ export function ColumnPicker({
                     </CommandItem>
                   );
                 })}
-                {metricNames.map((name) => (
+                {filteredMetrics.map((name) => (
                   <MetricExpandableItem
                     key={`search:metric:${name}`}
                     metricName={name}
@@ -160,7 +181,7 @@ export function ColumnPicker({
                     showBadge={true}
                   />
                 ))}
-                {configKeys.map((key) => {
+                {filteredConfigKeys.map((key) => {
                   const selected = isSelected("config", key);
                   return (
                     <CommandItem
@@ -180,7 +201,7 @@ export function ColumnPicker({
                     </CommandItem>
                   );
                 })}
-                {systemMetadataKeys.map((key) => {
+                {filteredSysMetaKeys.map((key) => {
                   const selected = isSelected("systemMetadata", key);
                   return (
                     <CommandItem

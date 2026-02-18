@@ -203,12 +203,15 @@ export function RunTableViewSelector({
     }
   }, [updateMutation.isSuccess, getCurrentConfig]);
 
-  // Initialize snapshot on page reload when activeViewId is restored from localStorage
+  // Initialize snapshot on page reload when activeViewId is restored from localStorage.
+  // Also apply the saved config so that fields like pageSize (which aren't independently
+  // persisted to localStorage for custom views) get restored into state.
   useEffect(() => {
     if (activeView && loadedConfigSnapshotRef.current === null) {
       loadedConfigSnapshotRef.current = JSON.stringify(activeView.config);
+      onLoadView(activeView.config as RunTableViewConfig);
     }
-  }, [activeView]);
+  }, [activeView, onLoadView]);
 
   const hasUnsavedChanges = useMemo(() => {
     if (!activeView) return false;

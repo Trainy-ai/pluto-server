@@ -27,7 +27,6 @@ import {
   FileTextIcon,
   ImageIcon,
   ArrowLeftIcon,
-  InfoIcon,
 } from "lucide-react";
 import { MetricSelector } from "./metric-selector";
 import { extractMetricNames, matchMetricsByPattern } from "./pattern-matching-utils";
@@ -49,6 +48,8 @@ interface AddWidgetModalProps {
   onOpenChange: (open: boolean) => void;
   onAdd: (widget: Omit<Widget, "id">) => void;
   groupedMetrics: GroupedMetrics;
+  organizationId: string;
+  projectName: string;
   editWidget?: Widget;
 }
 
@@ -102,6 +103,8 @@ export function AddWidgetModal({
   onOpenChange,
   onAdd,
   groupedMetrics,
+  organizationId,
+  projectName,
   editWidget,
 }: AddWidgetModalProps) {
   const [step, setStep] = useState<"type" | "config">(editWidget ? "config" : "type");
@@ -344,6 +347,8 @@ export function AddWidgetModal({
               <ChartConfigForm
                 config={config as Partial<ChartWidgetConfig>}
                 onChange={setConfig}
+                organizationId={organizationId}
+                projectName={projectName}
                 groupedMetrics={groupedMetrics}
                 metricMode={metricMode}
                 onModeChange={setMetricMode}
@@ -357,7 +362,8 @@ export function AddWidgetModal({
               <ScatterConfigForm
                 config={config as Partial<ScatterWidgetConfig>}
                 onChange={setConfig}
-                groupedMetrics={groupedMetrics}
+                organizationId={organizationId}
+                projectName={projectName}
               />
             )}
 
@@ -365,7 +371,8 @@ export function AddWidgetModal({
               <SingleValueConfigForm
                 config={config as Partial<SingleValueWidgetConfig>}
                 onChange={setConfig}
-                groupedMetrics={groupedMetrics}
+                organizationId={organizationId}
+                projectName={projectName}
               />
             )}
 
@@ -373,7 +380,8 @@ export function AddWidgetModal({
               <HistogramConfigForm
                 config={config as Partial<HistogramWidgetConfig>}
                 onChange={setConfig}
-                groupedMetrics={groupedMetrics}
+                organizationId={organizationId}
+                projectName={projectName}
               />
             )}
 
@@ -417,6 +425,8 @@ export function AddWidgetModal({
 function ChartConfigForm({
   config,
   onChange,
+  organizationId,
+  projectName,
   groupedMetrics,
   metricMode,
   onModeChange,
@@ -426,6 +436,8 @@ function ChartConfigForm({
 }: {
   config: Partial<ChartWidgetConfig>;
   onChange: (config: Partial<ChartWidgetConfig>) => void;
+  organizationId: string;
+  projectName: string;
   groupedMetrics: GroupedMetrics;
   metricMode: "specific" | "pattern";
   onModeChange: (mode: "specific" | "pattern") => void;
@@ -435,14 +447,6 @@ function ChartConfigForm({
 }) {
   return (
     <div className="space-y-4">
-      {/* Info about selected runs */}
-      <div className="flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-200">
-        <InfoIcon className="mt-0.5 size-4 shrink-0" />
-        <p>
-          Only metrics from your currently selected runs are shown. Select more runs in the sidebar to see additional metrics.
-        </p>
-      </div>
-
       {/* Mode Toggle */}
       <div className="grid gap-2">
         <Label>Metric Selection Mode</Label>
@@ -459,7 +463,8 @@ function ChartConfigForm({
         <div className="grid gap-2">
           <Label>Metric</Label>
           <MetricSelector
-            groupedMetrics={groupedMetrics}
+            organizationId={organizationId}
+            projectName={projectName}
             value={config.metrics?.[0] ?? ""}
             onChange={(metric) =>
               onChange({ ...config, metrics: [metric as string] })
@@ -608,18 +613,21 @@ function ChartConfigForm({
 function ScatterConfigForm({
   config,
   onChange,
-  groupedMetrics,
+  organizationId,
+  projectName,
 }: {
   config: Partial<ScatterWidgetConfig>;
   onChange: (config: Partial<ScatterWidgetConfig>) => void;
-  groupedMetrics: GroupedMetrics;
+  organizationId: string;
+  projectName: string;
 }) {
   return (
     <div className="space-y-4">
       <div className="grid gap-2">
         <Label>X-Axis Metric</Label>
         <MetricSelector
-          groupedMetrics={groupedMetrics}
+          organizationId={organizationId}
+          projectName={projectName}
           value={config.xMetric ?? ""}
           onChange={(metric) =>
             onChange({ ...config, xMetric: metric as string })
@@ -631,7 +639,8 @@ function ScatterConfigForm({
       <div className="grid gap-2">
         <Label>Y-Axis Metric</Label>
         <MetricSelector
-          groupedMetrics={groupedMetrics}
+          organizationId={organizationId}
+          projectName={projectName}
           value={config.yMetric ?? ""}
           onChange={(metric) =>
             onChange({ ...config, yMetric: metric as string })
@@ -733,18 +742,21 @@ function ScatterConfigForm({
 function SingleValueConfigForm({
   config,
   onChange,
-  groupedMetrics,
+  organizationId,
+  projectName,
 }: {
   config: Partial<SingleValueWidgetConfig>;
   onChange: (config: Partial<SingleValueWidgetConfig>) => void;
-  groupedMetrics: GroupedMetrics;
+  organizationId: string;
+  projectName: string;
 }) {
   return (
     <div className="space-y-4">
       <div className="grid gap-2">
         <Label>Metric</Label>
         <MetricSelector
-          groupedMetrics={groupedMetrics}
+          organizationId={organizationId}
+          projectName={projectName}
           value={config.metric ?? ""}
           onChange={(metric) =>
             onChange({ ...config, metric: metric as string })
@@ -815,18 +827,21 @@ function SingleValueConfigForm({
 function HistogramConfigForm({
   config,
   onChange,
-  groupedMetrics,
+  organizationId,
+  projectName,
 }: {
   config: Partial<HistogramWidgetConfig>;
   onChange: (config: Partial<HistogramWidgetConfig>) => void;
-  groupedMetrics: GroupedMetrics;
+  organizationId: string;
+  projectName: string;
 }) {
   return (
     <div className="space-y-4">
       <div className="grid gap-2">
         <Label>Metric</Label>
         <MetricSelector
-          groupedMetrics={groupedMetrics}
+          organizationId={organizationId}
+          projectName={projectName}
           value={config.metric ?? ""}
           onChange={(metric) =>
             onChange({ ...config, metric: metric as string })
