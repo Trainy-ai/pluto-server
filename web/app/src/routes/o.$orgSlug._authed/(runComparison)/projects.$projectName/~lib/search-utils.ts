@@ -1,4 +1,5 @@
 import type { GroupedMetrics } from "@/lib/grouping/types";
+import { fuzzyFilter } from "@/lib/fuzzy-search";
 
 /**
  * Interface for the search index which stores terms and metrics
@@ -67,9 +68,8 @@ export const searchUtils = {
         searchState.regex!.test(term),
       );
     }
-    return Array.from(indexEntry.terms).some((term) =>
-      term.includes(searchState.query.toLowerCase()),
-    );
+    const terms = Array.from(indexEntry.terms);
+    return fuzzyFilter(terms, searchState.query).length > 0;
   },
 
   /**
@@ -95,9 +95,9 @@ export const searchUtils = {
         searchState.regex!.test(m.name.toLowerCase()),
       );
     }
-    return metrics.filter((m) =>
-      m.name.toLowerCase().includes(searchState.query.toLowerCase()),
-    );
+    const names = metrics.map((m) => m.name.toLowerCase());
+    const matched = new Set(fuzzyFilter(names, searchState.query));
+    return metrics.filter((m) => matched.has(m.name.toLowerCase()));
   },
 
   /**

@@ -99,6 +99,7 @@
     "dexie-react-hooks": "^1.1.7",
     "dotenv-cli": "^8.0.0",
     "framer-motion": "^12.6.5",
+    "fuse.js": "^7.1.0",
     "gif.js": "^0.2.0",
     "lodash": "^4.17.23",
     "lucide-react": "^0.487.0",

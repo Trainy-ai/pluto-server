@@ -154,9 +154,14 @@ export async function queryDistinctMetrics(
   };
 
   let searchFilter = "";
+  let orderClause = "ORDER BY logName ASC";
   if (search && search.trim()) {
-    searchFilter = "AND logName ILIKE {search: String}";
-    queryParams.search = `%${search.trim()}%`;
+    const trimmed = search.trim();
+    searchFilter = `AND (multiFuzzyMatchAny(lower(logName), if(length({search: String}) < 4, 2, 3), [lower({search: String})]) = 1
+         OR logName ILIKE {searchPattern: String})`;
+    queryParams.search = trimmed;
+    queryParams.searchPattern = `%${trimmed}%`;
+    orderClause = "ORDER BY logName ILIKE {searchPattern: String} DESC, logName ASC";
   }
 
   let runIdFilter = "";
@@ -172,7 +177,7 @@ export async function queryDistinctMetrics(
       AND projectName = {projectName: String}
       ${searchFilter}
       ${runIdFilter}
-    ORDER BY logName ASC
+    ${orderClause}
     LIMIT {limit: UInt32}
   `;
 

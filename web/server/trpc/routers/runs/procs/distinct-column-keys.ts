@@ -92,29 +92,31 @@ export const searchColumnKeysProcedure = protectedOrgProcedure
       return { configKeys: [], systemMetadataKeys: [] };
     }
 
+    const fuzzyQuery = `
+      SELECT key, "dataType"
+      FROM project_column_keys
+      WHERE "projectId" = $1 AND "organizationId" = $2 AND source = $3
+        AND (similarity(key, $4) > 0.01 OR key ILIKE $5)
+      ORDER BY similarity(key, $4) DESC, key ASC
+      LIMIT $6
+    `;
+
+    const ilikePattern = `%${input.search}%`;
+
+    const searchBySource = (source: "config" | "systemMetadata") =>
+      ctx.prisma.$queryRawUnsafe<{ key: string; dataType: string }[]>(
+        fuzzyQuery,
+        project.id,
+        input.organizationId,
+        source,
+        input.search,
+        ilikePattern,
+        SEARCH_RESULT_LIMIT,
+      );
+
     const [configRows, sysMetaRows] = await Promise.all([
-      ctx.prisma.projectColumnKey.findMany({
-        where: {
-          projectId: project.id,
-          organizationId: input.organizationId,
-          source: "config",
-          key: { contains: input.search, mode: "insensitive" },
-        },
-        select: { key: true, dataType: true },
-        orderBy: { key: "asc" },
-        take: SEARCH_RESULT_LIMIT,
-      }),
-      ctx.prisma.projectColumnKey.findMany({
-        where: {
-          projectId: project.id,
-          organizationId: input.organizationId,
-          source: "systemMetadata",
-          key: { contains: input.search, mode: "insensitive" },
-        },
-        select: { key: true, dataType: true },
-        orderBy: { key: "asc" },
-        take: SEARCH_RESULT_LIMIT,
-      }),
+      searchBySource("config"),
+      searchBySource("systemMetadata"),
     ]);
 
     const configKeys = configRows.map((r) => ({

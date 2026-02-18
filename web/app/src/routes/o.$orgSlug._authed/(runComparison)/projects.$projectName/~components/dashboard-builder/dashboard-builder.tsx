@@ -405,6 +405,8 @@ export function DashboardBuilder({
         }}
         onAdd={editingWidget ? handleEditWidgetSave : (w) => addWidgetSectionId && addWidget(addWidgetSectionId, w)}
         groupedMetrics={groupedMetrics}
+        organizationId={organizationId}
+        projectName={projectName}
         editWidget={editingWidget ?? undefined}
       />
 

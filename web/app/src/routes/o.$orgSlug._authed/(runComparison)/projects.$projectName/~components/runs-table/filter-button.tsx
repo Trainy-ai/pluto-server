@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { fuzzyFilter } from "@/lib/fuzzy-search";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -69,6 +70,7 @@ export function FilterButton({
   const [extraConditions, setExtraConditions] = useState<FilterCondition[]>([]);
   const [isSearchActive, setIsSearchActive] = useState(false);
   const [expandedMetric, setExpandedMetric] = useState<string | null>(null);
+  const [searchValue, setSearchValue] = useState("");
   const [showValidation, setShowValidation] = useState(false);
 
   // Stable key for activeColumnIds — avoids memo invalidation on array reference changes
@@ -134,6 +136,19 @@ export function FilterButton({
     }
     return map;
   }, [filters]);
+
+  const filteredFields = useMemo(() => {
+    const nonMetric = filterableFields.filter((f) => f.source !== "metric");
+    if (!isSearchActive) return nonMetric;
+    const matchedLabels = new Set(
+      fuzzyFilter(nonMetric.map((f) => f.label), searchValue),
+    );
+    return nonMetric.filter((f) => matchedLabels.has(f.label));
+  }, [isSearchActive, searchValue, filterableFields]);
+  const filteredMetrics = useMemo(
+    () => isSearchActive ? fuzzyFilter(metricNames, searchValue) : metricNames,
+    [isSearchActive, searchValue, metricNames],
+  );
 
   const operators = useMemo(
     () => (selectedField ? getOperatorsForType(selectedField.dataType) : []),
@@ -256,6 +271,7 @@ export function FilterButton({
           setExtraConditions([]);
           setIsSearchActive(false);
           setExpandedMetric(null);
+          setSearchValue("");
           onFieldSearch?.("");
         }
       }}
@@ -283,11 +299,12 @@ export function FilterButton({
       </PopoverTrigger>
       <PopoverContent className="w-auto min-w-[20rem] max-w-[36rem] p-0" align="end">
         {step === "field" ? (
-          <Command>
+          <Command shouldFilter={false}>
             <div className="relative">
               <CommandInput
                 placeholder="Search columns..."
                 onValueChange={(value) => {
+                  setSearchValue(value);
                   setIsSearchActive(value.length > 0);
                   onFieldSearch?.(value);
                 }}
@@ -301,9 +318,7 @@ export function FilterButton({
               {isSearchActive ? (
                 /* Flat search results view — non-metric fields + matching metric expandable items */
                 <CommandGroup heading="Search Results">
-                  {filterableFields
-                    .filter((f) => f.source !== "metric")
-                    .map((f) => {
+                  {filteredFields.map((f) => {
                       const key = `${f.source}:${f.id}`;
                       const isFiltered = filters.some(
                         (fl) => `${fl.source}:${fl.field}` === key
@@ -341,7 +356,7 @@ export function FilterButton({
                         </CommandItem>
                       );
                     })}
-                  {metricNames.map((name) => (
+                  {filteredMetrics.map((name) => (
                     <FilterMetricExpandableItem
                       key={`search:metric:${name}`}
                       metricName={name}
