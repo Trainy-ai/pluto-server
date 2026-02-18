@@ -2,6 +2,7 @@ import { trpcServer } from "@hono/trpc-server";
 import { swaggerUI } from "@hono/swagger-ui";
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { cors } from "hono/cors";
+import { compress } from "hono/compress";
 
 import { createContext } from "./lib/context";
 import { appRouter } from "./trpc/router";
@@ -30,6 +31,9 @@ const allowedOrigins = [env.PUBLIC_URL, env.BETTER_AUTH_URL];
 if (env.ADDITIONAL_ORIGINS) {
   allowedOrigins.push(...env.ADDITIONAL_ORIGINS.split(",").map((s) => s.trim()));
 }
+
+// Apply gzip compression to reduce JSON payload sizes
+app.use("/*", compress());
 
 // Apply CORS middleware first
 app.use(

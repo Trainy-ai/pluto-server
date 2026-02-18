@@ -1,54 +1,23 @@
 "use client";
 
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import LineChart from "@/components/charts/line-wrapper";
+import LineChart, { type RawLineData } from "@/components/charts/line-wrapper";
 import { ChartCardWrapper } from "@/routes/o.$orgSlug._authed/(runComparison)/projects.$projectName/~components/multi-group/chart-card-wrapper";
-import { ensureGetGraph, useGetGraph } from "../../~queries/get-graph";
+import { ensureGetGraph, useGetGraphProgressive } from "../../~queries/get-graph";
 import { useCheckDatabaseSize } from "@/lib/db/local-cache";
 import { metricsCache } from "@/lib/db/index";
 import { useLineSettings, type LineChartSettings } from "../use-line-settings";
-import { smoothData } from "@/lib/math/smoothing";
+import { useZoomRefetch } from "@/lib/hooks/use-zoom-refetch";
+import {
+  getTimeUnitForDisplay,
+  alignAndUnzip,
+  downsampleAndSmooth,
+  type ChartDataPoint,
+} from "@/lib/chart-data-utils";
 
-export type MetricDataPoint = {
-  step: number;
-  time: string;
-  value: number;
-};
-
-function alignAndUnzip(
-  a: MetricDataPoint[],
-  b: MetricDataPoint[],
-): { x: number[]; y: number[] } {
-  // 1. Build a map from step → value for series "a"
-  const aMap = new Map<number, number>();
-  for (const { step, value } of a) {
-    aMap.set(step, value);
-  }
-
-  // 2. Walk series "b", pick only those points whose step exists in aMap
-  const pairs: [number, number][] = [];
-  let resMap = new Map<number, number>();
-  for (const { step, value: bVal } of b) {
-    const aVal = aMap.get(step);
-    if (aVal !== undefined) {
-      resMap.set(aVal, bVal);
-    }
-  }
-
-  // 3. Sort by x values ascending
-  const sortedPairs = Array.from(resMap.entries()).sort((a, b) => a[0] - b[0]);
-
-  const x: number[] = [];
-  const y: number[] = [];
-  for (const [aVal, bVal] of sortedPairs) {
-    x.push(aVal);
-    y.push(bVal);
-  }
-
-  return { x, y };
-}
+export type MetricDataPoint = ChartDataPoint;
 
 interface LineChartWithFetchProps {
   logName: string;
@@ -68,6 +37,7 @@ type ChartData = {
 
 type ChartConfig = {
   lines: ChartData[];
+  rawLines?: RawLineData[];
   xlabel: string;
   isDateTime?: boolean;
   showLegend?: boolean;
@@ -75,41 +45,6 @@ type ChartConfig = {
   title?: string;
 };
 
-// Custom hook to apply smoothing to chart data
-function applySmoothing(
-  chartData: ChartData,
-  smoothingSettings: LineChartSettings["smoothing"],
-): ChartData[] {
-  if (!smoothingSettings.enabled) {
-    return [chartData];
-  }
-
-  const data = [
-    {
-      ...chartData,
-      y: smoothData(
-        chartData.x,
-        chartData.y,
-        smoothingSettings.algorithm,
-        smoothingSettings.parameter,
-      ),
-      label: chartData.label,
-      opacity: 1,
-      hideFromLegend: false,
-    },
-  ];
-
-  if (smoothingSettings.showOriginalData) {
-    data.push({
-      ...chartData,
-      opacity: 0.1,
-      hideFromLegend: true,
-      label: chartData.label + " (original)",
-    });
-  }
-
-  return data;
-}
 
 // Custom hook to handle system charts
 function useSystemChartConfig(
@@ -153,60 +88,55 @@ function useSystemChartConfig(
   };
 }
 
-// Helper to determine appropriate time unit based on max seconds
-function getTimeUnitForDisplay(maxSeconds: number): {
-  divisor: number;
-  unit: string;
-} {
-  if (maxSeconds < 120) {
-    return { divisor: 1, unit: "s" }; // seconds
-  } else if (maxSeconds < 3600) {
-    return { divisor: 60, unit: "min" }; // minutes
-  } else if (maxSeconds < 86400) {
-    return { divisor: 3600, unit: "hr" }; // hours
-  } else if (maxSeconds < 604800) {
-    return { divisor: 86400, unit: "day" }; // days
-  } else if (maxSeconds < 2629746) {
-    return { divisor: 604800, unit: "week" }; // weeks
-  } else if (maxSeconds < 31556952) {
-    return { divisor: 2629746, unit: "month" }; // months (approx)
-  } else {
-    return { divisor: 31556952, unit: "year" }; // years (approx)
-  }
-}
 
-// Custom hook to handle chart strategy selection
-function useChartStrategy(
+// Chart strategy helper — builds chart config with downsampling + rawLines tracking
+function buildChartStrategy(
   strategy: string,
   data: MetricDataPoint[],
   logName: string,
   color: string,
   smoothingSettings: LineChartSettings["smoothing"],
+  maxPointsPerSeries: number,
+  zoomData?: MetricDataPoint[],
 ): ChartConfig {
   const strategies: Record<string, () => ChartConfig> = {
     Step: () => {
-      const baseChartData: ChartData = {
-        x: data.map((d) => Number(d.step)),
-        y: data.map((d) => Number(d.value)),
+      // Use zoom data (full-resolution for zoomed range) when available
+      const isUsingZoomData = !!zoomData;
+      const sourceData = zoomData ?? data;
+      const baseData = {
+        x: sourceData.map((d) => Number(d.step)),
+        y: sourceData.map((d) => Number(d.value)),
         label: logName,
         color,
       };
 
+      // Store raw (pre-downsampled) data for zoom-aware re-downsampling
+      const rawLines: RawLineData[] = maxPointsPerSeries > 0 ? [baseData] : [];
+
+      // Skip downsampling for zoom data — it's already range-limited by the server,
+      // so downsampling would re-introduce step gaps the zoom refetch was meant to fill.
+      const effectiveMaxPoints = isUsingZoomData ? 0 : maxPointsPerSeries;
+
       return {
-        lines: applySmoothing(baseChartData, smoothingSettings),
+        lines: downsampleAndSmooth(baseData, effectiveMaxPoints, smoothingSettings),
+        rawLines: rawLines.length > 0 ? rawLines : undefined,
         xlabel: "step",
       };
     },
     "Absolute Time": () => {
-      const baseChartData: ChartData = {
+      const baseData = {
         x: data.map((d) => new Date(d.time).getTime()),
         y: data.map((d) => Number(d.value)),
         label: logName,
         color,
       };
 
+      const rawLines: RawLineData[] = maxPointsPerSeries > 0 ? [baseData] : [];
+
       return {
-        lines: applySmoothing(baseChartData, smoothingSettings),
+        lines: downsampleAndSmooth(baseData, maxPointsPerSeries, smoothingSettings),
+        rawLines: rawLines.length > 0 ? rawLines : undefined,
         xlabel: "absolute time",
         isDateTime: true,
         showLegend: smoothingSettings.enabled,
@@ -227,29 +157,35 @@ function useChartStrategy(
       // Convert all values to the selected unit
       const normalizedTimes = relativeTimes.map((seconds) => seconds / divisor);
 
-      const baseChartData: ChartData = {
+      const baseData = {
         x: normalizedTimes,
         y: data.map((d) => Number(d.value)),
         label: logName,
         color,
       };
 
+      const rawLines: RawLineData[] = maxPointsPerSeries > 0 ? [baseData] : [];
+
       return {
-        lines: applySmoothing(baseChartData, smoothingSettings),
+        lines: downsampleAndSmooth(baseData, maxPointsPerSeries, smoothingSettings),
+        rawLines: rawLines.length > 0 ? rawLines : undefined,
         xlabel: `relative time (${unit})`,
         showLegend: smoothingSettings.enabled,
       };
     },
     default: () => {
-      const baseChartData: ChartData = {
+      const baseData = {
         x: data.map((d) => Number(d.step)),
         y: data.map((d) => Number(d.value)),
         label: logName,
         color,
       };
 
+      const rawLines: RawLineData[] = maxPointsPerSeries > 0 ? [baseData] : [];
+
       return {
-        lines: applySmoothing(baseChartData, smoothingSettings),
+        lines: downsampleAndSmooth(baseData, maxPointsPerSeries, smoothingSettings),
+        rawLines: rawLines.length > 0 ? rawLines : undefined,
         xlabel: "step",
       };
     },
@@ -266,10 +202,12 @@ function useChartConfig(
   projectName: string,
   runId: string,
   settings: LineChartSettings,
+  zoomData?: MetricDataPoint[],
 ): [ChartConfig | null, boolean] {
   const [chartConfig, setChartConfig] = useState<ChartConfig | null>(null);
   const [isLoadingCustomChart, setIsLoadingCustomChart] = useState(false);
   const COLOR = "hsl(216, 66%, 60%)";
+  const maxPts = settings.maxPointsPerSeries;
 
   useEffect(() => {
     if (!data || data.length === 0) {
@@ -290,12 +228,14 @@ function useChartConfig(
 
       if (["Step", "Absolute Time", "Relative Time"].includes(selectedLog)) {
         setChartConfig(
-          useChartStrategy(
+          buildChartStrategy(
             selectedLog,
             data,
             logName,
             COLOR,
             settings.smoothing,
+            maxPts,
+            zoomData,
           ),
         );
         return;
@@ -314,12 +254,13 @@ function useChartConfig(
 
         if (!selectLogData || selectLogData.length === 0) {
           setChartConfig(
-            useChartStrategy(
+            buildChartStrategy(
               "default",
               data,
               logName,
               COLOR,
               settings.smoothing,
+              maxPts,
             ),
           );
           return;
@@ -333,22 +274,25 @@ function useChartConfig(
           return;
         }
 
-        const baseChartData: ChartData = {
+        const baseData = {
           x,
           y,
           label: logName,
           color: COLOR,
         };
 
+        const rawLines: RawLineData[] = maxPts > 0 ? [baseData] : [];
+
         setChartConfig({
-          lines: applySmoothing(baseChartData, settings.smoothing),
+          lines: downsampleAndSmooth(baseData, maxPts, settings.smoothing),
+          rawLines: rawLines.length > 0 ? rawLines : undefined,
           xlabel: selectedLog,
           showLegend: settings.smoothing.enabled,
         });
       } catch (error) {
         console.error("Error generating custom chart:", error);
         setChartConfig(
-          useChartStrategy("default", data, logName, COLOR, settings.smoothing),
+          buildChartStrategy("default", data, logName, COLOR, settings.smoothing, maxPts),
         );
       } finally {
         setIsLoadingCustomChart(false);
@@ -356,7 +300,7 @@ function useChartConfig(
     };
 
     generateChartConfig();
-  }, [data, logName, settings, tenantId, projectName, runId]);
+  }, [data, logName, settings, tenantId, projectName, runId, zoomData, maxPts]);
 
   return [chartConfig, isLoadingCustomChart];
 }
@@ -371,7 +315,7 @@ export const LineChartWithFetch = memo(
   }: LineChartWithFetchProps) => {
     useCheckDatabaseSize(metricsCache);
 
-    const { data, isLoading, isError } = useGetGraph(
+    const { data, isLoading, isError, tier, fullProgress, isSampled } = useGetGraphProgressive(
       tenantId,
       projectName,
       runId,
@@ -380,6 +324,19 @@ export const LineChartWithFetch = memo(
 
     const { settings } = useLineSettings(tenantId, projectName, runId);
 
+    // Zoom-triggered server re-fetch for full-resolution step data
+    // Disabled when full tier is loaded (all data already client-side)
+    const runIdsMemo = useMemo(() => [runId], [runId]);
+    const { zoomDataMap, onZoomRangeChange, isZoomFetching } = useZoomRefetch({
+      organizationId: tenantId,
+      projectName,
+      logName,
+      runIds: runIdsMemo,
+      selectedLog: settings.selectedLog,
+      enabled: tier !== "full",
+    });
+    const zoomData = tier !== "full" ? zoomDataMap?.get(runId) : undefined;
+
     const [chartConfig, isLoadingCustomChart] = useChartConfig(
       data,
       logName,
@@ -387,7 +344,39 @@ export const LineChartWithFetch = memo(
       projectName,
       runId,
       settings,
+      zoomData,
     );
+
+    // Callback for zoom-aware re-downsampling: slices raw data to visible range
+    // and runs the full downsample+smooth pipeline to produce consistent series structure.
+    const reprocessForZoom = useMemo(() => {
+      if (settings.maxPointsPerSeries <= 0) return undefined;
+      const smoothing = settings.smoothing;
+      return (raws: RawLineData[], xMin: number, xMax: number) => {
+        return raws.flatMap((raw) => {
+          // Find visible range with 1-point margin on each side
+          let startIdx = 0;
+          let endIdx = raw.x.length;
+          for (let j = 0; j < raw.x.length; j++) {
+            if (raw.x[j] >= xMin) { startIdx = Math.max(0, j - 1); break; }
+          }
+          for (let j = raw.x.length - 1; j >= 0; j--) {
+            if (raw.x[j] <= xMax) { endIdx = Math.min(raw.x.length, j + 2); break; }
+          }
+          const sliced = {
+            x: raw.x.slice(startIdx, endIdx),
+            y: raw.y.slice(startIdx, endIdx),
+            label: raw.label,
+            seriesId: raw.seriesId,
+            color: raw.color,
+          };
+          // Show ALL raw data points in the visible range (maxPts=0).
+          // downsampleAndSmooth always produces consistent series count
+          // (main + envelope), matching the initial render for setData compatibility.
+          return downsampleAndSmooth(sliced, 0, smoothing);
+        });
+      };
+    }, [settings.maxPointsPerSeries, settings.smoothing]);
 
     // Render loading state
     if ((isLoading && !data) || isLoadingCustomChart) {
@@ -438,6 +427,8 @@ export const LineChartWithFetch = memo(
       title: logName,
       logXAxis: settings.xAxisLogScale,
       logYAxis: settings.yAxisLogScale,
+      tooltipInterpolation: settings.tooltipInterpolation,
+      outlierDetection: settings.yAxisScaleMode === "outlier-aware",
     };
 
     // Render chart wrapped in ChartCardWrapper for fullscreen + Y-axis bounds
@@ -445,32 +436,59 @@ export const LineChartWithFetch = memo(
       <ChartCardWrapper
         metricName={logName}
         groupId={`run-${runId}`}
-        renderChart={(yMin, yMax, onDataRange, onResetBounds) =>
-          chartConfig.isSystem ? (
-            <LineChart
-              lines={chartConfig.lines}
-              title={chartConfig.title}
-              isDateTime={chartConfig.isDateTime}
-              xlabel={chartConfig.xlabel}
-              yMin={yMin}
-              yMax={yMax}
-              onDataRange={onDataRange}
-              onResetBounds={onResetBounds}
-            />
-          ) : (
-            <LineChart
-              {...commonProps}
-              lines={chartConfig.lines}
-              xlabel={chartConfig.xlabel}
-              isDateTime={chartConfig.isDateTime}
-              showLegend={chartConfig.showLegend}
-              yMin={yMin}
-              yMax={yMax}
-              onDataRange={onDataRange}
-              onResetBounds={onResetBounds}
-            />
-          )
-        }
+        renderChart={(yMin, yMax, onDataRange, onResetBounds) => (
+          <div className="relative h-full w-full">
+            {/* Full-resolution loading progress bar */}
+            {isSampled && tier !== "full" && fullProgress > 0 && (
+              <div className="absolute top-0 right-0 left-0 z-10 h-0.5 bg-muted">
+                <div
+                  className="h-full bg-primary transition-all duration-300"
+                  style={{ width: `${fullProgress * 100}%` }}
+                />
+              </div>
+            )}
+            {/* Zoom refetch loading indicator */}
+            {isZoomFetching && (
+              <div className="absolute top-0 right-0 left-0 z-10 h-0.5 overflow-hidden bg-muted">
+                <div className="h-full w-1/3 animate-[shimmer_1s_ease-in-out_infinite] bg-primary" />
+              </div>
+            )}
+            {chartConfig.isSystem ? (
+              <LineChart
+                lines={chartConfig.lines}
+                title={chartConfig.title}
+                isDateTime={chartConfig.isDateTime}
+                xlabel={chartConfig.xlabel}
+                yMin={yMin}
+                yMax={yMax}
+                onDataRange={onDataRange}
+                onResetBounds={onResetBounds}
+                tooltipInterpolation={settings.tooltipInterpolation}
+                outlierDetection={settings.yAxisScaleMode === "outlier-aware"}
+                rawLines={chartConfig.rawLines}
+                downsampleTarget={settings.maxPointsPerSeries}
+                reprocessForZoom={reprocessForZoom}
+                onZoomRangeChange={onZoomRangeChange}
+              />
+            ) : (
+              <LineChart
+                {...commonProps}
+                lines={chartConfig.lines}
+                xlabel={chartConfig.xlabel}
+                isDateTime={chartConfig.isDateTime}
+                showLegend={chartConfig.showLegend}
+                yMin={yMin}
+                yMax={yMax}
+                onDataRange={onDataRange}
+                onResetBounds={onResetBounds}
+                rawLines={chartConfig.rawLines}
+                downsampleTarget={settings.maxPointsPerSeries}
+                reprocessForZoom={reprocessForZoom}
+                onZoomRangeChange={onZoomRangeChange}
+              />
+            )}
+          </div>
+        )}
       />
     );
   },

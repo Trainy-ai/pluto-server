@@ -18,13 +18,31 @@ export const graphProcedure = protectedOrgProcedure
       runId: z.string(),
       projectName: z.string(),
       logName: z.string(),
+      stepMin: z.number().int().nonnegative().optional(),
+      stepMax: z.number().int().nonnegative().optional(),
+      maxPoints: z.number().int().nonnegative().max(10_000_000).optional(),
+      preview: z.boolean().optional(),
     })
   )
   .query(async ({ ctx, input }) => {
-    const { runId: encodedRunId, projectName, organizationId, logName } = input;
+    const { runId: encodedRunId, projectName, organizationId, logName, stepMin, stepMax, maxPoints, preview } = input;
 
     const runId = await resolveRunId(ctx.prisma, encodedRunId, organizationId, projectName);
     const logGroup = getLogGroupName(logName);
+
+    // Non-default maxPoints, preview queries, and step-range queries bypass cache
+    if (maxPoints !== undefined || preview || (stepMin !== undefined && stepMax !== undefined)) {
+      return queryRunMetricsByLogName(ctx.clickhouse, {
+        organizationId,
+        projectName,
+        runId,
+        logName,
+        stepMin,
+        stepMax,
+        maxPoints,
+        preview,
+      });
+    }
 
     return withCache<GraphData>(
       ctx,

@@ -36,6 +36,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { useLineSettings, DEFAULT_SETTINGS } from "./use-line-settings";
 import { useChartLineWidth } from "@/lib/hooks/use-chart-line-width";
+import type { TooltipInterpolation } from "@/lib/math/interpolation";
 import {
   getLogNames,
   InfoTooltip,
@@ -315,31 +316,55 @@ const LineSettings = ({
             </SettingsSection>
 
             <SettingsSection title="Y Axis">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <Label
-                    htmlFor="y-axis-log-scale"
-                    className="flex cursor-pointer items-center gap-1.5 text-sm"
-                  >
-                    Logarithmic scale
-                    <InfoTooltip
-                      title="Logarithmic Scale"
-                      description="Use logarithmic scaling on the Y axis. This is useful when visualizing data that spans multiple orders of magnitude."
-                      link={{
-                        url: "https://en.wikipedia.org/wiki/Logarithmic_scale",
-                        label: "Learn more about logarithmic scales",
-                      }}
-                    />
-                  </Label>
+              <div className="space-y-4">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Label
+                      htmlFor="y-axis-log-scale"
+                      className="flex cursor-pointer items-center gap-1.5 text-sm"
+                    >
+                      Logarithmic scale
+                      <InfoTooltip
+                        title="Logarithmic Scale"
+                        description="Use logarithmic scaling on the Y axis. This is useful when visualizing data that spans multiple orders of magnitude."
+                        link={{
+                          url: "https://en.wikipedia.org/wiki/Logarithmic_scale",
+                          label: "Learn more about logarithmic scales",
+                        }}
+                      />
+                    </Label>
+                  </div>
+                  <Switch
+                    id="y-axis-log-scale"
+                    checked={settings.yAxisLogScale}
+                    onCheckedChange={(checked) =>
+                      updateSettings("yAxisLogScale", checked)
+                    }
+                    className="transition-colors data-[state=checked]:bg-primary"
+                  />
                 </div>
-                <Switch
-                  id="y-axis-log-scale"
-                  checked={settings.yAxisLogScale}
-                  onCheckedChange={(checked) =>
-                    updateSettings("yAxisLogScale", checked)
-                  }
-                  className="transition-colors data-[state=checked]:bg-primary"
-                />
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Label
+                      htmlFor="outlier-detection"
+                      className="flex cursor-pointer items-center gap-1.5 text-sm"
+                    >
+                      Outlier detection
+                      <InfoTooltip
+                        title="Outlier Detection"
+                        description="Automatically clip Y-axis to exclude statistical outliers using the Tukey IQR method. Useful when rare spikes squish the main data range."
+                      />
+                    </Label>
+                  </div>
+                  <Switch
+                    id="outlier-detection"
+                    checked={settings.yAxisScaleMode === "outlier-aware"}
+                    onCheckedChange={(checked) =>
+                      updateSettings("yAxisScaleMode", checked ? "outlier-aware" : "auto")
+                    }
+                    className="transition-colors data-[state=checked]:bg-primary"
+                  />
+                </div>
               </div>
             </SettingsSection>
 
@@ -365,6 +390,52 @@ const LineSettings = ({
                     <span>5</span>
                   </div>
                 </div>
+              </div>
+            </SettingsSection>
+
+            <SettingsSection
+              title="Tooltip Interpolation"
+              description="Fill in missing tooltip values when comparing runs with different logging frequencies"
+            >
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Label
+                      htmlFor="tooltip-interpolation"
+                      className="flex items-center gap-1.5 text-sm"
+                    >
+                      Mode
+                      <InfoTooltip
+                        title="Tooltip Interpolation"
+                        description="When comparing experiments that log at different step frequencies, the tooltip normally only shows values where steps match exactly. Interpolation fills in the gaps: Linear interpolates between neighboring points, Last Value uses the most recent known value."
+                      />
+                    </Label>
+                  </div>
+                </div>
+                <Select
+                  value={settings.tooltipInterpolation}
+                  onValueChange={(value) =>
+                    updateSettings("tooltipInterpolation", value as TooltipInterpolation)
+                  }
+                >
+                  <SelectTrigger
+                    id="tooltip-interpolation"
+                    className="h-9 rounded-md border border-input text-sm"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="rounded-md border border-input">
+                    <SelectItem value="none" className="text-sm">
+                      None (exact matches only)
+                    </SelectItem>
+                    <SelectItem value="linear" className="text-sm">
+                      Linear interpolation
+                    </SelectItem>
+                    <SelectItem value="last" className="text-sm">
+                      Last known value
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
             </SettingsSection>
 

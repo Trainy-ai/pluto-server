@@ -42,6 +42,17 @@ const STANDARD_DATAPOINTS = 1_000; // 1k steps (pagination test data)
 const SINGLE_POINT_RUN_INDEX = 11; // 'single-point-test' run index
 const SINGLE_POINT_DATAPOINTS = 1; // 1 step (tests single-point chart rendering)
 
+// Step-frequency comparison runs: same metric range but different step intervals
+// These runs log up to step 10,000 but at different frequencies to test tooltip interpolation
+const STEP_FREQ_RUN_INDICES = [12, 13, 14, 15]; // Indices in the run array
+const STEP_FREQ_CONFIGS: Record<number, { stepInterval: number; label: string }> = {
+  12: { stepInterval: 1, label: 'every-step' },       // 10,000 points
+  13: { stepInterval: 5, label: 'every-5-steps' },     // 2,000 points
+  14: { stepInterval: 10, label: 'every-10-steps' },   // 1,000 points
+  15: { stepInterval: 50, label: 'every-50-steps' },   // 200 points
+};
+const STEP_FREQ_MAX_STEP = 10_000;
+
 // Metric groups and names for realistic variety
 const METRIC_GROUPS = ['train', 'eval', 'system', 'custom', 'test'];
 const METRIC_NAMES = [
@@ -50,8 +61,9 @@ const METRIC_NAMES = [
   'gpu_util', 'memory_used', 'throughput', 'latency',
 ];
 
-// Test metrics: parallel horizontal and slanted lines for visual debugging
-const TEST_METRIC_NAMES = ['horizontal', 'slanted_up', 'slanted_down'];
+// Test metrics: parallel horizontal and slanted lines for visual debugging,
+// plus a rare-spike metric for testing envelope/downsampling detection
+const TEST_METRIC_NAMES = ['horizontal', 'slanted_up', 'slanted_down', 'rare_spike'];
 
 // ============================================================================
 // Story Runs Configuration - Runs with interesting patterns for Claude to analyze
@@ -148,6 +160,23 @@ function getMetricValue(metricIndex: number, step: number, totalSteps: number, r
       case 'slanted_down':
         // Parallel slanted lines going down
         return yIntercept + 1 - progress * 0.5;
+      case 'rare_spike': {
+        // Smooth loss curve with 2 needle-thin spikes (1-3 steps wide).
+        // Tests whether downsampling/envelope can detect rare anomalies.
+        // Base: exponential decay from ~2.0 to ~0.1
+        const base = Math.exp(-step / (totalSteps / 3)) * 2 + 0.05;
+        // Spike 1: at ~25% progress, 1 step wide, 50x magnitude
+        const spike1Center = Math.round(totalSteps * 0.25);
+        if (step >= spike1Center && step <= spike1Center + 1) {
+          return base * 50;
+        }
+        // Spike 2: at ~73% progress, 2 steps wide, 80x magnitude
+        const spike2Center = Math.round(totalSteps * 0.73);
+        if (step >= spike2Center && step <= spike2Center + 2) {
+          return base * 80;
+        }
+        return base;
+      }
       default:
         return yIntercept;
     }
@@ -269,20 +298,36 @@ async function seedClickHouseMetrics(
     password: clickhousePassword,
   });
 
-  // Calculate total rows with high-fidelity subset and single-point test run
+  // Calculate total rows with high-fidelity subset, single-point test run, and step-frequency runs
   const highFidelityRows = Math.min(HIGH_FIDELITY_RUNS, runs.length) * METRICS_PER_RUN * HIGH_FIDELITY_DATAPOINTS;
   const hasSinglePointRun = runs.length > SINGLE_POINT_RUN_INDEX;
   const singlePointRows = hasSinglePointRun ? METRICS_PER_RUN * SINGLE_POINT_DATAPOINTS : 0;
-  // Standard runs exclude high-fidelity runs AND the single-point test run
-  const standardRunCount = Math.max(0, runs.length - HIGH_FIDELITY_RUNS - (hasSinglePointRun ? 1 : 0));
+
+  // Step-frequency runs have variable datapoint counts based on their step interval
+  const stepFreqRunCount = STEP_FREQ_RUN_INDICES.filter(i => i < runs.length).length;
+  const stepFreqRows = STEP_FREQ_RUN_INDICES.reduce((sum, idx) => {
+    if (idx < runs.length) {
+      const config = STEP_FREQ_CONFIGS[idx];
+      const pointsPerMetric = Math.floor(STEP_FREQ_MAX_STEP / config.stepInterval) + 1;
+      return sum + METRICS_PER_RUN * pointsPerMetric;
+    }
+    return sum;
+  }, 0);
+
+  // Standard runs exclude high-fidelity, single-point, and step-frequency runs
+  const specialRunCount = HIGH_FIDELITY_RUNS + (hasSinglePointRun ? 1 : 0) + stepFreqRunCount;
+  const standardRunCount = Math.max(0, runs.length - specialRunCount);
   const standardRows = standardRunCount * METRICS_PER_RUN * STANDARD_DATAPOINTS;
-  const totalRows = highFidelityRows + standardRows + singlePointRows;
+  const totalRows = highFidelityRows + standardRows + singlePointRows + stepFreqRows;
 
   console.log(`   Seeding ClickHouse with ${totalRows.toLocaleString()} metric datapoints...`);
   console.log(`   - ${Math.min(HIGH_FIDELITY_RUNS, runs.length)} high-fidelity runs × ${METRICS_PER_RUN} metrics × ${HIGH_FIDELITY_DATAPOINTS.toLocaleString()} points`);
   console.log(`   - ${standardRunCount} standard runs × ${METRICS_PER_RUN} metrics × ${STANDARD_DATAPOINTS.toLocaleString()} points`);
   if (hasSinglePointRun) {
     console.log(`   - 1 single-point test run × ${METRICS_PER_RUN} metrics × ${SINGLE_POINT_DATAPOINTS} point`);
+  }
+  if (stepFreqRunCount > 0) {
+    console.log(`   - ${stepFreqRunCount} step-frequency runs × ${METRICS_PER_RUN} metrics (variable points)`);
   }
 
   const BATCH_SIZE = 50000; // Larger batch for faster inserts
@@ -292,43 +337,79 @@ async function seedClickHouseMetrics(
 
   for (let runIndex = 0; runIndex < runs.length; runIndex++) {
     const run = runs[runIndex];
-    // Special case: single-point test run gets 1 datapoint per metric
-    const datapointsForRun = runIndex === SINGLE_POINT_RUN_INDEX
-      ? SINGLE_POINT_DATAPOINTS
-      : runIndex < HIGH_FIDELITY_RUNS
-        ? HIGH_FIDELITY_DATAPOINTS
-        : STANDARD_DATAPOINTS;
-    const baseTime = Date.now() - datapointsForRun * 1000;
+    const stepFreqConfig = STEP_FREQ_CONFIGS[runIndex];
 
-    for (let m = 0; m < METRICS_PER_RUN; m++) {
-      const { group, name } = getMetricName(m);
-
-      for (let step = 0; step < datapointsForRun; step++) {
-        batch.push({
-          tenantId,
-          projectName,
-          runId: Number(run.id),
-          logGroup: group,
-          logName: name,
-          time: new Date(baseTime + step * 1000).toISOString().replace('T', ' ').replace('Z', ''),
-          step,
-          value: getMetricValue(m, step, datapointsForRun, runIndex),
-        });
-
-        if (batch.length >= BATCH_SIZE) {
-          await clickhouse.insert({
-            table: 'mlop_metrics',
-            values: batch,
-            format: 'JSONEachRow',
+    if (stepFreqConfig) {
+      // Step-frequency comparison run: log at specific intervals up to STEP_FREQ_MAX_STEP
+      const baseTime = Date.now() - STEP_FREQ_MAX_STEP * 1000;
+      for (let m = 0; m < METRICS_PER_RUN; m++) {
+        const { group, name } = getMetricName(m);
+        for (let step = 0; step <= STEP_FREQ_MAX_STEP; step += stepFreqConfig.stepInterval) {
+          batch.push({
+            tenantId,
+            projectName,
+            runId: Number(run.id),
+            logGroup: group,
+            logName: name,
+            time: new Date(baseTime + step * 1000).toISOString().replace('T', ' ').replace('Z', ''),
+            step,
+            value: getMetricValue(m, step, STEP_FREQ_MAX_STEP, runIndex),
           });
-          insertedCount += batch.length;
-          batch = [];
 
-          // Progress logging
-          const elapsed = (Date.now() - startTime) / 1000;
-          const rate = insertedCount / elapsed;
-          const remaining = (totalRows - insertedCount) / rate;
-          console.log(`   Progress: ${insertedCount.toLocaleString()}/${totalRows.toLocaleString()} (${Math.round(rate).toLocaleString()} rows/sec, ~${Math.round(remaining)}s remaining)`);
+          if (batch.length >= BATCH_SIZE) {
+            await clickhouse.insert({
+              table: 'mlop_metrics',
+              values: batch,
+              format: 'JSONEachRow',
+            });
+            insertedCount += batch.length;
+            batch = [];
+            const elapsed = (Date.now() - startTime) / 1000;
+            const rate = insertedCount / elapsed;
+            const remaining = (totalRows - insertedCount) / rate;
+            console.log(`   Progress: ${insertedCount.toLocaleString()}/${totalRows.toLocaleString()} (${Math.round(rate).toLocaleString()} rows/sec, ~${Math.round(remaining)}s remaining)`);
+          }
+        }
+      }
+    } else {
+      // Standard sequential-step run
+      const datapointsForRun = runIndex === SINGLE_POINT_RUN_INDEX
+        ? SINGLE_POINT_DATAPOINTS
+        : runIndex < HIGH_FIDELITY_RUNS
+          ? HIGH_FIDELITY_DATAPOINTS
+          : STANDARD_DATAPOINTS;
+      const baseTime = Date.now() - datapointsForRun * 1000;
+
+      for (let m = 0; m < METRICS_PER_RUN; m++) {
+        const { group, name } = getMetricName(m);
+
+        for (let step = 0; step < datapointsForRun; step++) {
+          batch.push({
+            tenantId,
+            projectName,
+            runId: Number(run.id),
+            logGroup: group,
+            logName: name,
+            time: new Date(baseTime + step * 1000).toISOString().replace('T', ' ').replace('Z', ''),
+            step,
+            value: getMetricValue(m, step, datapointsForRun, runIndex),
+          });
+
+          if (batch.length >= BATCH_SIZE) {
+            await clickhouse.insert({
+              table: 'mlop_metrics',
+              values: batch,
+              format: 'JSONEachRow',
+            });
+            insertedCount += batch.length;
+            batch = [];
+
+            // Progress logging
+            const elapsed = (Date.now() - startTime) / 1000;
+            const rate = insertedCount / elapsed;
+            const remaining = (totalRows - insertedCount) / rate;
+            console.log(`   Progress: ${insertedCount.toLocaleString()}/${totalRows.toLocaleString()} (${Math.round(rate).toLocaleString()} rows/sec, ~${Math.round(remaining)}s remaining)`);
+          }
         }
       }
     }
@@ -994,6 +1075,10 @@ async function main() {
       'warmup-schedule',
       'hidden-needle-experiment', // Index 10 - OLD run for search testing (won't be in first 150)
       'single-point-test', // Index 11 - Single datapoint per metric for chart dot rendering test
+      'freq-every-step',   // Index 12 - Logs every step (step 0,1,2,...,10000)
+      'freq-every-5',      // Index 13 - Logs every 5 steps (step 0,5,10,...,10000)
+      'freq-every-10',     // Index 14 - Logs every 10 steps (step 0,10,20,...,10000)
+      'freq-every-50',     // Index 15 - Logs every 50 steps (step 0,50,100,...,10000)
     ];
 
     // Unique tag per run for stress testing (170 unique tags)

@@ -1,19 +1,22 @@
 "use client";
 
-import { default as LineChart } from "@/components/charts/line-wrapper";
+import { default as LineChart, type RawLineData } from "@/components/charts/line-wrapper";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { memo, useMemo } from "react";
-import { useQueries } from "@tanstack/react-query";
 import { trpc, trpcClient } from "@/utils/trpc";
 import { useCheckDatabaseSize } from "@/lib/db/local-cache";
 import { metricsCache, type MetricDataPoint } from "@/lib/db/index";
 import { useLocalQueries } from "@/lib/hooks/use-local-query";
+import { useProgressiveMultiBatchQueries } from "@/lib/hooks/use-progressive-multi-batch-queries";
+import { useLineSettings } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/use-line-settings";
+import { useZoomRefetch } from "@/lib/hooks/use-zoom-refetch";
+import { useChartSyncContext } from "@/components/charts/context/chart-sync-context";
 import {
-  useLineSettings,
-  type SmoothingAlgorithm,
-} from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/use-line-settings";
-import { smoothData, downsampleLTTB } from "@/lib/math/smoothing";
+  getTimeUnitForDisplay,
+  alignAndUnzip,
+  downsampleAndSmooth,
+} from "@/lib/chart-data-utils";
 
 // For active runs, refresh every 30 seconds
 // For completed runs, data never changes so use Infinity
@@ -43,137 +46,25 @@ interface MultiLineChartProps {
   onResetBounds?: () => void;
 }
 
-// Helper to determine appropriate time unit based on max seconds
-function getTimeUnitForDisplay(maxSeconds: number): {
-  divisor: number;
-  unit: string;
-} {
-  if (maxSeconds < 120) {
-    return { divisor: 1, unit: "s" }; // seconds
-  } else if (maxSeconds < 3600) {
-    return { divisor: 60, unit: "min" }; // minutes
-  } else if (maxSeconds < 86400) {
-    return { divisor: 3600, unit: "hr" }; // hours
-  } else if (maxSeconds < 604800) {
-    return { divisor: 86400, unit: "day" }; // days
-  } else if (maxSeconds < 2629746) {
-    return { divisor: 604800, unit: "week" }; // weeks
-  } else if (maxSeconds < 31556952) {
-    return { divisor: 2629746, unit: "month" }; // months (approx)
-  } else {
-    return { divisor: 31556952, unit: "year" }; // years (approx)
-  }
+/** Props for the inner memo'd component (includes syncedZoomRange) */
+interface MultiLineChartInnerProps extends MultiLineChartProps {
+  syncedZoomRange: [number, number] | null;
 }
 
-// Apply downsampling to reduce data points
-function applyDownsampling(
-  chartData: {
-    x: number[];
-    y: number[];
-    label: string;
-    color: string;
-  },
-  maxPoints: number,
-): {
-  x: number[];
-  y: number[];
-  label: string;
-  color: string;
-} {
-  if (maxPoints <= 0 || chartData.x.length <= maxPoints) {
-    return chartData;
-  }
 
-  const { x, y } = downsampleLTTB(chartData.x, chartData.y, maxPoints);
-  return { ...chartData, x, y };
+/**
+ * Wrapper that reads syncedZoomRange from chart sync context and passes it
+ * as a prop to the memo'd inner component. This avoids subscribing the memo'd
+ * component to the entire context (which would bypass memo and cause chart
+ * recreations on every hover-triggered context update).
+ */
+export function MultiLineChart(props: MultiLineChartProps) {
+  const chartSyncContext = useChartSyncContext();
+  const syncedZoomRange = chartSyncContext?.syncedZoomRange ?? null;
+  return <MultiLineChartInner {...props} syncedZoomRange={syncedZoomRange} />;
 }
 
-// Apply smoothing to chart data
-function applySmoothing(
-  chartData: {
-    x: number[];
-    y: number[];
-    label: string;
-    color: string;
-  },
-  smoothingSettings: {
-    enabled: boolean;
-    algorithm: SmoothingAlgorithm;
-    parameter: number;
-    showOriginalData: boolean;
-  },
-): {
-  x: number[];
-  y: number[];
-  label: string;
-  color: string;
-  opacity?: number;
-  hideFromLegend?: boolean;
-}[] {
-  if (!smoothingSettings.enabled) {
-    return [chartData];
-  }
-
-  const data = [
-    {
-      ...chartData,
-      y: smoothData(
-        chartData.x,
-        chartData.y,
-        smoothingSettings.algorithm,
-        smoothingSettings.parameter,
-      ),
-      opacity: 1,
-      hideFromLegend: false,
-    },
-  ];
-
-  if (smoothingSettings.showOriginalData) {
-    data.push({
-      ...chartData,
-      opacity: 0.1,
-      hideFromLegend: true,
-      label: chartData.label + " (original)",
-    });
-  }
-
-  return data;
-}
-
-// Helper function to align and unzip data points
-function alignAndUnzip(
-  xData: MetricDataPoint[],
-  yData: MetricDataPoint[],
-): { x: number[]; y: number[] } {
-  // Build a map from step → value for x data
-  const xMap = new Map<number, number>();
-  for (const { step, value } of xData) {
-    xMap.set(Number(step), Number(value));
-  }
-
-  // Walk y data, pick only matching steps
-  const pairs: [number, number][] = [];
-  for (const { step, value: yVal } of yData) {
-    const xVal = xMap.get(Number(step));
-    if (xVal !== undefined) {
-      pairs.push([xVal, Number(yVal)]);
-    }
-  }
-
-  // Sort by x values ascending
-  const sortedPairs = pairs.sort((a, b) => a[0] - b[0]);
-
-  const x: number[] = [];
-  const y: number[] = [];
-  for (const [xVal, yVal] of sortedPairs) {
-    x.push(xVal);
-    y.push(yVal);
-  }
-
-  return { x, y };
-}
-
-export const MultiLineChart = memo(
+const MultiLineChartInner = memo(
   ({
     lines,
     title,
@@ -185,7 +76,8 @@ export const MultiLineChart = memo(
     yMax,
     onDataRange,
     onResetBounds,
-  }: MultiLineChartProps) => {
+    syncedZoomRange,
+  }: MultiLineChartInnerProps) => {
     useCheckDatabaseSize(metricsCache);
 
     // Use global chart settings with runId="full"
@@ -194,28 +86,14 @@ export const MultiLineChart = memo(
     // Use Infinity staleTime for completed runs since their data won't change
     const staleTime = allRunsCompleted ? COMPLETED_RUN_STALE_TIME : ACTIVE_RUN_STALE_TIME;
 
-    // Fetch data for all lines in parallel with optimized settings for quick cancellation
-    const queries = useLocalQueries<MetricDataPoint>(
-      lines.map((line) => {
-        const opts = {
-          organizationId,
-          projectName,
-          runId: line.runId,
-          logName: title,
-        };
-
-        const queryOptions = trpc.runs.data.graph.queryOptions(opts);
-
-        return {
-          queryKey: queryOptions.queryKey,
-          queryFn: () => trpcClient.runs.data.graph.query(opts),
-          staleTime,
-          gcTime: GC_TIME,
-          localCache: metricsCache,
-          enabled: true,
-        };
-      }),
-    );
+    // === Two-tier progressive loading: batch preview (1k pts) + individual cached (10k pts) ===
+    const queries = useProgressiveMultiBatchQueries({
+      organizationId,
+      projectName,
+      logName: title,
+      lines,
+      staleTime,
+    });
 
     // If the selected log is not a standard one, fetch that data for each run
     // to use as x-axis values
@@ -244,6 +122,17 @@ export const MultiLineChart = memo(
           })
         : [],
     );
+
+    // Zoom-triggered server re-fetch for full-resolution data (Step mode only)
+    const { zoomDataMap, onZoomRangeChange, isZoomFetching } = useZoomRefetch({
+      organizationId,
+      projectName,
+      logName: title,
+      runIds: useMemo(() => lines.map((l) => l.runId), [lines]),
+      selectedLog: settings.selectedLog,
+      staleTime,
+      syncedZoomRange,
+    });
 
     // Check error states and get data
     const isError = queries.some((query) => query.isError);
@@ -285,6 +174,11 @@ export const MultiLineChart = memo(
       if (!hasAnyData) {
         return null;
       }
+
+      // Collect raw (pre-downsampled) data for zoom-aware re-downsampling
+      const rawLines: RawLineData[] = [];
+      const collectRaw = settings.maxPointsPerSeries > 0;
+
       // System metrics chart - always uses relative time like in line-chart.tsx
       if (title.startsWith("sys/") || title.startsWith("_sys/")) {
         // Calculate the appropriate time unit across all datasets
@@ -339,13 +233,14 @@ export const MultiLineChart = memo(
               color: runInfo.color,
             };
 
-            const downsampledData = applyDownsampling(baseData, settings.maxPointsPerSeries);
-            return applySmoothing(downsampledData, settings.smoothing);
+            if (collectRaw) rawLines.push(baseData);
+            return downsampleAndSmooth(baseData, settings.maxPointsPerSeries, settings.smoothing);
           });
 
         return {
           type: "system" as const,
           data: chartData,
+          rawLines: collectRaw ? rawLines : undefined,
           xlabel: `relative time (${unit})`,
           isDateTime: false,
           className: "h-full min-h-96 w-full flex-grow",
@@ -365,13 +260,14 @@ export const MultiLineChart = memo(
                 seriesId: runInfo.runId,
                 color: runInfo.color,
               };
-              const downsampledData = applyDownsampling(baseData, settings.maxPointsPerSeries);
-              return applySmoothing(downsampledData, settings.smoothing);
+              if (collectRaw) rawLines.push(baseData);
+              return downsampleAndSmooth(baseData, settings.maxPointsPerSeries, settings.smoothing);
             });
 
           return {
             type: "data" as const,
             data,
+            rawLines: collectRaw ? rawLines : undefined,
             xlabel: "absolute time",
             isDateTime: true,
             className: "h-full w-full",
@@ -405,8 +301,8 @@ export const MultiLineChart = memo(
                 color: runInfo.color,
               };
 
-              const downsampledData = applyDownsampling(baseData, settings.maxPointsPerSeries);
-              return applySmoothing(downsampledData, settings.smoothing);
+              if (collectRaw) rawLines.push(baseData);
+              return downsampleAndSmooth(baseData, settings.maxPointsPerSeries, settings.smoothing);
             });
 
           // Determine time unit from the first dataset
@@ -425,6 +321,7 @@ export const MultiLineChart = memo(
           return {
             type: "data" as const,
             data,
+            rawLines: collectRaw ? rawLines : undefined,
             xlabel: `relative time (${unit})`,
             isDateTime: false,
             className: "h-full w-full",
@@ -433,23 +330,31 @@ export const MultiLineChart = memo(
 
         case "Step": {
           // Default step-based chart
+          // Priority: zoom refetch data > standard/preview data
           const data = allData
             .filter((item) => item.data.length > 0)
-            .flatMap(({ data, runInfo }) => {
+            .flatMap(({ data: tierData, runInfo }) => {
+              const isUsingZoomData = zoomDataMap?.has(runInfo.runId) ?? false;
+              const sourceData = zoomDataMap?.get(runInfo.runId) ?? tierData;
               const baseData = {
-                x: data.map((d: MetricDataPoint) => Number(d.step)),
-                y: data.map((d: MetricDataPoint) => Number(d.value)),
+                x: sourceData.map((d: MetricDataPoint) => Number(d.step)),
+                y: sourceData.map((d: MetricDataPoint) => Number(d.value)),
                 label: runInfo.runName,
                 seriesId: runInfo.runId,
                 color: runInfo.color,
               };
-              const downsampledData = applyDownsampling(baseData, settings.maxPointsPerSeries);
-              return applySmoothing(downsampledData, settings.smoothing);
+              if (collectRaw) rawLines.push(baseData);
+              // Skip client-side downsampling for zoom data — it's already
+              // range-limited by the server query, so downsampling would
+              // re-introduce step gaps that the zoom refetch was meant to fill.
+              const effectiveMaxPoints = isUsingZoomData ? 0 : settings.maxPointsPerSeries;
+              return downsampleAndSmooth(baseData, effectiveMaxPoints, settings.smoothing);
             });
 
           return {
             type: "data" as const,
             data,
+            rawLines: collectRaw ? rawLines : undefined,
             xlabel,
             isDateTime: false,
             className: "h-full w-full",
@@ -514,20 +419,53 @@ export const MultiLineChart = memo(
                 seriesId: runInfo.runId,
                 color: runInfo.color,
               };
-              const downsampledData = applyDownsampling(baseData, settings.maxPointsPerSeries);
-              return applySmoothing(downsampledData, settings.smoothing);
+              if (collectRaw) rawLines.push(baseData);
+              return downsampleAndSmooth(baseData, settings.maxPointsPerSeries, settings.smoothing);
             });
 
           return {
             type: "data" as const,
             data,
+            rawLines: collectRaw ? rawLines : undefined,
             xlabel: settings.selectedLog,
             isDateTime: false,
             className: "h-full w-full",
           };
         }
       }
-    }, [allData, customLogData, settings, title, xlabel, hasAnyData]);
+    }, [allData, customLogData, settings, title, xlabel, hasAnyData, zoomDataMap]);
+
+    // Callback for zoom-aware re-downsampling: slices raw data to visible range
+    // and runs the full downsample+smooth pipeline to produce consistent series structure.
+    // Stored in a ref inside the chart component, so reference instability is fine.
+    const reprocessForZoom = useMemo(() => {
+      if (settings.maxPointsPerSeries <= 0) return undefined;
+      const smoothing = settings.smoothing;
+      return (raws: RawLineData[], xMin: number, xMax: number) => {
+        return raws.flatMap((raw) => {
+          // Find visible range with 1-point margin on each side
+          let startIdx = 0;
+          let endIdx = raw.x.length;
+          for (let j = 0; j < raw.x.length; j++) {
+            if (raw.x[j] >= xMin) { startIdx = Math.max(0, j - 1); break; }
+          }
+          for (let j = raw.x.length - 1; j >= 0; j--) {
+            if (raw.x[j] <= xMax) { endIdx = Math.min(raw.x.length, j + 2); break; }
+          }
+          const sliced = {
+            x: raw.x.slice(startIdx, endIdx),
+            y: raw.y.slice(startIdx, endIdx),
+            label: raw.label,
+            seriesId: raw.seriesId,
+            color: raw.color,
+          };
+          // Use maxPts=0: show ALL raw data points in the visible range.
+          // applyDownsampling always produces 3 series (main + envelope),
+          // matching the initial render's series count for setData compatibility.
+          return downsampleAndSmooth(sliced, 0, smoothing);
+        });
+      };
+    }, [settings.maxPointsPerSeries, settings.smoothing]);
 
     // Error state
     if (isError) {
@@ -606,20 +544,34 @@ export const MultiLineChart = memo(
 
     // Render the chart with memoized data
     return (
-      <LineChart
-        lines={chartResult.data}
-        className={chartResult.className}
-        title={title}
-        xlabel={chartResult.xlabel}
-        showLegend={true}
-        isDateTime={chartResult.isDateTime}
-        logXAxis={settings.xAxisLogScale}
-        logYAxis={settings.yAxisLogScale}
-        yMin={yMin}
-        yMax={yMax}
-        onDataRange={onDataRange}
-        onResetBounds={onResetBounds}
-      />
+      <div className="relative h-full w-full">
+        {/* Zoom refetch loading indicator */}
+        {isZoomFetching && (
+          <div className="absolute top-0 right-0 left-0 z-10 h-0.5 overflow-hidden bg-muted">
+            <div className="h-full w-1/3 animate-[shimmer_1s_ease-in-out_infinite] bg-primary" />
+          </div>
+        )}
+        <LineChart
+          lines={chartResult.data}
+          className={chartResult.className}
+          title={title}
+          xlabel={chartResult.xlabel}
+          showLegend={true}
+          isDateTime={chartResult.isDateTime}
+          logXAxis={settings.xAxisLogScale}
+          logYAxis={settings.yAxisLogScale}
+          yMin={yMin}
+          yMax={yMax}
+          onDataRange={onDataRange}
+          onResetBounds={onResetBounds}
+          tooltipInterpolation={settings.tooltipInterpolation}
+          outlierDetection={settings.yAxisScaleMode === "outlier-aware"}
+          rawLines={chartResult.rawLines}
+          downsampleTarget={settings.maxPointsPerSeries}
+          reprocessForZoom={reprocessForZoom}
+          onZoomRangeChange={onZoomRangeChange}
+        />
+      </div>
     );
   },
 );

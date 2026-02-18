@@ -1,4 +1,5 @@
 import { LocalCache, useLocalStorage } from "@/lib/db/local-cache";
+import type { TooltipInterpolation } from "@/lib/math/interpolation";
 
 export type DisplayLogName =
   | "Step"
@@ -8,33 +9,43 @@ export type DisplayLogName =
 
 export type SmoothingAlgorithm = "twema" | "gaussian" | "running" | "ema";
 
+/** Y-axis scaling mode. "auto" = full data range (default), "outlier-aware" = IQR-based outlier detection */
+export type YAxisScaleMode = "auto" | "outlier-aware";
+
 export interface LineChartSettings {
   selectedLog: DisplayLogName;
   xAxisLogScale: boolean;
   yAxisLogScale: boolean;
+  yAxisScaleMode: YAxisScaleMode;
   smoothing: {
     enabled: boolean;
     algorithm: SmoothingAlgorithm;
     parameter: number;
     showOriginalData: boolean;
   };
-  /** Maximum points to display per series. 0 = no limit (show all points) */
+  /** Maximum points to draw per series (client-side only). 0 = draw all points. Does not affect data loading. */
   maxPointsPerSeries: number;
+  /** Tooltip interpolation mode for series with missing values at the hovered step.
+   *  "none" = only show exact matches, "linear" = linear interpolation, "last" = forward-fill */
+  tooltipInterpolation: TooltipInterpolation;
 }
 
 export const DEFAULT_SETTINGS: LineChartSettings = {
   selectedLog: "Step",
   xAxisLogScale: false,
   yAxisLogScale: false,
+  yAxisScaleMode: "auto",
   smoothing: {
     enabled: true,
     algorithm: "gaussian",
     parameter: 2,
     showOriginalData: true,
   },
-  // 0 = no limit (show all points, no downsampling)
-  // Set to 1000+ for better performance with large datasets
-  maxPointsPerSeries: 0,
+  // Default 2000: good balance of performance and visual fidelity.
+  // Min/max envelopes preserve anomalies even with aggressive downsampling.
+  // Set to 0 to disable downsampling (may be slow for 100k+ points).
+  maxPointsPerSeries: 2000,
+  tooltipInterpolation: "linear",
 };
 
 const lineSettingsDb = new LocalCache<LineChartSettings>(
