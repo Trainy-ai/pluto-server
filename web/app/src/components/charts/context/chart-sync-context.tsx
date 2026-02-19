@@ -200,24 +200,31 @@ export function ChartSyncProvider({
   // Table-highlighted series ref for synchronous access
   const tableHighlightedSeriesRef = useRef<string | null>(tableHighlightedSeriesProp);
 
-  // Keep ref in sync with prop
+  // Keep ref in sync with prop (if still passed)
   useEffect(() => {
     tableHighlightedSeriesRef.current = tableHighlightedSeriesProp;
   }, [tableHighlightedSeriesProp]);
 
-  // Apply table highlight widths to all charts when the prop changes
+  // Listen for DOM-based hover events from the runs table.
+  // The runs table dispatches "run-table-hover" CustomEvents to avoid React state
+  // changes that would remount table cell components (closing open popovers).
   useEffect(() => {
-    const label = tableHighlightedSeriesProp;
+    function handleRunTableHover(e: Event) {
+      const runId = (e as CustomEvent).detail as string | null;
+      tableHighlightedSeriesRef.current = runId;
 
-    // Only apply if no chart is actively being hovered
-    if (hoveredChartIdRef.current !== null) return;
+      // Only apply if no chart is actively being hovered
+      if (hoveredChartIdRef.current !== null) return;
 
-    const lw = getStoredLineWidth();
-    uplotInstancesRef.current.forEach((chart) => {
-      applySeriesHighlight(chart, label, '_seriesId', lw);
-      chart.redraw(false);
-    });
-  }, [tableHighlightedSeriesProp]);
+      const lw = getStoredLineWidth();
+      uplotInstancesRef.current.forEach((chart) => {
+        applySeriesHighlight(chart, runId, '_seriesId', lw);
+        chart.redraw(false);
+      });
+    }
+    document.addEventListener("run-table-hover", handleRunTableHover);
+    return () => document.removeEventListener("run-table-hover", handleRunTableHover);
+  }, []);
 
   // uPlot registration
   const registerUPlot = useCallback((id: string, chart: uPlot) => {
@@ -386,7 +393,9 @@ export function ChartSyncProvider({
       globalXRange,
       syncedZoomRange,
       setSyncedZoomRange,
-      tableHighlightedSeries: tableHighlightedSeriesProp,
+      // tableHighlightedSeries is now handled imperatively via DOM events
+      // to avoid re-rendering the entire component tree on hover
+      tableHighlightedSeries: null,
       isSyncingZoomRef,
     }),
     [
@@ -405,7 +414,6 @@ export function ChartSyncProvider({
       resetZoom,
       globalXRange,
       syncedZoomRange,
-      tableHighlightedSeriesProp,
       // isSyncingZoomRef intentionally omitted - stable ref, never changes
     ]
   );

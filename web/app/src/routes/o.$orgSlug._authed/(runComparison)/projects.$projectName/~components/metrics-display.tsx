@@ -33,8 +33,6 @@ interface MetricsDisplayProps {
   selectedRuns?: Record<string, SelectedRunWithColor>;
   selectedViewId?: string | null;
   onViewChange?: (viewId: string | null) => void;
-  /** Series ID to highlight from runs table hover */
-  tableHighlightedRunId?: string | null;
 }
 
 /**
@@ -51,7 +49,6 @@ export const MetricsDisplay = memo(function MetricsDisplay({
   selectedRuns = {},
   selectedViewId: externalSelectedViewId,
   onViewChange: externalOnViewChange,
-  tableHighlightedRunId,
 }: MetricsDisplayProps) {
   const [searchState, setSearchState] = useState<SearchState>({
     query: "",
@@ -151,7 +148,7 @@ export const MetricsDisplay = memo(function MetricsDisplay({
   // If a custom view is selected, render the DashboardBuilder
   if (selectedViewId && selectedView) {
     return (
-      <ChartSyncProvider syncKey={`dashboard-${selectedViewId}`} tableHighlightedSeries={tableHighlightedRunId}>
+      <ChartSyncProvider syncKey={`dashboard-${selectedViewId}`}>
         <div className="flex-1 space-y-4">
           <div className="sticky top-0 z-20 flex items-center justify-between gap-4 bg-background pb-2">
             <div className="flex items-center gap-4">
@@ -205,7 +202,7 @@ export const MetricsDisplay = memo(function MetricsDisplay({
 
   // Default "All Metrics" view
   return (
-    <ChartSyncProvider syncKey={`all-metrics-${projectName}`} tableHighlightedSeries={tableHighlightedRunId}>
+    <ChartSyncProvider syncKey={`all-metrics-${projectName}`}>
       <div className="flex-1 space-y-4">
         <div className="sticky top-0 z-10 flex items-center justify-between gap-4 bg-background pb-2">
           <div className="flex items-center gap-4">

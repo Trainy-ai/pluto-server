@@ -297,7 +297,7 @@ export function FilterButton({
           )}
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-auto min-w-[20rem] max-w-[36rem] p-0" align="end">
+      <PopoverContent className="w-auto min-w-[20rem] max-w-[36rem] p-0" align="end" onFocusOutside={(e) => e.preventDefault()}>
         {step === "field" ? (
           <Command shouldFilter={false}>
             <div className="relative">
