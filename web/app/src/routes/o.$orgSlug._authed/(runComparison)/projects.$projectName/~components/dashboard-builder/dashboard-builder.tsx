@@ -1,6 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import { useBlocker } from "@tanstack/react-router";
-import { PlusIcon, SaveIcon, XIcon, AlertTriangleIcon, RotateCcwIcon, GridIcon, SlidersHorizontalIcon } from "lucide-react";
+import { PlusIcon, SaveIcon, XIcon, AlertTriangleIcon, RotateCcwIcon, GridIcon, SlidersHorizontalIcon, ArchiveRestoreIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -15,6 +14,8 @@ import { SectionContainer, AddSectionButton } from "./section-container";
 import { WidgetGrid } from "./widget-grid";
 import { WidgetRenderer } from "./widget-renderer";
 import { AddWidgetModal } from "./add-widget-modal";
+import { useDraftSave } from "./use-auto-save";
+import { useNavigationGuard } from "./use-navigation-guard";
 import {
   useUpdateDashboardView,
   type DashboardView,
@@ -54,10 +55,21 @@ export function DashboardBuilder({
   const [addWidgetSectionId, setAddWidgetSectionId] = useState<string | null>(null);
   const [editingWidget, setEditingWidget] = useState<Widget | null>(null);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+  const [showDraftRestore, setShowDraftRestore] = useState(false);
   const [fullscreenWidget, setFullscreenWidget] = useState<Widget | null>(null);
   const [coarseMode, setCoarseMode] = useState(true);
 
   const updateMutation = useUpdateDashboardView(organizationId, projectName);
+
+  const { hasDraft, restoreDraft, clearDraft } = useDraftSave({
+    config,
+    viewId: view.id,
+    isEditing,
+    hasChanges,
+  });
+
+  // Block navigation when there are unsaved changes during editing
+  const navGuard = useNavigationGuard(isEditing && hasChanges);
 
   // Track container width for responsive grid
   useEffect(() => {
@@ -82,20 +94,27 @@ export function DashboardBuilder({
     setHasChanges(false);
   }, [view.config]);
 
-  // Warn on browser tab close/refresh with unsaved changes
-  useEffect(() => {
-    if (!isEditing || !hasChanges) return;
-    const handler = (e: BeforeUnloadEvent) => {
-      e.preventDefault();
-    };
-    window.addEventListener("beforeunload", handler);
-    return () => window.removeEventListener("beforeunload", handler);
-  }, [isEditing, hasChanges]);
+  // Show draft restore prompt when entering edit mode with a pending draft
+  const handleEnterEditMode = useCallback(() => {
+    setIsEditing(true);
+    if (hasDraft) {
+      setShowDraftRestore(true);
+    }
+  }, [hasDraft]);
 
-  // Block in-app navigation with unsaved changes
-  const { proceed, reset, status } = useBlocker({
-    condition: isEditing && hasChanges,
-  });
+  const handleRestoreDraft = useCallback(() => {
+    const draft = restoreDraft();
+    if (draft) {
+      setConfig(draft);
+      setHasChanges(true);
+    }
+    setShowDraftRestore(false);
+  }, [restoreDraft]);
+
+  const handleDiscardDraft = useCallback(() => {
+    clearDraft();
+    setShowDraftRestore(false);
+  }, [clearDraft]);
 
   const handleSave = useCallback(() => {
     updateMutation.mutate(
@@ -107,11 +126,12 @@ export function DashboardBuilder({
       {
         onSuccess: () => {
           setHasChanges(false);
+          clearDraft();
           setIsEditing(false);
         },
       }
     );
-  }, [updateMutation, organizationId, view.id, config]);
+  }, [updateMutation, organizationId, view.id, config, clearDraft]);
 
   const handleCancel = useCallback(() => {
     if (hasChanges) {
@@ -124,9 +144,10 @@ export function DashboardBuilder({
   const confirmCancel = useCallback(() => {
     setConfig(view.config);
     setHasChanges(false);
+    clearDraft();
     setIsEditing(false);
     setShowCancelConfirm(false);
-  }, [view.config]);
+  }, [view.config, clearDraft]);
 
   const updateSection = useCallback((sectionId: string, section: Section) => {
     setConfig((prev) => ({
@@ -329,7 +350,7 @@ export function DashboardBuilder({
               </Button>
             </>
           ) : (
-            <Button variant="outline" size="sm" onClick={() => setIsEditing(true)}>
+            <Button variant="outline" size="sm" onClick={handleEnterEditMode}>
               Edit Dashboard
             </Button>
           )}
@@ -470,31 +491,56 @@ export function DashboardBuilder({
         </DialogContent>
       </Dialog>
 
-      {/* Navigation Blocker Dialog */}
-      {status === "blocked" && (
-        <Dialog open onOpenChange={() => reset?.()}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2">
-                <AlertTriangleIcon className="size-5 text-yellow-500" />
-                Leave without saving?
-              </DialogTitle>
-              <DialogDescription>
-                You have unsaved changes to this dashboard. If you leave now, your
-                changes will be lost.
-              </DialogDescription>
-            </DialogHeader>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => reset?.()}>
-                Stay on Page
-              </Button>
-              <Button variant="destructive" onClick={() => proceed?.()}>
-                Leave Page
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      )}
+      {/* Draft Restore Dialog */}
+      <Dialog open={showDraftRestore} onOpenChange={setShowDraftRestore}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ArchiveRestoreIcon className="size-5 text-blue-500" />
+              Restore unsaved draft?
+            </DialogTitle>
+            <DialogDescription>
+              You have unsaved changes from a previous editing session. Would you
+              like to restore them, or start fresh from the last saved version?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={handleDiscardDraft}>
+              Start Fresh
+            </Button>
+            <Button onClick={handleRestoreDraft}>
+              Restore Draft
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Navigation Guard Dialog */}
+      <Dialog
+        open={navGuard.isBlocked}
+        onOpenChange={(open) => { if (!open) { navGuard.reset(); } }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangleIcon className="size-5 text-yellow-500" />
+              Unsaved dashboard changes
+            </DialogTitle>
+            <DialogDescription>
+              Your dashboard has changes that haven&apos;t been saved yet. If you
+              leave now, these changes will be lost.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={navGuard.reset}>
+              Stay
+            </Button>
+            <Button variant="destructive" onClick={navGuard.proceed}>
+              Leave
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
