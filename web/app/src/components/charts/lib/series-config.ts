@@ -116,7 +116,7 @@ export function buildSeriesConfig(
           return applyAlpha(baseColor, lineOpacity * 0.15);
         },
         width: chartLineWidth,
-        dash: line.dashed ? [5, 5] : undefined,
+        dash: line.dash,
         spanGaps: true,
         points: {
           // Show points for single-point series since lines need 2+ points to be visible

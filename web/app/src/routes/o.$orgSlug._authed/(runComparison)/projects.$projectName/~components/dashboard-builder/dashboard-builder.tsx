@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from "react";
+import { toast } from "sonner";
 import { PlusIcon, SaveIcon, XIcon, AlertTriangleIcon, RotateCcwIcon, GridIcon, SlidersHorizontalIcon, ArchiveRestoreIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -117,17 +118,41 @@ export function DashboardBuilder({
   }, [clearDraft]);
 
   const handleSave = useCallback(() => {
+    // Sanitize config: ensure no non-finite numbers (Infinity, NaN) in layouts or configs
+    const sanitizedConfig: DashboardViewConfig = {
+      ...config,
+      sections: config.sections.map((section) => ({
+        ...section,
+        widgets: section.widgets.map((widget) => ({
+          ...widget,
+          layout: {
+            ...widget.layout,
+            x: Number.isFinite(widget.layout.x) ? widget.layout.x : 0,
+            y: Number.isFinite(widget.layout.y) ? widget.layout.y : 9999,
+            w: Number.isFinite(widget.layout.w) ? widget.layout.w : 6,
+            h: Number.isFinite(widget.layout.h) ? widget.layout.h : 4,
+          },
+        })),
+      })),
+    };
+
     updateMutation.mutate(
       {
         organizationId,
         viewId: view.id,
-        config,
+        config: sanitizedConfig,
       },
       {
         onSuccess: () => {
           setHasChanges(false);
           clearDraft();
           setIsEditing(false);
+        },
+        onError: (error) => {
+          console.error("Dashboard save failed:", error);
+          toast.error("Failed to save dashboard", {
+            description: error.message || "An unexpected error occurred",
+          });
         },
       }
     );
@@ -429,6 +454,7 @@ export function DashboardBuilder({
         organizationId={organizationId}
         projectName={projectName}
         editWidget={editingWidget ?? undefined}
+        selectedRunIds={Object.keys(selectedRuns)}
       />
 
       {/* Fullscreen Chart Dialog */}

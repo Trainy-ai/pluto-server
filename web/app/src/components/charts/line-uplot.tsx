@@ -36,7 +36,8 @@ export interface LineData {
   /** Unique identifier for this series (e.g. run ID). Used for highlighting when labels may not be unique. Falls back to label if not provided. */
   seriesId?: string;
   color?: string;
-  dashed?: boolean;
+  /** uPlot dash pattern array, e.g. [10, 5] for dashed, [2, 4] for dotted. undefined = solid. */
+  dash?: number[];
   hideFromLegend?: boolean;
   opacity?: number;
   /** If set, this series is an envelope boundary (min or max) for the named parent series */
@@ -52,6 +53,8 @@ export interface RawLineData {
   label: string;
   color: string;
   seriesId?: string;
+  /** uPlot dash pattern, e.g. [10, 5]. undefined = solid. */
+  dash?: number[];
 }
 
 interface LineChartProps extends React.HTMLAttributes<HTMLDivElement> {

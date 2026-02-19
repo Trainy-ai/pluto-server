@@ -20,6 +20,7 @@ import {
 import { ChartBoundsPopover } from "@/components/charts/chart-bounds-popover";
 import { ChartExportMenu } from "@/components/charts/chart-export-menu";
 import type { Widget, WidgetLayout, ChartWidgetConfig } from "../../~types/dashboard-types";
+import { isGlobValue, getGlobPattern, isRegexValue, getRegexPattern } from "./glob-utils";
 
 interface WidgetGridProps {
   widgets: Widget[];
@@ -414,10 +415,17 @@ function getWidgetTitle(widget: Widget): string {
     case "chart": {
       const config = widget.config as { metrics?: string[] };
       if (config.metrics && config.metrics.length > 0) {
-        if (config.metrics.length === 1) {
-          return config.metrics[0];
+        // Strip "glob:" / "regex:" prefixes for display
+        const displayNames = config.metrics.map((m) =>
+          isGlobValue(m) ? getGlobPattern(m) : isRegexValue(m) ? getRegexPattern(m) : m
+        );
+        if (displayNames.length === 1) {
+          return displayNames[0];
         }
-        return `${config.metrics.length} metrics`;
+        if (displayNames.length <= 3) {
+          return displayNames.join(", ");
+        }
+        return `${displayNames.length} metrics`;
       }
       return "Chart";
     }

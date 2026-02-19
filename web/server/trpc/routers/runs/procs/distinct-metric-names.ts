@@ -13,6 +13,7 @@ export const distinctMetricNamesProcedure = protectedOrgProcedure
     z.object({
       projectName: z.string(),
       search: z.string().optional(),
+      regex: z.string().max(200).optional(),
       runIds: z.array(z.string()).optional(),
     })
   )
@@ -23,6 +24,7 @@ export const distinctMetricNamesProcedure = protectedOrgProcedure
       organizationId: input.organizationId,
       projectName: input.projectName,
       search: input.search,
+      regex: input.regex,
       runIds: numericRunIds,
       // No limit when scoped to specific runs — return all metric names
       ...(numericRunIds && numericRunIds.length > 0 ? { limit: 10000 } : {}),
