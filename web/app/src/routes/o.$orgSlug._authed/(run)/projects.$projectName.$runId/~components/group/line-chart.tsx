@@ -9,7 +9,7 @@ import { ensureGetGraph, useGetGraphProgressive } from "../../~queries/get-graph
 import { useCheckDatabaseSize } from "@/lib/db/local-cache";
 import { metricsCache } from "@/lib/db/index";
 import { useLineSettings, type LineChartSettings } from "../use-line-settings";
-import { useZoomRefetch } from "@/lib/hooks/use-zoom-refetch";
+import { useZoomRefetch, zoomKey } from "@/lib/hooks/use-zoom-refetch";
 import {
   getTimeUnitForDisplay,
   alignAndUnzip,
@@ -327,15 +327,16 @@ export const LineChartWithFetch = memo(
     // Zoom-triggered server re-fetch for full-resolution step data
     // Disabled when full tier is loaded (all data already client-side)
     const runIdsMemo = useMemo(() => [runId], [runId]);
+    const logNamesMemo = useMemo(() => [logName], [logName]);
     const { zoomDataMap, onZoomRangeChange, isZoomFetching } = useZoomRefetch({
       organizationId: tenantId,
       projectName,
-      logName,
+      logNames: logNamesMemo,
       runIds: runIdsMemo,
       selectedLog: settings.selectedLog,
       enabled: tier !== "full",
     });
-    const zoomData = tier !== "full" ? zoomDataMap?.get(runId) : undefined;
+    const zoomData = tier !== "full" ? zoomDataMap?.get(zoomKey(runId, logName)) : undefined;
 
     const [chartConfig, isLoadingCustomChart] = useChartConfig(
       data,

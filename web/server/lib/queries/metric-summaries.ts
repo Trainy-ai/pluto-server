@@ -141,11 +141,12 @@ export async function queryDistinctMetrics(
     organizationId: string;
     projectName: string;
     search?: string;
+    regex?: string;
     limit?: number;
     runIds?: number[];
   },
 ): Promise<string[]> {
-  const { organizationId, projectName, search, limit = 500, runIds } = params;
+  const { organizationId, projectName, search, regex, limit = 500, runIds } = params;
 
   const queryParams: Record<string, unknown> = {
     tenantId: organizationId,
@@ -155,7 +156,12 @@ export async function queryDistinctMetrics(
 
   let searchFilter = "";
   let orderClause = "ORDER BY logName ASC";
-  if (search && search.trim()) {
+
+  if (regex && regex.trim()) {
+    // ClickHouse match() uses re2 regex engine (ReDoS-safe by design)
+    searchFilter = `AND match(logName, {regex: String})`;
+    queryParams.regex = regex.trim();
+  } else if (search && search.trim()) {
     const trimmed = search.trim();
     searchFilter = `AND (multiFuzzyMatchAny(lower(logName), if(length({search: String}) < 4, 2, 3), [lower({search: String})]) = 1
          OR logName ILIKE {searchPattern: String})`;

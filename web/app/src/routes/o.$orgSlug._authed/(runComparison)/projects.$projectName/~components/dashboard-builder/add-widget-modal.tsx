@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import {
   Dialog,
   DialogContent,
@@ -17,8 +17,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   LineChartIcon,
   ScatterChartIcon,
@@ -27,9 +26,18 @@ import {
   FileTextIcon,
   ImageIcon,
   ArrowLeftIcon,
+  Loader2Icon,
+  CheckIcon,
+  Code2,
+  SparklesIcon,
+  TriangleAlertIcon,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
 import { MetricSelector } from "./metric-selector";
-import { extractMetricNames, matchMetricsByPattern } from "./pattern-matching-utils";
+import { makeRegexValue, makeGlobValue, isGlobValue, getGlobPattern, isRegexValue, getRegexPattern, isPatternValue, globToRegex } from "./glob-utils";
+import { useDistinctMetricNames, useRunMetricNames, useSearchMetricNames, useRegexSearchMetricNames } from "../../~queries/metric-summaries";
+import { fuzzyFilter } from "@/lib/fuzzy-search";
 import type { GroupedMetrics } from "@/lib/grouping/types";
 import type {
   WidgetType,
@@ -51,6 +59,8 @@ interface AddWidgetModalProps {
   organizationId: string;
   projectName: string;
   editWidget?: Widget;
+  /** Selected run IDs (SQID) for "not present" warnings in metric selector */
+  selectedRunIds?: string[];
 }
 
 const WIDGET_TYPES: {
@@ -106,6 +116,7 @@ export function AddWidgetModal({
   organizationId,
   projectName,
   editWidget,
+  selectedRunIds,
 }: AddWidgetModalProps) {
   const [step, setStep] = useState<"type" | "config">(editWidget ? "config" : "type");
   const [selectedType, setSelectedType] = useState<WidgetType | null>(
@@ -116,29 +127,10 @@ export function AddWidgetModal({
   );
   const [title, setTitle] = useState(editWidget?.config.title ?? "");
 
-  // Pattern mode state for chart widgets
-  const [metricMode, setMetricMode] = useState<"specific" | "pattern">("specific");
-  const [pattern, setPattern] = useState("");
-
   const isEditing = !!editWidget;
-
-  // Compute all available metric names from groupedMetrics
-  const allMetricNames = useMemo(
-    () => extractMetricNames(groupedMetrics),
-    [groupedMetrics]
-  );
-
-  // Compute matching metrics based on pattern
-  const matchingMetrics = useMemo(
-    () => matchMetricsByPattern(pattern, allMetricNames),
-    [pattern, allMetricNames]
-  );
 
   const handleTypeSelect = (type: WidgetType) => {
     setSelectedType(type);
-    // Reset pattern mode when switching types
-    setMetricMode("specific");
-    setPattern("");
     // Initialize default config based on type
     switch (type) {
       case "chart":
@@ -193,52 +185,24 @@ export function AddWidgetModal({
   const handleAdd = () => {
     if (!selectedType) return;
 
-    // Handle pattern mode for chart widgets - create multiple widgets
-    if (selectedType === "chart" && metricMode === "pattern" && matchingMetrics.length > 0) {
-      const chartConfig = config as ChartWidgetConfig;
+    const finalConfig = { ...config, title: title || undefined };
 
-      // Create a widget for each matching metric
-      matchingMetrics.forEach((metricName, index) => {
-        const widgetConfig: ChartWidgetConfig = {
-          ...chartConfig,
-          metrics: [metricName],
-          title: title ? `${title} - ${metricName}` : metricName,
-        };
-
-        onAdd({
-          type: "chart",
-          config: widgetConfig,
-          layout: {
-            x: (index % 2) * 6, // Alternate between left and right columns
-            y: Infinity, // Will be placed at the bottom
-            w: 6,
-            h: 4,
-          },
-        });
-      });
-    } else {
-      // Standard single widget creation
-      const finalConfig = { ...config, title: title || undefined };
-
-      onAdd({
-        type: selectedType,
-        config: finalConfig as WidgetConfig,
-        layout: editWidget?.layout ?? {
-          x: 0,
-          y: Infinity, // Will be placed at the bottom
-          w: selectedType === "single-value" ? 3 : 6,
-          h: selectedType === "single-value" ? 2 : 4,
-        },
-      });
-    }
+    onAdd({
+      type: selectedType,
+      config: finalConfig as WidgetConfig,
+      layout: editWidget?.layout ?? {
+        x: 0,
+        y: 9999, // Large value — react-grid-layout's compactor will place it at the bottom
+        w: selectedType === "single-value" ? 3 : 6,
+        h: selectedType === "single-value" ? 2 : 4,
+      },
+    });
 
     // Reset state
     setStep("type");
     setSelectedType(null);
     setConfig({});
     setTitle("");
-    setMetricMode("specific");
-    setPattern("");
     onOpenChange(false);
   };
 
@@ -247,8 +211,6 @@ export function AddWidgetModal({
     setSelectedType(null);
     setConfig({});
     setTitle("");
-    setMetricMode("specific");
-    setPattern("");
     onOpenChange(false);
   };
 
@@ -257,11 +219,6 @@ export function AddWidgetModal({
 
     switch (selectedType) {
       case "chart": {
-        // In pattern mode, check if there are matching metrics
-        if (metricMode === "pattern") {
-          return matchingMetrics.length > 0;
-        }
-        // In specific mode, check if a metric is selected
         const chartConfig = config as ChartWidgetConfig;
         return chartConfig.metrics && chartConfig.metrics.length > 0;
       }
@@ -285,7 +242,7 @@ export function AddWidgetModal({
       default:
         return false;
     }
-  }, [selectedType, config, metricMode, matchingMetrics]);
+  }, [selectedType, config]);
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
@@ -349,12 +306,7 @@ export function AddWidgetModal({
                 onChange={setConfig}
                 organizationId={organizationId}
                 projectName={projectName}
-                groupedMetrics={groupedMetrics}
-                metricMode={metricMode}
-                onModeChange={setMetricMode}
-                pattern={pattern}
-                onPatternChange={setPattern}
-                matchingMetrics={matchingMetrics}
+                selectedRunIds={selectedRunIds}
               />
             )}
 
@@ -364,6 +316,7 @@ export function AddWidgetModal({
                 onChange={setConfig}
                 organizationId={organizationId}
                 projectName={projectName}
+                selectedRunIds={selectedRunIds}
               />
             )}
 
@@ -373,6 +326,7 @@ export function AddWidgetModal({
                 onChange={setConfig}
                 organizationId={organizationId}
                 projectName={projectName}
+                selectedRunIds={selectedRunIds}
               />
             )}
 
@@ -382,6 +336,7 @@ export function AddWidgetModal({
                 onChange={setConfig}
                 organizationId={organizationId}
                 projectName={projectName}
+                selectedRunIds={selectedRunIds}
               />
             )}
 
@@ -408,11 +363,7 @@ export function AddWidgetModal({
               Cancel
             </Button>
             <Button onClick={handleAdd} disabled={!canAdd}>
-              {isEditing
-                ? "Save Changes"
-                : selectedType === "chart" && metricMode === "pattern" && matchingMetrics.length > 1
-                  ? `Add ${matchingMetrics.length} Widgets`
-                  : "Add Widget"}
+              {isEditing ? "Save Changes" : "Add Widget"}
             </Button>
           </DialogFooter>
         )}
@@ -421,101 +372,161 @@ export function AddWidgetModal({
   );
 }
 
-// Chart configuration form with specific/pattern mode
+// Chart configuration form with Search / Regex tabs
 function ChartConfigForm({
   config,
   onChange,
   organizationId,
   projectName,
-  groupedMetrics,
-  metricMode,
-  onModeChange,
-  pattern,
-  onPatternChange,
-  matchingMetrics,
+  selectedRunIds,
 }: {
   config: Partial<ChartWidgetConfig>;
   onChange: (config: Partial<ChartWidgetConfig>) => void;
   organizationId: string;
   projectName: string;
-  groupedMetrics: GroupedMetrics;
-  metricMode: "specific" | "pattern";
-  onModeChange: (mode: "specific" | "pattern") => void;
-  pattern: string;
-  onPatternChange: (pattern: string) => void;
-  matchingMetrics: string[];
+  selectedRunIds?: string[];
 }) {
+  const [metricMode, setMetricMode] = useState<"search" | "regex">("search");
+  const [regexPattern, setRegexPattern] = useState("");
+  const [debouncedRegex, setDebouncedRegex] = useState("");
+  const [isInvalidRegex, setIsInvalidRegex] = useState(false);
+
+  // Debounce regex input for backend query
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (regexPattern.trim() && !isInvalidRegex) {
+        setDebouncedRegex(regexPattern.trim());
+      } else {
+        setDebouncedRegex("");
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [regexPattern, isInvalidRegex]);
+
+  // Validate regex client-side
+  useEffect(() => {
+    if (!regexPattern.trim()) {
+      setIsInvalidRegex(false);
+      return;
+    }
+    try {
+      new RegExp(regexPattern.trim());
+      setIsInvalidRegex(false);
+    } catch {
+      setIsInvalidRegex(true);
+    }
+  }, [regexPattern]);
+
+  // Backend regex search via ClickHouse match()
+  const { data: regexResults, isFetching: isRegexSearching } =
+    useRegexSearchMetricNames(organizationId, projectName, debouncedRegex);
+
+  const regexMetrics = regexResults?.metricNames ?? [];
+
+  const selectedValues = config.metrics ?? [];
+
+  const handleRegexToggle = (metric: string) => {
+    const current = config.metrics ?? [];
+    if (current.includes(metric)) {
+      onChange({ ...config, metrics: current.filter((m) => m !== metric) });
+    } else {
+      onChange({ ...config, metrics: [...current, metric] });
+    }
+  };
+
+  const handleRegexSelectAll = () => {
+    const current = new Set(config.metrics ?? []);
+    for (const m of regexMetrics) {
+      current.add(m);
+    }
+    onChange({ ...config, metrics: Array.from(current) });
+  };
+
+  const handleApplyRegexDynamic = () => {
+    const trimmed = regexPattern.trim();
+    if (!trimmed || isInvalidRegex) return;
+    const regexVal = makeRegexValue(trimmed);
+    const current = config.metrics ?? [];
+    if (!current.includes(regexVal)) {
+      onChange({ ...config, metrics: [...current, regexVal] });
+    }
+  };
+
   return (
     <div className="space-y-4">
-      {/* Mode Toggle */}
       <div className="grid gap-2">
         <Label>Metric Selection Mode</Label>
-        <Tabs value={metricMode} onValueChange={(v) => onModeChange(v as "specific" | "pattern")}>
+        <Tabs value={metricMode} onValueChange={(v) => setMetricMode(v as "search" | "regex")}>
           <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="specific">Specific Metric</TabsTrigger>
-            <TabsTrigger value="pattern">Match by Pattern</TabsTrigger>
+            <TabsTrigger value="search">Search</TabsTrigger>
+            <TabsTrigger value="regex">Regex</TabsTrigger>
           </TabsList>
         </Tabs>
       </div>
 
-      {/* Mode-specific inputs */}
-      {metricMode === "specific" ? (
-        <div className="grid gap-2">
-          <Label>Metric</Label>
-          <MetricSelector
-            organizationId={organizationId}
-            projectName={projectName}
-            value={config.metrics?.[0] ?? ""}
-            onChange={(metric) =>
-              onChange({ ...config, metrics: [metric as string] })
+      {metricMode === "search" ? (
+        <SearchMetricPanel
+          organizationId={organizationId}
+          projectName={projectName}
+          selectedRunIds={selectedRunIds}
+          selectedValues={selectedValues}
+          onToggle={handleRegexToggle}
+          onSelectAll={(metrics) => {
+            const current = new Set(selectedValues);
+            for (const m of metrics) { current.add(m); }
+            onChange({ ...config, metrics: Array.from(current) });
+          }}
+          onApplyGlob={(pattern) => {
+            const globVal = makeGlobValue(pattern);
+            if (!selectedValues.includes(globVal)) {
+              onChange({ ...config, metrics: [...selectedValues, globVal] });
             }
-            placeholder="Select metric..."
-          />
-        </div>
+          }}
+        />
       ) : (
-        <div className="space-y-3">
-          <div className="grid gap-2">
-            <Label>Pattern (regex)</Label>
-            <Input
-              placeholder="e.g., loss.*, training/.*"
-              value={pattern}
-              onChange={(e) => onPatternChange(e.target.value)}
-            />
-            <p className="text-xs text-muted-foreground">
-              Use regex to match metrics. Example: "loss.*" matches all metrics starting with "loss".
-            </p>
-          </div>
+        <RegexMetricPanel
+          regexPattern={regexPattern}
+          onRegexChange={setRegexPattern}
+          isInvalidRegex={isInvalidRegex}
+          isRegexSearching={isRegexSearching}
+          regexMetrics={regexMetrics}
+          selectedValues={selectedValues}
+          onToggle={handleRegexToggle}
+          onSelectAll={handleRegexSelectAll}
+          onApplyDynamic={handleApplyRegexDynamic}
+        />
+      )}
 
-          {/* Live preview of matching metrics */}
-          {pattern && (
-            <div className="rounded-lg border bg-muted/50 p-3">
-              <p className="mb-2 text-sm font-medium">
-                Matching metrics ({matchingMetrics.length}):
-              </p>
-              {matchingMetrics.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No metrics match this pattern</p>
-              ) : (
-                <div className="max-h-32 overflow-y-auto">
-                  <ul className="space-y-1">
-                    {matchingMetrics.slice(0, 20).map((metric) => (
-                      <li key={metric} className="text-sm text-muted-foreground">
-                        • {metric}
-                      </li>
-                    ))}
-                    {matchingMetrics.length > 20 && (
-                      <li className="text-sm font-medium text-muted-foreground">
-                        ... and {matchingMetrics.length - 20} more
-                      </li>
-                    )}
-                  </ul>
-                </div>
-              )}
-              {matchingMetrics.length > 0 && (
-                <p className="mt-2 text-xs text-muted-foreground">
-                  This will create {matchingMetrics.length} chart widget{matchingMetrics.length !== 1 ? "s" : ""}.
-                </p>
-              )}
-            </div>
+      {/* Selected metrics badges (shown in both modes) */}
+      {selectedValues.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {selectedValues.slice(0, 8).map((v) => {
+            const isGlobVal = isGlobValue(v);
+            const isRegex = isRegexValue(v);
+            const isDynamic = isGlobVal || isRegex;
+            return (
+              <Badge
+                key={v}
+                variant={isDynamic ? "default" : "secondary"}
+                className={cn(
+                  "cursor-pointer text-xs",
+                  isDynamic && "bg-primary/90 text-primary-foreground"
+                )}
+                onClick={() => {
+                  onChange({ ...config, metrics: selectedValues.filter((m) => m !== v) });
+                }}
+              >
+                {isGlobVal && <SparklesIcon className="mr-1 size-3" />}
+                {isRegex && <Code2 className="mr-1 size-3" />}
+                {isGlobVal ? getGlobPattern(v) : isRegex ? getRegexPattern(v) : v}
+                <span className="ml-1">&times;</span>
+              </Badge>
+            );
+          })}
+          {selectedValues.length > 8 && (
+            <Badge variant="outline" className="text-xs">
+              +{selectedValues.length - 8} more
+            </Badge>
           )}
         </div>
       )}
@@ -609,17 +620,273 @@ function ChartConfigForm({
   );
 }
 
+// Shared metric results list used by both Search and Regex panels
+function MetricResultsList({
+  metrics,
+  selectedValues,
+  isLoading,
+  emptyMessage,
+  onToggle,
+  onSelectAll,
+  runMetricSet,
+  footer,
+}: {
+  metrics: string[];
+  selectedValues: string[];
+  isLoading: boolean;
+  emptyMessage: string;
+  onToggle: (metric: string) => void;
+  onSelectAll?: () => void;
+  runMetricSet?: Set<string> | null;
+  footer?: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-lg border">
+      <div className="flex items-center justify-between border-b px-3 py-2">
+        <span className="text-xs font-medium text-muted-foreground">
+          {isLoading ? "Searching..." : `${metrics.length} metric${metrics.length !== 1 ? "s" : ""}`}
+        </span>
+        {onSelectAll && metrics.length > 0 && (
+          <button
+            className="text-xs font-medium text-primary hover:underline"
+            onClick={onSelectAll}
+          >
+            Select all
+          </button>
+        )}
+      </div>
+      <div className="max-h-[200px] overflow-y-auto">
+        {isLoading && metrics.length === 0 ? (
+          <div className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">
+            <Loader2Icon className="size-4 animate-spin" />
+            Searching...
+          </div>
+        ) : metrics.length === 0 ? (
+          <div className="py-4 text-center text-sm text-muted-foreground">
+            {emptyMessage}
+          </div>
+        ) : (
+          metrics.map((metric) => {
+            const notInRuns = runMetricSet != null && !runMetricSet.has(metric);
+            return (
+              <button
+                key={metric}
+                type="button"
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-sm hover:bg-accent"
+                onClick={() => onToggle(metric)}
+              >
+                <CheckIcon
+                  className={cn(
+                    "size-4 shrink-0",
+                    selectedValues.includes(metric) ? "opacity-100" : "opacity-0"
+                  )}
+                />
+                <span className={cn("truncate", notInRuns && "text-muted-foreground")}>{metric}</span>
+                {notInRuns && (
+                  <span className="group/warn relative ml-auto shrink-0">
+                    <TriangleAlertIcon className="size-3.5 text-amber-500" />
+                    <span className="pointer-events-none absolute bottom-full right-0 z-[999] mb-1.5 hidden whitespace-nowrap rounded-md border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-md group-hover/warn:block">
+                      Not present in selected run(s)
+                    </span>
+                  </span>
+                )}
+              </button>
+            );
+          })
+        )}
+      </div>
+      {footer}
+    </div>
+  );
+}
+
+// Search panel — fuzzy + glob search with inline results
+function SearchMetricPanel({
+  organizationId,
+  projectName,
+  selectedRunIds,
+  selectedValues,
+  onToggle,
+  onSelectAll,
+  onApplyGlob,
+}: {
+  organizationId: string;
+  projectName: string;
+  selectedRunIds?: string[];
+  selectedValues: string[];
+  onToggle: (metric: string) => void;
+  onSelectAll: (metrics: string[]) => void;
+  onApplyGlob: (pattern: string) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+
+  const isGlob = search.includes("*") || search.includes("?");
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(isGlob ? search.replace(/[*?]/g, "") : search);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [search, isGlob]);
+
+  const { data: initialMetrics, isLoading: isLoadingInitial } =
+    useDistinctMetricNames(organizationId, projectName);
+
+  const { data: runMetrics } = useRunMetricNames(
+    organizationId, projectName, selectedRunIds ?? []
+  );
+
+  const runMetricSet = useMemo(() => {
+    if (!runMetrics?.metricNames) return null;
+    return new Set(runMetrics.metricNames);
+  }, [runMetrics]);
+
+  const { data: searchResults, isFetching: isSearching } =
+    useSearchMetricNames(organizationId, projectName, debouncedSearch);
+
+  const filteredMetrics = useMemo(() => {
+    const initial = initialMetrics?.metricNames ?? [];
+    const searched = searchResults?.metricNames ?? [];
+    const merged = Array.from(new Set([...searched, ...initial]));
+    const trimmed = search.trim();
+    if (!trimmed) return merged.sort((a, b) => a.localeCompare(b));
+    if (isGlob) {
+      try {
+        const regex = globToRegex(trimmed);
+        return merged.filter((m) => regex.test(m)).sort((a, b) => a.localeCompare(b));
+      } catch { return []; }
+    }
+    return fuzzyFilter(merged, search);
+  }, [initialMetrics, searchResults, search, isGlob]);
+
+  const isLoading = isLoadingInitial || isSearching;
+
+  return (
+    <div className="space-y-3">
+      <div className="grid gap-2">
+        <Label>Search Metrics</Label>
+        <Input
+          placeholder="Search metrics... (use * or ? for glob patterns)"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        <p className="text-xs text-muted-foreground">
+          Fuzzy text search. Use <code>*</code> / <code>?</code> for glob patterns (e.g., <code>train/*</code>).
+        </p>
+      </div>
+      <MetricResultsList
+        metrics={filteredMetrics}
+        selectedValues={selectedValues}
+        isLoading={isLoading}
+        emptyMessage="No metrics found."
+        onToggle={onToggle}
+        onSelectAll={() => onSelectAll(filteredMetrics)}
+        runMetricSet={runMetricSet}
+        footer={
+          isGlob && search.trim() ? (
+            <div className="flex items-center gap-2 border-t px-3 py-2">
+              <SparklesIcon className="size-3 shrink-0 text-muted-foreground" />
+              <span className="flex-1 text-xs text-muted-foreground">Apply as dynamic pattern</span>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 px-3 text-xs"
+                onClick={() => onApplyGlob(search.trim())}
+                disabled={selectedValues.includes(makeGlobValue(search.trim()))}
+              >
+                {selectedValues.includes(makeGlobValue(search.trim())) ? "Applied" : "Apply"}
+              </Button>
+            </div>
+          ) : undefined
+        }
+      />
+    </div>
+  );
+}
+
+// Regex panel — server-side regex search with inline results
+function RegexMetricPanel({
+  regexPattern,
+  onRegexChange,
+  isInvalidRegex,
+  isRegexSearching,
+  regexMetrics,
+  selectedValues,
+  onToggle,
+  onSelectAll,
+  onApplyDynamic,
+}: {
+  regexPattern: string;
+  onRegexChange: (v: string) => void;
+  isInvalidRegex: boolean;
+  isRegexSearching: boolean;
+  regexMetrics: string[];
+  selectedValues: string[];
+  onToggle: (metric: string) => void;
+  onSelectAll: () => void;
+  onApplyDynamic: () => void;
+}) {
+  return (
+    <div className="space-y-3">
+      <div className="grid gap-2">
+        <Label>Regex Pattern</Label>
+        <Input
+          placeholder="e.g., (train|eval)/.+, .*loss.*"
+          value={regexPattern}
+          onChange={(e) => onRegexChange(e.target.value)}
+          className={cn(isInvalidRegex && "border-destructive text-destructive")}
+        />
+      </div>
+
+      {regexPattern.trim() && !isInvalidRegex && (
+        <MetricResultsList
+          metrics={regexMetrics}
+          selectedValues={selectedValues}
+          isLoading={isRegexSearching}
+          emptyMessage="No metrics match this pattern."
+          onToggle={onToggle}
+          onSelectAll={onSelectAll}
+          footer={
+            regexMetrics.length > 0 ? (
+              <div className="flex items-center gap-2 border-t px-3 py-2">
+                <Code2 className="size-3 shrink-0 text-muted-foreground" />
+                <span className="flex-1 text-xs text-muted-foreground">Apply as dynamic pattern</span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 px-3 text-xs"
+                  onClick={onApplyDynamic}
+                  disabled={selectedValues.includes(makeRegexValue(regexPattern.trim()))}
+                >
+                  {selectedValues.includes(makeRegexValue(regexPattern.trim())) ? "Applied" : "Apply"}
+                </Button>
+              </div>
+            ) : undefined
+          }
+        />
+      )}
+
+      {isInvalidRegex && regexPattern.trim() && (
+        <p className="text-xs text-destructive">Invalid regex pattern.</p>
+      )}
+    </div>
+  );
+}
+
 // Scatter plot configuration form
 function ScatterConfigForm({
   config,
   onChange,
   organizationId,
   projectName,
+  selectedRunIds,
 }: {
   config: Partial<ScatterWidgetConfig>;
   onChange: (config: Partial<ScatterWidgetConfig>) => void;
   organizationId: string;
   projectName: string;
+  selectedRunIds?: string[];
 }) {
   return (
     <div className="space-y-4">
@@ -633,6 +900,7 @@ function ScatterConfigForm({
             onChange({ ...config, xMetric: metric as string })
           }
           placeholder="Select X-axis metric..."
+          selectedRunIds={selectedRunIds}
         />
       </div>
 
@@ -646,6 +914,7 @@ function ScatterConfigForm({
             onChange({ ...config, yMetric: metric as string })
           }
           placeholder="Select Y-axis metric..."
+          selectedRunIds={selectedRunIds}
         />
       </div>
 
@@ -744,11 +1013,13 @@ function SingleValueConfigForm({
   onChange,
   organizationId,
   projectName,
+  selectedRunIds,
 }: {
   config: Partial<SingleValueWidgetConfig>;
   onChange: (config: Partial<SingleValueWidgetConfig>) => void;
   organizationId: string;
   projectName: string;
+  selectedRunIds?: string[];
 }) {
   return (
     <div className="space-y-4">
@@ -762,6 +1033,7 @@ function SingleValueConfigForm({
             onChange({ ...config, metric: metric as string })
           }
           placeholder="Select metric..."
+          selectedRunIds={selectedRunIds}
         />
       </div>
 
@@ -829,11 +1101,13 @@ function HistogramConfigForm({
   onChange,
   organizationId,
   projectName,
+  selectedRunIds,
 }: {
   config: Partial<HistogramWidgetConfig>;
   onChange: (config: Partial<HistogramWidgetConfig>) => void;
   organizationId: string;
   projectName: string;
+  selectedRunIds?: string[];
 }) {
   return (
     <div className="space-y-4">
@@ -847,6 +1121,7 @@ function HistogramConfigForm({
             onChange({ ...config, metric: metric as string })
           }
           placeholder="Select metric..."
+          selectedRunIds={selectedRunIds}
         />
       </div>
 

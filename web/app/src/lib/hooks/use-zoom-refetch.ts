@@ -1,12 +1,13 @@
 import { useState, useMemo, useCallback } from "react";
-import { useQuery, useQueries } from "@tanstack/react-query";
+import { useQueries } from "@tanstack/react-query";
 import { trpc, trpcClient } from "@/utils/trpc";
 import type { MetricDataPoint } from "@/lib/db/index";
 
 interface UseZoomRefetchOptions {
   organizationId: string;
   projectName: string;
-  logName: string;
+  /** Metric names to fetch zoom data for. Supports single or multiple metrics. */
+  logNames: string[];
   /** Run IDs to fetch zoom data for (single-run = 1 element, multi-run = N elements) */
   runIds: string[];
   /** Only fire zoom queries when selectedLog === "Step" */
@@ -19,8 +20,13 @@ interface UseZoomRefetchOptions {
   syncedZoomRange?: [number, number] | null;
 }
 
+/** Build a composite key for the zoom data map: "runId\0metricName" */
+export function zoomKey(runId: string, metricName: string): string {
+  return `${runId}\0${metricName}`;
+}
+
 interface UseZoomRefetchReturn {
-  /** Map of runId → full-resolution data for the zoomed range, or null if not zooming */
+  /** Map of zoomKey(runId, metric) → full-resolution data, or null if not zooming */
   zoomDataMap: Map<string, MetricDataPoint[]> | null;
   /** Pass to <LineChart onZoomRangeChange={...}> */
   onZoomRangeChange: (range: [number, number] | null) => void;
@@ -46,15 +52,16 @@ const BATCH_THRESHOLD = 3;
  * only show sampled steps (e.g. multiples of 10). This hook fires a range query for
  * full-resolution data in the visible step range when the user zooms in.
  *
- * For multi-run charts (>= 3 runs), uses a single batch query instead of N individual
- * queries to avoid overwhelming the server.
+ * Supports multiple metrics: fires one batch/individual query per metric.
+ * For multi-run charts (>= 3 runs), uses batch queries per metric instead of
+ * N individual queries to avoid overwhelming the server.
  *
  * Used by both single-run and multi-run chart components.
  */
 export function useZoomRefetch({
   organizationId,
   projectName,
-  logName,
+  logNames,
   runIds,
   selectedLog,
   staleTime = Infinity,
@@ -71,111 +78,60 @@ export function useZoomRefetch({
   const isZooming = enabled && zoomStepRange !== null && selectedLog === "Step";
   const useBatch = runIds.length >= BATCH_THRESHOLD;
 
-  // === Batch path: two-tier queries for all runs (multi-run) ===
+  // Total series = metrics × runs — divide budgets accordingly
+  const totalSeries = logNames.length * runIds.length;
+
+  // === Batch path: one batch query per metric (multi-run) ===
   const batchRangeWidth = isZooming && useBatch && zoomStepRange
     ? zoomStepRange[1] - zoomStepRange[0]
     : 0;
 
-  const fastBatchOpts = useMemo(() => {
-    if (!isZooming || !useBatch || !zoomStepRange) return null;
-    const fastPerRun = Math.floor(ZOOM_FAST_BUDGET / runIds.length);
-    // Skip fast tier if range is small enough that full tier returns all data quickly
-    if (batchRangeWidth <= fastPerRun) return null;
-    return {
-      organizationId,
-      projectName,
-      logName,
-      runIds,
-      stepMin: zoomStepRange[0],
-      stepMax: zoomStepRange[1],
-      maxPoints: fastPerRun,
-      preview: true, // Use fast LIMIT scan, no window functions
-    };
-  }, [isZooming, useBatch, zoomStepRange, batchRangeWidth, organizationId, projectName, logName, runIds]);
+  const fastPerRun = Math.floor(ZOOM_FAST_BUDGET / totalSeries);
+  const skipFastBatch = batchRangeWidth <= fastPerRun;
 
-  const fullBatchOpts = useMemo(() => {
-    if (!isZooming || !useBatch || !zoomStepRange) return null;
-    const perRunBudget = Math.floor(ZOOM_TOTAL_BUDGET / runIds.length);
-    const maxPoints = batchRangeWidth <= perRunBudget ? 0 : perRunBudget;
-    return {
-      organizationId,
-      projectName,
-      logName,
-      runIds,
-      stepMin: zoomStepRange[0],
-      stepMax: zoomStepRange[1],
-      maxPoints,
-    };
-  }, [isZooming, useBatch, zoomStepRange, batchRangeWidth, organizationId, projectName, logName, runIds]);
-
-  const fastBatchQuery = useQuery({
-    queryKey: fastBatchOpts
-      ? [...trpc.runs.data.graphBatch.queryOptions(fastBatchOpts).queryKey, "zoom-fast"]
-      : ["noop-zoom-batch-fast"],
-    queryFn: () => trpcClient.runs.data.graphBatch.query(fastBatchOpts!),
-    staleTime,
-    gcTime: 60_000,
-    enabled: fastBatchOpts !== null,
-  });
-
-  const fullBatchQuery = useQuery({
-    queryKey: fullBatchOpts
-      ? [...trpc.runs.data.graphBatch.queryOptions(fullBatchOpts).queryKey, "zoom-full"]
-      : ["noop-zoom-batch-full"],
-    queryFn: () => trpcClient.runs.data.graphBatch.query(fullBatchOpts!),
-    staleTime,
-    gcTime: 60_000,
-    enabled: fullBatchOpts !== null,
-  });
-
-  // === Individual path: two-tier queries per run (single-run or few runs) ===
-  const individualRangeWidth = isZooming && !useBatch && zoomStepRange
-    ? zoomStepRange[1] - zoomStepRange[0]
-    : 0;
-  // Skip fast tier if range is small enough that full tier returns all data quickly
-  const skipFastIndividual = individualRangeWidth <= ZOOM_FAST_MAX_POINTS;
-
-  const fastQueries = useQueries({
+  const fastBatchQueries = useQueries({
     queries:
-      isZooming && !useBatch && zoomStepRange && !skipFastIndividual
-        ? runIds.map((runId) => {
+      isZooming && useBatch && zoomStepRange
+        ? logNames.map((metric) => {
             const opts = {
               organizationId,
               projectName,
-              runId,
-              logName,
+              logName: metric,
+              runIds,
               stepMin: zoomStepRange[0],
               stepMax: zoomStepRange[1],
-              maxPoints: ZOOM_FAST_MAX_POINTS,
-              preview: true, // Use fast LIMIT scan, no window functions
+              maxPoints: fastPerRun,
+              preview: true,
             };
             return {
-              queryKey: trpc.runs.data.graph.queryOptions(opts).queryKey,
-              queryFn: () => trpcClient.runs.data.graph.query(opts),
+              queryKey: [...trpc.runs.data.graphBatch.queryOptions(opts).queryKey, "zoom-fast"],
+              queryFn: () => trpcClient.runs.data.graphBatch.query(opts),
               staleTime,
               gcTime: 60_000,
+              enabled: !skipFastBatch,
             };
           })
         : [],
   });
 
-  const fullQueries = useQueries({
+  const fullBatchQueries = useQueries({
     queries:
-      isZooming && !useBatch && zoomStepRange
-        ? runIds.map((runId) => {
-            const maxPoints = individualRangeWidth <= ZOOM_FULL_MAX_POINTS ? 0 : ZOOM_FULL_MAX_POINTS;
+      isZooming && useBatch && zoomStepRange
+        ? logNames.map((metric) => {
+            const perRunBudget = Math.floor(ZOOM_TOTAL_BUDGET / totalSeries);
+            const maxPoints = batchRangeWidth <= perRunBudget ? 0 : perRunBudget;
             const opts = {
               organizationId,
               projectName,
-              runId,
-              logName,
+              logName: metric,
+              runIds,
               stepMin: zoomStepRange[0],
               stepMax: zoomStepRange[1],
               maxPoints,
             };
             return {
-              queryKey: trpc.runs.data.graph.queryOptions(opts).queryKey,
-              queryFn: () => trpcClient.runs.data.graph.query(opts),
+              queryKey: [...trpc.runs.data.graphBatch.queryOptions(opts).queryKey, "zoom-full"],
+              queryFn: () => trpcClient.runs.data.graphBatch.query(opts),
               staleTime,
               gcTime: 60_000,
             };
@@ -183,32 +139,101 @@ export function useZoomRefetch({
         : [],
   });
 
-  // Map zoom query results by runId — prefer full tier, fall back to fast tier
+  // === Individual path: queries per metric × run (single-run or few runs) ===
+  const individualRangeWidth = isZooming && !useBatch && zoomStepRange
+    ? zoomStepRange[1] - zoomStepRange[0]
+    : 0;
+  const skipFastIndividual = individualRangeWidth <= ZOOM_FAST_MAX_POINTS;
+
+  const fastIndividualQueries = useQueries({
+    queries:
+      isZooming && !useBatch && zoomStepRange && !skipFastIndividual
+        ? logNames.flatMap((metric) =>
+            runIds.map((runId) => {
+              const opts = {
+                organizationId,
+                projectName,
+                runId,
+                logName: metric,
+                stepMin: zoomStepRange[0],
+                stepMax: zoomStepRange[1],
+                maxPoints: Math.floor(ZOOM_FAST_MAX_POINTS / logNames.length),
+                preview: true,
+              };
+              return {
+                queryKey: trpc.runs.data.graph.queryOptions(opts).queryKey,
+                queryFn: () => trpcClient.runs.data.graph.query(opts),
+                staleTime,
+                gcTime: 60_000,
+              };
+            })
+          )
+        : [],
+  });
+
+  const fullIndividualQueries = useQueries({
+    queries:
+      isZooming && !useBatch && zoomStepRange
+        ? logNames.flatMap((metric) =>
+            runIds.map((runId) => {
+              const perSeriesBudget = Math.floor(ZOOM_FULL_MAX_POINTS / logNames.length);
+              const maxPoints = individualRangeWidth <= perSeriesBudget ? 0 : perSeriesBudget;
+              const opts = {
+                organizationId,
+                projectName,
+                runId,
+                logName: metric,
+                stepMin: zoomStepRange[0],
+                stepMax: zoomStepRange[1],
+                maxPoints,
+              };
+              return {
+                queryKey: trpc.runs.data.graph.queryOptions(opts).queryKey,
+                queryFn: () => trpcClient.runs.data.graph.query(opts),
+                staleTime,
+                gcTime: 60_000,
+              };
+            })
+          )
+        : [],
+  });
+
+  // Map zoom query results by zoomKey(runId, metric) — prefer full tier, fall back to fast tier
   const zoomDataMap = useMemo(() => {
     if (!isZooming || !zoomStepRange) return null;
 
     const map = new Map<string, MetricDataPoint[]>();
 
     if (useBatch) {
-      const fullData = fullBatchQuery.data as Record<string, MetricDataPoint[]> | undefined;
-      const fastData = fastBatchQuery.data as Record<string, MetricDataPoint[]> | undefined;
-      for (const runId of runIds) {
-        const points = fullData?.[runId] ?? fastData?.[runId];
-        if (points && points.length > 0) {
-          map.set(runId, points);
+      // Batch queries: one per metric, each returns Record<runId, data[]>
+      logNames.forEach((metric, metricIdx) => {
+        const fullData = fullBatchQueries[metricIdx]?.data as Record<string, MetricDataPoint[]> | undefined;
+        // Fast batch queries may be fewer (skipped if range is small)
+        // Find the matching fast query for this metric
+        const fastData = fastBatchQueries[metricIdx]?.data as Record<string, MetricDataPoint[]> | undefined;
+        for (const runId of runIds) {
+          const points = fullData?.[runId] ?? fastData?.[runId];
+          if (points && points.length > 0) {
+            map.set(zoomKey(runId, metric), points);
+          }
         }
-      }
+      });
     } else {
-      runIds.forEach((runId, i) => {
-        const points = (fullQueries[i]?.data ?? fastQueries[i]?.data) as MetricDataPoint[] | undefined;
-        if (points && points.length > 0) {
-          map.set(runId, points);
-        }
+      // Individual queries: logNames × runIds, flattened
+      logNames.forEach((metric, metricIdx) => {
+        runIds.forEach((runId, runIdx) => {
+          const flatIdx = metricIdx * runIds.length + runIdx;
+          const points = (fullIndividualQueries[flatIdx]?.data ?? fastIndividualQueries[flatIdx]?.data) as MetricDataPoint[] | undefined;
+          if (points && points.length > 0) {
+            map.set(zoomKey(runId, metric), points);
+          }
+        });
       });
     }
 
     return map.size > 0 ? map : null;
-  }, [isZooming, zoomStepRange, useBatch, fullBatchQuery.data, fastBatchQuery.data, fullQueries, fastQueries, runIds]);
+  }, [isZooming, zoomStepRange, useBatch, logNames, runIds,
+      fullBatchQueries, fastBatchQueries, fullIndividualQueries, fastIndividualQueries]);
 
   // Callback for the chart's zoom range change — triggers server re-fetch in Step mode
   const onZoomRangeChange = useCallback(
@@ -224,8 +249,8 @@ export function useZoomRefetch({
 
   const isZoomFetching = isZooming && (
     useBatch
-      ? fullBatchQuery.isFetching || fastBatchQuery.isFetching
-      : fullQueries.some((q) => q.isFetching) || fastQueries.some((q) => q.isFetching)
+      ? fullBatchQueries.some((q) => q.isFetching) || fastBatchQueries.some((q) => q.isFetching)
+      : fullIndividualQueries.some((q) => q.isFetching) || fastIndividualQueries.some((q) => q.isFetching)
   );
 
   return { zoomDataMap, onZoomRangeChange, isZoomFetching };

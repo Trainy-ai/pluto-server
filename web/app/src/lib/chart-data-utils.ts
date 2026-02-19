@@ -32,6 +32,8 @@ export interface BaseSeriesData {
   label: string;
   color: string;
   seriesId?: string;
+  /** uPlot dash pattern, e.g. [10, 5]. undefined = solid. */
+  dash?: number[];
 }
 
 /** Chart series data with all optional fields for smoothing/envelope/display */
@@ -41,6 +43,8 @@ export interface ChartSeriesData {
   label: string;
   color?: string;
   seriesId?: string;
+  /** uPlot dash pattern, e.g. [10, 5]. undefined = solid. */
+  dash?: number[];
   opacity?: number;
   hideFromLegend?: boolean;
   envelopeOf?: string;

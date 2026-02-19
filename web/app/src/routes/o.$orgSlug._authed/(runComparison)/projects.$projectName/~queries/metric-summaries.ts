@@ -53,6 +53,27 @@ export function useSearchMetricNames(orgId: string, projectName: string, search:
 }
 
 /**
+ * Search metric names server-side using regex (ClickHouse re2 engine).
+ * Only fires when regex is non-empty and valid.
+ */
+export function useRegexSearchMetricNames(orgId: string, projectName: string, regex: string) {
+  return useQuery(
+    trpc.runs.distinctMetricNames.queryOptions(
+      {
+        organizationId: orgId,
+        projectName,
+        regex,
+      },
+      {
+        enabled: regex.length > 0,
+        staleTime: 60 * 1000,
+        placeholderData: (prev) => prev,
+      },
+    )
+  );
+}
+
+/**
  * Batch fetch metric summaries for visible runs.
  * Only runs when there are metric columns and visible run IDs.
  */
