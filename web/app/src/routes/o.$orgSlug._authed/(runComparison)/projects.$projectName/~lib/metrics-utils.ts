@@ -8,6 +8,17 @@ type LogsByRunId = inferOutput<typeof trpc.runs.getLogsByRunIds>;
 type RunLog = LogsByRunId[string][number];
 
 /**
+ * Computes a display ID for a run from its project prefix and number.
+ * Returns null if either value is unavailable.
+ */
+export function getDisplayIdForRun(run: Run): string | null {
+  const runPrefix = (run as any).project?.runPrefix;
+  return run.number != null && runPrefix
+    ? `${runPrefix}-${run.number}`
+    : null;
+}
+
+/**
  * Cache structure for stable output references.
  * Uses a Map keyed by project context to ensure isolation between projects.
  * This prevents cross-project data leakage when multiple tabs are open.
@@ -145,6 +156,7 @@ export const groupMetrics = (
         runName: run.name,
         color,
         status: run.status,
+        displayId: getDisplayIdForRun(run),
       });
     });
   });
@@ -165,6 +177,7 @@ export const groupMetrics = (
               runName: run.name,
               color,
               status: run.status,
+              displayId: getDisplayIdForRun(run),
             });
           }
         });

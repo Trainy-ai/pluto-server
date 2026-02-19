@@ -13,6 +13,8 @@ import { MultiLineChart } from "../multi-group/line-chart-multi";
 import { MultiGroupImage } from "../multi-group/image";
 import { MultiGroupVideo } from "../multi-group/video";
 import { MultiGroupAudio } from "../multi-group/audio";
+import { formatRunLabel } from "@/lib/format-run-label";
+import { getDisplayIdForRun } from "../../~lib/metrics-utils";
 
 interface WidgetRendererProps {
   widget: Widget;
@@ -111,7 +113,7 @@ function ChartWidget({
   const lines = useMemo(() => {
     return Object.entries(selectedRuns).map(([runId, { run, color }]) => ({
       runId,
-      runName: run.name,
+      runName: formatRunLabel(run.name, getDisplayIdForRun(run)),
       color,
     }));
   }, [selectedRuns]);
@@ -301,7 +303,7 @@ function FileSeriesWidget({
   const runs = useMemo(() => {
     return Object.entries(selectedRuns).map(([runId, { run, color }]) => ({
       runId,
-      runName: run.name,
+      runName: formatRunLabel(run.name, getDisplayIdForRun(run)),
       color,
     }));
   }, [selectedRuns]);

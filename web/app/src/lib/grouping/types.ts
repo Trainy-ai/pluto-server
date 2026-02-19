@@ -22,6 +22,7 @@ export interface GroupedMetrics {
         runName: string;
         color: string;
         status: RunStatus;
+        displayId?: string | null;
       }>;
     }>;
     groupName: LogGroupName;

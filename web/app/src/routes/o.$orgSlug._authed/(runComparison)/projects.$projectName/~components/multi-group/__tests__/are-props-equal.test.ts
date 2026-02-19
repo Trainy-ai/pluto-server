@@ -11,6 +11,7 @@ function createMetric(
     runName: string;
     color: string;
     status: RunStatus;
+    displayId?: string | null;
   }>
 ) {
   return { name, type, data };
@@ -214,6 +215,42 @@ describe("arePropsEqual", () => {
         ],
       });
       expect(arePropsEqual(props1, props2)).toBe(false);
+    });
+
+    it("returns false when displayId changes", () => {
+      const props1 = createProps({
+        metrics: [
+          createMetric("loss", "METRIC", [
+            { runId: "run-1", runName: "Run 1", color: "#ff0000", status: "COMPLETED", displayId: "MMP-1" },
+          ]),
+        ],
+      });
+      const props2 = createProps({
+        metrics: [
+          createMetric("loss", "METRIC", [
+            { runId: "run-1", runName: "Run 1", color: "#ff0000", status: "COMPLETED", displayId: "MMP-2" },
+          ]),
+        ],
+      });
+      expect(arePropsEqual(props1, props2)).toBe(false);
+    });
+
+    it("returns true when displayId is the same", () => {
+      const props1 = createProps({
+        metrics: [
+          createMetric("loss", "METRIC", [
+            { runId: "run-1", runName: "Run 1", color: "#ff0000", status: "COMPLETED", displayId: "MMP-1" },
+          ]),
+        ],
+      });
+      const props2 = createProps({
+        metrics: [
+          createMetric("loss", "METRIC", [
+            { runId: "run-1", runName: "Run 1", color: "#ff0000", status: "COMPLETED", displayId: "MMP-1" },
+          ]),
+        ],
+      });
+      expect(arePropsEqual(props1, props2)).toBe(true);
     });
 
     it("handles empty run data arrays", () => {
