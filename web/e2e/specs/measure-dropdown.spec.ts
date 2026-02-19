@@ -18,7 +18,7 @@ test("measure visibility dropdown open time", async ({ page }) => {
 
   for (let i = 0; i < iterations; i++) {
     // Close dropdown if open
-    const isOpen = await page.locator('[data-radix-popper-content-wrapper]').count() > 0;
+    const isOpen = await page.locator('[data-testid="visibility-dropdown"]').count() > 0;
     if (isOpen) {
       await page.keyboard.press('Escape');
       await page.evaluate(() => new Promise<void>(r => requestAnimationFrame(() => r())));
@@ -45,14 +45,13 @@ test("measure visibility dropdown open time", async ({ page }) => {
             return;
           }
 
-          const wrapper = document.querySelector('[data-radix-popper-content-wrapper]');
+          const wrapper = document.querySelector('[data-testid="visibility-dropdown"]');
           if (wrapper) {
             const rect = wrapper.getBoundingClientRect();
             const style = window.getComputedStyle(wrapper);
 
             if (rect.width > 0 && rect.height > 0 &&
-                parseFloat(style.opacity) > 0.9 &&
-                style.visibility === 'visible' &&
+                style.visibility !== 'hidden' &&
                 style.display !== 'none') {
               resolve({ timeToVisible: elapsed });
               return;

@@ -129,14 +129,16 @@ export function TagsEditorPopover({
     <Popover
       open={open}
       onOpenChange={(isOpen) => {
-        if (!isOpen && hasChanges && !appliedRef.current) {
-          // Apply changes when closing the popover (but not if handleApply already fired)
-          onTagsUpdate(pendingTags);
-        }
         if (isOpen) {
           appliedRef.current = false;
+          setOpen(true);
+        } else {
+          // Auto-save pending changes on close (click-outside, Escape, etc.)
+          if (hasChanges && !appliedRef.current) {
+            onTagsUpdate(pendingTags);
+          }
+          setOpen(false);
         }
-        setOpen(isOpen);
       }}
     >
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>

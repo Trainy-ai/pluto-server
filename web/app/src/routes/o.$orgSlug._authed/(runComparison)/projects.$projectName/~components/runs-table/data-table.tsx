@@ -254,8 +254,6 @@ interface DataTableProps {
   onPageSizeChange: (pageSize: number) => void;
   // View selector slot
   viewSelector?: React.ReactNode;
-  /** Callback when a run row is hovered (for chart highlighting). Passes the run's unique SQID. */
-  onRunHover?: (runId: string | null) => void;
   /** Active chart view ID — passed as search param when navigating to a run */
   activeChartViewId?: string | null;
 }
@@ -315,7 +313,6 @@ export function DataTable({
   pageSize,
   onPageSizeChange,
   viewSelector,
-  onRunHover,
   activeChartViewId,
 }: DataTableProps) {
   // Internal pagination state (pageIndex only — pageSize is controlled by parent)
@@ -328,8 +325,11 @@ export function DataTable({
   const { draggedId, dragOverId, handleDragStart, handleDragOver, handleDrop, handleDragEnd } =
     useColumnDrag(customColumns, onReorderColumns);
 
-  // Track which run row is hovered (for highlight data attribute)
-  const [hoveredRunId, setHoveredRunId] = useState<string | null>(null);
+  // Track which run row is hovered — uses a ref + direct DOM mutation
+  // instead of state to avoid re-rendering the entire table (which would
+  // remount cell components and reset their local state, e.g. open popovers).
+  const hoveredRunIdRef = useRef<string | null>(null);
+  const tableBodyRef = useRef<HTMLTableSectionElement>(null);
 
   // Visibility options state
   const [showOnlySelected, setShowOnlySelected] = useState(false);
@@ -703,7 +703,7 @@ export function DataTable({
                 </TableRow>
               ))}
             </TableHeader>
-            <TableBody>
+            <TableBody ref={tableBodyRef}>
               {table.getRowModel().rows.length ? (
                 table.getRowModel().rows.map((row) => (
                   <TableRow
@@ -711,17 +711,42 @@ export function DataTable({
                     data-run-id={row.original.id}
                     data-run-name={row.original.name}
                     data-state={row.getIsSelected() ? "selected" : ""}
-                    data-hover-highlight={hoveredRunId === row.original.id ? "true" : undefined}
                     onMouseEnter={() => {
                       // Only highlight selected runs (those with visible chart curves)
                       if (row.getIsSelected()) {
-                        setHoveredRunId(row.original.id);
-                        onRunHover?.(row.original.id);
+                        // Update ref + DOM attribute directly (no state → no re-render)
+                        const prev = hoveredRunIdRef.current;
+                        hoveredRunIdRef.current = row.original.id;
+                        if (prev !== row.original.id && tableBodyRef.current) {
+                          if (prev) {
+                            tableBodyRef.current
+                              .querySelector(`[data-run-id="${prev}"]`)
+                              ?.removeAttribute("data-hover-highlight");
+                          }
+                          (
+                            tableBodyRef.current.querySelector(
+                              `[data-run-id="${row.original.id}"]`,
+                            ) as HTMLElement | null
+                          )?.setAttribute("data-hover-highlight", "true");
+                        }
+                        // Notify charts via DOM event (avoids React state → no re-render)
+                        document.dispatchEvent(
+                          new CustomEvent("run-table-hover", { detail: row.original.id }),
+                        );
                       }
                     }}
                     onMouseLeave={() => {
-                      setHoveredRunId(null);
-                      onRunHover?.(null);
+                      const prev = hoveredRunIdRef.current;
+                      hoveredRunIdRef.current = null;
+                      if (prev && tableBodyRef.current) {
+                        tableBodyRef.current
+                          .querySelector(`[data-run-id="${prev}"]`)
+                          ?.removeAttribute("data-hover-highlight");
+                      }
+                      // Notify charts via DOM event
+                      document.dispatchEvent(
+                        new CustomEvent("run-table-hover", { detail: null }),
+                      );
                     }}
                   >
                     {row.getVisibleCells().map((cell) => {

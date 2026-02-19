@@ -132,8 +132,9 @@ function RouteComponent() {
   // View mode state - "charts" (default) or "side-by-side"
   const [viewMode, setViewMode] = useState<ViewMode>("charts");
 
-  // Track hovered run ID from runs table for chart highlighting
-  const [hoveredRunId, setHoveredRunId] = useState<string | null>(null);
+  // Table hover → chart highlighting is handled entirely via DOM events
+  // ("run-table-hover" dispatched by data-table.tsx, consumed by chart-sync-context.tsx)
+  // to avoid re-rendering the component tree (which remounts table cells and closes popovers).
 
   // Server-side sorting state (persisted to localStorage)
   const sortingStorageKey = `run-table-sorting:${organizationSlug}:${projectName}`;
@@ -748,7 +749,6 @@ function RouteComponent() {
                     onResetToDefault={handleResetToDefault}
                   />
                 }
-                onRunHover={setHoveredRunId}
                 activeChartViewId={chart ?? null}
               />
             </div>
@@ -780,7 +780,6 @@ function RouteComponent() {
                       selectedRuns={selectedRunsWithColors}
                       selectedViewId={chart ?? null}
                       onViewChange={handleViewChange}
-                      tableHighlightedRunId={hoveredRunId}
                     />
                   </div>
                 </>
