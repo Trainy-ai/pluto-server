@@ -15,6 +15,7 @@ import type { RunLogType, RunStatus } from "@/lib/grouping/types";
 import { trpc } from "@/utils/trpc";
 import { useQuery } from "@tanstack/react-query";
 import { arePropsEqual } from "./props-comparison";
+import { formatRunLabel } from "@/lib/format-run-label";
 
 // Re-export for backwards compatibility
 export { arePropsEqual } from "./props-comparison";
@@ -30,6 +31,7 @@ interface MultiGroupProps {
       runName: string;
       color: string;
       status: RunStatus;
+      displayId?: string | null;
     }[];
   }[];
   className?: string;
@@ -65,7 +67,7 @@ export const MultiGroup = ({
       if (metric.type !== "METRIC") return null;
       return metric.data.map((line) => ({
         runId: line.runId,
-        runName: line.runName,
+        runName: formatRunLabel(line.runName, line.displayId),
         color: line.color,
       }));
     });
@@ -108,13 +110,19 @@ export const MultiGroup = ({
           );
         }
 
+        // Format runName with displayId for non-METRIC types
+        const formattedRuns = metric.data.map((d) => ({
+          ...d,
+          runName: formatRunLabel(d.runName, d.displayId),
+        }));
+
         if (metric.type === "HISTOGRAM") {
           return () => (
             <MultiHistogramView
               logName={metric.name}
               tenantId={organizationId}
               projectName={projectName}
-              runs={metric.data}
+              runs={formattedRuns}
             />
           );
         }
@@ -125,7 +133,7 @@ export const MultiGroup = ({
               logName={metric.name}
               organizationId={organizationId}
               projectName={projectName}
-              runs={metric.data}
+              runs={formattedRuns}
               className="h-full"
             />
           );
@@ -137,7 +145,7 @@ export const MultiGroup = ({
               logName={metric.name}
               organizationId={organizationId}
               projectName={projectName}
-              runs={metric.data}
+              runs={formattedRuns}
               className="h-full"
             />
           );
@@ -149,7 +157,7 @@ export const MultiGroup = ({
               logName={metric.name}
               organizationId={organizationId}
               projectName={projectName}
-              runs={metric.data}
+              runs={formattedRuns}
               className="h-full"
             />
           );

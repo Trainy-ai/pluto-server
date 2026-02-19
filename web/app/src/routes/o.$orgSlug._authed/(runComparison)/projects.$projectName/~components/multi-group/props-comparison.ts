@@ -20,6 +20,7 @@ export interface MultiGroupPropsForComparison {
       runName: string;
       color: string;
       status: RunStatus;
+      displayId?: string | null;
     }[];
   }[];
 }
@@ -73,7 +74,8 @@ export function arePropsEqual(
         prevData.runId !== nextData.runId ||
         prevData.runName !== nextData.runName ||
         prevData.color !== nextData.color ||
-        prevData.status !== nextData.status
+        prevData.status !== nextData.status ||
+        prevData.displayId !== nextData.displayId
       ) {
         return false;
       }
