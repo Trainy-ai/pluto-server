@@ -947,6 +947,11 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
                           // Restore the zoom range since setData may reset it
                           chart.setScale("x", { min: currentXMin, max: currentXMax });
                         });
+                        // Flush any lingering microtask commits from setData while
+                        // isProgrammaticScaleRef is still true. Without this, deferred
+                        // commits fire after the guard is lowered and can trigger spurious
+                        // syncXScale calls that leave isSyncingZoomRef stuck at true.
+                        chart.batch(() => {});
                       } finally {
                         isProgrammaticScaleRef.current = false;
                       }
@@ -1230,6 +1235,9 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       // Register a reset callback that restores the original full-range data.
       // This is called by context.resetZoom() on OTHER charts when one chart resets.
       // Using uplotDataRef ensures we always have the latest full-range data.
+      // IMPORTANT: The callback must be completely self-contained — it restores data,
+      // resets the X scale, and clears all zoom state. The context's resetZoom() simply
+      // calls this callback without any additional scale manipulation.
       chartSyncContextRef.current?.registerResetCallback(chartId, () => {
         if (zoomResampleTimerRef.current) {
           clearTimeout(zoomResampleTimerRef.current);
@@ -1239,16 +1247,29 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           clearTimeout(zoomRangeTimerRef.current);
           zoomRangeTimerRef.current = null;
         }
+        const fullData = uplotDataRef.current;
+        isProgrammaticScaleRef.current = true;
         try {
-          isProgrammaticScaleRef.current = true;
-          chart.batch(() => {
-            chart.setData(uplotDataRef.current);
-          });
+          // Step 1: Restore full-range data. setData() schedules a microtask commit.
+          chart.setData(fullData);
+          // Step 2: Force synchronous commit so scales are recalculated immediately
+          // while isProgrammaticScaleRef is still true (prevents hook side effects).
+          chart.batch(() => {});
+          // Step 3: Explicitly set X scale to full data range. setData's auto-scale
+          // may not reset the X range when cursor sync is active.
+          const xVals = fullData[0] as number[];
+          if (xVals && xVals.length > 0) {
+            chart.setScale("x", { min: xVals[0], max: xVals[xVals.length - 1] });
+            // Force commit for the scale change
+            chart.batch(() => {});
+          }
         } finally {
           isProgrammaticScaleRef.current = false;
         }
         userHasZoomedRef.current = false;
         zoomStateRef.current = null;
+        lastAppliedGlobalRangeRef.current = null;
+        onZoomRangeChangeRef.current?.(null);
       });
 
       // Safety: Re-check synced zoom from context in next frame
@@ -1319,7 +1340,13 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         onZoomRangeChangeRef.current?.(null);
         // Clear synced zoom in context so all charts reset
         chartSyncContextRef.current?.setSyncedZoomRange(null);
-        // Reset all other charts to global range
+        // Force-clear the sync guard before calling resetZoom.
+        // Microtask commits from zoom re-downsampling can leave isSyncingZoomRef stuck
+        // at true, which would cause resetZoom to bail out. Since dblclick is always a
+        // deliberate user action, it's safe to override the guard here.
+        const syncRef = chartSyncContextRef.current?.isSyncingZoomRef;
+        if (syncRef) syncRef.current = false;
+        // Reset all other charts to full range
         chartSyncContextRef.current?.resetZoom(chartId);
         // Re-apply global range if available (use ref since this is an event handler)
         const globalRange = chartSyncContextRef.current?.globalXRange;

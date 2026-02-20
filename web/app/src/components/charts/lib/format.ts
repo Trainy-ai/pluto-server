@@ -3,7 +3,8 @@
 // ============================
 
 /** Format a single value with SI units (k, M, G, etc.) */
-export function formatAxisLabel(value: number): string {
+export function formatAxisLabel(value: number | null | undefined): string {
+  if (value == null) return "";
   if (value === 0) return "0";
   if (Math.abs(value) < 0.0001) {
     return value.toExponential(2).replace(/\.?0+e/, "e");
@@ -29,7 +30,7 @@ export function formatAxisLabel(value: number): string {
  * When zoomed in, abbreviated format (e.g. "52.95k") can produce duplicate labels
  * for nearby tick values. This detects duplicates and falls back to full precision.
  */
-export function formatAxisLabels(vals: number[]): string[] {
+export function formatAxisLabels(vals: (number | null | undefined)[]): string[] {
   if (vals.length === 0) return [];
 
   // Try abbreviated format first
@@ -41,17 +42,21 @@ export function formatAxisLabels(vals: number[]): string[] {
     return abbreviated;
   }
 
+  // Filter to non-null values for spacing/precision calculations
+  const nonNull = vals.filter((v): v is number => v != null);
+  if (nonNull.length < 2) return abbreviated;
+
   // Ticks have duplicates — need more precision
-  const spacing = vals.length > 1 ? Math.abs(vals[1] - vals[0]) : 1;
+  const spacing = Math.abs(nonNull[1] - nonNull[0]);
 
   // For integer-spaced values (step axes), show full integers with commas
-  if (spacing >= 1 && vals.every((v) => Number.isInteger(v))) {
-    return vals.map((v) => v.toLocaleString());
+  if (spacing >= 1 && nonNull.every((v) => Number.isInteger(v))) {
+    return vals.map((v) => (v == null ? "" : v.toLocaleString()));
   }
 
   // For decimal spacing, show enough decimal places to differentiate
   const decimals = Math.max(0, Math.ceil(-Math.log10(spacing)) + 1);
-  return vals.map((v) => v.toFixed(Math.min(decimals, 10)));
+  return vals.map((v) => (v == null ? "" : v.toFixed(Math.min(decimals, 10))));
 }
 
 /** Format a step/x value for the tooltip header with full precision. */

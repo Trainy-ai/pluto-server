@@ -484,16 +484,14 @@ export const LineChartWithFetch = memo(
             )}
             {chartConfig.isSystem ? (
               <LineChart
+                {...commonProps}
                 lines={chartConfig.lines}
-                title={chartConfig.title}
                 isDateTime={chartConfig.isDateTime}
                 xlabel={chartConfig.xlabel}
                 yMin={yMin}
                 yMax={yMax}
                 onDataRange={onDataRange}
                 onResetBounds={onResetBounds}
-                tooltipInterpolation={settings.tooltipInterpolation}
-                outlierDetection={settings.yAxisScaleMode === "outlier-aware"}
                 rawLines={chartConfig.rawLines}
                 downsampleTarget={settings.maxPointsPerSeries}
                 reprocessForZoom={reprocessForZoom}
