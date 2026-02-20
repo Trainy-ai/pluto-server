@@ -11,6 +11,7 @@ import { updateNotesProcedure } from "./procs/update-notes";
 import { distinctTagsProcedure } from "./procs/distinct-tags";
 import { distinctColumnKeysProcedure, searchColumnKeysProcedure } from "./procs/distinct-column-keys";
 import { getLogsByRunIdsProcedure } from "./procs/get-logs-by-run-ids";
+import { getFieldValuesProcedure } from "./procs/get-field-values";
 import { distinctMetricNamesProcedure } from "./procs/distinct-metric-names";
 import { metricSummariesProcedure } from "./procs/metric-summaries";
 
@@ -26,6 +27,7 @@ export const runsRouter = router({
   distinctColumnKeys: distinctColumnKeysProcedure,
   searchColumnKeys: searchColumnKeysProcedure,
   getLogsByRunIds: getLogsByRunIdsProcedure,
+  getFieldValues: getFieldValuesProcedure,
   distinctMetricNames: distinctMetricNamesProcedure,
   metricSummaries: metricSummariesProcedure,
   // Routers

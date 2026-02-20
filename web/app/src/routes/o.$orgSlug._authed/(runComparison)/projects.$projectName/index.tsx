@@ -29,7 +29,7 @@ import {
   ResizableHandle,
 } from "@/components/ui/resizable";
 import { useDebouncedCallback } from "@/lib/hooks/use-debounced-callback";
-import { flattenObject } from "@/lib/flatten-object";
+import { useFieldValues } from "./~queries/field-values";
 import { RunTableViewSelector } from "./~components/runs-table/run-table-view-selector";
 import { DEFAULT_PAGE_SIZE } from "./~components/runs-table/config";
 
@@ -456,28 +456,20 @@ function RouteComponent() {
     setPageSize(getDefaultPageSize());
   }, [updateColumns, setAllOverrides, setAllFilters, getDefaultPageSize]);
 
-  // Flatten the pages to get all runs.
-  // Pre-flatten config and systemMetadata once per run so every downstream
-  // consumer (table cells, side-by-side view, etc.) can do a cheap key lookup
-  // instead of re-flattening on each render.
+  // Flatten the pages to get all runs, deduplicating by ID.
   const allLoadedRuns = useMemo(() => {
     if (!data?.pages) return [];
 
-    // Flatten and deduplicate runs by ID to prevent pagination issues
     const allRuns = data.pages.flatMap((page) => {
       if (!page) return [];
       return page.runs || [];
     });
 
-    // Create a Map to deduplicate by run ID
+    // Deduplicate by run ID
     const uniqueRuns = new Map();
     allRuns.forEach((run) => {
       if (run.id && !uniqueRuns.has(run.id)) {
-        uniqueRuns.set(run.id, {
-          ...run,
-          _flatConfig: run.config ? flattenObject(run.config) : {},
-          _flatSystemMetadata: run.systemMetadata ? flattenObject(run.systemMetadata) : {},
-        });
+        uniqueRuns.set(run.id, run);
       }
     });
 
@@ -491,8 +483,16 @@ function RouteComponent() {
       .map((c) => ({ logName: c.id, aggregation: c.aggregation }));
   }, [customColumns]);
 
-  // Get all visible run IDs for metric summaries batch fetch
+  // Get all visible run IDs for batch fetches (field values, metric summaries)
   const visibleRunIds = useMemo(() => allLoadedRuns.map((r) => r.id), [allLoadedRuns]);
+
+  // Fetch pre-flattened field values (config + systemMetadata) from run_field_values table.
+  // This replaces the old pattern of sending full JSON blobs in runs.list.
+  const { data: fieldValuesData } = useFieldValues(
+    organizationId,
+    projectName,
+    visibleRunIds,
+  );
 
   // Fetch metric summaries for visible runs (only when metric columns are active)
   const { data: metricSummariesData } = useMetricSummaries(
@@ -502,20 +502,46 @@ function RouteComponent() {
     metricColumnSpecs,
   );
 
-  // Merge metric summaries into runs
-  const runsWithMetrics = useMemo(() => {
-    if (!metricSummariesData?.summaries || metricColumnSpecs.length === 0) {
-      return allLoadedRuns;
-    }
-    const summaries = metricSummariesData.summaries;
-    return allLoadedRuns.map((run) => {
-      const runSummaries = summaries[run.id];
-      if (!runSummaries) return run;
-      return { ...run, metricSummaries: runSummaries };
-    });
-  }, [allLoadedRuns, metricSummariesData, metricColumnSpecs.length]);
+  // Merge field values and metric summaries into runs.
+  // Field values provide _flatConfig and _flatSystemMetadata from the
+  // pre-flattened run_field_values table (replaces client-side flattenObject).
+  const runs = useMemo(() => {
+    let result = allLoadedRuns;
 
-  const runs = runsWithMetrics;
+    // Merge field values (config + systemMetadata)
+    if (fieldValuesData) {
+      result = result.map((run) => {
+        const fv = fieldValuesData[run.id];
+        if (!fv) return run;
+        const flatConfig: Record<string, unknown> = {};
+        const flatSystemMetadata: Record<string, unknown> = {};
+        for (const [compositeKey, value] of Object.entries(fv)) {
+          const sepIdx = compositeKey.indexOf("::");
+          if (sepIdx === -1) continue;
+          const source = compositeKey.slice(0, sepIdx);
+          const key = compositeKey.slice(sepIdx + 2);
+          if (source === "config") {
+            flatConfig[key] = value;
+          } else if (source === "systemMetadata") {
+            flatSystemMetadata[key] = value;
+          }
+        }
+        return { ...run, _flatConfig: flatConfig, _flatSystemMetadata: flatSystemMetadata };
+      });
+    }
+
+    // Merge metric summaries
+    if (metricSummariesData?.summaries && metricColumnSpecs.length > 0) {
+      const summaries = metricSummariesData.summaries;
+      result = result.map((run) => {
+        const runSummaries = summaries[run.id];
+        if (!runSummaries) return run;
+        return { ...run, metricSummaries: runSummaries };
+      });
+    }
+
+    return result;
+  }, [allLoadedRuns, fieldValuesData, metricSummariesData, metricColumnSpecs.length]);
 
   // Build filterable fields from system fields + config/systemMetadata keys.
   // When the user is searching, merge results from the cache table so keys

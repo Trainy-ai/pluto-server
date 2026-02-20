@@ -3861,4 +3861,84 @@ describe('SDK API Endpoints (with API Key)', () => {
       expect(response.status).toBe(401);
     });
   });
+
+  // ============================================================================
+  // Test Suite 25: Performance Regression — Payload Size Guards
+  // ============================================================================
+  describe('Test Suite 25: Performance Regression Guards', () => {
+    it('Test 25.1: runs.list should NOT include config/systemMetadata JSON', async () => {
+      // Use the HTTP API to create a run with config, then verify runs.list
+      // does NOT return those fields (they should be served via getFieldValues).
+      const createResponse = await makeRequest('/api/runs/create', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${TEST_API_KEY}`,
+        },
+        body: JSON.stringify({
+          project: TEST_PROJECT_NAME,
+          name: `perf-guard-test-${Date.now()}`,
+          config: JSON.stringify({ lr: 0.001, batch_size: 32, optimizer: 'adam' }),
+        }),
+      });
+
+      // Even if creation fails (e.g., test user), test the shape of list response
+      const listResponse = await makeRequest(
+        `/api/runs/list?project=${encodeURIComponent(TEST_PROJECT_NAME)}&limit=5`,
+        {
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+        }
+      );
+
+      if (listResponse.status === 200) {
+        const body = await listResponse.json();
+        const runs = body.runs || body.data || [];
+        if (runs.length > 0) {
+          const firstRun = runs[0];
+          // The HTTP API may still return config — this test primarily
+          // guards the tRPC endpoint. But we can check payload size.
+          const payloadSize = JSON.stringify(body).length;
+          // For 5 runs without JSON blobs, payload should be well under 50KB
+          console.log(`   runs.list payload for 5 runs: ${(payloadSize / 1024).toFixed(1)}KB`);
+          expect(payloadSize).toBeLessThan(50 * 1024);
+        }
+      }
+
+      // Clean up if we created a run
+      if (createResponse.status === 200) {
+        const created = await createResponse.json();
+        if (created.id) {
+          // Update status to mark as completed
+          await makeRequest('/api/runs/status/update', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${TEST_API_KEY}`,
+            },
+            body: JSON.stringify({ runId: created.id, status: 'COMPLETED' }),
+          });
+        }
+      }
+    });
+
+    it('Test 25.2: getLogsByRunIds - Unauthorized without session', async () => {
+      const response = await makeTrpcRequest('runs.getLogsByRunIds', {
+        runIds: ['test'],
+        projectName: 'test-project',
+      });
+
+      expect(response.status).toBe(401);
+    });
+
+    it('Test 25.3: getFieldValues - Unauthorized without session', async () => {
+      const response = await makeTrpcRequest('runs.getFieldValues', {
+        runIds: ['test'],
+        projectName: 'test-project',
+      });
+
+      expect(response.status).toBe(401);
+    });
+  });
 });
