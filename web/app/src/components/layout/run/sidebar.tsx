@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth/client";
 import {
   RiCpuLine,
+  RiFolderFill,
   RiInformationFill,
   RiLineChartFill,
   RiNodeTree,
@@ -48,6 +49,14 @@ const mainNavItems = [
     icon: RiTerminalFill,
     link: "https://docs.trainy.ai/pluto/logs",
     description: "Terminal logs from the training",
+  },
+  {
+    title: "Files",
+    href: "/projects/$projectName/$runId/files",
+    matchPattern: /^projects\/[^/]+\/[^/]+\/files$/,
+    icon: RiFolderFill,
+    link: "https://docs.trainy.ai/pluto/experiments",
+    description: "Browse files, images, and artifacts logged during the run",
   },
   {
     title: "System Metrics",

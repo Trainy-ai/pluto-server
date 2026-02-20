@@ -42,6 +42,7 @@ import { Route as OOrgSlugAuthedrunProjectsProjectNameRunIdIndexRouteImport } fr
 import { Route as OOrgSlugAuthedrunProjectsProjectNameRunIdSystemRouteImport } from './routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/system'
 import { Route as OOrgSlugAuthedrunProjectsProjectNameRunIdLogsRouteImport } from './routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/logs'
 import { Route as OOrgSlugAuthedrunProjectsProjectNameRunIdGraphRouteImport } from './routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/graph'
+import { Route as OOrgSlugAuthedrunProjectsProjectNameRunIdFilesRouteImport } from './routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/files'
 import { Route as OOrgSlugAuthedrunProjectsProjectNameRunIdSummaryIndexRouteImport } from './routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/summary/index'
 
 const SplatRoute = SplatRouteImport.update({
@@ -227,6 +228,12 @@ const OOrgSlugAuthedrunProjectsProjectNameRunIdGraphRoute =
     path: '/projects/$projectName/$runId/graph',
     getParentRoute: () => OOrgSlugAuthedRoute,
   } as any)
+const OOrgSlugAuthedrunProjectsProjectNameRunIdFilesRoute =
+  OOrgSlugAuthedrunProjectsProjectNameRunIdFilesRouteImport.update({
+    id: '/(run)/projects/$projectName/$runId/files',
+    path: '/projects/$projectName/$runId/files',
+    getParentRoute: () => OOrgSlugAuthedRoute,
+  } as any)
 const OOrgSlugAuthedrunProjectsProjectNameRunIdSummaryIndexRoute =
   OOrgSlugAuthedrunProjectsProjectNameRunIdSummaryIndexRouteImport.update({
     id: '/(run)/projects/$projectName/$runId/summary/',
@@ -263,6 +270,7 @@ export interface FileRoutesByFullPath {
   '/o/$orgSlug/settings/org/': typeof OOrgSlugAuthedSettingsOrgIndexRoute
   '/o/$orgSlug/projects/$projectName/table': typeof OOrgSlugAuthedrunComparisonProjectsProjectNameTableRoute
   '/o/$orgSlug/projects/$projectName/': typeof OOrgSlugAuthedrunComparisonProjectsProjectNameIndexRoute
+  '/o/$orgSlug/projects/$projectName/$runId/files': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdFilesRoute
   '/o/$orgSlug/projects/$projectName/$runId/graph': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdGraphRoute
   '/o/$orgSlug/projects/$projectName/$runId/logs': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdLogsRoute
   '/o/$orgSlug/projects/$projectName/$runId/system': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdSystemRoute
@@ -297,6 +305,7 @@ export interface FileRoutesByTo {
   '/o/$orgSlug/settings/org': typeof OOrgSlugAuthedSettingsOrgIndexRoute
   '/o/$orgSlug/projects/$projectName/table': typeof OOrgSlugAuthedrunComparisonProjectsProjectNameTableRoute
   '/o/$orgSlug/projects/$projectName': typeof OOrgSlugAuthedrunComparisonProjectsProjectNameIndexRoute
+  '/o/$orgSlug/projects/$projectName/$runId/files': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdFilesRoute
   '/o/$orgSlug/projects/$projectName/$runId/graph': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdGraphRoute
   '/o/$orgSlug/projects/$projectName/$runId/logs': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdLogsRoute
   '/o/$orgSlug/projects/$projectName/$runId/system': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdSystemRoute
@@ -334,6 +343,7 @@ export interface FileRoutesById {
   '/o/$orgSlug/_authed/settings/org/': typeof OOrgSlugAuthedSettingsOrgIndexRoute
   '/o/$orgSlug/_authed/(runComparison)/projects/$projectName/table': typeof OOrgSlugAuthedrunComparisonProjectsProjectNameTableRoute
   '/o/$orgSlug/_authed/(runComparison)/projects/$projectName/': typeof OOrgSlugAuthedrunComparisonProjectsProjectNameIndexRoute
+  '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/files': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdFilesRoute
   '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/graph': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdGraphRoute
   '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/logs': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdLogsRoute
   '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/system': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdSystemRoute
@@ -371,6 +381,7 @@ export interface FileRouteTypes {
     | '/o/$orgSlug/settings/org/'
     | '/o/$orgSlug/projects/$projectName/table'
     | '/o/$orgSlug/projects/$projectName/'
+    | '/o/$orgSlug/projects/$projectName/$runId/files'
     | '/o/$orgSlug/projects/$projectName/$runId/graph'
     | '/o/$orgSlug/projects/$projectName/$runId/logs'
     | '/o/$orgSlug/projects/$projectName/$runId/system'
@@ -405,6 +416,7 @@ export interface FileRouteTypes {
     | '/o/$orgSlug/settings/org'
     | '/o/$orgSlug/projects/$projectName/table'
     | '/o/$orgSlug/projects/$projectName'
+    | '/o/$orgSlug/projects/$projectName/$runId/files'
     | '/o/$orgSlug/projects/$projectName/$runId/graph'
     | '/o/$orgSlug/projects/$projectName/$runId/logs'
     | '/o/$orgSlug/projects/$projectName/$runId/system'
@@ -441,6 +453,7 @@ export interface FileRouteTypes {
     | '/o/$orgSlug/_authed/settings/org/'
     | '/o/$orgSlug/_authed/(runComparison)/projects/$projectName/table'
     | '/o/$orgSlug/_authed/(runComparison)/projects/$projectName/'
+    | '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/files'
     | '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/graph'
     | '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/logs'
     | '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/system'
@@ -691,6 +704,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OOrgSlugAuthedrunProjectsProjectNameRunIdLogsRouteImport
       parentRoute: typeof OOrgSlugAuthedRoute
     }
+    '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/files': {
+      id: '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/files'
+      path: '/projects/$projectName/$runId/files'
+      fullPath: '/o/$orgSlug/projects/$projectName/$runId/files'
+      preLoaderRoute: typeof OOrgSlugAuthedrunProjectsProjectNameRunIdFilesRouteImport
+      parentRoute: typeof OOrgSlugAuthedRoute
+    }
     '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/graph': {
       id: '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/graph'
       path: '/projects/$projectName/$runId/graph'
@@ -738,6 +758,7 @@ interface OOrgSlugAuthedRouteChildren {
   OOrgSlugAuthedSettingsOrgIndexRoute: typeof OOrgSlugAuthedSettingsOrgIndexRoute
   OOrgSlugAuthedrunComparisonProjectsProjectNameTableRoute: typeof OOrgSlugAuthedrunComparisonProjectsProjectNameTableRoute
   OOrgSlugAuthedrunComparisonProjectsProjectNameIndexRoute: typeof OOrgSlugAuthedrunComparisonProjectsProjectNameIndexRoute
+  OOrgSlugAuthedrunProjectsProjectNameRunIdFilesRoute: typeof OOrgSlugAuthedrunProjectsProjectNameRunIdFilesRoute
   OOrgSlugAuthedrunProjectsProjectNameRunIdGraphRoute: typeof OOrgSlugAuthedrunProjectsProjectNameRunIdGraphRoute
   OOrgSlugAuthedrunProjectsProjectNameRunIdLogsRoute: typeof OOrgSlugAuthedrunProjectsProjectNameRunIdLogsRoute
   OOrgSlugAuthedrunProjectsProjectNameRunIdSystemRoute: typeof OOrgSlugAuthedrunProjectsProjectNameRunIdSystemRoute
@@ -764,6 +785,8 @@ const OOrgSlugAuthedRouteChildren: OOrgSlugAuthedRouteChildren = {
     OOrgSlugAuthedrunComparisonProjectsProjectNameTableRoute,
   OOrgSlugAuthedrunComparisonProjectsProjectNameIndexRoute:
     OOrgSlugAuthedrunComparisonProjectsProjectNameIndexRoute,
+  OOrgSlugAuthedrunProjectsProjectNameRunIdFilesRoute:
+    OOrgSlugAuthedrunProjectsProjectNameRunIdFilesRoute,
   OOrgSlugAuthedrunProjectsProjectNameRunIdGraphRoute:
     OOrgSlugAuthedrunProjectsProjectNameRunIdGraphRoute,
   OOrgSlugAuthedrunProjectsProjectNameRunIdLogsRoute:

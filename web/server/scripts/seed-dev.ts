@@ -10,7 +10,9 @@
 import { PrismaClient } from '@prisma/client';
 import { scryptAsync } from '@noble/hashes/scrypt.js';
 import { createClient } from '@clickhouse/client-web';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import crypto from 'crypto';
+import { deflateSync } from 'zlib';
 import { nanoid } from 'nanoid';
 import { extractAndUpsertColumnKeys } from '../lib/extract-column-keys';
 
@@ -873,6 +875,395 @@ async function backfillColumnKeys(
   console.log(`   Backfilled column keys for ${processed} runs in ${elapsed}s`);
 }
 
+// ============================================================================
+// File Seeding - Creates files in ClickHouse + MinIO for the file browser
+// ============================================================================
+
+interface SeedFile {
+  logName: string;
+  fileName: string;
+  fileType: string;
+  /** RunLogType for PostgreSQL registration */
+  logType: 'FILE' | 'IMAGE' | 'VIDEO' | 'AUDIO';
+  content: Buffer;
+  step: number;
+}
+
+// Steps at which image series are logged (20 steps across training)
+const IMAGE_SERIES_STEPS = [
+  0, 500, 1000, 2000, 3000, 5000, 7500, 10000,
+  15000, 20000, 30000, 40000, 50000, 60000, 70000,
+  80000, 85000, 90000, 95000, 100000,
+];
+
+/**
+ * Generates seed files for a specific run.
+ * Includes static config/eval files PLUS media series (images at many steps)
+ * so the file-series widget can step through training evolution.
+ */
+function generateRunFiles(runIndex: number): SeedFile[] {
+  const files: SeedFile[] = [];
+  const storyConfig = STORY_RUNS[runIndex];
+  const modelName = storyConfig?.model ?? ['resnet50', 'transformer', 'bert', 'gpt2'][runIndex % 4];
+  const lr = storyConfig?.lr ?? 0.001;
+  const batchSize = storyConfig?.batchSize ?? 32;
+
+  // --- Config files (once per run, step 0) ---
+  files.push({
+    logName: 'config',
+    fileName: 'hyperparams.yaml',
+    fileType: 'yaml',
+    logType: 'FILE',
+    content: Buffer.from(
+      `model: ${modelName}\noptimizer: adam\nlr: ${lr}\nbatch_size: ${batchSize}\nepochs: 100\nweight_decay: 0.0001\nscheduler: cosine\nwarmup_steps: 500\nseed: 42\n`
+    ),
+    step: 0,
+  });
+  files.push({
+    logName: 'config',
+    fileName: 'model_config.json',
+    fileType: 'json',
+    logType: 'FILE',
+    content: Buffer.from(
+      JSON.stringify({ architecture: modelName, num_classes: 1000, pretrained: true, dropout: 0.2, hidden_dim: 2048, run_index: runIndex }, null, 2)
+    ),
+    step: 0,
+  });
+
+  // --- Training script (once per run) ---
+  files.push({
+    logName: 'source',
+    fileName: 'train.py',
+    fileType: 'py',
+    logType: 'FILE',
+    content: Buffer.from(
+      `import torch\nimport torch.nn as nn\nfrom torchvision import models, transforms\n\ndef train_epoch(model, loader, optimizer, criterion, device):\n    model.train()\n    total_loss = 0\n    for batch_idx, (inputs, targets) in enumerate(loader):\n        inputs, targets = inputs.to(device), targets.to(device)\n        optimizer.zero_grad()\n        outputs = model(inputs)\n        loss = criterion(outputs, targets)\n        loss.backward()\n        optimizer.step()\n        total_loss += loss.item()\n    return total_loss / len(loader)\n\nif __name__ == "__main__":\n    model = models.${modelName.replace('-', '_')}(pretrained=True)\n    optimizer = torch.optim.Adam(model.parameters(), lr=${lr})\n    print("Training started...")\n`
+    ),
+    step: 0,
+  });
+
+  // --- Image series: val/predictions (same logName, many steps) ---
+  // This is the key file-series pattern: users step through predictions at each checkpoint
+  for (const step of IMAGE_SERIES_STEPS) {
+    const progress = step / 100000;
+    // Color evolves: red (bad) → green (good) as training progresses
+    // Each run has a slight hue offset so they look different
+    const hueOffset = runIndex * 40;
+    const r = Math.floor((1 - progress) * 220 + hueOffset) % 256;
+    const g = Math.floor(progress * 220 + 20);
+    const b = Math.floor(80 + Math.sin(progress * Math.PI) * 80);
+    const png = createMinimalPng(r, g, b);
+    files.push({
+      logName: 'val/predictions',
+      fileName: `prediction_step_${step}.png`,
+      fileType: 'png',
+      logType: 'IMAGE',
+      content: png,
+      step,
+    });
+  }
+
+  // --- Image series: train/reconstructions (autoencoder-style) ---
+  for (const step of IMAGE_SERIES_STEPS) {
+    const progress = step / 100000;
+    // Reconstructions get sharper (more saturated) over training
+    const clarity = Math.floor(progress * 200 + 30);
+    const png = createMinimalPng(clarity, clarity, Math.floor(clarity * 0.8));
+    files.push({
+      logName: 'train/reconstructions',
+      fileName: `reconstruction_step_${step}.png`,
+      fileType: 'png',
+      logType: 'IMAGE',
+      content: png,
+      step,
+    });
+  }
+
+  // --- Image series: val/attention_maps (fewer steps, visualizing model internals) ---
+  const attentionSteps = [0, 5000, 10000, 25000, 50000, 75000, 100000];
+  for (const step of attentionSteps) {
+    const progress = step / 100000;
+    // Attention maps: start random (gray), become focused (high contrast)
+    const focus = Math.floor(progress * 255);
+    const png = createMinimalPng(focus, Math.floor(focus * 0.3), Math.floor(255 - focus * 0.7));
+    files.push({
+      logName: 'val/attention_maps',
+      fileName: `attention_step_${step}.png`,
+      fileType: 'png',
+      logType: 'IMAGE',
+      content: png,
+      step,
+    });
+  }
+
+  // --- Audio series: val/audio_samples (TTS/audio generation) ---
+  // Minimal valid WAV: 44-byte header + tiny PCM data
+  const audioSteps = [0, 10000, 25000, 50000, 75000, 100000];
+  for (const step of audioSteps) {
+    const progress = step / 100000;
+    const wav = createMinimalWav(progress, runIndex);
+    files.push({
+      logName: 'val/audio_samples',
+      fileName: `sample_step_${step}.wav`,
+      fileType: 'wav',
+      logType: 'AUDIO',
+      content: wav,
+      step,
+    });
+  }
+
+  // --- Evaluation results (end of training) ---
+  files.push({
+    logName: 'eval',
+    fileName: 'classification_report.csv',
+    fileType: 'csv',
+    logType: 'FILE',
+    content: Buffer.from(
+      `class,precision,recall,f1-score,support\ncat,0.92,0.89,0.90,500\ndog,0.88,0.91,0.89,500\nbird,0.85,0.83,0.84,500\nfish,0.90,0.92,0.91,500\naccuracy,,,0.89,2000\nmacro avg,0.89,0.89,0.89,2000\n`
+    ),
+    step: 100000,
+  });
+  files.push({
+    logName: 'eval',
+    fileName: 'metrics_summary.json',
+    fileType: 'json',
+    logType: 'FILE',
+    content: Buffer.from(
+      JSON.stringify({
+        final_loss: 0.0523 + runIndex * 0.01,
+        final_accuracy: 0.891 - runIndex * 0.02,
+        best_epoch: 87 - runIndex * 3,
+        model: modelName,
+      }, null, 2)
+    ),
+    step: 100000,
+  });
+
+  // --- Model checkpoints ---
+  files.push({
+    logName: 'checkpoints',
+    fileName: 'best_model.pt',
+    fileType: 'pt',
+    logType: 'FILE',
+    content: Buffer.from(`PyTorch checkpoint placeholder - ${modelName} best val loss`),
+    step: 87000,
+  });
+  files.push({
+    logName: 'checkpoints',
+    fileName: 'final_model.pt',
+    fileType: 'pt',
+    logType: 'FILE',
+    content: Buffer.from(`PyTorch checkpoint placeholder - ${modelName} final epoch`),
+    step: 100000,
+  });
+
+  return files;
+}
+
+/**
+ * Creates a minimal valid WAV file (~1 second of tone).
+ * Frequency varies with progress so each step sounds different.
+ */
+function createMinimalWav(progress: number, runIndex: number): Buffer {
+  const sampleRate = 8000;
+  const duration = 0.5; // half second
+  const numSamples = Math.floor(sampleRate * duration);
+  const freq = 220 + progress * 660 + runIndex * 50; // A3 → A5, shifted per run
+
+  // PCM 16-bit mono samples
+  const pcmData = Buffer.alloc(numSamples * 2);
+  for (let i = 0; i < numSamples; i++) {
+    const t = i / sampleRate;
+    // Sine wave with fade in/out
+    const envelope = Math.min(t * 20, 1, (duration - t) * 20);
+    const sample = Math.floor(Math.sin(2 * Math.PI * freq * t) * 16000 * envelope);
+    pcmData.writeInt16LE(sample, i * 2);
+  }
+
+  const dataSize = pcmData.length;
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0);
+  header.writeUInt32LE(36 + dataSize, 4);
+  header.write('WAVE', 8);
+  header.write('fmt ', 12);
+  header.writeUInt32LE(16, 16);      // chunk size
+  header.writeUInt16LE(1, 20);       // PCM format
+  header.writeUInt16LE(1, 22);       // mono
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(sampleRate * 2, 28); // byte rate
+  header.writeUInt16LE(2, 32);       // block align
+  header.writeUInt16LE(16, 34);      // bits per sample
+  header.write('data', 36);
+  header.writeUInt32LE(dataSize, 40);
+
+  return Buffer.concat([header, pcmData]);
+}
+
+/**
+ * Creates a 64x64 PNG image with a gradient pattern.
+ * The r/g/b params control the base color — images visually evolve across training steps.
+ */
+function createMinimalPng(r: number, g: number, b: number): Buffer {
+  const width = 64;
+  const height = 64;
+
+  // Generate pixel data: each row has a filter byte (0=None) + width*3 RGB bytes
+  const rawData = Buffer.alloc(height * (1 + width * 3));
+  for (let y = 0; y < height; y++) {
+    const rowOffset = y * (1 + width * 3);
+    rawData[rowOffset] = 0; // filter: none
+    for (let x = 0; x < width; x++) {
+      const px = rowOffset + 1 + x * 3;
+      const xf = x / (width - 1);
+      const yf = y / (height - 1);
+      // Diagonal gradient mixing the input color with its complement
+      rawData[px] = Math.min(255, Math.floor(r * (1 - xf) + (255 - r) * xf));
+      rawData[px + 1] = Math.min(255, Math.floor(g * (1 - yf) + (255 - g) * yf));
+      rawData[px + 2] = Math.min(255, Math.floor(b * xf * yf + 40));
+    }
+  }
+
+  const compressed = deflateSync(rawData);
+
+  // CRC32 helper
+  const crc32Table: number[] = [];
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) {
+      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    }
+    crc32Table[n] = c >>> 0;
+  }
+  function crc32(buf: Buffer): number {
+    let c = 0xffffffff;
+    for (let i = 0; i < buf.length; i++) {
+      c = (c >>> 8) ^ crc32Table[(c ^ buf[i]) & 0xff];
+    }
+    return (c ^ 0xffffffff) >>> 0;
+  }
+  function makeChunk(type: string, data: Buffer): Buffer {
+    const typeBytes = Buffer.from(type, 'ascii');
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length);
+    const crcInput = Buffer.concat([typeBytes, data]);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(crcInput));
+    return Buffer.concat([len, typeBytes, data, crc]);
+  }
+
+  const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;  // bit depth
+  ihdr[9] = 2;  // color type (RGB)
+
+  return Buffer.concat([
+    signature,
+    makeChunk('IHDR', ihdr),
+    makeChunk('IDAT', compressed),
+    makeChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+// Number of story runs to seed with files (first N runs get media series)
+const FILE_SEED_RUN_COUNT = 3;
+
+/**
+ * Seeds ClickHouse with file metadata and uploads files to MinIO.
+ * Seeds files for the first FILE_SEED_RUN_COUNT runs so cross-run comparison works.
+ */
+async function seedClickHouseFiles(
+  runs: { id: bigint; name: string }[],
+  tenantId: string,
+  projectName: string,
+): Promise<void> {
+  const clickhouseUrl = process.env.CLICKHOUSE_URL;
+  const clickhouseUser = process.env.CLICKHOUSE_USER || 'default';
+  const clickhousePassword = process.env.CLICKHOUSE_PASSWORD || '';
+  const storageEndpoint = process.env.STORAGE_ENDPOINT || '';
+  const storageAccessKey = process.env.STORAGE_ACCESS_KEY_ID || '';
+  const storageSecretKey = process.env.STORAGE_SECRET_ACCESS_KEY || '';
+  const storageBucket = process.env.STORAGE_BUCKET || '';
+  const storageRegion = process.env.STORAGE_REGION || 'auto';
+
+  if (!clickhouseUrl || !storageEndpoint) {
+    console.log('   CLICKHOUSE_URL or STORAGE_ENDPOINT not set, skipping file seeding');
+    return;
+  }
+
+  const clickhouse = createClient({
+    url: clickhouseUrl,
+    username: clickhouseUser,
+    password: clickhousePassword,
+  });
+
+  // Use Docker hostname for MinIO when running inside Docker
+  const isDocker = process.env.IS_DOCKER === 'true';
+  const s3Endpoint = isDocker ? storageEndpoint.replace('127.0.0.1', 'minio') : storageEndpoint;
+
+  const s3Client = new S3Client({
+    region: storageRegion,
+    endpoint: s3Endpoint,
+    credentials: {
+      accessKeyId: storageAccessKey,
+      secretAccessKey: storageSecretKey,
+    },
+    forcePathStyle: true,
+  });
+
+  const runsToSeed = runs.slice(0, FILE_SEED_RUN_COUNT);
+  const baseTime = Date.now() - 100000 * 1000;
+  let totalFiles = 0;
+
+  for (let runIndex = 0; runIndex < runsToSeed.length; runIndex++) {
+    const run = runsToSeed[runIndex];
+    const runId = Number(run.id);
+    const files = generateRunFiles(runIndex);
+    totalFiles += files.length;
+
+    console.log(`   Run "${run.name}": uploading ${files.length} files...`);
+
+    const chRows: Record<string, unknown>[] = [];
+
+    for (const file of files) {
+      const s3Key = `${tenantId}/${projectName}/${runId}/${file.logName}/${file.fileName}`;
+
+      // Upload to MinIO
+      await s3Client.send(new PutObjectCommand({
+        Bucket: storageBucket,
+        Key: s3Key,
+        Body: file.content,
+      }));
+
+      const logGroup = file.logName.split('/')[0];
+
+      chRows.push({
+        tenantId,
+        projectName,
+        runId,
+        time: new Date(baseTime + file.step * 1000).toISOString().replace('T', ' ').replace('Z', ''),
+        step: file.step,
+        logGroup,
+        logName: file.logName,
+        fileName: file.fileName,
+        fileType: file.fileType,
+        fileSize: file.content.length,
+      });
+    }
+
+    // Insert all file metadata for this run into ClickHouse
+    await clickhouse.insert({
+      table: 'mlop_files',
+      values: chRows,
+      format: 'JSONEachRow',
+    });
+  }
+
+  await clickhouse.close();
+  console.log(`   Uploaded ${totalFiles} files across ${runsToSeed.length} runs`);
+}
+
 async function main() {
   console.log('Seeding development data...\n');
 
@@ -1196,6 +1587,37 @@ async function main() {
 
   // Seed ClickHouse logs with story-driven patterns
   await seedClickHouseLogs(allRuns, org.id, project.name);
+
+  // Seed files for the first N runs (file browser + file-series widget testing)
+  if (allRuns.length > 0) {
+    console.log('\n5b. Seeding files for file browser & media series...');
+    const runsToSeed = allRuns.slice(0, FILE_SEED_RUN_COUNT);
+
+    // Register file log names in PostgreSQL with correct logType per run
+    for (let i = 0; i < runsToSeed.length; i++) {
+      const run = runsToSeed[i];
+      const runFiles = generateRunFiles(i);
+      // Dedupe by logName, picking the logType from the first file with that logName
+      const logNameMap = new Map<string, SeedFile>();
+      for (const f of runFiles) {
+        if (!logNameMap.has(f.logName)) {
+          logNameMap.set(f.logName, f);
+        }
+      }
+      const fileLogData = [...logNameMap.values()].map(f => ({
+        runId: run.id,
+        logName: f.logName,
+        logGroup: f.logName.split('/')[0],
+        logType: f.logType as 'FILE' | 'IMAGE' | 'VIDEO' | 'AUDIO',
+      }));
+      await prisma.runLogs.createMany({
+        data: fileLogData,
+        skipDuplicates: true,
+      });
+    }
+
+    await seedClickHouseFiles(allRuns, org.id, project.name);
+  }
 
   // Backfill metric summaries (MV only captures future inserts)
   console.log('\n6. Backfilling metric summaries...');
