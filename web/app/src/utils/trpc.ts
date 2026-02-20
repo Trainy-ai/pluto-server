@@ -13,6 +13,7 @@ import { env } from "@/lib/env";
 
 const isProduction = env.VITE_ENV === "production";
 const isTest = env.VITE_ENV === "test";
+const MAX_URL_LENGTH = 2083;
 
 // In test/Docker environments, use relative URLs to go through Vite proxy
 // This ensures same-origin requests for proper cookie handling
@@ -76,7 +77,7 @@ export const trpcClient = createTRPCClient<AppRouter>({
       false: isTest
         ? httpBatchLink({
             url: trpcUrl,
-            maxURLLength: 2083,
+            maxURLLength: MAX_URL_LENGTH,
             fetch(url, options) {
               return fetch(url, {
                 ...options,
@@ -88,6 +89,7 @@ export const trpcClient = createTRPCClient<AppRouter>({
         : httpBatchStreamLink({
             url: trpcUrl,
             maxItems: env.VITE_IS_DOCKER ? 1 : 30,
+            maxURLLength: MAX_URL_LENGTH,
             fetch(url, options) {
               return fetch(url, {
                 ...options,
