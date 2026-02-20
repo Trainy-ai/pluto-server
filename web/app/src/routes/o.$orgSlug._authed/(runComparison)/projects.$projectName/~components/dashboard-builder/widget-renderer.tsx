@@ -247,6 +247,8 @@ function ChartWidget({
         yMax={config.yMax}
         onDataRange={onDataRange}
         onResetBounds={onResetBounds}
+        logXAxis={config.xAxisScale === "log"}
+        logYAxis={config.yAxisScale === "log"}
       />
     </div>
   );

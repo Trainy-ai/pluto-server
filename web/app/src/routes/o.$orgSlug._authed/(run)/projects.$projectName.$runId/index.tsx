@@ -218,10 +218,10 @@ function RouteComponent() {
             />
           </ChartSyncProvider>
         ) : (
-          <>
+          <ChartSyncProvider syncKey={`run-all-metrics-${runId}`}>
             <LogSearch onSearch={handleSearch} placeholder="Search metrics..." />
             {dataGroups}
-          </>
+          </ChartSyncProvider>
         )}
       </div>
     </Layout>

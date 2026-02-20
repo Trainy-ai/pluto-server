@@ -333,14 +333,16 @@ export function ChartSyncProvider({
   }, []);
 
   // Reset zoom on all uPlot charts
+  // Each chart's reset callback is self-contained: it restores data, resets X scale,
+  // and clears zoom state. No additional scale manipulation is needed here.
   const resetZoom = useCallback((sourceChartId: string) => {
     // Prevent infinite loops
     if (isSyncingZoomRef.current) return;
     isSyncingZoomRef.current = true;
 
     try {
-      // Use registered reset callbacks (which restore original full-range data)
-      // instead of reading chart.data (which may be re-downsampled for a zoomed range)
+      // Use registered reset callbacks (which restore original full-range data
+      // AND explicitly reset the X scale to the full data range)
       resetCallbacksRef.current.forEach((callback, id) => {
         if (id === sourceChartId) return; // Skip source chart
         try {

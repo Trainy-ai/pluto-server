@@ -71,6 +71,10 @@ interface MultiLineChartProps {
   onDataRange?: (dataMin: number, dataMax: number) => void;
   /** Callback fired on double-click to reset Y-axis bounds for this chart */
   onResetBounds?: () => void;
+  /** Override log X-axis scale (per-widget config takes precedence over global settings) */
+  logXAxis?: boolean;
+  /** Override log Y-axis scale (per-widget config takes precedence over global settings) */
+  logYAxis?: boolean;
 }
 
 /** Props for the inner memo'd component (includes syncedZoomRange) */
@@ -105,6 +109,8 @@ const MultiLineChartInner = memo(
     onDataRange,
     onResetBounds,
     syncedZoomRange,
+    logXAxis: logXAxisOverride,
+    logYAxis: logYAxisOverride,
   }: MultiLineChartInnerProps) => {
     useCheckDatabaseSize(metricsCache);
 
@@ -118,6 +124,10 @@ const MultiLineChartInner = memo(
 
     // Use global chart settings with runId="full"
     const { settings } = useLineSettings(organizationId, projectName, "full");
+
+    // Per-widget log scale overrides take precedence over global settings
+    const logXAxis = logXAxisOverride ?? settings.xAxisLogScale;
+    const logYAxis = logYAxisOverride ?? settings.yAxisLogScale;
 
     // Use Infinity staleTime for completed runs since their data won't change
     const staleTime = allRunsCompleted ? COMPLETED_RUN_STALE_TIME : ACTIVE_RUN_STALE_TIME;
@@ -738,8 +748,8 @@ const MultiLineChartInner = memo(
           xlabel={chartResult.xlabel}
           showLegend={true}
           isDateTime={chartResult.isDateTime}
-          logXAxis={settings.xAxisLogScale}
-          logYAxis={settings.yAxisLogScale}
+          logXAxis={logXAxis}
+          logYAxis={logYAxis}
           yMin={yMin}
           yMax={yMax}
           onDataRange={onDataRange}
