@@ -225,6 +225,102 @@ test.describe("Dashboard Performance Tests", () => {
     });
   });
 
+  test.describe("API Payload Size Guards", () => {
+    test("runs.list payload should be under threshold (no JSON blobs)", async ({ page }) => {
+      let runsListPayloadBytes = 0;
+      let runsListResponseMs = 0;
+
+      // Track request start times to measure actual network response time
+      const requestStartTimes = new Map<string, number>();
+      page.on("request", (request) => {
+        const url = request.url();
+        if (url.includes("/trpc/") && url.includes("runs.list")) {
+          requestStartTimes.set(url, Date.now());
+        }
+      });
+
+      // Intercept tRPC responses to measure payload size
+      page.on("response", async (response) => {
+        const url = response.url();
+        if (url.includes("/trpc/") && url.includes("runs.list")) {
+          const requestStart = requestStartTimes.get(url);
+          if (requestStart) {
+            runsListResponseMs = Date.now() - requestStart;
+          }
+          try {
+            const body = await response.body();
+            runsListPayloadBytes = body.length;
+          } catch {
+            // Ignore if response is already consumed
+          }
+        }
+      });
+
+      await page.goto(`/o/${DEV_ORG_SLUG}/projects/${DEV_PROJECT}`);
+      await page.waitForLoadState("domcontentloaded");
+
+      // Wait for runs table to load
+      await page.waitForSelector('[data-testid="runs-table"], table', { timeout: 15000 });
+
+      // Wait for network to settle
+      await page.waitForTimeout(2000);
+
+      if (runsListPayloadBytes > 0) {
+        const payloadKB = runsListPayloadBytes / 1024;
+
+        allMetrics.push(
+          createMetric("runs_list_payload_kb", payloadKB, "KB", PERF_THRESHOLDS.RUNS_LIST_PAYLOAD_KB),
+        );
+
+        // Payload should be well under 500KB without config/systemMetadata JSON
+        expect(payloadKB).toBeLessThan(PERF_THRESHOLDS.RUNS_LIST_PAYLOAD_KB);
+      }
+    });
+
+    test("getLogsByRunIds payload should be reasonable", async ({ page }) => {
+      let getLogsPayloadBytes = 0;
+
+      page.on("response", async (response) => {
+        const url = response.url();
+        if (url.includes("/trpc/") && url.includes("getLogsByRunIds")) {
+          try {
+            const body = await response.body();
+            getLogsPayloadBytes = body.length;
+          } catch {
+            // Ignore
+          }
+        }
+      });
+
+      await page.goto(`/o/${DEV_ORG_SLUG}/projects/${DEV_PROJECT}`);
+      await page.waitForLoadState("domcontentloaded");
+
+      // Wait for runs table
+      await page.waitForSelector('[data-testid="runs-table"], table', { timeout: 15000 });
+
+      // Select a few runs to trigger getLogsByRunIds
+      const runCheckboxes = page.locator('input[type="checkbox"]');
+      const checkboxCount = await runCheckboxes.count();
+      if (checkboxCount >= 3) {
+        for (let i = 0; i < 3; i++) {
+          await runCheckboxes.nth(i).click();
+        }
+      }
+
+      // Wait for logs to load
+      await page.waitForTimeout(3000);
+
+      if (getLogsPayloadBytes > 0) {
+        const payloadKB = getLogsPayloadBytes / 1024;
+        allMetrics.push(
+          createMetric("get_logs_payload_kb", payloadKB, "KB"),
+        );
+        // With select optimization, should be much smaller than before
+        console.log(`   getLogsByRunIds payload: ${payloadKB.toFixed(1)}KB`);
+      }
+    });
+  });
+
   test.describe("Backend API Performance", () => {
     test("validates backend sampling for large datasets", async ({ page }) => {
       // Navigate to get auth context

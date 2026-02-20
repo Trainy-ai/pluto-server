@@ -239,4 +239,8 @@ export const PERF_THRESHOLDS = {
   LCP_MS: 2500 * CI_MULTIPLIER,
   CHARTS_IN_DOM_INITIAL: 10,
   BACKEND_SAMPLE_SIZE: 2000,
+  // Payload size guards — prevent regressions from re-adding JSON blobs to runs.list
+  RUNS_LIST_PAYLOAD_KB: 500,
+  RUNS_LIST_RESPONSE_MS: 5000 * CI_MULTIPLIER,
+  GET_LOGS_RESPONSE_MS: 5000 * CI_MULTIPLIER,
 };

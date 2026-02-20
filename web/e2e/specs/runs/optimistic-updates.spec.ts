@@ -38,17 +38,24 @@ test.describe("Optimistic Updates for Tags & Notes", () => {
       ).toBeVisible({ timeout: 2000 });
     }).toPass({ timeout: 10000 });
 
-    // Type a unique tag name and press Enter to add it
+    // Type a unique tag name and add it via the "Create" button
     const uniqueTag = `e2e-optimistic-${Date.now()}`;
     const searchInput = page.locator('[placeholder="Search or add tag..."]');
     await searchInput.fill(uniqueTag);
-    await searchInput.press("Enter");
+
+    // Click the "Create" button that appears for new tags (more reliable than Enter in cmdk)
+    const popoverContent = page
+      .locator('[data-radix-popper-content-wrapper]')
+      .filter({ has: searchInput });
+    const createButton = popoverContent.locator("button", {
+      hasText: `Create`,
+    });
+    await expect(createButton).toBeVisible({ timeout: 5000 });
+    await createButton.click();
 
     // Click the Apply button to commit the change
-    const applyButton = page
-      .locator('[data-radix-popper-content-wrapper]')
-      .filter({ has: searchInput })
-      .locator("button", { hasText: "Apply" });
+    const applyButton = popoverContent.locator("button", { hasText: "Apply" });
+    await expect(applyButton).toBeVisible({ timeout: 5000 });
     await applyButton.click();
 
     // Key assertion: the tag should appear in the table almost immediately
@@ -129,12 +136,20 @@ test.describe("Optimistic Updates for Tags & Notes", () => {
     const persistTag = `e2e-persist-${Date.now()}`;
     const searchInput = page.locator('[placeholder="Search or add tag..."]');
     await searchInput.fill(persistTag);
-    await searchInput.press("Enter");
 
-    const applyButton = page
+    // Click the "Create" button that appears for new tags (more reliable than Enter in cmdk)
+    const popoverContent = page
       .locator('[data-radix-popper-content-wrapper]')
-      .filter({ has: searchInput })
-      .locator("button", { hasText: "Apply" });
+      .filter({ has: searchInput });
+    const createButton = popoverContent.locator("button", {
+      hasText: `Create`,
+    });
+    await expect(createButton).toBeVisible({ timeout: 5000 });
+    await createButton.click();
+
+    const applyButton = popoverContent.locator("button", {
+      hasText: "Apply",
+    });
 
     // Set up response listener BEFORE clicking to avoid race condition
     const mutationResponse = page.waitForResponse(

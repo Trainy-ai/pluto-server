@@ -2,9 +2,6 @@ import { z } from "zod";
 import { protectedOrgProcedure } from "../../../../lib/trpc";
 import { sqidDecode, sqidEncode } from "../../../../lib/sqid";
 
-// Maximum logs per run to prevent excessive memory usage
-const MAX_LOGS_PER_RUN = 1000;
-
 export const getLogsByRunIdsProcedure = protectedOrgProcedure
   .input(
     z.object({
@@ -38,26 +35,24 @@ export const getLogsByRunIdsProcedure = protectedOrgProcedure
       return {};
     }
 
-    // Fetch logs for each run ID separately to ensure the MAX_LOGS_PER_RUN limit is applied per run.
-    // This avoids one run with many logs from starving others. While this makes N queries (where N is the number of run IDs),
-    // it is more correct. The number of selected runs is expected to be small (max 50).
-    const logsPerRun = await Promise.all(
-      validRunIds.map((runId) =>
-        ctx.prisma.runLogs.findMany({
-          where: { runId },
-          orderBy: { id: "asc" },
-          take: MAX_LOGS_PER_RUN,
-        })
-      )
-    );
+    // Single batch query — select only the fields the frontend needs.
+    // The @@unique([runId, logName]) constraint means there's at most one row
+    // per metric name per run, so the old per-run 1000 limit is rarely hit.
+    const allLogs = await ctx.prisma.runLogs.findMany({
+      where: { runId: { in: validRunIds } },
+      select: { runId: true, logGroup: true, logName: true, logType: true },
+      orderBy: { id: "asc" },
+    });
 
-    // Group logs by runId
-    const logsByRunId: Record<string, typeof logsPerRun[number]> = {};
+    // Group by runId
+    const logsByRunId: Record<string, typeof allLogs> = {};
 
-    for (const logs of logsPerRun) {
-      if (logs.length === 0) continue;
-      const encodedRunId = sqidEncode(logs[0].runId);
-      logsByRunId[encodedRunId] = logs;
+    for (const log of allLogs) {
+      const encodedRunId = sqidEncode(log.runId);
+      if (!logsByRunId[encodedRunId]) {
+        logsByRunId[encodedRunId] = [];
+      }
+      logsByRunId[encodedRunId].push(log);
     }
 
     return logsByRunId;
