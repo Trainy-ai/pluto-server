@@ -9,11 +9,14 @@ use std::{
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, info_span, trace, warn, Instrument};
 
+use serde::de::DeserializeOwned;
+
 use crate::{
     auth::auth,
     db::Database,
     error::{AppError, ErrorCode},
     traits::{DatabaseRow, EnrichmentData, InputData, StreamProcessor},
+    utils::sanitize_json_non_finite_floats,
 };
 
 /// Trait for input data types that can be converted into one or more database rows,
@@ -72,6 +75,43 @@ where
             db,
             _raw_type: std::marker::PhantomData,
             _enrichment_type: std::marker::PhantomData,
+        }
+    }
+}
+
+/// Try to parse JSON, falling back to sanitizing non-finite float literals (NaN/Infinity/-Infinity).
+///
+/// `simd_json` mutates the input buffer on parse, so `original_bytes` must be a
+/// pre-mutation clone used for both the sanitization fallback and error messages.
+fn try_parse_with_sanitize<R: DeserializeOwned>(
+    buf: &mut [u8],
+    original_bytes: &[u8],
+    is_final: bool,
+) -> Result<R, AppError> {
+    match simd_json::from_slice::<R>(buf) {
+        Ok(data) => Ok(data),
+        Err(original_err) => {
+            let mut sanitized = sanitize_json_non_finite_floats(original_bytes);
+            match simd_json::from_slice::<R>(&mut sanitized) {
+                Ok(data) => {
+                    let ctx = if is_final { "final " } else { "" };
+                    warn!("Recovered {ctx}JSON line by sanitizing non-finite float values (NaN/Infinity/-Infinity)");
+                    Ok(data)
+                }
+                Err(_) => {
+                    let line_preview = String::from_utf8_lossy(original_bytes);
+                    let ctx = if is_final { "final " } else { "" };
+                    error!(error = %original_err, line = %line_preview.chars().take(100).collect::<String>(), "Failed to parse {ctx}JSON line");
+                    Err(AppError::new(
+                        ErrorCode::StreamDecodingError,
+                        format!(
+                            "Failed to parse {ctx}JSON line (bytes): '{}': {}",
+                            line_preview.chars().take(100).collect::<String>(),
+                            original_err
+                        ),
+                    ))
+                }
+            }
         }
     }
 }
@@ -147,50 +187,38 @@ where
                     }
 
                     // ---- Start Sequential Line Processing ----
-                    let line_data_for_error = trimmed_line_slice.to_vec(); // Clone only for potential error message
+                    let line_data_for_error = trimmed_line_slice.to_vec(); // Clone before simd_json mutates
                     let task_span = info_span!("process_line", line_num = line_counter);
                     let process_result = async {
                         trace!("Attempting to parse JSON line");
-                        match simd_json::from_slice::<R>(trimmed_line_slice) {
-                            Ok(raw_data) => {
-                                trace!("JSON parsed successfully, validating...");
-                                raw_data.validate()?;
-                                trace!("Validation successful, converting to rows...");
-                                let rows = raw_data.into_rows(enrichment.clone())?; // Clone enrichment per line
-                                let num_rows = rows.len();
-                                trace!(count = num_rows, "Converted to rows, sending to channel...");
-                                let mut processed_in_task = 0;
-                                for row in rows {
-                                    let send_start = Instant::now();
-                                    trace!("Sending record to background channel...");
-                                    // Send directly using self.record_sender
-                                    self.record_sender.send(row).await.map_err(|e| { 
-                                        error!(error = %e, "Failed to send record to background processor channel");
-                                        AppError::new(
-                                            ErrorCode::StreamProcessingError,
-                                            format!("Failed to send record to processor: {}", e),
-                                        )
-                                    })?;
-                                    let send_duration = send_start.elapsed();
-                                    trace!(duration_ms = send_duration.as_millis(), "Record sent to channel");
-                                    processed_in_task += 1;
-                                }
-                                debug!(rows_processed = processed_in_task, "Line processed successfully");
-                                Ok(processed_in_task) // Return count for this line
-                            }
-                            Err(e) => {
-                                let line_preview = String::from_utf8_lossy(&line_data_for_error);
-                                error!(error = %e, line = %line_preview.chars().take(100).collect::<String>(), "Failed to parse JSON line");
-                                Err(AppError::new(
-                                    ErrorCode::StreamDecodingError,
-                                    format!(
-                                        "Failed to parse JSON line (bytes): '{}': {}",
-                                        line_preview.chars().take(100).collect::<String>(),
-                                        e
-                                    ),
-                                ))
-                            }
+
+                        // Try parsing, with sanitization fallback for NaN/Infinity/-Infinity
+                        let raw_data = try_parse_with_sanitize::<R>(trimmed_line_slice, &line_data_for_error, false)?;
+
+                        trace!("JSON parsed successfully, validating...");
+                        raw_data.validate()?;
+                        trace!("Validation successful, converting to rows...");
+                        let rows = raw_data.into_rows(enrichment.clone())?; // Clone enrichment per line
+                        let num_rows = rows.len();
+                        trace!(count = num_rows, "Converted to rows, sending to channel...");
+                        let mut processed_in_task = 0;
+                        for row in rows {
+                            let send_start = Instant::now();
+                            trace!("Sending record to background channel...");
+                            // Send directly using self.record_sender
+                            self.record_sender.send(row).await.map_err(|e| {
+                                error!(error = %e, "Failed to send record to background processor channel");
+                                AppError::new(
+                                    ErrorCode::StreamProcessingError,
+                                    format!("Failed to send record to processor: {}", e),
+                                )
+                            })?;
+                            let send_duration = send_start.elapsed();
+                            trace!(duration_ms = send_duration.as_millis(), "Record sent to channel");
+                            processed_in_task += 1;
                         }
+                        debug!(rows_processed = processed_in_task, "Line processed successfully");
+                        Ok(processed_in_task) // Return count for this line
                     }.instrument(task_span).await; // Await the processing immediately
 
                     match process_result {
@@ -222,48 +250,35 @@ where
                         "Processing remaining data in buffer"
                     );
 
-                    let line_data_for_error = trimmed_line_slice.to_vec(); // Clone only for error message
+                    let line_data_for_error = trimmed_line_slice.to_vec(); // Clone before simd_json mutates
                     let task_span = info_span!("process_line", line_num = line_counter);
                     let process_result = async {
-                        match simd_json::from_slice::<R>(trimmed_line_slice) {
-                            Ok(raw_data) => {
-                                raw_data.validate()?;
-                                let rows = raw_data.into_rows(enrichment.clone())?; // Clone enrichment
-                                let mut processed_in_task = 0;
-                                for row in rows {
-                                    let send_start = Instant::now();
-                                    trace!("Sending remaining record to background channel...");
-                                    // Send directly
-                                    self.record_sender.send(row).await.map_err(|e| {
-                                        error!(error = %e, "Failed to send remaining record to background processor channel");
-                                        AppError::new(
-                                            ErrorCode::StreamProcessingError,
-                                            format!("Failed to send record to processor: {}", e),
-                                        )
-                                    })?;
-                                    let send_duration = send_start.elapsed();
-                                    if send_duration > Duration::from_millis(10) {
-                                        warn!(duration_ms = send_duration.as_millis(), "Sending remaining record to channel took longer than expected");
-                                    }
-                                    trace!(duration_ms = send_duration.as_millis(), "Remaining record sent to channel");
-                                    processed_in_task += 1;
-                                }
-                                debug!(rows_processed = processed_in_task, "Remaining line processed successfully");
-                                Ok(processed_in_task)
+                        // Try parsing, with sanitization fallback for NaN/Infinity/-Infinity
+                        let raw_data = try_parse_with_sanitize::<R>(trimmed_line_slice, &line_data_for_error, true)?;
+
+                        raw_data.validate()?;
+                        let rows = raw_data.into_rows(enrichment.clone())?; // Clone enrichment
+                        let mut processed_in_task = 0;
+                        for row in rows {
+                            let send_start = Instant::now();
+                            trace!("Sending remaining record to background channel...");
+                            // Send directly
+                            self.record_sender.send(row).await.map_err(|e| {
+                                error!(error = %e, "Failed to send remaining record to background processor channel");
+                                AppError::new(
+                                    ErrorCode::StreamProcessingError,
+                                    format!("Failed to send record to processor: {}", e),
+                                )
+                            })?;
+                            let send_duration = send_start.elapsed();
+                            if send_duration > Duration::from_millis(10) {
+                                warn!(duration_ms = send_duration.as_millis(), "Sending remaining record to channel took longer than expected");
                             }
-                            Err(e) => {
-                                let line_preview = String::from_utf8_lossy(&line_data_for_error);
-                                error!(error = %e, line = %line_preview.chars().take(100).collect::<String>(), "Failed to parse final JSON line");
-                                Err(AppError::new(
-                                    ErrorCode::StreamDecodingError,
-                                    format!(
-                                        "Failed to parse final JSON line (bytes): '{}': {}",
-                                        line_preview.chars().take(100).collect::<String>(),
-                                        e
-                                    ),
-                                ))
-                            }
+                            trace!(duration_ms = send_duration.as_millis(), "Remaining record sent to channel");
+                            processed_in_task += 1;
                         }
+                        debug!(rows_processed = processed_in_task, "Remaining line processed successfully");
+                        Ok(processed_in_task)
                     }.instrument(task_span).await; // Await immediately
 
                     match process_result {

@@ -8,6 +8,7 @@ import { queryRunMetricsByLogName } from "../../../../../../lib/queries";
 // Type for graph data returned by this procedure
 type GraphData = {
   value: number;
+  valueFlag: string;
   time: string;
   step: number;
 }[];

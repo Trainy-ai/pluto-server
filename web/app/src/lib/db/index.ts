@@ -4,6 +4,7 @@ export type MetricDataPoint = {
   step: number;
   time: string;
   value: number;
+  valueFlag?: string; // "NaN" | "Inf" | "-Inf" | ""
 };
 
 const MAX_DB_SIZE = 1024 * 1024 * 1024; // 1GB in bytes

@@ -77,8 +77,15 @@ export function alignDataForUPlot(processedLines: LineData[]): uPlot.AlignedData
 
   // Build aligned data arrays
   const data: uPlot.AlignedData = [xValues];
-  lineMaps.forEach((map) => {
-    const yValues = xValues.map((x) => map.get(x) ?? null);
+  lineMaps.forEach((map, lineIdx) => {
+    const flags = processedLines[lineIdx].valueFlags;
+    const yValues = xValues.map((x) => {
+      const y = map.get(x);
+      if (y === undefined) return null;
+      // Substitute null for non-finite flagged values to create gaps in the line
+      if (flags && flags.has(x)) return null;
+      return y;
+    });
     data.push(yValues as (number | null)[]);
   });
 

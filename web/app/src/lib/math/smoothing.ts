@@ -68,21 +68,24 @@ function smoothEMA(y: number[], alpha: number): number[] {
   return result;
 }
 
-// Simple running (moving) average over a fixed window length
+// Centered running (moving) average over a fixed window length.
+// Uses a symmetric window around each point so the smoothed curve
+// doesn't systematically lag above/below the raw data.
 function smoothRunning(y: number[], windowSize: number): number[] {
   const n = y.length;
-  const result = new Array<number>(n);
   if (n === 0 || windowSize <= 1) {
     return [...y];
   }
-  let sum = 0;
+  const result = new Array<number>(n);
+  const half = Math.floor(windowSize / 2);
   for (let i = 0; i < n; i++) {
-    sum += y[i];
-    if (i >= windowSize) {
-      sum -= y[i - windowSize];
+    const lo = Math.max(0, i - half);
+    const hi = Math.min(n - 1, i + half);
+    let sum = 0;
+    for (let j = lo; j <= hi; j++) {
+      sum += y[j];
     }
-    const count = Math.min(i + 1, windowSize);
-    result[i] = sum / count;
+    result[i] = sum / (hi - lo + 1);
   }
   return result;
 }

@@ -103,6 +103,7 @@ if [ "${summaries_count:-0}" = "0" ] && [ "${metrics_count:-0}" != "0" ] && [ "$
                 argMaxState(value, step),
                 sum(value * value)
             FROM mlop_metrics
+            WHERE isFinite(value)
             GROUP BY tenantId, projectName, runId, logName" \
         "$CLICKHOUSE_URL")
 

@@ -16,6 +16,8 @@ function createTooltipRow(
   isHighlighted: boolean = false,
   rawValue?: number,
   isInterpolated: boolean = false,
+  flagText?: string,
+  rawFlagText?: string,
 ): HTMLDivElement {
   const row = document.createElement("div");
   row.style.cssText = `padding: 1px 4px; display: flex; align-items: center; gap: 6px; white-space: nowrap${isHighlighted ? "; background: rgba(255,255,255,0.05)" : ""}`;
@@ -31,11 +33,27 @@ function createTooltipRow(
   row.appendChild(nameSpan);
 
   const valueSpan = document.createElement("span");
-  valueSpan.style.cssText = `color: ${textColor}; font-weight: 500; flex-shrink: 0${isInterpolated ? "; opacity: 0.6; font-style: italic" : ""}`;
-  if (rawValue != null && rawValue !== value) {
-    valueSpan.textContent = `${formatAxisLabel(value)} (${formatAxisLabel(rawValue)})`;
+  if (flagText) {
+    // Non-finite value: show flag text (NaN/Inf/-Inf) in warning color
+    valueSpan.style.cssText = `color: #e8a838; font-weight: 600; flex-shrink: 0; font-style: italic`;
+    valueSpan.textContent = flagText;
+  } else if (rawFlagText) {
+    // Smoothed value is finite but raw/original value was NaN/Inf/-Inf
+    valueSpan.style.cssText = `color: ${textColor}; font-weight: 500; flex-shrink: 0`;
+    const smoothedText = document.createTextNode(`${formatAxisLabel(value)} (`);
+    valueSpan.appendChild(smoothedText);
+    const flagSpan = document.createElement("span");
+    flagSpan.style.cssText = "color: #e8a838; font-style: italic";
+    flagSpan.textContent = rawFlagText;
+    valueSpan.appendChild(flagSpan);
+    valueSpan.appendChild(document.createTextNode(")"));
   } else {
-    valueSpan.textContent = isInterpolated ? `~${formatAxisLabel(value)}` : formatAxisLabel(value);
+    valueSpan.style.cssText = `color: ${textColor}; font-weight: 500; flex-shrink: 0${isInterpolated ? "; opacity: 0.6; font-style: italic" : ""}`;
+    if (rawValue != null && rawValue !== value) {
+      valueSpan.textContent = `${formatAxisLabel(value)} (${formatAxisLabel(rawValue)})`;
+    } else {
+      valueSpan.textContent = isInterpolated ? `~${formatAxisLabel(value)}` : formatAxisLabel(value);
+    }
   }
   row.appendChild(valueSpan);
 
@@ -205,18 +223,29 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
 
     // Gather series values
     const textColor = theme === "dark" ? "#fff" : "#000";
-    const seriesItems: { name: string; value: number; color: string; hidden: boolean; rawValue?: number; isInterpolated: boolean }[] = [];
+    const seriesItems: { name: string; value: number; color: string; hidden: boolean; rawValue?: number; isInterpolated: boolean; flagText?: string; rawFlagText?: string }[] = [];
 
-    // First pass: collect raw (original) values from hidden smoothing series
+    // First pass: collect raw (original) values and flags from hidden smoothing series
     const rawValues = new Map<string, number>();
+    const rawFlags = new Map<string, string>();
     for (let i = 1; i < u.series.length; i++) {
       const series = u.series[i];
       const yVal = u.data[i][idx];
       const lineData = lines[i - 1];
-      if (yVal != null && series.show !== false && lineData?.hideFromLegend) {
+      if (series.show !== false && lineData?.hideFromLegend) {
         const labelText = typeof series.label === "string" ? series.label : "";
         if (labelText.endsWith(" (original)")) {
-          rawValues.set(labelText.slice(0, -" (original)".length), yVal);
+          const baseName = labelText.slice(0, -" (original)".length);
+          if (yVal != null) {
+            rawValues.set(baseName, yVal);
+          } else {
+            // Check if the raw value has a non-finite flag (NaN/Inf/-Inf)
+            const xAtIdx = (u.data[0] as number[])[idx];
+            const flag = lineData?.valueFlags?.get(xAtIdx);
+            if (flag) {
+              rawFlags.set(baseName, flag);
+            }
+          }
         }
       }
     }
@@ -229,6 +258,26 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
 
       let yVal = u.data[i][idx] as number | null | undefined;
       let isInterpolated = false;
+
+      // Check for non-finite value flag (NaN/Inf/-Inf) before interpolation
+      const lineData = lines[i - 1];
+      const xAtIdx = xValues[idx];
+      const flag = lineData?.valueFlags?.get(xAtIdx);
+
+      if (yVal == null && flag) {
+        // This is a known non-finite value — show flag text instead of interpolating
+        const labelText = typeof series.label === "string" ? series.label : `Series ${i}`;
+        const seriesColor = lineData?.color || `hsl(${((i - 1) * 137) % 360}, 70%, 50%)`;
+        seriesItems.push({
+          name: labelText,
+          value: 0,
+          color: seriesColor,
+          hidden: lineData?.hideFromLegend || false,
+          isInterpolated: false,
+          flagText: flag,
+        });
+        continue;
+      }
 
       // If value is null and interpolation is enabled, try to interpolate
       if (yVal == null && tooltipInterpolation !== "none") {
@@ -245,7 +294,6 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       }
 
       if (yVal != null) {
-        const lineData = lines[i - 1];
         // Handle label which can be string or HTMLElement
         const labelText = typeof series.label === "string" ? series.label : `Series ${i}`;
         // Get color from lineData (series.stroke is a function, not a string)
@@ -257,6 +305,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
           hidden: lineData?.hideFromLegend || false,
           rawValue: rawValues.get(labelText),
           isInterpolated,
+          rawFlagText: rawFlags.get(labelText),
         });
       }
     }
@@ -294,7 +343,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     // Add ALL rows using safe DOM APIs - scrolling handles overflow
     for (const s of visibleItems) {
       const isHighlighted = highlightedName !== null && s.name === highlightedName;
-      content.appendChild(createTooltipRow(s.name, s.value, s.color, textColor, isHighlighted, s.rawValue, s.isInterpolated));
+      content.appendChild(createTooltipRow(s.name, s.value, s.color, textColor, isHighlighted, s.rawValue, s.isInterpolated, s.flagText, s.rawFlagText));
     }
 
     tooltipEl.appendChild(content);

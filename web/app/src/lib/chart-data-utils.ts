@@ -15,6 +15,7 @@ export interface ChartDataPoint {
   step: number;
   time: string;
   value: number;
+  valueFlag?: string; // "NaN" | "Inf" | "-Inf" | ""
 }
 
 /** Smoothing settings subset needed by these utilities */
@@ -34,6 +35,8 @@ export interface BaseSeriesData {
   seriesId?: string;
   /** uPlot dash pattern, e.g. [10, 5]. undefined = solid. */
   dash?: number[];
+  /** Map from x-value to non-finite flag text ("NaN", "Inf", "-Inf") for tooltip display */
+  valueFlags?: Map<number, string>;
 }
 
 /** Chart series data with all optional fields for smoothing/envelope/display */
@@ -49,11 +52,32 @@ export interface ChartSeriesData {
   hideFromLegend?: boolean;
   envelopeOf?: string;
   envelopeBound?: "min" | "max";
+  /** Map from x-value to non-finite flag text ("NaN", "Inf", "-Inf") for tooltip display */
+  valueFlags?: Map<number, string>;
 }
 
 // ============================
 // Functions
 // ============================
+
+/**
+ * Build a valueFlags map from data points that have non-empty valueFlag.
+ * Maps x-value (step or time) to flag text ("NaN", "Inf", "-Inf").
+ * Returns undefined if no flags are present (optimization to skip downstream checks).
+ */
+export function buildValueFlags(
+  data: ChartDataPoint[],
+  getX: (d: ChartDataPoint) => number,
+): Map<number, string> | undefined {
+  let flags: Map<number, string> | undefined;
+  for (const d of data) {
+    if (d.valueFlag && d.valueFlag !== "") {
+      if (!flags) flags = new Map();
+      flags.set(getX(d), d.valueFlag);
+    }
+  }
+  return flags;
+}
 
 /**
  * Determine appropriate time unit based on max seconds for display.
@@ -123,7 +147,7 @@ export function applyDownsampling(
   maxPoints: number,
 ): ChartSeriesData[] {
   const envelope = downsampleWithEnvelope(chartData.x, chartData.y, maxPoints);
-  const main: ChartSeriesData = { ...chartData, x: envelope.x, y: envelope.y };
+  const main: ChartSeriesData = { ...chartData, x: envelope.x, y: envelope.y, valueFlags: chartData.valueFlags };
 
   return [
     main,
@@ -136,6 +160,7 @@ export function applyDownsampling(
       hideFromLegend: true,
       envelopeOf: chartData.label,
       envelopeBound: "min" as const,
+      valueFlags: chartData.valueFlags,
     },
     {
       x: envelope.x,
@@ -146,6 +171,7 @@ export function applyDownsampling(
       hideFromLegend: true,
       envelopeOf: chartData.label,
       envelopeBound: "max" as const,
+      valueFlags: chartData.valueFlags,
     },
   ];
 }
@@ -167,17 +193,45 @@ export function applySmoothing(
     return [chartData];
   }
 
+  // Split data into contiguous segments of finite values and smooth each
+  // independently. This prevents smoothing from interpolating across
+  // NaN/Inf/-Inf gaps — the smoothed curve has the same gaps as the raw
+  // data, and the EMA state resets after each gap.
+  let finalY: number[];
+  if (chartData.valueFlags && chartData.valueFlags.size > 0) {
+    finalY = new Array(chartData.x.length);
+    let segStart = -1;
+    for (let i = 0; i <= chartData.x.length; i++) {
+      const isFlagged = i < chartData.x.length && chartData.valueFlags.has(chartData.x[i]);
+      if (isFlagged || i === chartData.x.length) {
+        // End of a contiguous finite segment — smooth it independently
+        if (segStart >= 0) {
+          const segX = chartData.x.slice(segStart, i);
+          const segY = chartData.y.slice(segStart, i);
+          const smoothedSeg = smoothData(segX, segY, smoothingSettings.algorithm, smoothingSettings.parameter);
+          for (let j = 0; j < smoothedSeg.length; j++) {
+            finalY[segStart + j] = smoothedSeg[j];
+          }
+          segStart = -1;
+        }
+        if (isFlagged) {
+          finalY[i] = chartData.y[i]; // placeholder — will become null gap
+        }
+      } else if (segStart < 0) {
+        segStart = i;
+      }
+    }
+  } else {
+    finalY = smoothData(chartData.x, chartData.y, smoothingSettings.algorithm, smoothingSettings.parameter);
+  }
+
   const data: ChartSeriesData[] = [
     {
       ...chartData,
-      y: smoothData(
-        chartData.x,
-        chartData.y,
-        smoothingSettings.algorithm,
-        smoothingSettings.parameter,
-      ),
+      y: finalY,
       opacity: 1,
       hideFromLegend: false,
+      valueFlags: chartData.valueFlags,
     },
   ];
 
