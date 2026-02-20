@@ -172,3 +172,64 @@ export async function queryRunFilesByLogName(
 
   return filesWithUrls;
 }
+
+/**
+ * Lightweight metadata-only query for building a file browser tree.
+ * Does NOT generate presigned URLs to avoid expensive parallel URL generation.
+ */
+export interface RunFileMetadata {
+  fileName: string;
+  fileType: string;
+  fileSize: number;
+  logName: string;
+  logGroup: string;
+  time: string;
+  step: number;
+}
+
+export async function queryRunFileTree(
+  ch: typeof clickhouse,
+  params: {
+    organizationId: string;
+    projectName: string;
+    runId: number;
+    limit?: number;
+  }
+): Promise<RunFileMetadata[]> {
+  const { organizationId, projectName, runId, limit = 10000 } = params;
+
+  const query = `
+    SELECT fileName, fileType, fileSize, logName, logGroup, time, step
+    FROM mlop_files
+    WHERE tenantId = {tenantId: String}
+    AND projectName = {projectName: String}
+    AND runId = {runId: UInt64}
+    ORDER BY logName ASC, step ASC, fileName ASC
+    LIMIT {limit: UInt32}
+  `;
+
+  const result = await ch.query(query, {
+    tenantId: organizationId,
+    projectName,
+    runId,
+    limit,
+  });
+
+  return (await result.json()) as RunFileMetadata[];
+}
+
+/**
+ * Generate a presigned URL for a single file.
+ */
+export async function getRunFileUrl(
+  params: {
+    organizationId: string;
+    projectName: string;
+    runId: number;
+    logName: string;
+    fileName: string;
+  }
+): Promise<string> {
+  const { organizationId, projectName, runId, logName, fileName } = params;
+  return getImageUrl(organizationId, projectName, runId, logName, fileName);
+}
