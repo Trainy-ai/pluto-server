@@ -88,8 +88,8 @@ export function buildSeriesConfig(
             isHighlighted = thisSeriesLabel === crossChartLabel;
             highlightedLabel = crossChartLabel;
           } else if (tableId !== null) {
-            // Table row hover highlight - match by unique seriesId to handle duplicate run names
-            isHighlighted = thisSeriesId === tableId;
+            // Table row hover highlight - match by runId prefix to handle composite "runId:metric" seriesIds
+            isHighlighted = thisSeriesId === tableId || (!!thisSeriesId && thisSeriesId.startsWith(tableId + ':'));
           }
 
           const isFocusActive =
@@ -113,7 +113,7 @@ export function buildSeriesConfig(
             return applyAlpha(baseColor, Math.min(lineOpacity * 2.5, 0.35));
           }
           // Dim unfocused series: combine line opacity with focus dimming
-          return applyAlpha(baseColor, lineOpacity * 0.15);
+          return applyAlpha(baseColor, lineOpacity * 0.05);
         },
         width: chartLineWidth,
         dash: line.dash,
