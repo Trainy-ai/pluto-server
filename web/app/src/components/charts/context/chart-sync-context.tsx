@@ -28,14 +28,21 @@ function getStoredLineWidth(): number {
  * @param key - which series property to match against ('label' for cross-chart, '_seriesId' for table highlight)
  * @param defaultWidth - base line width (default 1.5)
  */
+function seriesKeyMatches(seriesValue: string | undefined, target: string, key: string): boolean {
+  if (!seriesValue) return false;
+  if (seriesValue === target) return true;
+  if (key === '_seriesId' && seriesValue.startsWith(target + ':')) return true;
+  return false;
+}
+
 export function applySeriesHighlight(chart: uPlot, value: string | null, key: '_seriesId' | 'label' = 'label', defaultWidth = 1.5): void {
-  const hasMatch = value && chart.series.some((s: any) => s[key] === value);
+  const hasMatch = value && chart.series.some((s: any) => seriesKeyMatches(s[key], value, key));
 
   if (hasMatch) {
-    const highlightedWidth = defaultWidth * 1.6;
-    const dimmedWidth = Math.max(0.3, defaultWidth * 0.2);
+    const highlightedWidth = Math.max(2.5, defaultWidth * 2);
+    const dimmedWidth = Math.max(0.3, defaultWidth * 0.15);
     for (let i = 1; i < chart.series.length; i++) {
-      const match = (chart.series[i] as any)[key] === value;
+      const match = seriesKeyMatches((chart.series[i] as any)[key], value, key);
       chart.series[i].width = match ? highlightedWidth : dimmedWidth;
     }
   } else {
