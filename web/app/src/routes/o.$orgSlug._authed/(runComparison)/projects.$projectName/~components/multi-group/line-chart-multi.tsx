@@ -16,6 +16,7 @@ import {
   getTimeUnitForDisplay,
   alignAndUnzip,
   downsampleAndSmooth,
+  buildValueFlags,
 } from "@/lib/chart-data-utils";
 
 // For active runs, refresh every 30 seconds
@@ -373,10 +374,21 @@ const MultiLineChartInner = memo(
               (seconds) => seconds / divisor,
             );
 
+            // Build valueFlags map for non-finite values
+            let valueFlags: Map<number, string> | undefined;
+            for (let i = 0; i < sortedData.length; i++) {
+              const flag = (sortedData[i] as MetricDataPoint).valueFlag;
+              if (flag && flag !== "") {
+                if (!valueFlags) valueFlags = new Map();
+                valueFlags.set(normalizedTimes[i], flag);
+              }
+            }
+
             const baseData = {
               x: normalizedTimes,
               y: sortedData.map((d: MetricDataPoint) => Number(d.value)),
               ...seriesProps(pair),
+              valueFlags,
             };
 
             if (collectRaw) rawLines.push(baseData);
@@ -403,6 +415,7 @@ const MultiLineChartInner = memo(
                 x: data.map((d: MetricDataPoint) => new Date(d.time).getTime()),
                 y: data.map((d: MetricDataPoint) => Number(d.value)),
                 ...seriesProps(pair),
+                valueFlags: buildValueFlags(data, (d) => new Date(d.time).getTime()),
               };
               if (collectRaw) rawLines.push(baseData);
               return downsampleAndSmooth(baseData, settings.maxPointsPerSeries, settings.smoothing);
@@ -437,10 +450,21 @@ const MultiLineChartInner = memo(
                 (seconds) => seconds / divisor,
               );
 
+              // Build valueFlags map for non-finite values
+              let valueFlags: Map<number, string> | undefined;
+              for (let i = 0; i < data.length; i++) {
+                const flag = (data[i] as MetricDataPoint).valueFlag;
+                if (flag && flag !== "") {
+                  if (!valueFlags) valueFlags = new Map();
+                  valueFlags.set(normalizedTimes[i], flag);
+                }
+              }
+
               const baseData = {
                 x: normalizedTimes,
                 y: data.map((d: MetricDataPoint) => Number(d.value)),
                 ...seriesProps(pair),
+                valueFlags,
               };
 
               if (collectRaw) rawLines.push(baseData);
@@ -483,6 +507,7 @@ const MultiLineChartInner = memo(
                 x: sourceData.map((d: MetricDataPoint) => Number(d.step)),
                 y: sourceData.map((d: MetricDataPoint) => Number(d.value)),
                 ...seriesProps(pair),
+                valueFlags: buildValueFlags(sourceData, (d) => Number(d.step)),
               };
               if (collectRaw) rawLines.push(baseData);
               // Skip client-side downsampling for zoom data — it's already

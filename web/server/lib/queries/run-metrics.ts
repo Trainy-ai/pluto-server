@@ -12,6 +12,21 @@ import { getLogGroupName } from "../utilts";
 // This keeps individual metric responses under ~500KB uncompressed.
 const DEFAULT_MAX_POINTS = 10_000;
 
+// SQL fragment: extract non-finite type as valueFlag BEFORE JSON serialization
+// converts NaN/Inf/-Inf to null. We leave `value` unaliased — ClickHouse JSON
+// will serialize non-finite values as null, which we sanitize to 0 in TypeScript.
+const VALUE_FLAG_SELECT = `multiIf(isNaN(value), 'NaN', isInfinite(value) AND value > 0, 'Inf', isInfinite(value) AND value < 0, '-Inf', '') as valueFlag`;
+
+/** Sanitize null values (from ClickHouse JSON serialization of NaN/Inf/-Inf) to 0 */
+function sanitizeMetricRows<T extends { value: number | null }>(rows: T[]): T[] {
+  for (const row of rows) {
+    if (row.value === null || row.value === undefined) {
+      (row as { value: number }).value = 0;
+    }
+  }
+  return rows;
+}
+
 export interface QueryRunMetricsParams {
   organizationId: string;
   projectName: string;
@@ -25,6 +40,15 @@ export interface RunMetricEntry {
   logName: string;
   logGroup: string;
   value: number;
+  valueFlag: string;
+  time: string;
+  step: number;
+}
+
+/** Data point returned by single-run and batch graph queries */
+export interface MetricDataPoint {
+  value: number;
+  valueFlag: string;
   time: string;
   step: number;
 }
@@ -80,7 +104,7 @@ export async function queryRunMetrics(
       FROM mlop_metrics
       WHERE ${whereClause}
     )
-    SELECT logName, logGroup, value, time, step
+    SELECT logName, logGroup, value, ${VALUE_FLAG_SELECT}, time, step
     FROM counted
     WHERE total_rows <= {limit: UInt32}
        OR rn % ceiling(total_rows / {limit: UInt32}) = 1
@@ -90,7 +114,7 @@ export async function queryRunMetrics(
   queryParams.limit = limit;
 
   const result = await ch.query(query, queryParams);
-  return (await result.json()) as RunMetricEntry[];
+  return sanitizeMetricRows((await result.json()) as RunMetricEntry[]);
 }
 
 /**
@@ -113,7 +137,7 @@ export async function queryRunMetricsByLogName(
     maxPoints?: number; // 0 = no limit (return all rows), undefined = DEFAULT_MAX_POINTS
     preview?: boolean; // When true, use fast LIMIT instead of reservoir sampling
   }
-): Promise<{ value: number; time: string; step: number }[]> {
+): Promise<MetricDataPoint[]> {
   const { organizationId, projectName, runId, logName, stepMin, stepMax, maxPoints, preview } = params;
   const logGroup = getLogGroupName(logName);
   const effectiveLimit = maxPoints === undefined ? DEFAULT_MAX_POINTS : maxPoints;
@@ -134,7 +158,7 @@ export async function queryRunMetricsByLogName(
     // When maxPoints=0, skip reservoir sampling entirely — return all rows in range
     if (effectiveLimit === 0) {
       const query = `
-        SELECT value, time, step
+        SELECT value, ${VALUE_FLAG_SELECT}, time, step
         FROM mlop_metrics
         WHERE tenantId = {tenantId: String}
           AND projectName = {projectName: String}
@@ -146,7 +170,7 @@ export async function queryRunMetricsByLogName(
         ORDER BY step ASC
       `;
       const result = await ch.query(query, queryParams);
-      return (await result.json()) as { value: number; time: string; step: number }[];
+      return sanitizeMetricRows((await result.json()) as MetricDataPoint[]);
     }
 
     // Fast preview path for step ranges: stride-based sampling, no window functions.
@@ -154,7 +178,7 @@ export async function queryRunMetricsByLogName(
     // at once rather than filling in left-to-right (which LIMIT would do).
     if (preview && effectiveLimit > 0) {
       const query = `
-        SELECT value, time, step
+        SELECT value, ${VALUE_FLAG_SELECT}, time, step
         FROM mlop_metrics
         WHERE tenantId = {tenantId: String}
           AND projectName = {projectName: String}
@@ -167,7 +191,7 @@ export async function queryRunMetricsByLogName(
         ORDER BY step ASC
       `;
       const result = await ch.query(query, queryParams);
-      return (await result.json()) as { value: number; time: string; step: number }[];
+      return sanitizeMetricRows((await result.json()) as MetricDataPoint[]);
     }
 
     // Uses reservoir sampling when the range has more points than the limit,
@@ -187,7 +211,7 @@ export async function queryRunMetricsByLogName(
           AND step >= {stepMin: UInt64}
           AND step <= {stepMax: UInt64}
       )
-      SELECT value, time, step
+      SELECT value, ${VALUE_FLAG_SELECT}, time, step
       FROM counted
       WHERE total_rows <= ${effectiveLimit}
          OR rn % ceiling(total_rows / ${effectiveLimit}) = 1
@@ -196,13 +220,13 @@ export async function queryRunMetricsByLogName(
     `;
 
     const result = await ch.query(query, queryParams);
-    return (await result.json()) as { value: number; time: string; step: number }[];
+    return sanitizeMetricRows((await result.json()) as MetricDataPoint[]);
   }
 
   // Overview query: when maxPoints=0, return all data without sampling
   if (effectiveLimit === 0) {
     const query = `
-      SELECT value, time, step
+      SELECT value, ${VALUE_FLAG_SELECT}, time, step
       FROM mlop_metrics
       WHERE tenantId = {tenantId: String}
         AND projectName = {projectName: String}
@@ -212,7 +236,7 @@ export async function queryRunMetricsByLogName(
       ORDER BY step ASC
     `;
     const result = await ch.query(query, queryParams);
-    return (await result.json()) as { value: number; time: string; step: number }[];
+    return sanitizeMetricRows((await result.json()) as MetricDataPoint[]);
   }
 
   // Fast preview path: simple LIMIT scan using primary key index, no window functions.
@@ -220,7 +244,7 @@ export async function queryRunMetricsByLogName(
   // that gets replaced by properly-sampled data moments later.
   if (preview && effectiveLimit > 0) {
     const query = `
-      SELECT value, time, step
+      SELECT value, ${VALUE_FLAG_SELECT}, time, step
       FROM mlop_metrics
       WHERE tenantId = {tenantId: String}
         AND projectName = {projectName: String}
@@ -231,7 +255,7 @@ export async function queryRunMetricsByLogName(
       LIMIT ${effectiveLimit}
     `;
     const result = await ch.query(query, queryParams);
-    return (await result.json()) as { value: number; time: string; step: number }[];
+    return sanitizeMetricRows((await result.json()) as MetricDataPoint[]);
   }
 
   // Overview query: reservoir sampling to fit within the effective limit
@@ -248,7 +272,7 @@ export async function queryRunMetricsByLogName(
         AND logName = {logName: String}
         AND logGroup = {logGroup: String}
     )
-    SELECT value, time, step
+    SELECT value, ${VALUE_FLAG_SELECT}, time, step
     FROM counted
     WHERE total_rows <= ${effectiveLimit}
        OR rn % ceiling(total_rows / ${effectiveLimit}) = 1
@@ -257,7 +281,7 @@ export async function queryRunMetricsByLogName(
   `;
 
   const result = await ch.query(query, queryParams);
-  return (await result.json()) as { value: number; time: string; step: number }[];
+  return sanitizeMetricRows((await result.json()) as MetricDataPoint[]);
 }
 
 /**
@@ -279,7 +303,7 @@ export async function queryRunMetricsBatchByLogName(
     maxPoints?: number; // per-run limit: 0 = no limit, undefined = DEFAULT_MAX_POINTS
     preview?: boolean;
   }
-): Promise<Record<number, { value: number; time: string; step: number }[]>> {
+): Promise<Record<number, MetricDataPoint[]>> {
   const { organizationId, projectName, runIds, logName, stepMin, stepMax, maxPoints, preview } = params;
 
   if (runIds.length === 0) return {};
@@ -304,7 +328,7 @@ export async function queryRunMetricsBatchByLogName(
     if (effectiveLimit === 0) {
       // No sampling — return all rows in range
       query = `
-        SELECT runId, value, time, step
+        SELECT runId, value, ${VALUE_FLAG_SELECT}, time, step
         FROM mlop_metrics
         WHERE tenantId = {tenantId: String}
           AND projectName = {projectName: String}
@@ -320,7 +344,7 @@ export async function queryRunMetricsBatchByLogName(
       // Selects every Nth step across the full zoom range so data covers the
       // entire visible area at once rather than filling in left-to-right.
       query = `
-        SELECT runId, value, time, step
+        SELECT runId, value, ${VALUE_FLAG_SELECT}, time, step
         FROM mlop_metrics
         WHERE tenantId = {tenantId: String}
           AND projectName = {projectName: String}
@@ -348,7 +372,7 @@ export async function queryRunMetricsBatchByLogName(
             AND step >= {stepMin: UInt64}
             AND step <= {stepMax: UInt64}
         )
-        SELECT runId, value, time, step FROM counted
+        SELECT runId, value, ${VALUE_FLAG_SELECT}, time, step FROM counted
         WHERE total_rows <= ${effectiveLimit}
            OR rn % ceiling(total_rows / ${effectiveLimit}) = 1
            OR rn = total_rows
@@ -358,7 +382,7 @@ export async function queryRunMetricsBatchByLogName(
   } else if (effectiveLimit === 0) {
     // No sampling — return all data
     query = `
-      SELECT runId, value, time, step
+      SELECT runId, value, ${VALUE_FLAG_SELECT}, time, step
       FROM mlop_metrics
       WHERE tenantId = {tenantId: String}
         AND projectName = {projectName: String}
@@ -380,7 +404,7 @@ export async function queryRunMetricsBatchByLogName(
           AND logName = {logName: String}
           AND logGroup = {logGroup: String}
       )
-      SELECT runId, value, time, step FROM numbered
+      SELECT runId, value, ${VALUE_FLAG_SELECT}, time, step FROM numbered
       WHERE rn <= ${effectiveLimit}
       ORDER BY runId, step ASC
     `;
@@ -398,7 +422,7 @@ export async function queryRunMetricsBatchByLogName(
           AND logName = {logName: String}
           AND logGroup = {logGroup: String}
       )
-      SELECT runId, value, time, step FROM counted
+      SELECT runId, value, ${VALUE_FLAG_SELECT}, time, step FROM counted
       WHERE total_rows <= ${effectiveLimit}
          OR rn % ceiling(total_rows / ${effectiveLimit}) = 1
          OR rn = total_rows
@@ -407,13 +431,13 @@ export async function queryRunMetricsBatchByLogName(
   }
 
   const result = await ch.query(query, queryParams);
-  const rows = (await result.json()) as { runId: number; value: number; time: string; step: number }[];
+  const rows = sanitizeMetricRows((await result.json()) as (MetricDataPoint & { runId: number })[]);
 
   // Group flat result set by runId
-  const grouped: Record<number, { value: number; time: string; step: number }[]> = {};
+  const grouped: Record<number, MetricDataPoint[]> = {};
   for (const row of rows) {
     const arr = grouped[row.runId] ?? (grouped[row.runId] = []);
-    arr.push({ value: row.value, time: row.time, step: row.step });
+    arr.push({ value: row.value, valueFlag: row.valueFlag, time: row.time, step: row.step });
   }
 
   return grouped;

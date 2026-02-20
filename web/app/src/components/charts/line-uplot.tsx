@@ -44,6 +44,8 @@ export interface LineData {
   envelopeOf?: string;
   /** Whether this is the min or max boundary of an envelope */
   envelopeBound?: "min" | "max";
+  /** Map from x-value to non-finite flag text ("NaN", "Inf", "-Inf") for tooltip display */
+  valueFlags?: Map<number, string>;
 }
 
 /** Raw (pre-downsampled) data for a single series, used for zoom-aware re-downsampling */

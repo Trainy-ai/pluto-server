@@ -6,7 +6,7 @@ import { queryRunMetricsBatchByLogName } from "../../../../../../lib/queries";
 // Type for batch graph data: map of SQID-encoded runId → data points
 type GraphBatchData = Record<
   string,
-  { value: number; time: string; step: number }[]
+  { value: number; valueFlag: string; time: string; step: number }[]
 >;
 
 export const graphBatchProcedure = protectedOrgProcedure

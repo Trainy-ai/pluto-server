@@ -14,6 +14,7 @@ import {
   getTimeUnitForDisplay,
   alignAndUnzip,
   downsampleAndSmooth,
+  buildValueFlags,
   type ChartDataPoint,
 } from "@/lib/chart-data-utils";
 
@@ -33,6 +34,7 @@ type ChartData = {
   color?: string;
   opacity?: number;
   hideFromLegend?: boolean;
+  valueFlags?: Map<number, string>;
 };
 
 type ChartConfig = {
@@ -73,12 +75,23 @@ function useSystemChartConfig(
   // Convert all values to the selected unit
   const normalizedTimes = relativeTimes.map((seconds) => seconds / divisor);
 
+  // Build valueFlags map for non-finite values
+  let valueFlags: Map<number, string> | undefined;
+  for (let i = 0; i < sortedData.length; i++) {
+    const flag = sortedData[i].valueFlag;
+    if (flag && flag !== "") {
+      if (!valueFlags) valueFlags = new Map();
+      valueFlags.set(normalizedTimes[i], flag);
+    }
+  }
+
   return {
     lines: [
       {
         x: normalizedTimes,
         y: sortedData.map((d) => Number(d.value)),
         label: logName,
+        valueFlags,
       },
     ],
     title: logName,
@@ -109,6 +122,7 @@ function buildChartStrategy(
         y: sourceData.map((d) => Number(d.value)),
         label: logName,
         color,
+        valueFlags: buildValueFlags(sourceData, (d) => Number(d.step)),
       };
 
       // Store raw (pre-downsampled) data for zoom-aware re-downsampling
@@ -130,6 +144,7 @@ function buildChartStrategy(
         y: data.map((d) => Number(d.value)),
         label: logName,
         color,
+        valueFlags: buildValueFlags(data, (d) => new Date(d.time).getTime()),
       };
 
       const rawLines: RawLineData[] = maxPointsPerSeries > 0 ? [baseData] : [];
@@ -157,11 +172,22 @@ function buildChartStrategy(
       // Convert all values to the selected unit
       const normalizedTimes = relativeTimes.map((seconds) => seconds / divisor);
 
+      // Build valueFlags map for non-finite values
+      let valueFlags: Map<number, string> | undefined;
+      for (let i = 0; i < data.length; i++) {
+        const flag = data[i].valueFlag;
+        if (flag && flag !== "") {
+          if (!valueFlags) valueFlags = new Map();
+          valueFlags.set(normalizedTimes[i], flag);
+        }
+      }
+
       const baseData = {
         x: normalizedTimes,
         y: data.map((d) => Number(d.value)),
         label: logName,
         color,
+        valueFlags,
       };
 
       const rawLines: RawLineData[] = maxPointsPerSeries > 0 ? [baseData] : [];
@@ -179,6 +205,7 @@ function buildChartStrategy(
         y: data.map((d) => Number(d.value)),
         label: logName,
         color,
+        valueFlags: buildValueFlags(data, (d) => Number(d.step)),
       };
 
       const rawLines: RawLineData[] = maxPointsPerSeries > 0 ? [baseData] : [];
@@ -398,12 +425,13 @@ export const LineChartWithFetch = memo(
       );
     }
 
-    // Render empty state
+    // Show "no data" state when the run has no data points at all
     if (!data || data.length === 0) {
       return (
-        <div className="flex h-full flex-grow flex-col items-center justify-center bg-accent">
-          <h2 className="text-2xl font-bold">{logName}</h2>
-          <p className="text-sm text-gray-500">No data received yet</p>
+        <div className="flex h-full flex-grow flex-col items-center justify-center bg-accent p-4">
+          <p className="text-center text-sm text-gray-500">
+            No data received yet
+          </p>
         </div>
       );
     }
