@@ -259,34 +259,54 @@ export function ChartSyncProvider({
   // Track last highlighted series to avoid redundant redraws
   const lastHighlightedRef = useRef<{ sourceChartId: string; seriesLabel: string | null } | null>(null);
 
+  // rAF throttle refs for highlight coalescing
+  const pendingHighlightRef = useRef<{ sourceChartId: string; seriesLabel: string | null } | null>(null);
+  const highlightRafRef = useRef<number | null>(null);
+
   // Cross-chart highlighting for uPlot - directly manipulates registered instances
   // This avoids React state timing issues by working imperatively
+  // Uses requestAnimationFrame to coalesce multiple calls per frame (e.g. 60fps mouse moves with 20+ charts)
   const highlightUPlotSeries = useCallback(
     (sourceChartId: string, seriesLabel: string | null) => {
-      // Skip if nothing changed (avoids constant redraws during cursor sync)
-      const last = lastHighlightedRef.current;
-      if (last && last.sourceChartId === sourceChartId && last.seriesLabel === seriesLabel) {
-        return;
-      }
-      lastHighlightedRef.current = { sourceChartId, seriesLabel };
+      // Store the latest args — only the most recent call per frame matters
+      pendingHighlightRef.current = { sourceChartId, seriesLabel };
 
-      uplotInstancesRef.current.forEach((chart, id) => {
-        if (id === sourceChartId) return; // Skip source chart
+      // If a rAF is already scheduled, the pending ref will be picked up — no need to schedule another
+      if (highlightRafRef.current !== null) return;
 
-        const lw = getStoredLineWidth();
-        if (seriesLabel === null) {
-          // Fall back to table highlight if active, otherwise reset to default
-          const tableId = tableHighlightedSeriesRef.current;
-          applySeriesHighlight(chart, tableId, '_seriesId', lw);
-          chart.redraw(false);
-        } else {
-          // Only apply highlighting if this chart has the series
-          const hasMatch = chart.series.some((s) => s.label === seriesLabel);
-          if (hasMatch) {
-            applySeriesHighlight(chart, seriesLabel, 'label', lw);
-            chart.redraw(false);
-          }
+      highlightRafRef.current = requestAnimationFrame(() => {
+        highlightRafRef.current = null;
+        const pending = pendingHighlightRef.current;
+        if (!pending) return;
+        pendingHighlightRef.current = null;
+
+        const { sourceChartId: srcId, seriesLabel: label } = pending;
+
+        // Skip if nothing changed (avoids constant redraws during cursor sync)
+        const last = lastHighlightedRef.current;
+        if (last && last.sourceChartId === srcId && last.seriesLabel === label) {
+          return;
         }
+        lastHighlightedRef.current = { sourceChartId: srcId, seriesLabel: label };
+
+        uplotInstancesRef.current.forEach((chart, id) => {
+          if (id === srcId) return; // Skip source chart
+
+          const lw = getStoredLineWidth();
+          if (label === null) {
+            // Fall back to table highlight if active, otherwise reset to default
+            const tableId = tableHighlightedSeriesRef.current;
+            applySeriesHighlight(chart, tableId, '_seriesId', lw);
+            chart.redraw(false);
+          } else {
+            // Only apply highlighting if this chart has the series
+            const hasMatch = chart.series.some((s) => s.label === label);
+            if (hasMatch) {
+              applySeriesHighlight(chart, label, 'label', lw);
+              chart.redraw(false);
+            }
+          }
+        });
       });
     },
     []
@@ -432,6 +452,11 @@ export function ChartSyncProvider({
     return () => {
       uplotInstancesRef.current.clear();
       resetCallbacksRef.current.clear();
+      // Cancel any pending highlight rAF to avoid post-unmount work
+      if (highlightRafRef.current !== null) {
+        cancelAnimationFrame(highlightRafRef.current);
+        highlightRafRef.current = null;
+      }
     };
   }, []);
 

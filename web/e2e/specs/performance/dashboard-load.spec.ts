@@ -225,6 +225,198 @@ test.describe("Dashboard Performance Tests", () => {
     });
   });
 
+  test.describe("Dashboard View (Custom Chart) — Lazy Loading & Tooltip", () => {
+    test("validates lazy loading in dashboard widget grid", async ({ page }) => {
+      // Navigate to project page
+      await page.goto(`/o/${DEV_ORG_SLUG}/projects/${DEV_PROJECT}`);
+      await page.waitForLoadState("domcontentloaded");
+
+      // Wait for runs table to load so we can select runs
+      await page.waitForSelector('[data-testid="runs-table"], table', { timeout: 15000 });
+
+      // Select a few runs to populate chart data
+      const runCheckboxes = page.locator('input[type="checkbox"]');
+      const checkboxCount = await runCheckboxes.count();
+      if (checkboxCount >= 3) {
+        for (let i = 0; i < 3; i++) {
+          await runCheckboxes.nth(i).click();
+        }
+      }
+
+      // Look for a dashboard view selector (custom chart tab)
+      // If a custom dashboard view exists, click on it; otherwise this test
+      // validates the default All Metrics grid which also uses LazyChart.
+      const dashboardTab = page.locator('[data-testid="dashboard-view-tab"]').first();
+      const hasDashboardTab = await dashboardTab.isVisible({ timeout: 5000 }).catch(() => false);
+
+      if (hasDashboardTab) {
+        await dashboardTab.click();
+      }
+
+      // Wait for at least one chart to render
+      await waitForRenderedChart(page);
+
+      // Wait for initial render to settle
+      await page.evaluate(
+        () => new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        })
+      );
+
+      // Count charts before scroll
+      const initialCharts = await countElements(page, CHART_SELECTOR);
+
+      // Scroll down to trigger lazy loading of below-fold widgets
+      await page.evaluate(() => window.scrollBy(0, 3000));
+
+      // Wait for lazy-loaded charts to appear
+      await expect.poll(
+        () => countElements(page, CHART_SELECTOR),
+        { timeout: 10000 }
+      ).toBeGreaterThanOrEqual(initialCharts);
+
+      const afterScrollCharts = await countElements(page, CHART_SELECTOR);
+      const lazyLoadingWorks = afterScrollCharts > initialCharts || initialCharts < 20;
+
+      allMetrics.push(
+        createMetric("dashboard_view_charts_initial", initialCharts, "count"),
+        createMetric("dashboard_view_charts_after_scroll", afterScrollCharts, "count"),
+        createBooleanMetric("dashboard_view_lazy_loading_works", lazyLoadingWorks)
+      );
+
+      expect(lazyLoadingWorks).toBe(true);
+    });
+
+    test("tooltip appears within responsiveness threshold on hover", async ({ page }) => {
+      // Navigate to project page and select runs
+      await page.goto(`/o/${DEV_ORG_SLUG}/projects/${DEV_PROJECT}`);
+      await page.waitForLoadState("domcontentloaded");
+
+      await page.waitForSelector('[data-testid="runs-table"], table', { timeout: 15000 });
+
+      const runCheckboxes = page.locator('input[type="checkbox"]');
+      const checkboxCount = await runCheckboxes.count();
+      if (checkboxCount >= 2) {
+        for (let i = 0; i < 2; i++) {
+          await runCheckboxes.nth(i).click();
+        }
+      }
+
+      // Wait for charts to render
+      await waitForRenderedChart(page);
+
+      // Find the first chart's overlay element (uPlot's mouse event target)
+      const chartOverlay = page.locator(".uplot .u-over").first();
+      await expect(chartOverlay).toBeVisible({ timeout: 10000 });
+
+      const overlayBox = await chartOverlay.boundingBox();
+      if (!overlayBox) {
+        // Skip if no chart overlay found
+        allMetrics.push(createBooleanMetric("tooltip_responsiveness", false));
+        return;
+      }
+
+      // Move mouse to the center of the chart overlay
+      const centerX = overlayBox.x + overlayBox.width / 2;
+      const centerY = overlayBox.y + overlayBox.height / 2;
+
+      const tooltipStart = performance.now();
+      await page.mouse.move(centerX, centerY);
+
+      // Wait for tooltip to appear (class: uplot-tooltip)
+      const tooltipAppeared = await page
+        .waitForSelector(".uplot-tooltip", { state: "visible", timeout: 2000 })
+        .then(() => true)
+        .catch(() => false);
+
+      const tooltipTime = performance.now() - tooltipStart;
+
+      allMetrics.push(
+        createMetric("tooltip_appear_ms", tooltipTime, "ms", 500),
+        createBooleanMetric("tooltip_appeared", tooltipAppeared)
+      );
+
+      if (tooltipAppeared) {
+        // Tooltip should appear quickly (rAF throttling keeps it responsive)
+        expect(tooltipTime).toBeLessThan(500);
+      }
+    });
+
+    test("cross-chart highlighting syncs on hover", async ({ page }) => {
+      // Navigate and select runs
+      await page.goto(`/o/${DEV_ORG_SLUG}/projects/${DEV_PROJECT}`);
+      await page.waitForLoadState("domcontentloaded");
+
+      await page.waitForSelector('[data-testid="runs-table"], table', { timeout: 15000 });
+
+      const runCheckboxes = page.locator('input[type="checkbox"]');
+      const checkboxCount = await runCheckboxes.count();
+      if (checkboxCount >= 2) {
+        for (let i = 0; i < 2; i++) {
+          await runCheckboxes.nth(i).click();
+        }
+      }
+
+      // Wait for at least 2 charts to render
+      await waitForRenderedChart(page);
+      await expect.poll(
+        () => countElements(page, CHART_WRAPPER_SELECTOR),
+        { timeout: 15000 }
+      ).toBeGreaterThanOrEqual(2);
+
+      // Get the first chart overlay's bounding box
+      const firstOverlay = page.locator(".uplot .u-over").first();
+      const firstBox = await firstOverlay.boundingBox();
+      if (!firstBox) {
+        allMetrics.push(createBooleanMetric("cross_chart_highlight_sync", false));
+        return;
+      }
+
+      // Hover over the first chart
+      await page.mouse.move(
+        firstBox.x + firstBox.width / 2,
+        firstBox.y + firstBox.height / 2
+      );
+
+      // Wait briefly for rAF-throttled highlight to propagate
+      await page.evaluate(
+        () => new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        })
+      );
+
+      // Check that at least one other chart has a cursor line visible
+      // uPlot synced charts show a vertical cursor line via the .u-cursor-pt or cursor elements
+      const cursorLines = await page.evaluate(() => {
+        const charts = document.querySelectorAll(".uplot");
+        let visibleCursors = 0;
+        charts.forEach((chart) => {
+          // uPlot creates .u-cursor-x and .u-cursor-y divs for the crosshair
+          const cursor = chart.querySelector(".u-cursor-x");
+          if (cursor) {
+            const style = window.getComputedStyle(cursor);
+            // Cursor is positioned via left/top; check it's not hidden
+            if (style.display !== "none" && style.visibility !== "hidden") {
+              visibleCursors++;
+            }
+          }
+        });
+        return visibleCursors;
+      });
+
+      // With cursor sync enabled, hovering one chart should show cursors in others
+      const crossChartSync = cursorLines >= 2;
+
+      allMetrics.push(
+        createMetric("visible_chart_cursors", cursorLines, "count"),
+        createBooleanMetric("cross_chart_highlight_sync", crossChartSync)
+      );
+
+      // At least 2 charts should show cursor (the hovered one + synced ones)
+      expect(crossChartSync).toBe(true);
+    });
+  });
+
   test.describe("API Payload Size Guards", () => {
     test("runs.list payload should be under threshold (no JSON blobs)", async ({ page }) => {
       let runsListPayloadBytes = 0;

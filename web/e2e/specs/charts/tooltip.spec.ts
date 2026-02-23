@@ -165,26 +165,39 @@ test.describe("Chart Tooltip Behavior", () => {
       return style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0";
     }).catch(() => false);
 
-    // Move mouse away from the chart (far outside)
-    await page.mouse.move(0, 0);
-
-    // Wait for tooltip to disappear (use evaluate since multiple tooltip elements exist)
-    if (tooltipVisibleBefore) {
-      await expect.poll(
-        async () => {
-          return page.evaluate(() => {
-            const tooltips = document.querySelectorAll('[data-testid="uplot-tooltip"]');
-            for (const el of tooltips) {
-              const style = window.getComputedStyle(el);
-              if (style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0" && el.textContent?.trim()) {
-                return true; // still visible
-              }
-            }
-            return false;
-          });
-        },
-        { timeout: 5000, message: "Waiting for tooltips to disappear" }
-      ).toBe(false);
+    if (!tooltipVisibleBefore) {
+      // No tooltip was shown — nothing to verify about hiding
+      return;
     }
+
+    // Move mouse vertically above the chart with intermediate steps.
+    // Using { steps } ensures the browser fires proper mouseleave events
+    // when the cursor crosses the chart overlay boundary — an instant
+    // teleport to (0,0) can miss the event in headless Chrome.
+    await page.mouse.move(
+      chartBox.x + chartBox.width / 2,
+      Math.max(0, chartBox.y - 100),
+      { steps: 5 }
+    );
+
+    // Wait for the tooltip's 50ms mouseleave debounce + rendering
+    await waitForInteraction(page, 300);
+
+    // Verify all tooltips are hidden
+    await expect.poll(
+      async () => {
+        return page.evaluate(() => {
+          const tooltips = document.querySelectorAll('[data-testid="uplot-tooltip"]');
+          for (const el of tooltips) {
+            const style = window.getComputedStyle(el);
+            if (style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0" && el.textContent?.trim()) {
+              return true; // still visible
+            }
+          }
+          return false;
+        });
+      },
+      { timeout: 5000, message: "Waiting for tooltips to disappear" }
+    ).toBe(false);
   });
 });
