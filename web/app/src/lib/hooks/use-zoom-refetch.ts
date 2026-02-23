@@ -79,7 +79,7 @@ export function useZoomRefetch({
   const useBatch = runIds.length >= BATCH_THRESHOLD;
 
   // Total series = metrics × runs — divide budgets accordingly
-  const totalSeries = logNames.length * runIds.length;
+  const totalSeries = Math.max(1, logNames.length * runIds.length);
 
   // === Batch path: one batch query per metric (multi-run) ===
   const batchRangeWidth = isZooming && useBatch && zoomStepRange
