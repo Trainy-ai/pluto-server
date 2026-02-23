@@ -578,6 +578,19 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       };
     }, [chartId]);
 
+    // Strict check: is this chart the one the user is actively interacting with?
+    // Unlike isActiveChart (which returns true when no chart is hovered), this returns
+    // true ONLY when the user is hovering this specific chart. Used for zoom broadcast
+    // to prevent spurious broadcasts when no chart is hovered (e.g. resize, scroll).
+    const isZoomSourceChart = useMemo(() => {
+      return () => {
+        const ctx = chartSyncContextRef.current;
+        if (!ctx) return true; // standalone chart
+        const currentHovered = ctx.hoveredChartIdRef?.current ?? ctx.hoveredChartId;
+        return currentHovered === chartId;
+      };
+    }, [chartId]);
+
     // Build uPlot options
     const options = useMemo<uPlot.Options>(() => {
       const isDark = theme === "dark";
@@ -819,7 +832,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
                 // must not broadcast back to context as that corrupts syncedZoomRange for other charts.
                 // Also skip when syncXScale is propagating to this chart (isSyncingZoomRef) -
                 // without this, target charts re-broadcast during scroll when isActiveChart() is true.
-                if (!isProgrammatic && !isSyncing && isActiveChart()) {
+                if (!isProgrammatic && !isSyncing && isZoomSourceChart()) {
                   chartSyncContextRef.current?.syncXScale(chartId, xMin, xMax);
                   // Mark that user has manually zoomed (prevents global range from overwriting)
                   userHasZoomedRef.current = true;
@@ -984,6 +997,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       chartId,
       handleHoverChange,
       isActiveChart,
+      isZoomSourceChart,
       chartLineWidth,
       yMinProp,
       yMaxProp,
@@ -1255,14 +1269,19 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           // Step 2: Force synchronous commit so scales are recalculated immediately
           // while isProgrammaticScaleRef is still true (prevents hook side effects).
           chart.batch(() => {});
-          // Step 3: Explicitly set X scale to full data range. setData's auto-scale
-          // may not reset the X range when cursor sync is active.
-          const xVals = fullData[0] as number[];
-          if (xVals && xVals.length > 0) {
-            chart.setScale("x", { min: xVals[0], max: xVals[xVals.length - 1] });
-            // Force commit for the scale change
-            chart.batch(() => {});
+          // Step 3: Use globalXRange for X scale so all charts reset to the same range.
+          // Falls back to per-chart data range if globalXRange is unavailable.
+          const globalRange = chartSyncContextRef.current?.globalXRange;
+          if (globalRange) {
+            chart.setScale("x", { min: globalRange[0], max: globalRange[1] });
+          } else {
+            const xVals = fullData[0] as number[];
+            if (xVals && xVals.length > 0) {
+              chart.setScale("x", { min: xVals[0], max: xVals[xVals.length - 1] });
+            }
           }
+          // Force commit for the scale change
+          chart.batch(() => {});
         } finally {
           isProgrammaticScaleRef.current = false;
         }
@@ -1271,6 +1290,26 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         lastAppliedGlobalRangeRef.current = null;
         onZoomRangeChangeRef.current?.(null);
       });
+
+      // Register a zoom callback that wraps setScale in isProgrammaticScaleRef guard.
+      // This is called by context.syncXScale() on OTHER charts when one chart zooms.
+      // The guard prevents the setScale hook from broadcasting back to context.
+      // Skip for log X-axis and datetime charts — their X scale is incompatible
+      // with linear zoom ranges, and applying linear values would corrupt the axis.
+      if (!logXAxis && !isDateTime) {
+        chartSyncContextRef.current?.registerZoomCallback(chartId, (xMin: number, xMax: number) => {
+          isProgrammaticScaleRef.current = true;
+          try {
+            chart.batch(() => {
+              chart.setScale("x", { min: xMin, max: xMax });
+            });
+          } catch {
+            // Ignore errors from destroyed charts
+          } finally {
+            isProgrammaticScaleRef.current = false;
+          }
+        });
+      }
 
       // Safety: Re-check synced zoom from context in next frame
       // This handles race conditions where context wasn't yet updated during chart creation
@@ -1317,13 +1356,32 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           clearTimeout(zoomRangeTimerRef.current);
           zoomRangeTimerRef.current = null;
         }
+        // Restore data and apply globalXRange synchronously (not in RAF).
+        // Using RAF caused source chart to show a different range than target charts
+        // because resetZoom callbacks fire synchronously while source chart's range
+        // was deferred to the next frame.
+        // Reset logic mirrors registerResetCallback for consistency:
+        // restore data, flush, apply globalXRange (or fallback to data range).
+        const globalRange = chartSyncContextRef.current?.globalXRange;
         try {
           isProgrammaticScaleRef.current = true;
-          chart.batch(() => {
-            // Restore the original full-range data (not chart.data which may be
-            // zoomed re-downsampled data)
-            chart.setData(uplotData);
-          });
+          // Restore the original full-range data
+          chart.setData(uplotData);
+          // Force synchronous commit
+          chart.batch(() => {});
+          // Apply globalXRange or fallback to data range
+          if (globalRange) {
+            chart.setScale("x", { min: globalRange[0], max: globalRange[1] });
+          } else {
+            const xVals = uplotData[0] as number[];
+            if (xVals && xVals.length > 0) {
+              chart.setScale("x", { min: xVals[0], max: xVals[xVals.length - 1] });
+            }
+          }
+          // Force commit for the scale change
+          chart.batch(() => {});
+        } catch {
+          // Ignore errors from destroyed charts
         } finally {
           isProgrammaticScaleRef.current = false;
         }
@@ -1333,7 +1391,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         zoomStateRef.current = null;
         // Clear user zoom flag so global range can be applied again
         userHasZoomedRef.current = false;
-        lastAppliedGlobalRangeRef.current = null;
+        lastAppliedGlobalRangeRef.current = globalRange ?? null;
         // Reset toast tracking so it can show again if needed
         noDataToastShownRef.current = null;
         // Notify parent that zoom was reset (clear server re-fetch)
@@ -1346,26 +1404,8 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         // deliberate user action, it's safe to override the guard here.
         const syncRef = chartSyncContextRef.current?.isSyncingZoomRef;
         if (syncRef) syncRef.current = false;
-        // Reset all other charts to full range
+        // Reset all other charts to full range (their reset callbacks use globalXRange too)
         chartSyncContextRef.current?.resetZoom(chartId);
-        // Re-apply global range if available (use ref since this is an event handler)
-        const globalRange = chartSyncContextRef.current?.globalXRange;
-        if (globalRange && !logXAxis && !isDateTime) {
-          const [globalMin, globalMax] = globalRange;
-          lastAppliedGlobalRangeRef.current = [globalMin, globalMax];
-          requestAnimationFrame(() => {
-            try {
-              isProgrammaticScaleRef.current = true;
-              chart.batch(() => {
-                chart.setScale("x", { min: globalMin, max: globalMax });
-              });
-            } catch {
-              // Ignore errors
-            } finally {
-              isProgrammaticScaleRef.current = false;
-            }
-          });
-        }
       };
       const container = chartContainerRef.current;
       container.addEventListener("dblclick", handleDblClick);
@@ -1374,6 +1414,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       cleanupRef.current = () => {
         chartSyncContextRef.current?.unregisterUPlot(chartId);
         chartSyncContextRef.current?.unregisterResetCallback(chartId);
+        chartSyncContextRef.current?.unregisterZoomCallback(chartId);
         container?.removeEventListener("dblclick", handleDblClick);
       };
 

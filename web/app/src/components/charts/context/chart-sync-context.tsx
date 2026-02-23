@@ -66,6 +66,10 @@ interface ChartSyncContextValue {
   registerResetCallback: (id: string, callback: () => void) => void;
   unregisterResetCallback: (id: string) => void;
 
+  // Per-chart zoom callbacks (apply zoom with isProgrammaticScaleRef guard)
+  registerZoomCallback: (id: string, callback: (xMin: number, xMax: number) => void) => void;
+  unregisterZoomCallback: (id: string) => void;
+
   // Sync key for uPlot built-in cursor sync
   syncKey: string;
 
@@ -140,6 +144,8 @@ export function ChartSyncProvider({
   const uplotInstancesRef = useRef(new Map<string, uPlot>());
   // Per-chart reset callbacks — each chart registers a function that restores its original data
   const resetCallbacksRef = useRef(new Map<string, () => void>());
+  // Per-chart zoom callbacks — each chart registers a function that applies zoom with its own isProgrammaticScaleRef guard
+  const zoomCallbacksRef = useRef(new Map<string, (xMin: number, xMax: number) => void>());
 
   // Flag to prevent infinite highlight loops
   const isHighlightingRef = useRef(false);
@@ -241,6 +247,7 @@ export function ChartSyncProvider({
   const unregisterUPlot = useCallback((id: string) => {
     uplotInstancesRef.current.delete(id);
     resetCallbacksRef.current.delete(id);
+    zoomCallbacksRef.current.delete(id);
   }, []);
 
   // Per-chart reset callback registration
@@ -250,6 +257,15 @@ export function ChartSyncProvider({
 
   const unregisterResetCallback = useCallback((id: string) => {
     resetCallbacksRef.current.delete(id);
+  }, []);
+
+  // Per-chart zoom callback registration
+  const registerZoomCallback = useCallback((id: string, callback: (xMin: number, xMax: number) => void) => {
+    zoomCallbacksRef.current.set(id, callback);
+  }, []);
+
+  const unregisterZoomCallback = useCallback((id: string) => {
+    zoomCallbacksRef.current.delete(id);
   }, []);
 
   const getUPlotInstances = useCallback(() => {
@@ -335,27 +351,33 @@ export function ChartSyncProvider({
   const isSyncingZoomRef = useRef(false);
 
   // Sync X-axis zoom across all uPlot charts
+  // Uses per-chart zoom callbacks so each chart wraps setScale in its own isProgrammaticScaleRef guard.
+  // Falls back to direct chart.setScale() for charts without a registered callback.
   const syncXScale = useCallback((sourceChartId: string, xMin: number, xMax: number) => {
     // Prevent infinite loops
     if (isSyncingZoomRef.current) return;
     isSyncingZoomRef.current = true;
 
     try {
-      uplotInstancesRef.current.forEach((chart, id) => {
-        if (id === sourceChartId) return; // Skip source chart
-
+      // Prefer per-chart zoom callbacks (which wrap setScale in isProgrammaticScaleRef)
+      const calledIds = new Set<string>();
+      zoomCallbacksRef.current.forEach((callback, id) => {
+        if (id === sourceChartId) return;
+        calledIds.add(id);
         try {
-          // Set the X scale to match the source chart's zoom
-          chart.setScale("x", { min: xMin, max: xMax });
+          callback(xMin, xMax);
         } catch {
           // Ignore errors from destroyed charts
         }
       });
+
+      // Note: charts without a zoom callback (log X-axis, datetime) are intentionally
+      // excluded from zoom sync since their X scale is incompatible with linear ranges.
+      // No fallback path needed — only charts with registered zoom callbacks participate.
     } finally {
-      // Reset flag after current event loop
-      setTimeout(() => {
-        isSyncingZoomRef.current = false;
-      }, 0);
+      // Reset synchronously — each target chart's zoom callback guards its own scales
+      // via isProgrammaticScaleRef, so we don't need to defer the reset
+      isSyncingZoomRef.current = false;
     }
   }, []);
 
@@ -379,9 +401,9 @@ export function ChartSyncProvider({
         }
       });
     } finally {
-      setTimeout(() => {
-        isSyncingZoomRef.current = false;
-      }, 0);
+      // Reset synchronously — each chart's reset callback guards its own scales
+      // via isProgrammaticScaleRef, so we don't need to defer the reset
+      isSyncingZoomRef.current = false;
     }
   }, []);
 
@@ -410,6 +432,8 @@ export function ChartSyncProvider({
       getUPlotInstances,
       registerResetCallback,
       unregisterResetCallback,
+      registerZoomCallback,
+      unregisterZoomCallback,
       syncKey,
       highlightUPlotSeries,
       hoveredChartId,
@@ -433,6 +457,8 @@ export function ChartSyncProvider({
       getUPlotInstances,
       registerResetCallback,
       unregisterResetCallback,
+      registerZoomCallback,
+      unregisterZoomCallback,
       syncKey,
       highlightUPlotSeries,
       // hoveredChartId intentionally omitted - use hoveredChartIdRef instead
@@ -452,6 +478,7 @@ export function ChartSyncProvider({
     return () => {
       uplotInstancesRef.current.clear();
       resetCallbacksRef.current.clear();
+      zoomCallbacksRef.current.clear();
       // Cancel any pending highlight rAF to avoid post-unmount work
       if (highlightRafRef.current !== null) {
         cancelAnimationFrame(highlightRafRef.current);

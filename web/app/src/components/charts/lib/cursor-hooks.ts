@@ -61,12 +61,10 @@ export function buildFocusDetectionHook(deps: FocusDetectionDeps): (u: uPlot) =>
       }
       if (yVal == null) continue;
 
-      // Convert data value to pixel position
+      // Convert data value to pixel position using uPlot's scale-aware conversion.
+      // This correctly handles log scales (distr: 3) unlike manual linear mapping.
       if (yScale.min == null || yScale.max == null) continue;
-
-      const plotHeight = u.bbox.height / devicePixelRatio;
-      const yRange = yScale.max - yScale.min;
-      const yPx = plotHeight - ((yVal - yScale.min) / yRange) * plotHeight;
+      const yPx = u.valToPos(yVal, "y");
 
       const distance = Math.abs(yPx - top);
       if (distance < closestDistance) {
