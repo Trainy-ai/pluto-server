@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -19,6 +19,14 @@ interface NotesCellProps {
 }
 
 export function NotesCell({ notes, onNotesUpdate }: NotesCellProps) {
+  // Controlled hover state — bypasses Radix Tooltip's scroll-based dismissal
+  // which fires when the data-table container emits layout-driven scroll events.
+  const [isHovered, setIsHovered] = useState(false);
+  const leaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(leaveTimer.current), []);
+  const onPointerEnter = useCallback(() => { clearTimeout(leaveTimer.current); setIsHovered(true); }, []);
+  const onPointerLeave = useCallback(() => { leaveTimer.current = setTimeout(() => setIsHovered(false), 100); }, []);
+
   const [isOpen, setIsOpen] = useState(false);
   const [draft, setDraft] = useState(notes ?? "");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -53,13 +61,22 @@ export function NotesCell({ notes, onNotesUpdate }: NotesCellProps) {
   return (
     <div className="flex items-center gap-1">
       {notes ? (
-        <Tooltip>
+        <Tooltip open={isHovered}>
           <TooltipTrigger asChild>
-            <span className="flex-1 truncate text-sm text-muted-foreground">
+            <span
+              className="flex-1 truncate text-sm text-muted-foreground"
+              onPointerEnter={onPointerEnter}
+              onPointerLeave={onPointerLeave}
+            >
               {notes}
             </span>
           </TooltipTrigger>
-          <TooltipContent side="top" sideOffset={4}>
+          <TooltipContent
+            side="top"
+            sideOffset={4}
+            onPointerEnter={onPointerEnter}
+            onPointerLeave={onPointerLeave}
+          >
             <p className="max-w-xs whitespace-pre-wrap">{notes}</p>
           </TooltipContent>
         </Tooltip>
