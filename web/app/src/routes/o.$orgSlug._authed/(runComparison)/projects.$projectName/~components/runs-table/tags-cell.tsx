@@ -35,13 +35,15 @@ export function TagsCell({ tags, allTags, onTagsUpdate, organizationId }: TagsCe
             )}
           </div>
         </TooltipTrigger>
-        <TooltipContent side="top" className="max-w-64">
-          <div className="flex flex-wrap gap-1">
-            {tags.map((tag) => (
-              <TagBadge key={tag} tag={tag} />
-            ))}
-          </div>
-        </TooltipContent>
+        {hasOverflow && (
+          <TooltipContent side="top" className="max-w-64">
+            <div className="flex flex-wrap gap-1">
+              {tags.map((tag) => (
+                <TagBadge key={tag} tag={tag} />
+              ))}
+            </div>
+          </TooltipContent>
+        )}
       </Tooltip>
       <TagsEditorPopover
         tags={tags}
