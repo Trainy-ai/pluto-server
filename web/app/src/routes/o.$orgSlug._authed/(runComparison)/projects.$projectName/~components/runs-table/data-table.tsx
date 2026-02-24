@@ -741,9 +741,9 @@ export function DataTable({
                         style={{
                           ...(bgColor
                             ? pinned
-                              ? { background: `linear-gradient(${bgColor}20, ${bgColor}20), var(--background)` }
+                              ? { background: `linear-gradient(${bgColor}20, ${bgColor}20), hsl(var(--background))` }
                               : { backgroundColor: `${bgColor}20` }
-                            : { backgroundColor: 'var(--background)' }),
+                            : { backgroundColor: 'hsl(var(--background))' }),
                           ...(pinned && {
                             left: pinned.left,
                             zIndex: 20,
@@ -844,7 +844,7 @@ export function DataTable({
                           style={{
                             ...(cellBgColor
                               ? pinned
-                                ? { background: `linear-gradient(${cellBgColor}10, ${cellBgColor}10), var(--background)` }
+                                ? { background: `linear-gradient(${cellBgColor}10, ${cellBgColor}10), hsl(var(--background))` }
                                 : { backgroundColor: `${cellBgColor}10` }
                               : undefined),
                             ...(pinned && {
