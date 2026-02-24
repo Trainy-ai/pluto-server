@@ -7,6 +7,7 @@ import { sso } from "@better-auth/sso";
 import { prisma } from "../lib/prisma";
 import { env } from "./env";
 import { sendEmail } from "./email";
+import { allowedOrigins } from "./origins";
 
 // Escape HTML to prevent XSS/HTML injection in email notifications
 function escapeHtml(str: string): string {
@@ -48,12 +49,6 @@ async function notifyAdminOfNewSignup(user: { email: string; name: string; id: s
     html,
     text,
   });
-}
-
-// Build trusted origins list for auth
-const trustedOrigins = [env.PUBLIC_URL];
-if (env.ADDITIONAL_ORIGINS) {
-  trustedOrigins.push(...env.ADDITIONAL_ORIGINS.split(",").map((s) => s.trim()));
 }
 
 export const auth = betterAuth({
@@ -103,7 +98,7 @@ export const auth = betterAuth({
           : "http://localhost:3001/api/auth/callback/google",
     },
   },
-  trustedOrigins,
+  trustedOrigins: allowedOrigins,
   user: {
     additionalFields: {
       finishedOnboarding: {
