@@ -332,7 +332,7 @@ function RouteComponent() {
   const allTags = distinctTagsData?.tags ?? [];
 
   // Column configuration (custom columns in runs table)
-  const { columns: customColumns, addColumn, removeColumn, updateColumns, reorderColumns } = useColumnConfig(organizationSlug, projectName);
+  const { columns: customColumns, addColumn, removeColumn, updateColumns, reorderColumns, toggleColumnPin } = useColumnConfig(organizationSlug, projectName);
   const { data: columnKeysData, isLoading: columnKeysLoading } = useDistinctColumnKeys(organizationId, projectName);
 
   // Metric names for column picker and filter dropdown (initial load: last 100)
@@ -756,6 +756,7 @@ function RouteComponent() {
                 onNameRename={handleNameRename}
                 onNameSetColor={handleNameSetColor}
                 onReorderColumns={reorderColumns}
+                onToggleColumnPin={toggleColumnPin}
                 sorting={sorting}
                 onSortingChange={setSorting}
                 pageSize={pageSize}

@@ -8,6 +8,7 @@ export const ColumnConfigSchema = z.object({
   customLabel: z.string().optional(),
   backgroundColor: z.string().optional(),
   aggregation: z.enum(["MIN", "MAX", "AVG", "LAST", "VARIANCE"]).optional(),
+  isPinned: z.boolean().optional(),
 });
 
 // Base column overrides schema (mirrors BaseColumnOverrides)

@@ -134,6 +134,10 @@ interface ColumnsProps {
   onSortingChange?: (sorting: SortingState) => void;
   /** Active chart view ID — passed as search param when navigating to a run */
   activeChartViewId?: string | null;
+  /** Set of pinned column table IDs (includes base + user-pinned custom columns) */
+  pinnedColumnIds?: Set<string>;
+  /** Callback to toggle pin on a custom column */
+  onToggleColumnPin?: (colId: string, source: string, aggregation?: string) => void;
 }
 
 function getRowRange<T>(rows: Array<Row<T>>, idA: string, idB: string) {
@@ -244,6 +248,8 @@ export const columns = ({
   sorting = [],
   onSortingChange,
   activeChartViewId,
+  pinnedColumnIds,
+  onToggleColumnPin,
 }: ColumnsProps): ColumnDef<Run>[] => {
   // Helper to get sort direction for a column
   const getSortDirection = (colId: string): "asc" | "desc" | false => {
@@ -381,6 +387,8 @@ export const columns = ({
             canSort={false}
             sortDirection={false}
             backgroundColor={col.backgroundColor}
+            isPinned={pinnedColumnIds?.has(colTableId)}
+            onTogglePin={onToggleColumnPin ? () => onToggleColumnPin(col.id, col.source, col.aggregation) : undefined}
             onSort={() => {}}
             onRename={(newName) => onColumnRename?.(col.id, col.source, newName, col.aggregation)}
             onSetColor={(color) => onColumnSetColor?.(col.id, col.source, color, col.aggregation)}
@@ -419,6 +427,8 @@ export const columns = ({
             canSort={true}
             sortDirection={getSortDirection(colTableId)}
             backgroundColor={col.backgroundColor}
+            isPinned={pinnedColumnIds?.has(colTableId)}
+            onTogglePin={onToggleColumnPin ? () => onToggleColumnPin(col.id, col.source, col.aggregation) : undefined}
             onSort={(dir) => handleSort(colTableId, dir)}
             onRename={(newName) => onColumnRename?.(col.id, col.source, newName, col.aggregation)}
             onSetColor={(color) => onColumnSetColor?.(col.id, col.source, color, col.aggregation)}
@@ -462,6 +472,8 @@ export const columns = ({
           canSort={canSort}
           sortDirection={canSort ? getSortDirection(colTableId) : false}
           backgroundColor={col.backgroundColor}
+          isPinned={pinnedColumnIds?.has(colTableId)}
+          onTogglePin={onToggleColumnPin ? () => onToggleColumnPin(col.id, col.source, col.aggregation) : undefined}
           onSort={(dir) => canSort && handleSort(colTableId, dir)}
           onRename={(newName) => onColumnRename?.(col.id, col.source, newName, col.aggregation)}
           onSetColor={(color) => onColumnSetColor?.(col.id, col.source, color, col.aggregation)}
