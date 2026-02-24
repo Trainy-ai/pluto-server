@@ -1,3 +1,4 @@
+import { useState, useRef, useEffect, useCallback } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -17,14 +18,25 @@ interface TagsCellProps {
 }
 
 export function TagsCell({ tags, allTags, onTagsUpdate, organizationId }: TagsCellProps) {
+  // Controlled hover state — bypasses Radix Tooltip's scroll-based dismissal
+  // which fires when the data-table container emits layout-driven scroll events.
+  const [isHovered, setIsHovered] = useState(false);
+  const leaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(leaveTimer.current), []);
+  const onPointerEnter = useCallback(() => { clearTimeout(leaveTimer.current); setIsHovered(true); }, []);
+  const onPointerLeave = useCallback(() => { leaveTimer.current = setTimeout(() => setIsHovered(false), 100); }, []);
   const visibleTags = tags.slice(0, 2);
   const hasOverflow = tags.length > 2;
 
   return (
     <div className="flex items-center gap-1 overflow-hidden">
-      <Tooltip>
+      <Tooltip open={isHovered}>
         <TooltipTrigger asChild>
-          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden cursor-default">
+          <div
+            className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden cursor-default"
+            onPointerEnter={onPointerEnter}
+            onPointerLeave={onPointerLeave}
+          >
             {visibleTags.map((tag) => (
               <TagBadge key={tag} tag={tag} truncate />
             ))}
@@ -36,7 +48,12 @@ export function TagsCell({ tags, allTags, onTagsUpdate, organizationId }: TagsCe
           </div>
         </TooltipTrigger>
         {hasOverflow && (
-          <TooltipContent side="top" className="max-w-64">
+          <TooltipContent
+            side="top"
+            className="max-w-64"
+            onPointerEnter={onPointerEnter}
+            onPointerLeave={onPointerLeave}
+          >
             <div className="flex flex-wrap gap-1">
               {tags.map((tag) => (
                 <TagBadge key={tag} tag={tag} />
