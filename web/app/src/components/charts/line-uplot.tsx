@@ -248,10 +248,21 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         lastFocusedSeriesRef.current = null;
       }
 
+      // Only apply cross-chart highlight if this chart has a series matching the
+      // highlighted label. Without this check, charts that don't contain the
+      // highlighted series (e.g. single-run "All Metrics" view where each chart
+      // shows a different metric) would set crossChartHighlightRef to a non-null
+      // value that matches nothing, causing the stroke function to dim ALL series
+      // (isFocusActive=true but isHighlighted=false for every series).
+      const effectiveHighlight = highlightedName !== null &&
+        processedLinesRef.current.some(line => line.label === highlightedName)
+        ? highlightedName
+        : null;
+
       // Update cross-chart highlight ref and trigger redraw if changed
       // The stroke function reads from crossChartHighlightRef during redraw
-      if (crossChartHighlightRef.current !== highlightedName) {
-        crossChartHighlightRef.current = highlightedName;
+      if (crossChartHighlightRef.current !== effectiveHighlight) {
+        crossChartHighlightRef.current = effectiveHighlight;
 
         const chart = chartInstanceRef.current;
         if (chart) {
@@ -259,7 +270,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           chart.redraw();
         }
       }
-    }, [chartSyncContext?.highlightedSeriesName, chartSyncContext?.hoveredChartIdRef, chartId]);
+    }, [chartSyncContext?.highlightedSeriesName, chartSyncContext?.hoveredChartIdRef, chartId, processedLines]);
 
     // Subscribe to table highlight changes (from runs table row hover)
     // This is separate from cross-chart highlighting to avoid conflicts
