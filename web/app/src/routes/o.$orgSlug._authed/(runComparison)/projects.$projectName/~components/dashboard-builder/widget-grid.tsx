@@ -19,7 +19,7 @@ import {
 } from "@/components/ui/tooltip";
 import { ChartBoundsPopover } from "@/components/charts/chart-bounds-popover";
 import { ChartExportMenu } from "@/components/charts/chart-export-menu";
-import { LazyChart } from "@/components/core/lazy-chart";
+import { VirtualizedChart } from "@/components/core/virtualized-chart";
 import type { Widget, WidgetLayout, ChartWidgetConfig } from "../../~types/dashboard-types";
 import { isGlobValue, getGlobPattern, isRegexValue, getRegexPattern } from "./glob-utils";
 
@@ -393,7 +393,7 @@ export function WidgetGrid({
                   : undefined
               }
             >
-              <LazyChart minHeight="100%" rootMargin="400px">
+              <VirtualizedChart minHeight="100%" loadMargin="400px" unloadMargin="1200px">
                 {renderWidget(
                   widget,
                   widget.type === "chart"
@@ -403,7 +403,7 @@ export function WidgetGrid({
                     ? () => onUpdateWidgetBounds?.(widget.id, undefined, undefined)
                     : undefined
                 )}
-              </LazyChart>
+              </VirtualizedChart>
             </div>
           </div>
         );
