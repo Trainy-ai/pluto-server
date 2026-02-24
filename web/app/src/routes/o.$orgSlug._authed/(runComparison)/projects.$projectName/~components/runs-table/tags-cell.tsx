@@ -22,29 +22,27 @@ export function TagsCell({ tags, allTags, onTagsUpdate, organizationId }: TagsCe
 
   return (
     <div className="flex items-center gap-1 overflow-hidden">
-      <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
-        {visibleTags.map((tag) => (
-          <TagBadge key={tag} tag={tag} truncate />
-        ))}
-        {hasOverflow && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="shrink-0 cursor-default">
-                <Badge variant="outline" className="text-xs bg-primary/10">
-                  +{tags.length - 2}
-                </Badge>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent side="top" className="max-w-64">
-              <div className="flex flex-wrap gap-1">
-                {tags.map((tag) => (
-                  <TagBadge key={tag} tag={tag} />
-                ))}
-              </div>
-            </TooltipContent>
-          </Tooltip>
-        )}
-      </div>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden cursor-default">
+            {visibleTags.map((tag) => (
+              <TagBadge key={tag} tag={tag} truncate />
+            ))}
+            {hasOverflow && (
+              <Badge variant="outline" className="text-xs bg-primary/10 shrink-0">
+                +{tags.length - 2}
+              </Badge>
+            )}
+          </div>
+        </TooltipTrigger>
+        <TooltipContent side="top" className="max-w-64">
+          <div className="flex flex-wrap gap-1">
+            {tags.map((tag) => (
+              <TagBadge key={tag} tag={tag} />
+            ))}
+          </div>
+        </TooltipContent>
+      </Tooltip>
       <TagsEditorPopover
         tags={tags}
         allTags={allTags}
