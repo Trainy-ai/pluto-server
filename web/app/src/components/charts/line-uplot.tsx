@@ -618,7 +618,17 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         // When yMin/yMax props are set, use a fixed range function to enforce bounds
         // When outlier-aware range is active, constrain Y to exclude statistical outliers
         y: logYAxis
-          ? { distr: 3 }
+          ? (yMinProp != null || yMaxProp != null)
+            ? {
+                distr: 3,
+                auto: false,
+                range: (u: uPlot, dataMin: number, dataMax: number): uPlot.Range.MinMax => {
+                  // For log scale, dataMin/dataMax are already log-filtered (positive only)
+                  // Apply manual bounds, falling back to data range
+                  return [yMinProp ?? dataMin, yMaxProp ?? dataMax];
+                },
+              }
+            : { distr: 3 }
           : (yMinProp != null || yMaxProp != null)
             ? {
                 auto: false,
@@ -845,7 +855,9 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
                 }
 
                 // Auto-scale Y axis when X scale changes (zoom)
-                if (!logYAxis) {
+                // For log scale without manual bounds, let uPlot handle it via distr:3
+                // For log scale WITH manual bounds, apply them during zoom too
+                if (!logYAxis || (logYAxis && (yMinProp != null || yMaxProp != null))) {
                   // Find Y min/max for data points within visible X range
                   let visibleYMin = Infinity;
                   let visibleYMax = -Infinity;
@@ -865,11 +877,20 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
 
                   // Only update if we found valid data
                   if (visibleYMin !== Infinity && visibleYMax !== -Infinity) {
-                    const range = visibleYMax - visibleYMin;
-                    // Add 5% padding, with minimum padding for flat lines
-                    const padding = Math.max(range * 0.05, Math.abs(visibleYMax) * 0.02, 0.1);
-                    let newYMin = visibleYMin >= 0 ? Math.max(0, visibleYMin - padding) : visibleYMin - padding;
-                    let newYMax = visibleYMax + padding;
+                    let newYMin: number;
+                    let newYMax: number;
+
+                    if (logYAxis) {
+                      // For log scale, use data range directly (no linear padding)
+                      newYMin = visibleYMin;
+                      newYMax = visibleYMax;
+                    } else {
+                      const range = visibleYMax - visibleYMin;
+                      // Add 5% padding, with minimum padding for flat lines
+                      const padding = Math.max(range * 0.05, Math.abs(visibleYMax) * 0.02, 0.1);
+                      newYMin = visibleYMin >= 0 ? Math.max(0, visibleYMin - padding) : visibleYMin - padding;
+                      newYMax = visibleYMax + padding;
+                    }
 
                     // Respect manual bounds if set
                     if (yMinProp != null) newYMin = yMinProp;
