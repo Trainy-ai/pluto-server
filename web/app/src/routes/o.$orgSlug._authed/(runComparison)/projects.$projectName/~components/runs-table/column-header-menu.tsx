@@ -25,6 +25,8 @@ import {
   MoreHorizontal,
   Pencil,
   Palette,
+  Pin,
+  PinOff,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -43,6 +45,8 @@ export interface ColumnHeaderMenuProps {
   canSort: boolean;
   sortDirection: "asc" | "desc" | false;
   backgroundColor?: string;
+  isPinned?: boolean;
+  onTogglePin?: () => void;
   onSort: (direction: "asc" | "desc" | false) => void;
   onRename: (newName: string) => void;
   onSetColor: (color: string | undefined) => void;
@@ -55,6 +59,8 @@ export function ColumnHeaderMenu({
   canSort,
   sortDirection,
   backgroundColor,
+  isPinned,
+  onTogglePin,
   onSort,
   onRename,
   onSetColor,
@@ -107,6 +113,19 @@ export function ColumnHeaderMenu({
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-48">
+            {onTogglePin && (
+              <>
+                <DropdownMenuItem onClick={onTogglePin}>
+                  {isPinned ? (
+                    <PinOff className="mr-2 h-4 w-4" />
+                  ) : (
+                    <Pin className="mr-2 h-4 w-4" />
+                  )}
+                  {isPinned ? "Unpin column" : "Pin column"}
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+              </>
+            )}
             {canSort && (
               <>
                 <DropdownMenuItem

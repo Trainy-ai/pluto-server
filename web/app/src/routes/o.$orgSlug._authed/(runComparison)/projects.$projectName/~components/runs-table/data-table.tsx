@@ -40,6 +40,9 @@ import type { RunFilter, FilterableField } from "@/lib/run-filters";
 
 const MIN_COL_WIDTH = 50;
 
+// Base columns always pinned to the left (select, status, name)
+const BASE_PINNED_IDS = ["select", "status", "name"] as const;
+
 // Hook for drag-and-drop column reordering (native HTML drag events)
 function useColumnDrag(
   customColumns: ColumnConfig[],
@@ -121,7 +124,7 @@ function useColumnDrag(
 // to state changes during resize. Only triggers one React re-render on mouseup.
 function useColumnResize() {
   const columnWidthsRef = useRef<Record<string, number>>({});
-  const [, setRenderTrigger] = useState(0);
+  const [resizeGeneration, setRenderTrigger] = useState(0);
 
   // Stable getter — always reads latest from ref, never causes re-renders
   const getWidth = useCallback(
@@ -188,7 +191,7 @@ function useColumnResize() {
     [],
   );
 
-  return { getWidth, handleMouseDown };
+  return { getWidth, handleMouseDown, resizeGeneration };
 }
 
 type ViewMode = "charts" | "side-by-side";
@@ -256,6 +259,8 @@ interface DataTableProps {
   viewSelector?: React.ReactNode;
   /** Active chart view ID — passed as search param when navigating to a run */
   activeChartViewId?: string | null;
+  /** Callback to toggle pin on a custom column */
+  onToggleColumnPin?: (colId: string, source: string, aggregation?: string) => void;
 }
 
 export function DataTable({
@@ -314,12 +319,13 @@ export function DataTable({
   onPageSizeChange,
   viewSelector,
   activeChartViewId,
+  onToggleColumnPin,
 }: DataTableProps) {
   // Internal pagination state (pageIndex only — pageSize is controlled by parent)
   const [pageIndex, setPageIndex] = useState(0);
 
   // Custom column resize — uses refs + direct DOM manipulation during drag
-  const { getWidth, handleMouseDown } = useColumnResize();
+  const { getWidth, handleMouseDown, resizeGeneration } = useColumnResize();
 
   // Drag-and-drop column reordering (custom columns only)
   const { draggedId, dragOverId, handleDragStart, handleDragOver, handleDrop, handleDragEnd } =
@@ -363,6 +369,39 @@ export function DataTable({
 
   // Stable getter function for tags - doesn't change reference
   const getAllTags = useCallback(() => allTagsRef.current, []);
+
+  // Compute the set of all pinned column IDs (base + user-pinned custom columns)
+  const pinnedColumnIds = useMemo(() => {
+    const ids = new Set<string>(BASE_PINNED_IDS);
+    for (const col of customColumns) {
+      if (col.isPinned) {
+        const colTableId = col.source === "metric" && col.aggregation
+          ? `custom-${col.source}-${col.id}-${col.aggregation}`
+          : `custom-${col.source}-${col.id}`;
+        ids.add(colTableId);
+      }
+    }
+    return ids;
+  }, [customColumns]);
+
+  // Compute column ordering: pinned columns first (base order, then user-pinned),
+  // followed by unpinned columns in their config order
+  const columnOrder = useMemo(() => {
+    const basePinned = [...BASE_PINNED_IDS] as string[];
+    const customPinned: string[] = [];
+    const customUnpinned: string[] = [];
+    for (const col of customColumns) {
+      const colTableId = col.source === "metric" && col.aggregation
+        ? `custom-${col.source}-${col.id}-${col.aggregation}`
+        : `custom-${col.source}-${col.id}`;
+      if (col.isPinned) {
+        customPinned.push(colTableId);
+      } else {
+        customUnpinned.push(colTableId);
+      }
+    }
+    return [...basePinned, ...customPinned, ...customUnpinned];
+  }, [customColumns]);
 
   // Calculate current row selection based on actual selectedRunsWithColors
   // This ensures the table checkboxes stay in sync with the actual selected runs
@@ -415,6 +454,8 @@ export function DataTable({
         sorting,
         onSortingChange,
         activeChartViewId,
+        pinnedColumnIds,
+        onToggleColumnPin,
       }),
     [
       orgSlug,
@@ -436,6 +477,8 @@ export function DataTable({
       sorting,
       onSortingChange,
       activeChartViewId,
+      pinnedColumnIds,
+      onToggleColumnPin,
     ],
   );
 
@@ -503,6 +546,7 @@ export function DataTable({
       rowSelection: currentRowSelection,
       pagination: { pageIndex, pageSize },
       sorting,
+      columnOrder,
     },
     enableRowSelection: true,
     // Prevent TanStack Table from auto-resetting pagination
@@ -511,6 +555,25 @@ export function DataTable({
     // loops with the ref-based column resize. Sorting is managed manually via
     // onSortingChange called from column header dropdown menus.
   });
+
+  // Compute dynamic pinned column map from the actual rendered header order + widths.
+  // This replaces the old static PINNED_COLUMNS constant.
+  const pinnedColumnMap = useMemo(() => {
+    const map: Record<string, { left: number; isLast: boolean }> = {};
+    const headers = table.getHeaderGroups()[0]?.headers ?? [];
+    let cumulativeLeft = 0;
+    const pinnedHeaders = headers.filter((h) => pinnedColumnIds.has(h.column.id));
+    pinnedHeaders.forEach((h, i) => {
+      const def = h.column.columnDef;
+      const isFixed = def.enableResizing === false;
+      const w = isFixed ? (def.size ?? 150) : getWidth(h.column.id, def.size ?? 150);
+      map[h.column.id] = { left: cumulativeLeft, isLast: i === pinnedHeaders.length - 1 };
+      cumulativeLeft += w;
+    });
+    return map;
+    // resizeGeneration ensures recalc after column resize (getWidth reads from a ref)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [table, pinnedColumnIds, getWidth, resizeGeneration]);
 
   // Handle Enter key press for search and pagination
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -664,16 +727,29 @@ export function DataTable({
                     const bgColor = (header.column.columnDef.meta as any)?.backgroundColor;
                     const isCustom = header.column.id.startsWith("custom-");
                     const isDragOver = isCustom && dragOverId === header.column.id && draggedId !== header.column.id;
+                    const pinned = pinnedColumnMap[header.column.id];
 
                     return (
                       <TableHead
                         key={header.id}
                         className={cn(
-                          "group relative overflow-hidden px-2 py-2 text-left text-sm font-medium whitespace-nowrap text-muted-foreground",
+                          "group overflow-hidden px-2 py-2 text-left text-sm font-medium whitespace-nowrap text-muted-foreground",
+                          pinned ? "sticky" : "relative",
                           isCustom && "cursor-grab",
                           isDragOver && "border-l-2 border-primary",
                         )}
-                        style={bgColor ? { backgroundColor: `${bgColor}20` } : { backgroundColor: 'var(--background)' }}
+                        style={{
+                          ...(bgColor
+                            ? pinned
+                              ? { background: `linear-gradient(${bgColor}20, ${bgColor}20), var(--background)` }
+                              : { backgroundColor: `${bgColor}20` }
+                            : { backgroundColor: 'var(--background)' }),
+                          ...(pinned && {
+                            left: pinned.left,
+                            zIndex: 20,
+                            ...(pinned.isLast && { boxShadow: '3px 0 6px -2px rgba(0,0,0,0.15)' }),
+                          }),
+                        }}
                         draggable={isCustom}
                         onDragStart={isCustom ? (e) => handleDragStart(header.column.id, e) : undefined}
                         onDragOver={isCustom ? (e) => handleDragOver(header.column.id, e) : undefined}
@@ -708,6 +784,7 @@ export function DataTable({
                 table.getRowModel().rows.map((row) => (
                   <TableRow
                     key={row.id}
+                    className="group/row"
                     data-run-id={row.original.id}
                     data-run-name={row.original.name}
                     data-state={row.getIsSelected() ? "selected" : ""}
@@ -751,11 +828,31 @@ export function DataTable({
                   >
                     {row.getVisibleCells().map((cell) => {
                       const cellBgColor = (cell.column.columnDef.meta as any)?.backgroundColor;
+                      const pinned = pinnedColumnMap[cell.column.id];
                       return (
                         <TableCell
                           key={cell.id}
-                          className="px-2 py-2 text-sm"
-                          style={cellBgColor ? { backgroundColor: `${cellBgColor}10` } : undefined}
+                          className={cn(
+                            "px-2 py-2 text-sm",
+                            pinned && [
+                              "sticky",
+                              "before:absolute before:inset-0 before:-z-10 before:bg-background",
+                              "group-hover/row:bg-muted/50",
+                              "group-data-[state=selected]/row:bg-muted",
+                            ],
+                          )}
+                          style={{
+                            ...(cellBgColor
+                              ? pinned
+                                ? { background: `linear-gradient(${cellBgColor}10, ${cellBgColor}10), var(--background)` }
+                                : { backgroundColor: `${cellBgColor}10` }
+                              : undefined),
+                            ...(pinned && {
+                              left: pinned.left,
+                              zIndex: 1,
+                              ...(pinned.isLast && { boxShadow: '3px 0 6px -2px rgba(0,0,0,0.15)' }),
+                            }),
+                          }}
                         >
                           <div className="truncate">
                             {flexRender(

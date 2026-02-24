@@ -9,6 +9,7 @@ export interface ColumnConfig {
   customLabel?: string; // user-set display name (rename)
   backgroundColor?: string; // hex color for column tinting
   aggregation?: MetricAggregation; // Only for source === "metric"
+  isPinned?: boolean; // Whether the column is pinned to the left
 }
 
 /** Default columns — pre-checked on first visit. Shown in "Defaults" group. */
@@ -127,7 +128,23 @@ export function useColumnConfig(orgSlug: string, projectName: string) {
     [orgSlug, projectName],
   );
 
-  return { columns, addColumn, removeColumn, updateColumns, reorderColumns };
+  const toggleColumnPin = useCallback(
+    (colId: string, source: string, aggregation?: string) => {
+      setColumns((prev) => {
+        const next = prev.map((c) => {
+          if (c.id === colId && c.source === source && c.aggregation === aggregation) {
+            return { ...c, isPinned: !c.isPinned };
+          }
+          return c;
+        });
+        saveColumns(orgSlug, projectName, next);
+        return next;
+      });
+    },
+    [orgSlug, projectName],
+  );
+
+  return { columns, addColumn, removeColumn, updateColumns, reorderColumns, toggleColumnPin };
 }
 
 /** Overrides for base columns (Name, Status) that aren't in customColumns */
