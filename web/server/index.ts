@@ -3,11 +3,13 @@ import { swaggerUI } from "@hono/swagger-ui";
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { cors } from "hono/cors";
 import { compress } from "hono/compress";
+import { HTTPException } from "hono/http-exception";
 
 import { createContext } from "./lib/context";
 import { appRouter } from "./trpc/router";
 import { prisma } from "./lib/prisma";
 import { env } from "./lib/env";
+import { allowedOrigins } from "./lib/origins";
 
 import healthRoutes from "./routes/health";
 import versionRoutes from "./routes/version";
@@ -26,16 +28,8 @@ declare module "hono" {
   }
 }
 
-// Build allowed origins list for CORS
-const allowedOrigins = [env.PUBLIC_URL, env.BETTER_AUTH_URL];
-if (env.ADDITIONAL_ORIGINS) {
-  allowedOrigins.push(...env.ADDITIONAL_ORIGINS.split(",").map((s) => s.trim()));
-}
-
-// Apply gzip compression to reduce JSON payload sizes
-app.use("/*", compress());
-
-// Apply CORS middleware first
+// Apply CORS middleware first — must run before compress so that
+// CORS headers are present even when compression fails or errors occur.
 app.use(
   "/*",
   cors({
@@ -55,6 +49,26 @@ app.use(
     maxAge: 86400,
   })
 );
+
+// Apply gzip compression to reduce JSON payload sizes
+app.use("/*", compress());
+
+// Global error handler — ensures CORS headers are present on error responses
+// so the browser doesn't mask the real error with an opaque CORS failure.
+app.onError((err, c) => {
+  const origin = c.req.header("Origin");
+  if (origin && allowedOrigins.includes(origin)) {
+    c.header("Access-Control-Allow-Origin", origin);
+    c.header("Access-Control-Allow-Credentials", "true");
+  }
+
+  if (err instanceof HTTPException) {
+    return c.json({ error: err.message }, err.status);
+  }
+
+  console.error(`[${c.req.method}] ${c.req.path}:`, err);
+  return c.json({ error: "Internal Server Error" }, 500);
+});
 
 // Add prisma to context
 app.use("*", async (c, next) => {
