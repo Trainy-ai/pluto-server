@@ -44,6 +44,14 @@ function unregisterSafetyEntry(entry: TooltipSafetyEntry) {
   }
 }
 
+/** Check if ANY tooltip instance across all charts is currently pinned */
+function isAnyTooltipPinnedGlobal(): boolean {
+  for (const entry of tooltipSafetyEntries) {
+    if (entry.isPinned()) return true;
+  }
+  return false;
+}
+
 const TOOLTIP_SIZE_KEY = "uplot-tooltip-size";
 
 /** Module-level cache so all tooltip instances share the latest size immediately */
@@ -301,7 +309,8 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       // Notify context that this chart is now hovered
       onHoverChange?.(true);
       // Show tooltip immediately on mouseenter (uPlot demo pattern)
-      if (tooltipEl) {
+      // But suppress if any other tooltip is currently pinned
+      if (tooltipEl && !isAnyTooltipPinnedGlobal()) {
         tooltipEl.style.display = "block";
         log("  set display=block");
       }
@@ -814,6 +823,13 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     // With synchronous ref tracking in chart-sync-context, this is now safe
     if (!isActive && !isPinned) {
       log(`setCursor - hiding tooltip (not active chart)`);
+      tooltipEl.style.display = "none";
+      return;
+    }
+
+    // If any other tooltip is pinned, suppress this chart's tooltip
+    // This prevents a second tooltip from appearing when hovering after pinning
+    if (!isPinned && isAnyTooltipPinnedGlobal()) {
       tooltipEl.style.display = "none";
       return;
     }
