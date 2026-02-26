@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { OrganizationRole } from "@prisma/client";
+import { OrganizationRole, Prisma } from "@prisma/client";
 import { protectedOrgProcedure } from "../../../../lib/trpc";
 import { DashboardViewConfigSchema } from "../../../../lib/dashboard-types";
 
@@ -92,7 +92,7 @@ export const updateViewProcedure = protectedOrgProcedure
       },
       data: {
         ...(name !== undefined && { name }),
-        ...(config !== undefined && { config }),
+        ...(config !== undefined && { config: config as unknown as Prisma.InputJsonValue }),
         ...(isDefault !== undefined && { isDefault }),
       },
       include: {
@@ -106,13 +106,17 @@ export const updateViewProcedure = protectedOrgProcedure
       },
     });
 
+    const viewWithRelations = updatedView as typeof updatedView & {
+      createdBy: { id: string; name: string | null; image: string | null };
+    };
+
     return {
-      id: updatedView.id.toString(),
-      name: updatedView.name,
-      isDefault: updatedView.isDefault,
-      config: DashboardViewConfigSchema.parse(updatedView.config),
-      createdAt: updatedView.createdAt,
-      updatedAt: updatedView.updatedAt,
-      createdBy: updatedView.createdBy,
+      id: viewWithRelations.id.toString(),
+      name: viewWithRelations.name,
+      isDefault: viewWithRelations.isDefault,
+      config: DashboardViewConfigSchema.parse(viewWithRelations.config),
+      createdAt: viewWithRelations.createdAt,
+      updatedAt: viewWithRelations.updatedAt,
+      createdBy: viewWithRelations.createdBy,
     };
   });

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { OrganizationRole } from "@prisma/client";
+import { OrganizationRole, Prisma } from "@prisma/client";
 import { protectedOrgProcedure } from "../../../../lib/trpc";
 import {
   DashboardViewConfigSchema,
@@ -87,7 +87,7 @@ export const createViewProcedure = protectedOrgProcedure
         projectId: project.id,
         createdById: ctx.user.id,
         isDefault,
-        config: config ?? createEmptyDashboardConfig(),
+        config: (config ?? createEmptyDashboardConfig()) as unknown as Prisma.InputJsonValue,
       },
       include: {
         createdBy: {
@@ -100,13 +100,17 @@ export const createViewProcedure = protectedOrgProcedure
       },
     });
 
+    const viewWithRelations = view as typeof view & {
+      createdBy: { id: string; name: string | null; image: string | null };
+    };
+
     return {
-      id: view.id.toString(),
-      name: view.name,
-      isDefault: view.isDefault,
-      config: DashboardViewConfigSchema.parse(view.config),
-      createdAt: view.createdAt,
-      updatedAt: view.updatedAt,
-      createdBy: view.createdBy,
+      id: viewWithRelations.id.toString(),
+      name: viewWithRelations.name,
+      isDefault: viewWithRelations.isDefault,
+      config: DashboardViewConfigSchema.parse(viewWithRelations.config),
+      createdAt: viewWithRelations.createdAt,
+      updatedAt: viewWithRelations.updatedAt,
+      createdBy: viewWithRelations.createdBy,
     };
   });
