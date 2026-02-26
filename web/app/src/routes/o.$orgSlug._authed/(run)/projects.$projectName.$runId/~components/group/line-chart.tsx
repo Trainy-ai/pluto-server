@@ -450,72 +450,75 @@ export const LineChartWithFetch = memo(
       );
     }
 
-    // Common props for charts
-    const commonProps = {
-      className: "h-full",
-      title: logName,
-      logXAxis: settings.xAxisLogScale,
-      logYAxis: settings.yAxisLogScale,
-      tooltipInterpolation: settings.tooltipInterpolation,
-      outlierDetection: settings.yAxisScaleMode === "outlier-aware",
-    };
-
-    // Render chart wrapped in ChartCardWrapper for fullscreen + Y-axis bounds
+    // Render chart wrapped in ChartCardWrapper for fullscreen + Y-axis bounds + log scale
     return (
       <ChartCardWrapper
         metricName={logName}
         groupId={`run-${runId}`}
-        renderChart={(yMin, yMax, onDataRange, onResetBounds) => (
-          <div className="relative h-full w-full">
-            {/* Full-resolution loading progress bar */}
-            {isSampled && tier !== "full" && fullProgress > 0 && (
-              <div className="absolute top-0 right-0 left-0 z-10 h-0.5 bg-muted">
-                <div
-                  className="h-full bg-primary transition-all duration-300"
-                  style={{ width: `${fullProgress * 100}%` }}
+        globalLogXAxis={settings.xAxisLogScale}
+        globalLogYAxis={settings.yAxisLogScale}
+        renderChart={(yMin, yMax, onDataRange, onResetBounds, logXAxis, logYAxis) => {
+          const commonProps = {
+            className: "h-full",
+            title: logName,
+            logXAxis: logXAxis ?? settings.xAxisLogScale,
+            logYAxis: logYAxis ?? settings.yAxisLogScale,
+            tooltipInterpolation: settings.tooltipInterpolation,
+            outlierDetection: settings.yAxisScaleMode === "outlier-aware",
+          };
+
+          return (
+            <div className="relative h-full w-full">
+              {/* Full-resolution loading progress bar */}
+              {isSampled && tier !== "full" && fullProgress > 0 && (
+                <div className="absolute top-0 right-0 left-0 z-10 h-0.5 bg-muted">
+                  <div
+                    className="h-full bg-primary transition-all duration-300"
+                    style={{ width: `${fullProgress * 100}%` }}
+                  />
+                </div>
+              )}
+              {/* Zoom refetch loading indicator */}
+              {isZoomFetching && (
+                <div className="absolute top-0 right-0 left-0 z-10 h-0.5 overflow-hidden bg-muted">
+                  <div className="h-full w-1/3 animate-[shimmer_1s_ease-in-out_infinite] bg-primary" />
+                </div>
+              )}
+              {chartConfig.isSystem ? (
+                <LineChart
+                  {...commonProps}
+                  lines={chartConfig.lines}
+                  isDateTime={chartConfig.isDateTime}
+                  xlabel={chartConfig.xlabel}
+                  yMin={yMin}
+                  yMax={yMax}
+                  onDataRange={onDataRange}
+                  onResetBounds={onResetBounds}
+                  rawLines={chartConfig.rawLines}
+                  downsampleTarget={settings.maxPointsPerSeries}
+                  reprocessForZoom={reprocessForZoom}
+                  onZoomRangeChange={onZoomRangeChange}
                 />
-              </div>
-            )}
-            {/* Zoom refetch loading indicator */}
-            {isZoomFetching && (
-              <div className="absolute top-0 right-0 left-0 z-10 h-0.5 overflow-hidden bg-muted">
-                <div className="h-full w-1/3 animate-[shimmer_1s_ease-in-out_infinite] bg-primary" />
-              </div>
-            )}
-            {chartConfig.isSystem ? (
-              <LineChart
-                {...commonProps}
-                lines={chartConfig.lines}
-                isDateTime={chartConfig.isDateTime}
-                xlabel={chartConfig.xlabel}
-                yMin={yMin}
-                yMax={yMax}
-                onDataRange={onDataRange}
-                onResetBounds={onResetBounds}
-                rawLines={chartConfig.rawLines}
-                downsampleTarget={settings.maxPointsPerSeries}
-                reprocessForZoom={reprocessForZoom}
-                onZoomRangeChange={onZoomRangeChange}
-              />
-            ) : (
-              <LineChart
-                {...commonProps}
-                lines={chartConfig.lines}
-                xlabel={chartConfig.xlabel}
-                isDateTime={chartConfig.isDateTime}
-                showLegend={chartConfig.showLegend}
-                yMin={yMin}
-                yMax={yMax}
-                onDataRange={onDataRange}
-                onResetBounds={onResetBounds}
-                rawLines={chartConfig.rawLines}
-                downsampleTarget={settings.maxPointsPerSeries}
-                reprocessForZoom={reprocessForZoom}
-                onZoomRangeChange={onZoomRangeChange}
-              />
-            )}
-          </div>
-        )}
+              ) : (
+                <LineChart
+                  {...commonProps}
+                  lines={chartConfig.lines}
+                  xlabel={chartConfig.xlabel}
+                  isDateTime={chartConfig.isDateTime}
+                  showLegend={chartConfig.showLegend}
+                  yMin={yMin}
+                  yMax={yMax}
+                  onDataRange={onDataRange}
+                  onResetBounds={onResetBounds}
+                  rawLines={chartConfig.rawLines}
+                  downsampleTarget={settings.maxPointsPerSeries}
+                  reprocessForZoom={reprocessForZoom}
+                  onZoomRangeChange={onZoomRangeChange}
+                />
+              )}
+            </div>
+          );
+        }}
       />
     );
   },

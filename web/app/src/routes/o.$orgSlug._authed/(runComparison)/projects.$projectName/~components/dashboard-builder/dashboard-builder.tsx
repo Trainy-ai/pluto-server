@@ -290,6 +290,28 @@ export function DashboardBuilder({
     }));
   }, []);
 
+  const updateWidgetScale = useCallback((widgetId: string, axis: "x" | "y", value: boolean) => {
+    setConfig((prev) => ({
+      ...prev,
+      sections: prev.sections.map((s) => ({
+        ...s,
+        widgets: s.widgets.map((w) => {
+          if (w.id !== widgetId || w.type !== "chart") return w;
+          const config = w.config as ChartWidgetConfig;
+          const scaleValue = value ? "log" : "linear";
+          return {
+            ...w,
+            config: {
+              ...config,
+              ...(axis === "x" ? { xAxisScale: scaleValue } : { yAxisScale: scaleValue }),
+            },
+          };
+        }),
+      })),
+    }));
+    setHasChanges(true);
+  }, []);
+
   const resetAllWidgetBounds = useCallback(() => {
     setConfig((prev) => ({
       ...prev,
@@ -494,6 +516,7 @@ export function DashboardBuilder({
                   onDeleteWidget={(widgetId) => deleteWidget(section.id, widgetId)}
                   onFullscreenWidget={setFullscreenWidget}
                   onUpdateWidgetBounds={updateWidgetBounds}
+                  onUpdateWidgetScale={updateWidgetScale}
                   isEditing={isEditing}
                   coarseMode={coarseMode}
                   containerWidth={containerWidth - 48} // Account for padding
@@ -563,6 +586,50 @@ export function DashboardBuilder({
                   updateWidgetBounds(fullscreenWidget.id, yMin, yMax);
                   setFullscreenWidget((prev) =>
                     prev ? { ...prev, config: { ...prev.config, yMin, yMax } } : null
+                  );
+                }
+              : undefined
+          }
+          logXAxis={fullscreenWidget.type === "chart" ? (fullscreenWidget.config as ChartWidgetConfig).xAxisScale === "log" : undefined}
+          logYAxis={fullscreenWidget.type === "chart" ? (fullscreenWidget.config as ChartWidgetConfig).yAxisScale === "log" : undefined}
+          onLogScaleChange={
+            fullscreenWidget.type === "chart"
+              ? (axis, value) => {
+                  updateWidgetScale(fullscreenWidget.id, axis, value);
+                  const scaleValue = value ? "log" : "linear";
+                  setFullscreenWidget((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          config: {
+                            ...prev.config,
+                            ...(axis === "x" ? { xAxisScale: scaleValue } : { yAxisScale: scaleValue }),
+                          },
+                        }
+                      : null
+                  );
+                }
+              : undefined
+          }
+          onResetAll={
+            fullscreenWidget.type === "chart"
+              ? () => {
+                  updateWidgetBounds(fullscreenWidget.id, undefined, undefined);
+                  updateWidgetScale(fullscreenWidget.id, "x", false);
+                  updateWidgetScale(fullscreenWidget.id, "y", false);
+                  setFullscreenWidget((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          config: {
+                            ...prev.config,
+                            yMin: undefined,
+                            yMax: undefined,
+                            xAxisScale: "linear",
+                            yAxisScale: "linear",
+                          },
+                        }
+                      : null
                   );
                 }
               : undefined

@@ -261,6 +261,8 @@ export const MetricsDisplay = memo(function MetricsDisplay({
             organizationId={organizationId}
             projectName={projectName}
             boundsResetKey={boundsResetKey}
+            globalLogXAxis={settings.xAxisLogScale}
+            globalLogYAxis={settings.yAxisLogScale}
           />
         ))}
       </div>

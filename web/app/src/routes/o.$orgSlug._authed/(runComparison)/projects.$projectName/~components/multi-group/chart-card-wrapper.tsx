@@ -12,37 +12,44 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 
-interface ChartBounds {
+interface ChartSettings {
   yMin?: number;
   yMax?: number;
+  logXAxis?: boolean;
+  logYAxis?: boolean;
 }
 
-function getBoundsKey(groupId: string, metricName: string): string {
+function getSettingsKey(groupId: string, metricName: string): string {
   return `chartBounds_${groupId}_${metricName}`;
 }
 
-function loadBounds(groupId: string, metricName: string): ChartBounds {
+function loadSettings(groupId: string, metricName: string): ChartSettings {
   try {
-    const raw = localStorage.getItem(getBoundsKey(groupId, metricName));
+    const raw = localStorage.getItem(getSettingsKey(groupId, metricName));
     if (raw) {
       return JSON.parse(raw);
     }
   } catch (e) {
-    console.error(`Failed to load chart bounds for ${getBoundsKey(groupId, metricName)}`, e);
+    console.error(`Failed to load chart settings for ${getSettingsKey(groupId, metricName)}`, e);
   }
   return {};
 }
 
-function saveBounds(groupId: string, metricName: string, bounds: ChartBounds) {
-  const key = getBoundsKey(groupId, metricName);
-  if (bounds.yMin == null && bounds.yMax == null) {
+function saveSettings(groupId: string, metricName: string, settings: ChartSettings) {
+  const key = getSettingsKey(groupId, metricName);
+  const hasValues =
+    settings.yMin != null ||
+    settings.yMax != null ||
+    settings.logXAxis != null ||
+    settings.logYAxis != null;
+  if (!hasValues) {
     localStorage.removeItem(key);
   } else {
-    localStorage.setItem(key, JSON.stringify(bounds));
+    localStorage.setItem(key, JSON.stringify(settings));
   }
 }
 
-/** Clear all chart bounds from localStorage */
+/** Clear all chart settings (bounds + log scale overrides) from localStorage */
 export function clearAllChartBounds() {
   const keysToRemove: string[] = [];
   for (let i = 0; i < localStorage.length; i++) {
@@ -57,9 +64,20 @@ export function clearAllChartBounds() {
 interface ChartCardWrapperProps {
   metricName: string;
   groupId: string;
-  renderChart: (yMin?: number, yMax?: number, onDataRange?: (dataMin: number, dataMax: number) => void, onResetBounds?: () => void) => React.ReactNode;
-  /** Incrementing this key forces re-reading bounds from localStorage (used after reset all) */
+  renderChart: (
+    yMin?: number,
+    yMax?: number,
+    onDataRange?: (dataMin: number, dataMax: number) => void,
+    onResetBounds?: () => void,
+    logXAxis?: boolean,
+    logYAxis?: boolean,
+  ) => React.ReactNode;
+  /** Incrementing this key forces re-reading settings from localStorage (used after reset all) */
   boundsResetKey?: number;
+  /** Global X-axis log scale from settings panel (used as default when no per-chart override) */
+  globalLogXAxis?: boolean;
+  /** Global Y-axis log scale from settings panel (used as default when no per-chart override) */
+  globalLogYAxis?: boolean;
 }
 
 export function ChartCardWrapper({
@@ -67,25 +85,47 @@ export function ChartCardWrapper({
   groupId,
   renderChart,
   boundsResetKey = 0,
+  globalLogXAxis = false,
+  globalLogYAxis = false,
 }: ChartCardWrapperProps) {
-  const [bounds, setBounds] = useState<ChartBounds>(() =>
-    loadBounds(groupId, metricName)
+  const [settings, setSettings] = useState<ChartSettings>(() =>
+    loadSettings(groupId, metricName)
   );
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [dataRange, setDataRange] = useState<{ min: number; max: number } | null>(null);
 
-  // Re-read bounds from localStorage when boundsResetKey changes
+  // Re-read settings from localStorage when boundsResetKey changes
   const prevResetKeyRef = useRef(boundsResetKey);
   if (boundsResetKey !== prevResetKeyRef.current) {
     prevResetKeyRef.current = boundsResetKey;
-    setBounds(loadBounds(groupId, metricName));
+    setSettings(loadSettings(groupId, metricName));
   }
+
+  // Compute effective log scale: per-chart override takes precedence over global
+  const effectiveLogXAxis = settings.logXAxis ?? globalLogXAxis;
+  const effectiveLogYAxis = settings.logYAxis ?? globalLogYAxis;
 
   const handleBoundsChange = useCallback(
     (yMin?: number, yMax?: number) => {
-      const newBounds = { yMin, yMax };
-      setBounds(newBounds);
-      saveBounds(groupId, metricName, newBounds);
+      setSettings((prev) => {
+        const next = { ...prev, yMin, yMax };
+        saveSettings(groupId, metricName, next);
+        return next;
+      });
+    },
+    [groupId, metricName]
+  );
+
+  const handleLogScaleChange = useCallback(
+    (axis: "x" | "y", value: boolean) => {
+      setSettings((prev) => {
+        const next = {
+          ...prev,
+          ...(axis === "x" ? { logXAxis: value } : { logYAxis: value }),
+        };
+        saveSettings(groupId, metricName, next);
+        return next;
+      });
     },
     [groupId, metricName]
   );
@@ -95,18 +135,24 @@ export function ChartCardWrapper({
   }, []);
 
   const handleResetBounds = useCallback(() => {
-    const newBounds = { yMin: undefined, yMax: undefined };
-    setBounds(newBounds);
-    saveBounds(groupId, metricName, newBounds);
+    const newSettings: ChartSettings = {};
+    setSettings(newSettings);
+    saveSettings(groupId, metricName, newSettings);
+  }, [groupId, metricName]);
+
+  const handleResetAll = useCallback(() => {
+    const newSettings: ChartSettings = {};
+    setSettings(newSettings);
+    saveSettings(groupId, metricName, newSettings);
   }, [groupId, metricName]);
 
   // Determine if data is being clipped by user-set bounds
   const clippingInfo = (() => {
     if (!dataRange) return null;
-    if (bounds.yMin == null && bounds.yMax == null) return null;
+    if (settings.yMin == null && settings.yMax == null) return null;
 
-    const clippedBelow = bounds.yMin != null && dataRange.min < bounds.yMin;
-    const clippedAbove = bounds.yMax != null && dataRange.max > bounds.yMax;
+    const clippedBelow = settings.yMin != null && dataRange.min < settings.yMin;
+    const clippedAbove = settings.yMax != null && dataRange.max > settings.yMax;
 
     if (!clippedBelow && !clippedAbove) return null;
 
@@ -120,9 +166,9 @@ export function ChartCardWrapper({
 
   return (
     <>
-      <div ref={chartContainerRef} className="relative h-full w-full" data-testid="chart-card" onDoubleClick={handleResetBounds}>
+      <div ref={chartContainerRef} className="relative h-full w-full" data-testid="chart-card" data-log-x-scale={effectiveLogXAxis || undefined} data-log-y-scale={effectiveLogYAxis || undefined} onDoubleClick={handleResetBounds}>
         {/* Chart content */}
-        {renderChart(bounds.yMin, bounds.yMax, handleDataRange, handleResetBounds)}
+        {renderChart(settings.yMin, settings.yMax, handleDataRange, handleResetBounds, effectiveLogXAxis, effectiveLogYAxis)}
 
         {/* Hover toolbar - top right */}
         <div className="absolute top-1 right-1 z-10 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
@@ -144,9 +190,13 @@ export function ChartCardWrapper({
             className="size-7 bg-background/80 backdrop-blur-sm hover:bg-background"
           />
           <ChartBoundsPopover
-            yMin={bounds.yMin}
-            yMax={bounds.yMax}
+            yMin={settings.yMin}
+            yMax={settings.yMax}
             onBoundsChange={handleBoundsChange}
+            logXAxis={effectiveLogXAxis}
+            logYAxis={effectiveLogYAxis}
+            onLogScaleChange={handleLogScaleChange}
+            onResetAll={handleResetAll}
           >
             <Button
               variant="ghost"
@@ -188,11 +238,15 @@ export function ChartCardWrapper({
         open={isFullscreen}
         onOpenChange={setIsFullscreen}
         title={metricName}
-        yMin={bounds.yMin}
-        yMax={bounds.yMax}
+        yMin={settings.yMin}
+        yMax={settings.yMax}
         onBoundsChange={handleBoundsChange}
+        logXAxis={effectiveLogXAxis}
+        logYAxis={effectiveLogYAxis}
+        onLogScaleChange={handleLogScaleChange}
+        onResetAll={handleResetAll}
       >
-        {renderChart(bounds.yMin, bounds.yMax, handleDataRange, handleResetBounds)}
+        {renderChart(settings.yMin, settings.yMax, handleDataRange, handleResetBounds, effectiveLogXAxis, effectiveLogYAxis)}
       </ChartFullscreenDialog>
     </>
   );

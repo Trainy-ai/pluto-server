@@ -31,6 +31,7 @@ interface WidgetGridProps {
   renderWidget: (widget: Widget, onDataRange?: (dataMin: number, dataMax: number) => void, onResetBounds?: () => void) => React.ReactNode;
   onFullscreenWidget?: (widget: Widget) => void;
   onUpdateWidgetBounds?: (widgetId: string, yMin?: number, yMax?: number) => void;
+  onUpdateWidgetScale?: (widgetId: string, axis: "x" | "y", value: boolean) => void;
   isEditing?: boolean;
   coarseMode?: boolean;
   cols?: number;
@@ -46,6 +47,7 @@ export function WidgetGrid({
   renderWidget,
   onFullscreenWidget,
   onUpdateWidgetBounds,
+  onUpdateWidgetScale,
   isEditing = false,
   coarseMode = true,
   cols: colsProp = 12,
@@ -334,6 +336,16 @@ export function WidgetGrid({
                       onBoundsChange={(yMin, yMax) =>
                         onUpdateWidgetBounds?.(widget.id, yMin, yMax)
                       }
+                      logXAxis={(widget.config as ChartWidgetConfig).xAxisScale === "log"}
+                      logYAxis={(widget.config as ChartWidgetConfig).yAxisScale === "log"}
+                      onLogScaleChange={(axis, value) =>
+                        onUpdateWidgetScale?.(widget.id, axis, value)
+                      }
+                      onResetAll={() => {
+                        onUpdateWidgetBounds?.(widget.id, undefined, undefined);
+                        onUpdateWidgetScale?.(widget.id, "x", false);
+                        onUpdateWidgetScale?.(widget.id, "y", false);
+                      }}
                     >
                       <Button
                         variant="ghost"

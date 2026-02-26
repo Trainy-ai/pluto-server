@@ -39,6 +39,10 @@ interface MultiGroupProps {
   projectName: string;
   /** Incrementing this key forces all charts to re-read bounds from localStorage */
   boundsResetKey?: number;
+  /** Global X-axis log scale from settings panel */
+  globalLogXAxis?: boolean;
+  /** Global Y-axis log scale from settings panel */
+  globalLogYAxis?: boolean;
 }
 
 // Constants for responsive design
@@ -60,6 +64,8 @@ export const MultiGroup = ({
   organizationId,
   projectName,
   boundsResetKey,
+  globalLogXAxis,
+  globalLogYAxis,
 }: MultiGroupProps) => {
   // Memoize lines arrays for each metric to prevent recreation
   const memoizedLines = useMemo(() => {
@@ -92,7 +98,9 @@ export const MultiGroup = ({
               metricName={metric.name}
               groupId={groupId}
               boundsResetKey={boundsResetKey}
-              renderChart={(yMin, yMax, onDataRange, onResetBounds) => (
+              globalLogXAxis={globalLogXAxis}
+              globalLogYAxis={globalLogYAxis}
+              renderChart={(yMin, yMax, onDataRange, onResetBounds, logXAxis, logYAxis) => (
                 <MultiLineChart
                   lines={lines}
                   title={metric.name}
@@ -104,6 +112,8 @@ export const MultiGroup = ({
                   yMax={yMax}
                   onDataRange={onDataRange}
                   onResetBounds={onResetBounds}
+                  logXAxis={logXAxis}
+                  logYAxis={logYAxis}
                 />
               )}
             />
@@ -172,6 +182,8 @@ export const MultiGroup = ({
       organizationId,
       projectName,
       boundsResetKey,
+      globalLogXAxis,
+      globalLogYAxis,
     ],
   );
 

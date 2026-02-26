@@ -12,6 +12,8 @@ export interface MultiGroupPropsForComparison {
   projectName: string;
   className?: string;
   boundsResetKey?: number;
+  globalLogXAxis?: boolean;
+  globalLogYAxis?: boolean;
   metrics: {
     name: string;
     type: RunLogType;
@@ -40,7 +42,9 @@ export function arePropsEqual(
     prevProps.organizationId !== nextProps.organizationId ||
     prevProps.projectName !== nextProps.projectName ||
     prevProps.className !== nextProps.className ||
-    prevProps.boundsResetKey !== nextProps.boundsResetKey
+    prevProps.boundsResetKey !== nextProps.boundsResetKey ||
+    prevProps.globalLogXAxis !== nextProps.globalLogXAxis ||
+    prevProps.globalLogYAxis !== nextProps.globalLogYAxis
   ) {
     return false;
   }
