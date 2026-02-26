@@ -32,20 +32,29 @@ const PREVIEW_MAX_POINTS = 1000;
 const MAX_SERIES_COUNT = 200;
 
 /** Distinct dash patterns per metric index (metric 0 = solid). */
+// Base dash patterns for multi-metric charts. Values are horizontal pixel
+// distances (on, off, ...). For dense data, series-config.ts uses a custom
+// paths builder that renders these as horizontal-distance dashes with
+// subsampled points for noise reduction.
 const METRIC_DASH_PATTERNS: (number[] | undefined)[] = [
-  undefined,     // metric 0: solid
-  [10, 5],       // metric 1: dashed
-  [2, 4],        // metric 2: dotted
-  [10, 3, 2, 3], // metric 3: dash-dot
-  [15, 5, 2, 5], // metric 4: long dash-dot
+  undefined,              // metric 0: solid           ━━━━━━━━━
+  [16, 10],              // metric 1: dashed          ━  ━  ━  ━
+  [4, 10],               // metric 2: dotted          · · · · · ·
+  [16, 6, 4, 6],         // metric 3: dash-dot        ━ · ━ · ━ ·
+  [24, 8, 4, 8],         // metric 4: long dash-dot   ━━ · ━━ · ━━
+  [16, 6, 4, 6, 4, 6],   // metric 5: dash-dot-dot    ━ · · ━ · ·
+  [30, 14],              // metric 6: long dash       ━━━  ━━━  ━━━
+  [10, 10],              // metric 7: short dash      ━ ━ ━ ━ ━ ━
+  [30, 8, 10, 8],        // metric 8: long-short      ━━━ ━ ━━━ ━
+  [4, 10, 4, 10, 16, 10], // metric 9: dot-dot-dash    · · ━ · · ━
 ];
 
 function getDashPattern(metricIndex: number): number[] | undefined {
   if (metricIndex < METRIC_DASH_PATTERNS.length) {
     return METRIC_DASH_PATTERNS[metricIndex];
   }
-  // For 5+ metrics, cycle through patterns 1-4 (skip solid)
-  return METRIC_DASH_PATTERNS[((metricIndex - 1) % 4) + 1];
+  // For 10+ metrics, cycle through patterns 1-9 (skip solid)
+  return METRIC_DASH_PATTERNS[((metricIndex - 1) % 9) + 1];
 }
 
 interface MultiLineChartProps {
@@ -55,6 +64,8 @@ interface MultiLineChartProps {
     color: string;
   }[];
   title: string;
+  /** Subtitle shown in tooltip header (e.g. chip/pattern names) */
+  subtitle?: string;
   /** Optional array of metric names. When provided, fetches all metrics for each run.
    *  When omitted, falls back to [title] for backward compatibility (All Metrics view). */
   metrics?: string[];
@@ -99,6 +110,7 @@ const MultiLineChartInner = memo(
   ({
     lines,
     title,
+    subtitle,
     metrics: metricsProp,
     xlabel,
     organizationId,
@@ -402,7 +414,7 @@ const MultiLineChartInner = memo(
             };
 
             if (collectRaw) rawLines.push(baseData);
-            return downsampleAndSmooth(baseData, settings.maxPointsPerSeries, settings.smoothing);
+            return downsampleAndSmooth(baseData, settings.maxPointsPerSeries, settings.smoothing, isMultiMetric);
           });
 
         return {
@@ -428,7 +440,7 @@ const MultiLineChartInner = memo(
                 valueFlags: buildValueFlags(data, (d) => new Date(d.time).getTime()),
               };
               if (collectRaw) rawLines.push(baseData);
-              return downsampleAndSmooth(baseData, settings.maxPointsPerSeries, settings.smoothing);
+              return downsampleAndSmooth(baseData, settings.maxPointsPerSeries, settings.smoothing, isMultiMetric);
             });
 
           return {
@@ -478,7 +490,7 @@ const MultiLineChartInner = memo(
               };
 
               if (collectRaw) rawLines.push(baseData);
-              return downsampleAndSmooth(baseData, settings.maxPointsPerSeries, settings.smoothing);
+              return downsampleAndSmooth(baseData, settings.maxPointsPerSeries, settings.smoothing, isMultiMetric);
             });
 
           // Determine time unit from the first dataset
@@ -524,7 +536,7 @@ const MultiLineChartInner = memo(
               // range-limited by the server query, so downsampling would
               // re-introduce step gaps that the zoom refetch was meant to fill.
               const effectiveMaxPoints = isUsingZoomData ? 0 : settings.maxPointsPerSeries;
-              return downsampleAndSmooth(baseData, effectiveMaxPoints, settings.smoothing);
+              return downsampleAndSmooth(baseData, effectiveMaxPoints, settings.smoothing, isMultiMetric);
             });
 
           return {
@@ -594,7 +606,7 @@ const MultiLineChartInner = memo(
                 ...seriesProps(pair),
               };
               if (collectRaw) rawLines.push(baseData);
-              return downsampleAndSmooth(baseData, settings.maxPointsPerSeries, settings.smoothing);
+              return downsampleAndSmooth(baseData, settings.maxPointsPerSeries, settings.smoothing, isMultiMetric);
             });
 
           return {
@@ -637,7 +649,7 @@ const MultiLineChartInner = memo(
           // Use maxPts=0: show ALL raw data points in the visible range.
           // applyDownsampling always produces 3 series (main + envelope),
           // matching the initial render's series count for setData compatibility.
-          return downsampleAndSmooth(sliced, 0, smoothing);
+          return downsampleAndSmooth(sliced, 0, smoothing, isMultiMetric);
         });
       };
     }, [settings.maxPointsPerSeries, settings.smoothing]);
@@ -745,6 +757,7 @@ const MultiLineChartInner = memo(
           lines={chartResult.data}
           className={chartResult.className}
           title={title}
+          subtitle={subtitle}
           xlabel={chartResult.xlabel}
           showLegend={true}
           isDateTime={chartResult.isDateTime}

@@ -50,5 +50,7 @@ web/server/test-results/
 *.tsbuildinfo
 
 # Test artifacts
+.pluto/
+.neptune/
 tests/e2e/.pluto/
 tests/e2e/__pycache__/

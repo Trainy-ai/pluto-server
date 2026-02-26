@@ -151,11 +151,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
   }, [resetHide, isGifFile]);
 
-  // Keyboard shortcuts (only for non-GIF files)
+  // Keyboard shortcuts (only for non-GIF files, only when video container is hovered/focused)
   const onKey = useCallback(
     (e: KeyboardEvent) => {
       if (isGifFile) return;
       if (!videoRef.current) return;
+      // Only handle shortcuts when the video container is hovered or focused
+      if (!containerRef.current?.matches(":hover") && !containerRef.current?.contains(document.activeElement)) return;
 
       switch (e.code) {
         case "Space":

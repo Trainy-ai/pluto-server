@@ -10,11 +10,15 @@ import { formatAxisLabel } from "./format";
 export interface SeriesConfigRefs {
   /** Last locally-focused series index (from Y-distance detection) */
   lastFocusedSeriesRef: { current: number | null };
-  /** Cross-chart highlighted series label (from another chart) */
-  crossChartHighlightRef: { current: string | null };
+  /** Cross-chart highlighted run ID (from another chart's hovered series) */
+  crossChartRunIdRef: { current: string | null };
   /** Table-driven highlighted series ID (from runs table hover) */
   tableHighlightRef: { current: string | null };
 }
+
+// ============================
+// Series Config Builder
+// ============================
 
 /**
  * Build uPlot series configuration array from processedLines.
@@ -67,7 +71,7 @@ export function buildSeriesConfig(
         // and applies per-series opacity (used by smoothing to dim raw data)
         stroke: (u: uPlot, seriesIdx: number) => {
           const localFocusIdx = refs.lastFocusedSeriesRef.current;
-          const crossChartLabel = refs.crossChartHighlightRef.current;
+          const crossChartRunId = refs.crossChartRunIdRef.current;
           const tableId = refs.tableHighlightRef.current;
           const thisSeriesLabel = u.series[seriesIdx]?.label;
           const thisSeriesId = (u.series[seriesIdx] as any)?._seriesId;
@@ -83,17 +87,20 @@ export function buildSeriesConfig(
             isHighlighted = seriesIdx === localFocusIdx;
             highlightedLabel = typeof u.series[localFocusIdx]?.label === "string"
               ? (u.series[localFocusIdx].label as string) : null;
-          } else if (crossChartLabel !== null) {
+          } else if (crossChartRunId !== null) {
             // Cross-chart highlight (another chart is being hovered)
-            isHighlighted = thisSeriesLabel === crossChartLabel;
-            highlightedLabel = crossChartLabel;
+            // Match by run ID prefix — works for both single-metric ("runId") and multi-metric ("runId:metric") seriesIds
+            isHighlighted = thisSeriesId === crossChartRunId ||
+              (!!thisSeriesId && thisSeriesId.startsWith(crossChartRunId + ':'));
+            // Multiple series can match — don't set highlightedLabel (raw companions get standard dim)
+            highlightedLabel = null;
           } else if (tableId !== null) {
             // Table row hover highlight - match by runId prefix to handle composite "runId:metric" seriesIds
             isHighlighted = thisSeriesId === tableId || (!!thisSeriesId && thisSeriesId.startsWith(tableId + ':'));
           }
 
           const isFocusActive =
-            localFocusIdx !== null || crossChartLabel !== null || tableId !== null;
+            localFocusIdx !== null || crossChartRunId !== null || tableId !== null;
 
           // Check if this is the raw/original companion of the highlighted series
           const isRawOfHighlighted = isFocusActive && !isHighlighted &&
@@ -113,10 +120,41 @@ export function buildSeriesConfig(
             return applyAlpha(baseColor, Math.min(lineOpacity * 2.5, 0.35));
           }
           // Dim unfocused series: combine line opacity with focus dimming
-          return applyAlpha(baseColor, lineOpacity * 0.05);
+          return applyAlpha(baseColor, lineOpacity * 0.25);
         },
-        width: chartLineWidth,
-        dash: line.dash,
+        // Differentiate line widths:
+        // - Dashed series: slightly thicker for dash visibility
+        // - Smoothed series with companion: thicker for emphasis over raw cloud
+        // - Raw companion: thinner to reduce visual noise
+        ...(() => {
+          const w = line.hideFromLegend
+            ? chartLineWidth * 0.5
+            : !!line.dash
+              ? Math.max(chartLineWidth * 1.3, 1.8)
+              : companionDataIdx.has(i)
+                ? chartLineWidth * 1.5
+                : chartLineWidth;
+          return { width: w, _baseWidth: w };
+        })(),
+        // Canvas setLineDash() with round caps. Round caps extend each dash
+        // by lineWidth/2 per end, so compensate the pattern values to keep
+        // the visual dash/gap sizes constant regardless of line width:
+        //   on-segments:  shrink by lineWidth (round caps add it back)
+        //   off-segments: grow by lineWidth (round caps eat into gaps)
+        // At thin widths the compensation is small; at thick widths, dots
+        // become circles (natural for thicker lines) and gaps stay constant.
+        ...(() => {
+          if (!line.dash) return {};
+          const actualW = line.hideFromLegend
+            ? chartLineWidth * 0.5
+            : Math.max(chartLineWidth * 1.3, 1.8);
+          const compensated = line.dash.map((v, idx) =>
+            idx % 2 === 0
+              ? Math.max(0.1, v - actualW)   // on: shrink (caps restore it)
+              : v + actualW                    // off: grow (caps eat into gap)
+          );
+          return { dash: compensated, cap: "round" as const };
+        })(),
         spanGaps: true,
         points: {
           // Show points for single-point series since lines need 2+ points to be visible

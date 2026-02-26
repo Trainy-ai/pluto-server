@@ -4,7 +4,7 @@ import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
 import "./widget-grid.css";
 import { cn } from "@/lib/utils";
-import { MoreHorizontalIcon, PencilIcon, Trash2Icon, MoveIcon, Maximize2Icon, SlidersHorizontalIcon, TriangleAlertIcon } from "lucide-react";
+import { MoreHorizontalIcon, PencilIcon, Trash2Icon, MoveIcon, Maximize2Icon, SlidersHorizontalIcon, TriangleAlertIcon, ZapIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -297,11 +297,14 @@ export function WidgetGrid({
               "relative z-10 flex items-center justify-between border-b px-3 py-2 bg-card",
               isEditing && "widget-drag-handle cursor-move"
             )}>
-              <div className="flex items-center gap-2">
+              <div className="flex min-w-0 flex-1 items-center gap-2">
                 {isEditing && (
-                  <MoveIcon className="size-4 text-muted-foreground" />
+                  <MoveIcon className="size-4 shrink-0 text-muted-foreground" />
                 )}
-                <span className="text-sm font-medium truncate">
+                {hasWidgetPatterns(widget) && (
+                  <ZapIcon className="size-3 shrink-0 text-muted-foreground" />
+                )}
+                <span className="min-w-0 truncate text-sm font-medium">
                   {widget.config.title || getWidgetTitle(widget)}
                 </span>
                 {clippingInfo && (
@@ -316,7 +319,7 @@ export function WidgetGrid({
                 )}
               </div>
 
-              <div className="flex items-center gap-1">
+              <div className="flex shrink-0 items-center gap-1">
                 {/* Chart-specific actions (visible on hover) */}
                 {widget.type === "chart" && (
                   <>
@@ -386,7 +389,7 @@ export function WidgetGrid({
             {/* Widget Content */}
             <div
               ref={(el) => { widgetContentRefs.current[widget.id] = el; }}
-              className="h-[calc(100%-40px)] overflow-hidden p-2"
+              className="h-[calc(100%-40px)] overflow-auto p-2"
               onDoubleClick={
                 widget.type === "chart"
                   ? () => onUpdateWidgetBounds?.(widget.id, undefined, undefined)
@@ -449,10 +452,39 @@ function getWidgetTitle(widget: Widget): string {
     }
     case "logs":
       return "Logs";
+    case "file-group": {
+      const config = widget.config as { files?: string[] };
+      if (config.files && config.files.length > 0) {
+        const displayNames = config.files.map((f) =>
+          isGlobValue(f) ? getGlobPattern(f) : isRegexValue(f) ? getRegexPattern(f) : f
+        );
+        if (displayNames.length === 1) {
+          return displayNames[0];
+        }
+        if (displayNames.length <= 3) {
+          return displayNames.join(", ");
+        }
+        return `${displayNames.length} files`;
+      }
+      return "Files";
+    }
     case "file-series":
       return "File Series";
     default:
       return "Widget";
   }
+}
+
+// Check if a widget uses glob or regex patterns (i.e., is "dynamic")
+function hasWidgetPatterns(widget: Widget): boolean {
+  if (widget.type === "chart") {
+    const config = widget.config as { metrics?: string[] };
+    return config.metrics?.some((m) => isGlobValue(m) || isRegexValue(m)) ?? false;
+  }
+  if (widget.type === "file-group") {
+    const config = widget.config as { files?: string[] };
+    return config.files?.some((f) => isGlobValue(f) || isRegexValue(f)) ?? false;
+  }
+  return false;
 }
 

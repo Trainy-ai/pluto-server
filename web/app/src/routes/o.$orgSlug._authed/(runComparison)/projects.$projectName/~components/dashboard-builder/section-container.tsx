@@ -6,6 +6,7 @@ import {
   MoreHorizontalIcon,
   PencilIcon,
   Trash2Icon,
+  ZapIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -28,38 +29,79 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Badge } from "@/components/ui/badge";
+import { DynamicPatternPreview } from "./dynamic-pattern-preview";
 import type { Section } from "../../~types/dashboard-types";
 
 interface SectionContainerProps {
   section: Section;
   onUpdate: (section: Section) => void;
+  onToggleCollapse: () => void;
   onDelete: () => void;
   onAddWidget: () => void;
   children: React.ReactNode;
   isEditing?: boolean;
+  dynamicWidgetCount?: number;
+  organizationId: string;
+  projectName: string;
+  selectedRunIds: string[];
 }
 
 export function SectionContainer({
   section,
   onUpdate,
+  onToggleCollapse,
   onDelete,
   onAddWidget,
   children,
   isEditing = false,
+  dynamicWidgetCount,
+  organizationId,
+  projectName,
+  selectedRunIds,
 }: SectionContainerProps) {
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [editName, setEditName] = useState(section.name);
+  const [editIsDynamic, setEditIsDynamic] = useState(!!section.dynamicPattern);
+  const [editPattern, setEditPattern] = useState(section.dynamicPattern ?? "");
+  const [editPatternMode, setEditPatternMode] = useState<"search" | "regex">(
+    section.dynamicPatternMode ?? "search",
+  );
+
+  const isDynamic = !!section.dynamicPattern;
+  const widgetCount = isDynamic
+    ? (dynamicWidgetCount ?? 0)
+    : section.widgets.length;
 
   const handleToggleCollapse = () => {
-    onUpdate({ ...section, collapsed: !section.collapsed });
+    onToggleCollapse();
   };
 
   const handleSaveEdit = () => {
-    onUpdate({ ...section, name: editName });
+    onUpdate({
+      ...section,
+      name: editName,
+      dynamicPattern: editIsDynamic && editPattern.trim()
+        ? editPattern.trim()
+        : undefined,
+      dynamicPatternMode: editIsDynamic && editPattern.trim()
+        ? editPatternMode
+        : undefined,
+    });
     setIsEditDialogOpen(false);
+  };
+
+  const handleOpenEditDialog = () => {
+    setEditName(section.name);
+    setEditIsDynamic(!!section.dynamicPattern);
+    setEditPattern(section.dynamicPattern ?? "");
+    setEditPatternMode(section.dynamicPatternMode ?? "search");
+    setIsEditDialogOpen(true);
   };
 
   return (
@@ -75,25 +117,33 @@ export function SectionContainer({
                   <ChevronDownIcon className="size-4" />
                 )}
                 <span>{section.name}</span>
+                {isDynamic && (
+                  <Badge variant="secondary" className="gap-1 text-xs font-normal">
+                    <ZapIcon className="size-3" />
+                    {section.dynamicPattern}
+                  </Badge>
+                )}
                 <span className="text-xs text-muted-foreground">
-                  ({section.widgets.length} widgets)
+                  ({widgetCount} widgets)
                 </span>
               </button>
             </CollapsibleTrigger>
 
             {isEditing && (
               <div className="flex items-center gap-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onAddWidget();
-                  }}
-                >
-                  <PlusIcon className="mr-1 size-4" />
-                  Add Widget
-                </Button>
+                {!isDynamic && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onAddWidget();
+                    }}
+                  >
+                    <PlusIcon className="mr-1 size-4" />
+                    Add Widget
+                  </Button>
+                )}
 
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
@@ -102,12 +152,7 @@ export function SectionContainer({
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
-                    <DropdownMenuItem
-                      onClick={() => {
-                        setEditName(section.name);
-                        setIsEditDialogOpen(true);
-                      }}
-                    >
+                    <DropdownMenuItem onClick={handleOpenEditDialog}>
                       <PencilIcon className="mr-2 size-4" />
                       Edit Section
                     </DropdownMenuItem>
@@ -127,7 +172,7 @@ export function SectionContainer({
 
           <CollapsibleContent>
             <div className="p-4">
-              {section.widgets.length === 0 ? (
+              {!isDynamic && section.widgets.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-8 text-center text-muted-foreground">
                   <p className="mb-2">No widgets in this section yet.</p>
                   {isEditing && (
@@ -151,7 +196,7 @@ export function SectionContainer({
           <DialogHeader>
             <DialogTitle>Edit Section</DialogTitle>
             <DialogDescription>
-              Update the section name.
+              Update the section name and configuration.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
@@ -163,6 +208,30 @@ export function SectionContainer({
                 onChange={(e) => setEditName(e.target.value)}
               />
             </div>
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <Label htmlFor="dynamic-toggle">Dynamic section</Label>
+                <p className="text-xs text-muted-foreground">
+                  Auto-create widgets from a pattern
+                </p>
+              </div>
+              <Switch
+                id="dynamic-toggle"
+                checked={editIsDynamic}
+                onCheckedChange={setEditIsDynamic}
+              />
+            </div>
+            {editIsDynamic && (
+              <DynamicPatternInput
+                pattern={editPattern}
+                onPatternChange={setEditPattern}
+                mode={editPatternMode}
+                onModeChange={setEditPatternMode}
+                organizationId={organizationId}
+                projectName={projectName}
+                selectedRunIds={selectedRunIds}
+              />
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsEditDialogOpen(false)}>
@@ -179,7 +248,7 @@ export function SectionContainer({
           <DialogHeader>
             <DialogTitle>Delete Section</DialogTitle>
             <DialogDescription>
-              Are you sure you want to delete "{section.name}"? This will also
+              Are you sure you want to delete &quot;{section.name}&quot;? This will also
               delete all widgets in this section.
             </DialogDescription>
           </DialogHeader>
@@ -200,19 +269,97 @@ export function SectionContainer({
   );
 }
 
-interface AddSectionButtonProps {
-  onAddSection: (name: string) => void;
+// Shared pattern input with Search/Regex toggle + preview
+interface DynamicPatternInputProps {
+  pattern: string;
+  onPatternChange: (value: string) => void;
+  mode: "search" | "regex";
+  onModeChange: (mode: "search" | "regex") => void;
+  organizationId: string;
+  projectName: string;
+  selectedRunIds: string[];
+  onEnter?: () => void;
 }
 
-export function AddSectionButton({ onAddSection }: AddSectionButtonProps) {
+function DynamicPatternInput({
+  pattern,
+  onPatternChange,
+  mode,
+  onModeChange,
+  organizationId,
+  projectName,
+  selectedRunIds,
+  onEnter,
+}: DynamicPatternInputProps) {
+  return (
+    <div className="grid gap-2">
+      <Label>Pattern</Label>
+      <Tabs
+        value={mode}
+        onValueChange={(v) => onModeChange(v as "search" | "regex")}
+      >
+        <TabsList className="grid w-full grid-cols-2">
+          <TabsTrigger value="search">Search</TabsTrigger>
+          <TabsTrigger value="regex">Regex</TabsTrigger>
+        </TabsList>
+      </Tabs>
+      <Input
+        placeholder={
+          mode === "search"
+            ? "Search metrics and files... (use * or ? for glob)"
+            : "Regex pattern... e.g. (train|val)/.+"
+        }
+        value={pattern}
+        onChange={(e) => onPatternChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && onEnter) {
+            onEnter();
+          }
+        }}
+      />
+      <p className="text-xs text-muted-foreground">
+        {mode === "search"
+          ? "Fuzzy text search. Use * / ? for glob patterns (e.g., train/*)."
+          : "Regex pattern matched against metric and file names."}
+        {" "}Creates one widget per match. Searches selected runs only.
+      </p>
+      {pattern.trim() && (
+        <DynamicPatternPreview
+          pattern={pattern.trim()}
+          mode={mode}
+          organizationId={organizationId}
+          projectName={projectName}
+          selectedRunIds={selectedRunIds}
+        />
+      )}
+    </div>
+  );
+}
+
+interface AddSectionButtonProps {
+  onAddSection: (name: string, dynamicPattern?: string, dynamicPatternMode?: "search" | "regex") => void;
+  organizationId: string;
+  projectName: string;
+  selectedRunIds: string[];
+}
+
+export function AddSectionButton({ onAddSection, organizationId, projectName, selectedRunIds }: AddSectionButtonProps) {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [name, setName] = useState("");
+  const [isDynamic, setIsDynamic] = useState(false);
+  const [pattern, setPattern] = useState("");
+  const [patternMode, setPatternMode] = useState<"search" | "regex">("search");
 
   const handleCreate = () => {
-    if (!name.trim()) return;
-    onAddSection(name.trim());
+    const sectionName = name.trim() || "New Section";
+    const dynamicPattern = isDynamic && pattern.trim() ? pattern.trim() : undefined;
+    const mode = isDynamic && pattern.trim() ? patternMode : undefined;
+    onAddSection(sectionName, dynamicPattern, mode);
     setIsDialogOpen(false);
     setName("");
+    setIsDynamic(false);
+    setPattern("");
+    setPatternMode("search");
   };
 
   return (
@@ -237,7 +384,7 @@ export function AddSectionButton({ onAddSection }: AddSectionButtonProps) {
               <Label htmlFor="new-section-name">Section Name</Label>
               <Input
                 id="new-section-name"
-                placeholder="Enter section name..."
+                placeholder="New Section"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 onKeyDown={(e) => {
@@ -247,12 +394,37 @@ export function AddSectionButton({ onAddSection }: AddSectionButtonProps) {
                 }}
               />
             </div>
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <Label htmlFor="new-dynamic-toggle">Dynamic section</Label>
+                <p className="text-xs text-muted-foreground">
+                  Auto-create widgets from a pattern
+                </p>
+              </div>
+              <Switch
+                id="new-dynamic-toggle"
+                checked={isDynamic}
+                onCheckedChange={setIsDynamic}
+              />
+            </div>
+            {isDynamic && (
+              <DynamicPatternInput
+                pattern={pattern}
+                onPatternChange={setPattern}
+                mode={patternMode}
+                onModeChange={setPatternMode}
+                organizationId={organizationId}
+                projectName={projectName}
+                selectedRunIds={selectedRunIds}
+                onEnter={handleCreate}
+              />
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsDialogOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={handleCreate} disabled={!name.trim()}>
+            <Button onClick={handleCreate} disabled={isDynamic && !pattern.trim()}>
               Create Section
             </Button>
           </DialogFooter>

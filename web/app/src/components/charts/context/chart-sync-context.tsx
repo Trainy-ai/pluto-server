@@ -40,14 +40,15 @@ export function applySeriesHighlight(chart: uPlot, value: string | null, key: '_
 
   if (hasMatch) {
     const highlightedWidth = Math.max(2.5, defaultWidth * 2);
-    const dimmedWidth = Math.max(0.3, defaultWidth * 0.15);
+    const dimmedWidth = Math.max(0.7, defaultWidth * 0.47);
     for (let i = 1; i < chart.series.length; i++) {
       const match = seriesKeyMatches((chart.series[i] as any)[key], value, key);
       chart.series[i].width = match ? highlightedWidth : dimmedWidth;
     }
   } else {
     for (let i = 1; i < chart.series.length; i++) {
-      chart.series[i].width = defaultWidth;
+      // Restore per-series base width (set by buildSeriesConfig for smoothed/raw differentiation)
+      chart.series[i].width = (chart.series[i] as any)._baseWidth ?? defaultWidth;
     }
   }
 }
@@ -74,7 +75,8 @@ interface ChartSyncContextValue {
   syncKey: string;
 
   // Cross-chart highlighting for uPlot (direct instance manipulation)
-  highlightUPlotSeries: (sourceChartId: string, seriesLabel: string | null) => void;
+  // Accepts a run ID (not a label) — matches series by _seriesId prefix
+  highlightUPlotSeries: (sourceChartId: string, runId: string | null) => void;
 
   // Hover tracking - only the hovered chart should show tooltip
   hoveredChartId: string | null;
@@ -84,6 +86,10 @@ interface ChartSyncContextValue {
   // Cross-chart series highlighting for uPlot (tracked via state for subscriptions)
   highlightedSeriesName: string | null;
   setHighlightedSeriesName: (name: string | null) => void;
+
+  // Cross-chart run ID — the run ID of the hovered series, used for prefix matching
+  highlightedRunId: string | null;
+  setHighlightedRunId: (runId: string | null) => void;
 
   // Zoom sync for uPlot - syncs X-axis scale across all charts
   syncXScale: (sourceChartId: string, xMin: number, xMax: number) => void;
@@ -147,9 +153,6 @@ export function ChartSyncProvider({
   // Per-chart zoom callbacks — each chart registers a function that applies zoom with its own isProgrammaticScaleRef guard
   const zoomCallbacksRef = useRef(new Map<string, (xMin: number, xMax: number) => void>());
 
-  // Flag to prevent infinite highlight loops
-  const isHighlightingRef = useRef(false);
-
   // Track which chart is currently being hovered (for tooltip display)
   // Only the hovered chart should show its tooltip; synced charts show only cursor line
   // Use BOTH ref (synchronous) and state (async) for proper React/event handling
@@ -158,6 +161,9 @@ export function ChartSyncProvider({
 
   // Track which series is highlighted across all charts (for uPlot cross-chart highlighting)
   const [highlightedSeriesName, setHighlightedSeriesName] = useState<string | null>(null);
+
+  // Track which run ID is highlighted across charts (for prefix matching on multi-metric charts)
+  const [highlightedRunId, setHighlightedRunIdState] = useState<string | null>(null);
 
   // Global X-axis range from prop (computed from server before charts render)
   // Use ref for stable reference that doesn't cause re-renders when updated
@@ -273,19 +279,20 @@ export function ChartSyncProvider({
   }, []);
 
   // Track last highlighted series to avoid redundant redraws
-  const lastHighlightedRef = useRef<{ sourceChartId: string; seriesLabel: string | null } | null>(null);
+  const lastHighlightedRef = useRef<{ sourceChartId: string; runId: string | null } | null>(null);
 
   // rAF throttle refs for highlight coalescing
-  const pendingHighlightRef = useRef<{ sourceChartId: string; seriesLabel: string | null } | null>(null);
+  const pendingHighlightRef = useRef<{ sourceChartId: string; runId: string | null } | null>(null);
   const highlightRafRef = useRef<number | null>(null);
 
   // Cross-chart highlighting for uPlot - directly manipulates registered instances
   // This avoids React state timing issues by working imperatively
   // Uses requestAnimationFrame to coalesce multiple calls per frame (e.g. 60fps mouse moves with 20+ charts)
+  // Accepts a run ID and matches by _seriesId prefix — works for both single-metric and multi-metric charts
   const highlightUPlotSeries = useCallback(
-    (sourceChartId: string, seriesLabel: string | null) => {
+    (sourceChartId: string, runId: string | null) => {
       // Store the latest args — only the most recent call per frame matters
-      pendingHighlightRef.current = { sourceChartId, seriesLabel };
+      pendingHighlightRef.current = { sourceChartId, runId };
 
       // If a rAF is already scheduled, the pending ref will be picked up — no need to schedule another
       if (highlightRafRef.current !== null) return;
@@ -296,32 +303,28 @@ export function ChartSyncProvider({
         if (!pending) return;
         pendingHighlightRef.current = null;
 
-        const { sourceChartId: srcId, seriesLabel: label } = pending;
+        const { sourceChartId: srcId, runId: id } = pending;
 
         // Skip if nothing changed (avoids constant redraws during cursor sync)
         const last = lastHighlightedRef.current;
-        if (last && last.sourceChartId === srcId && last.seriesLabel === label) {
+        if (last && last.sourceChartId === srcId && last.runId === id) {
           return;
         }
-        lastHighlightedRef.current = { sourceChartId: srcId, seriesLabel: label };
+        lastHighlightedRef.current = { sourceChartId: srcId, runId: id };
 
-        uplotInstancesRef.current.forEach((chart, id) => {
-          if (id === srcId) return; // Skip source chart
+        uplotInstancesRef.current.forEach((chart, chartMapId) => {
+          if (chartMapId === srcId) return; // Skip source chart
 
           const lw = getStoredLineWidth();
-          if (label === null) {
+          if (id === null) {
             // Fall back to table highlight if active, otherwise reset to default
             const tableId = tableHighlightedSeriesRef.current;
             applySeriesHighlight(chart, tableId, '_seriesId', lw);
-            chart.redraw(false);
           } else {
-            // Only apply highlighting if this chart has the series
-            const hasMatch = chart.series.some((s) => s.label === label);
-            if (hasMatch) {
-              applySeriesHighlight(chart, label, 'label', lw);
-              chart.redraw(false);
-            }
+            // Match by _seriesId prefix — handles both "runId" and "runId:metric" formats
+            applySeriesHighlight(chart, id, '_seriesId', lw);
           }
+          chart.redraw(false);
         });
       });
     },
@@ -339,12 +342,18 @@ export function ChartSyncProvider({
     // Table highlight (if active) will take over via the stroke function's 3rd priority tier
     if (id === null) {
       setHighlightedSeriesName(null);
+      setHighlightedRunIdState(null);
     }
   }, []);
 
   // Callback for setting highlighted series name (stable reference)
   const setHighlightedSeries = useCallback((name: string | null) => {
     setHighlightedSeriesName(name);
+  }, []);
+
+  // Callback for setting highlighted run ID (stable reference)
+  const setHighlightedRunId = useCallback((runId: string | null) => {
+    setHighlightedRunIdState(runId);
   }, []);
 
   // Flag to prevent zoom sync infinite loops
@@ -441,6 +450,8 @@ export function ChartSyncProvider({
       setHoveredChart,
       highlightedSeriesName,
       setHighlightedSeriesName: setHighlightedSeries,
+      highlightedRunId,
+      setHighlightedRunId,
       syncXScale,
       resetZoom,
       globalXRange,
@@ -465,6 +476,8 @@ export function ChartSyncProvider({
       setHoveredChart,
       highlightedSeriesName,
       setHighlightedSeries,
+      highlightedRunId,
+      setHighlightedRunId,
       syncXScale,
       resetZoom,
       globalXRange,

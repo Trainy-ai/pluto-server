@@ -1,5 +1,8 @@
 import { trpc } from "@/utils/trpc";
-import { useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
+import { useMemo } from "react";
+
+const METRIC_AGGS = ["MIN", "MAX", "AVG", "LAST", "VARIANCE"] as const;
 
 /**
  * Fetch distinct metric names in a project (for the column picker "Metrics" group).
@@ -75,7 +78,7 @@ export function useRegexSearchMetricNames(orgId: string, projectName: string, re
 
 /**
  * Batch fetch metric summaries for visible runs.
- * Only runs when there are metric columns and visible run IDs.
+ * Used by the run table for metric columns (small, known set of specs).
  */
 export function useMetricSummaries(
   orgId: string,
@@ -98,4 +101,50 @@ export function useMetricSummaries(
       },
     )
   );
+}
+
+/**
+ * Fetch metric summaries one query per metric name.
+ * Each expanded metric gets its own cached query, so expanding a new metric
+ * only fetches the new one — previously expanded metrics are served from cache.
+ * Used by the side-by-side view where metrics are lazily expanded.
+ */
+export function usePerMetricSummaries(
+  orgId: string,
+  projectName: string,
+  runIds: string[],
+  expandedMetricNames: string[],
+) {
+  const queries = useQueries({
+    queries: expandedMetricNames.map((logName) =>
+      trpc.runs.metricSummaries.queryOptions(
+        {
+          organizationId: orgId,
+          projectName,
+          runIds,
+          metrics: METRIC_AGGS.map((agg) => ({ logName, aggregation: agg })),
+        },
+        {
+          enabled: runIds.length > 0,
+          staleTime: 30 * 1000,
+        },
+      )
+    ),
+  });
+
+  // Merge all per-metric results into the same shape the component expects:
+  // Record<runId, Record<"logName|AGG", number>>
+  const summaries = useMemo(() => {
+    const merged: Record<string, Record<string, number>> = {};
+    for (const q of queries) {
+      if (!q.data?.summaries) continue;
+      for (const [runId, metrics] of Object.entries(q.data.summaries)) {
+        if (!merged[runId]) merged[runId] = {};
+        Object.assign(merged[runId], metrics);
+      }
+    }
+    return merged;
+  }, [queries]);
+
+  return { summaries };
 }

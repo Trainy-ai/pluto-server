@@ -19,6 +19,8 @@ interface LineChartWrapperProps extends React.HTMLAttributes<HTMLDivElement> {
   xlabel?: string;
   ylabel?: string;
   title?: string;
+  /** Subtitle shown in tooltip header (e.g. chip/pattern names) */
+  subtitle?: string;
   showXAxis?: boolean;
   showYAxis?: boolean;
   showLegend?: boolean;

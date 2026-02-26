@@ -25,8 +25,8 @@ export interface AnimationControlsProps {
   onPlayPause: () => void;
   onStepChange: (step: number) => void;
   onSpeedChange: (speed: number) => void;
-  onExport: (type: "snapshot" | "gif") => void;
-  isExporting: boolean;
+  onExport?: (type: "snapshot" | "gif") => void;
+  isExporting?: boolean;
 }
 
 export const AnimationControls: React.FC<AnimationControlsProps> = ({
@@ -102,14 +102,18 @@ export const AnimationControls: React.FC<AnimationControlsProps> = ({
               onValueChange={(value) => onSpeedChange(1000 - value[0] + 1)}
             />
           </div>
-          <DropdownMenuItem onClick={() => onExport("snapshot")}>
-            <Camera className="mr-2 h-4 w-4" />
-            Export Snapshot
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => onExport("gif")}>
-            <Film className="mr-2 h-4 w-4" />
-            Export Animation
-          </DropdownMenuItem>
+          {onExport && (
+            <>
+              <DropdownMenuItem onClick={() => onExport("snapshot")}>
+                <Camera className="mr-2 h-4 w-4" />
+                Export Snapshot
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onExport("gif")}>
+                <Film className="mr-2 h-4 w-4" />
+                Export Animation
+              </DropdownMenuItem>
+            </>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
     </div>

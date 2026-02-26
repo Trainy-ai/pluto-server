@@ -28,6 +28,8 @@ export interface SingleRunHistogramProps {
   theme: string;
   globalMaxFreq: number;
   isSingleRun?: boolean;
+  color?: string;
+  hideStepLabel?: boolean;
 }
 
 export interface MultiRunHistogramProps {
@@ -344,6 +346,8 @@ export const useHistogramCanvas = () => {
       xAxisRange,
       theme,
       globalMaxFreq,
+      color,
+      hideStepLabel,
     }: SingleRunHistogramProps) => {
       if (!canvas || !data) return;
       const ctx = canvas.getContext("2d");
@@ -425,25 +429,27 @@ export const useHistogramCanvas = () => {
         availableWidth,
         displayHeight - padding,
         availableHeight,
-        "rgba(59, 130, 246, 0.8)",
-        false,
+        color || "rgba(59, 130, 246, 0.8)",
+        !!color,
       );
 
       // Draw step counter
-      ctx.fillStyle = theme === "dark" ? "#94a3b8" : "#666";
-      ctx.font = `${titleFontSize}px sans-serif`;
-      ctx.textAlign = "right";
-      ctx.textBaseline = "top";
-      ctx.fillText(
-        `Step: ${formatNumber(data.step, true)}`,
-        displayWidth - padding,
-        padding - titleFontSize - 5,
-      );
+      if (!hideStepLabel) {
+        ctx.fillStyle = theme === "dark" ? "#94a3b8" : "#666";
+        ctx.font = `${titleFontSize}px sans-serif`;
+        ctx.textAlign = "right";
+        ctx.textBaseline = "top";
+        ctx.fillText(
+          `Step: ${formatNumber(data.step, true)}`,
+          displayWidth - padding,
+          padding - titleFontSize - 5,
+        );
+      }
     },
     [],
   );
 
-  // Multi-run histogram drawing
+  // Multi-run histogram drawing — stacked per-run charts
   const drawMultiHistogram = useCallback(
     ({
       canvas,
@@ -458,8 +464,8 @@ export const useHistogramCanvas = () => {
       if (!ctx) return;
 
       // Find the data for the current step value in each run
-      const findStepData = (run: any) => {
-        return run.data.find((d: any) => d.step === currentStep);
+      const findStepData = (run: (typeof normalizedData)[number]) => {
+        return run.data.find((d: { step: number }) => d.step === currentStep);
       };
 
       const dpr = window.devicePixelRatio || 1;
@@ -511,7 +517,6 @@ export const useHistogramCanvas = () => {
         padding,
         maxYLabelWidth + TICK_CONFIG.LABEL_PADDING,
       );
-
       // Calculate actual available width for the chart area
       const availableWidth = displayWidth - (leftPadding + padding);
 
@@ -550,10 +555,7 @@ export const useHistogramCanvas = () => {
           padding +
           legendHeight +
           index * (histogramHeight + TICK_CONFIG.CHART_SPACING);
-        return {
-          yStart,
-          yEnd: yStart + histogramHeight,
-        };
+        return { yStart, yEnd: yStart + histogramHeight };
       });
 
       // Draw each histogram
@@ -561,7 +563,7 @@ export const useHistogramCanvas = () => {
         const stepData = findStepData(run);
         if (!stepData) return;
 
-        const { freq, bins, maxFreq } = stepData.histogramData;
+        const { freq, bins } = stepData.histogramData;
         const { yStart, yEnd } = chartPositions[runIndex];
 
         // Draw y-axis line for this run

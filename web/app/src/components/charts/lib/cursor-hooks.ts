@@ -12,11 +12,13 @@ export interface FocusDetectionDeps {
   isActiveChart: () => boolean;
   lastFocusedSeriesRef: { current: number | null };
   highlightedSeriesRef: { current: string | null };
+  chartLineWidthRef: { current: number };
   chartId: string;
   chartSyncContextRef: {
     current: {
-      highlightUPlotSeries: (chartId: string, seriesLabel: string | null) => void;
+      highlightUPlotSeries: (chartId: string, runId: string | null) => void;
       setHighlightedSeriesName: (name: string | null) => void;
+      setHighlightedRunId: (runId: string | null) => void;
     } | null;
   };
 }
@@ -81,6 +83,14 @@ export function buildFocusDetectionHook(deps: FocusDetectionDeps): (u: uPlot) =>
       // Update focus ref - stroke functions will read this during redraw
       deps.lastFocusedSeriesRef.current = closestSeriesIdx;
 
+      // Apply width emphasis on this chart (matches cross-chart applySeriesHighlight)
+      const lw = deps.chartLineWidthRef.current;
+      const highlightedWidth = Math.max(2.5, lw * 2);
+      const dimmedWidth = Math.max(0.7, lw * 0.47);
+      for (let si = 1; si < u.series.length; si++) {
+        u.series[si].width = si === closestSeriesIdx ? highlightedWidth : dimmedWidth;
+      }
+
       // Trigger redraw so stroke functions re-evaluate with new focus
       u.redraw();
 
@@ -89,8 +99,16 @@ export function buildFocusDetectionHook(deps: FocusDetectionDeps): (u: uPlot) =>
       if (seriesLabel) {
         // Update tooltip ref immediately (context state is async)
         deps.highlightedSeriesRef.current = seriesLabel;
-        deps.chartSyncContextRef.current?.highlightUPlotSeries(deps.chartId, seriesLabel);
         deps.chartSyncContextRef.current?.setHighlightedSeriesName(seriesLabel);
+
+        // Extract run ID from seriesId for cross-chart matching
+        // seriesId is either "runId" (single-metric) or "runId:metricName" (multi-metric)
+        const seriesId = deps.processedLines[closestSeriesIdx - 1]?.seriesId;
+        const runId = seriesId ? seriesId.split(':')[0] : null;
+        if (runId) {
+          deps.chartSyncContextRef.current?.highlightUPlotSeries(deps.chartId, runId);
+          deps.chartSyncContextRef.current?.setHighlightedRunId(runId);
+        }
       }
     }
   };

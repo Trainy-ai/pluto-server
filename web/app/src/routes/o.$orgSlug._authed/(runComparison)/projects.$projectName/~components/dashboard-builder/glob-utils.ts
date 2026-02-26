@@ -86,6 +86,26 @@ export function isPatternValue(value: string): boolean {
 }
 
 /**
+ * Auto-detect whether a raw pattern (no prefix) looks like glob or regex,
+ * and wrap it with the appropriate prefix.
+ *
+ * Heuristic: if it contains `*` or `?` but none of the regex-specific
+ * characters like `(`, `)`, `|`, `+`, `{`, `}`, `^`, `$`, treat as glob.
+ * Otherwise treat as regex.
+ */
+export function autoDetectPattern(pattern: string): string {
+  if (isGlobValue(pattern) || isRegexValue(pattern)) {
+    return pattern;
+  }
+  const hasGlobChars = /[*?]/.test(pattern);
+  const hasRegexChars = /[()|\+{}^$]/.test(pattern);
+  if (hasGlobChars && !hasRegexChars) {
+    return makeGlobValue(pattern);
+  }
+  return makeRegexValue(pattern);
+}
+
+/**
  * Convert a glob pattern to a RegExp for client-side matching.
  *   - `*` becomes `.*` (match anything)
  *   - `?` becomes `.`  (match single char)

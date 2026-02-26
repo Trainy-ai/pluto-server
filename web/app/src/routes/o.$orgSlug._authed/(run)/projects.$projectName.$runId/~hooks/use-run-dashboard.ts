@@ -30,6 +30,9 @@ export function useRunDashboardData(
     [runId, chartColors],
   );
 
+  // Use the SQID-encoded ID for dashboard queries (backend expects SQIDs, not display IDs like TES-451)
+  const sqid = runData?.encodedId ?? runId;
+
   const groupedMetrics = useMemo((): GroupedMetrics => {
     if (!runData?.logs) return {};
 
@@ -64,7 +67,7 @@ export function useRunDashboardData(
       }
 
       metricGroup.data.push({
-        runId,
+        runId: sqid,
         runName: runData.name,
         color,
         status: runData.status as RunStatus,
@@ -72,26 +75,26 @@ export function useRunDashboardData(
     }
 
     return groups;
-  }, [runData, runId, color]);
+  }, [runData, sqid, color]);
 
   const selectedRuns = useMemo((): Record<string, SelectedRunWithColor> => {
     if (!runData) return {};
 
     // Build a Run-compatible object. The dashboard widgets only access
     // run.name and run.status from this object; the runId comes from
-    // the dictionary key. We cast to satisfy the type constraint.
+    // the dictionary key (must be SQID for backend queries).
     const runForDashboard = {
       ...runData,
-      id: runId, // Override BigInt id with SQID-encoded string
+      id: sqid,
     } as unknown as SelectedRunWithColor["run"];
 
     return {
-      [runId]: {
+      [sqid]: {
         run: runForDashboard,
         color,
       },
     };
-  }, [runData, runId, color]);
+  }, [runData, sqid, color]);
 
   return { groupedMetrics, selectedRuns, color };
 }

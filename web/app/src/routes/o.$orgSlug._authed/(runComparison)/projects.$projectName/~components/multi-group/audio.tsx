@@ -113,7 +113,7 @@ export const MultiGroupAudio = ({
           {logName}
         </h3>
         <div className="grid grid-cols-1 gap-4">
-          {runs.map((run) => (
+          {runs.slice(0, 2).map((run) => (
             <div key={run.runId} className="flex flex-col gap-1.5">
               <div className="flex items-center justify-center gap-1.5">
                 <Skeleton className="h-2 w-2 rounded-full" />

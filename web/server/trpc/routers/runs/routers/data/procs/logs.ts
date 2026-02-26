@@ -12,21 +12,22 @@ type LogData = {
 }[];
 
 export const logsProcedure = protectedOrgProcedure
-  .input(z.object({ runId: z.string(), projectName: z.string() }))
+  .input(z.object({ runId: z.string(), projectName: z.string(), logType: z.string().optional() }))
   .query(async ({ ctx, input }) => {
-    const { runId: encodedRunId, projectName, organizationId } = input;
+    const { runId: encodedRunId, projectName, organizationId, logType } = input;
 
     const runId = await resolveRunId(ctx.prisma, encodedRunId, organizationId, projectName);
 
     return withCache<LogData>(
       ctx,
       "logs",
-      { runId, organizationId, projectName },
+      { runId, organizationId, projectName, logType },
       async () => {
         const logs = await queryAllRunLogs(ctx.clickhouse, {
           organizationId,
           projectName,
           runId,
+          logType,
         });
 
         return logs.map((log) => ({

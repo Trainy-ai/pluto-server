@@ -12,7 +12,11 @@ interface NavigationGuardResult {
  */
 export function useNavigationGuard(hasUnsavedChanges: boolean): NavigationGuardResult {
   const blocker = useBlocker({
-    shouldBlockFn: () => hasUnsavedChanges,
+    shouldBlockFn: ({ current, next }) => {
+      // Only block actual path changes, not search param updates (e.g. run selection)
+      if (current.pathname === next.pathname) return false;
+      return hasUnsavedChanges;
+    },
     enableBeforeUnload: () => hasUnsavedChanges,
     withResolver: true,
   });
