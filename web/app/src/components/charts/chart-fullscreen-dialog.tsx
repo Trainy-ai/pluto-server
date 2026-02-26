@@ -21,6 +21,11 @@ interface ChartFullscreenDialogProps {
   yMin?: number;
   yMax?: number;
   onBoundsChange?: (yMin?: number, yMax?: number) => void;
+  /** Log scale state for the popover toggles */
+  logXAxis?: boolean;
+  logYAxis?: boolean;
+  onLogScaleChange?: (axis: "x" | "y", value: boolean) => void;
+  onResetAll?: () => void;
 }
 
 export function ChartFullscreenDialog({
@@ -31,6 +36,10 @@ export function ChartFullscreenDialog({
   yMin,
   yMax,
   onBoundsChange,
+  logXAxis,
+  logYAxis,
+  onLogScaleChange,
+  onResetAll,
 }: ChartFullscreenDialogProps) {
   const chartContentRef = useRef<HTMLDivElement>(null);
 
@@ -51,6 +60,10 @@ export function ChartFullscreenDialog({
                   yMin={yMin}
                   yMax={yMax}
                   onBoundsChange={onBoundsChange}
+                  logXAxis={logXAxis}
+                  logYAxis={logYAxis}
+                  onLogScaleChange={onLogScaleChange}
+                  onResetAll={onResetAll}
                 >
                   <Button
                     variant="outline"
@@ -59,7 +72,7 @@ export function ChartFullscreenDialog({
                     data-testid="chart-fullscreen-bounds-btn"
                   >
                     <SlidersHorizontalIcon className="size-3.5" />
-                    Y-Axis Bounds
+                    Chart Settings
                   </Button>
                 </ChartBoundsPopover>
               )}
