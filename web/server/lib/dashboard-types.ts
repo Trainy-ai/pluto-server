@@ -113,23 +113,32 @@ export const FileSeriesWidgetConfigSchema = BaseWidgetConfigSchema.extend({
 });
 export type FileSeriesWidgetConfig = z.infer<typeof FileSeriesWidgetConfigSchema>;
 
-// Union of all widget configs.
-// IMPORTANT: FileSeriesWidgetConfigSchema must come BEFORE LogsWidgetConfigSchema
-// because both share `logName`. Zod's union tries schemas in order and strips
-// unknown fields on match — if LogsWidgetConfig matches first (logName present,
-// maxLines gets default), it strips `mediaType`, causing the superRefine to fail.
-// Placing file-series first ensures `mediaType` (required) fails for logs configs,
-// so Zod correctly falls through to LogsWidgetConfig.
+// Clean union type without passthrough index signatures
+type WidgetConfigType =
+  | z.infer<typeof ChartWidgetConfigSchema>
+  | z.infer<typeof ScatterWidgetConfigSchema>
+  | z.infer<typeof SingleValueWidgetConfigSchema>
+  | z.infer<typeof HistogramWidgetConfigSchema>
+  | z.infer<typeof FileGroupWidgetConfigSchema>
+  | z.infer<typeof LogsWidgetConfigSchema>
+  | z.infer<typeof FileSeriesWidgetConfigSchema>;
+
+// Union of all widget configs
+// IMPORTANT: .passthrough() prevents z.union from stripping unknown keys when
+// an earlier schema matches (e.g. LogsWidgetConfig matches file-series data
+// because both have `logName`, which would strip `mediaType`). The superRefine
+// on WidgetSchema handles authoritative type-specific validation.
+// The type cast preserves clean TS types while keeping passthrough runtime behavior.
 export const WidgetConfigSchema = z.union([
-  ChartWidgetConfigSchema,
-  ScatterWidgetConfigSchema,
-  SingleValueWidgetConfigSchema,
-  FileGroupWidgetConfigSchema,
-  HistogramWidgetConfigSchema,
-  FileSeriesWidgetConfigSchema,
-  LogsWidgetConfigSchema,
-]);
-export type WidgetConfig = z.infer<typeof WidgetConfigSchema>;
+  ChartWidgetConfigSchema.passthrough(),
+  ScatterWidgetConfigSchema.passthrough(),
+  SingleValueWidgetConfigSchema.passthrough(),
+  FileGroupWidgetConfigSchema.passthrough(),
+  HistogramWidgetConfigSchema.passthrough(),
+  LogsWidgetConfigSchema.passthrough(),
+  FileSeriesWidgetConfigSchema.passthrough(),
+]) as unknown as z.ZodType<WidgetConfigType, z.ZodTypeDef, WidgetConfigType>;
+export type WidgetConfig = WidgetConfigType;
 
 // Widget position and size in the grid
 export const WidgetLayoutSchema = z.object({
