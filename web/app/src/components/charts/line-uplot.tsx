@@ -67,6 +67,8 @@ interface LineChartProps extends React.HTMLAttributes<HTMLDivElement> {
   xlabel?: string;
   ylabel?: string;
   title?: string;
+  /** Subtitle shown in tooltip header (e.g. chip/pattern names) */
+  subtitle?: string;
   showXAxis?: boolean;
   showYAxis?: boolean;
   showLegend?: boolean;
@@ -127,6 +129,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       xlabel,
       ylabel,
       title,
+      subtitle,
       showXAxis = true,
       showYAxis = true,
       showLegend = false,
@@ -155,6 +158,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
     // This fixes tooltip disappearing when chart is recreated while mouse is hovering
     const hoverStateRef = useRef<HoverState>({
       isHovering: false,
+      isPinned: false,
       lastIdx: null,
       lastLeft: null,
       lastTop: null,
@@ -175,8 +179,8 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
     // Track last focused series for emphasis persistence (don't reset on seriesIdx=null)
     const lastFocusedSeriesRef = useRef<number | null>(null);
 
-    // Track cross-chart highlighted series name (from other charts in the sync group)
-    const crossChartHighlightRef = useRef<string | null>(null);
+    // Track cross-chart highlighted run ID (from other charts in the sync group)
+    const crossChartRunIdRef = useRef<string | null>(null);
 
     // Track table-driven highlighted series name (from runs table hover)
     const tableHighlightRef = useRef<string | null>(null);
@@ -228,6 +232,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
     // When another chart highlights a series, we need to redraw to show emphasis
     useEffect(() => {
       const highlightedName = chartSyncContext?.highlightedSeriesName ?? null;
+      const runId = chartSyncContext?.highlightedRunId ?? null;
 
       // Always keep highlightedSeriesRef in sync for tooltip access
       highlightedSeriesRef.current = highlightedName;
@@ -238,31 +243,20 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
 
       if (isActive) {
         // We're the source - don't apply cross-chart highlight to ourselves
-        crossChartHighlightRef.current = null;
+        crossChartRunIdRef.current = null;
         return;
       }
 
       // CRITICAL: Clear local focus when another chart is active
-      // Otherwise localFocusIdx takes priority over crossChartLabel in stroke function
-      if (highlightedName !== null) {
+      // Otherwise localFocusIdx takes priority over crossChartRunId in stroke function
+      if (runId !== null) {
         lastFocusedSeriesRef.current = null;
       }
 
-      // Only apply cross-chart highlight if this chart has a series matching the
-      // highlighted label. Without this check, charts that don't contain the
-      // highlighted series (e.g. single-run "All Metrics" view where each chart
-      // shows a different metric) would set crossChartHighlightRef to a non-null
-      // value that matches nothing, causing the stroke function to dim ALL series
-      // (isFocusActive=true but isHighlighted=false for every series).
-      const effectiveHighlight = highlightedName !== null &&
-        processedLinesRef.current.some(line => line.label === highlightedName)
-        ? highlightedName
-        : null;
-
-      // Update cross-chart highlight ref and trigger redraw if changed
-      // The stroke function reads from crossChartHighlightRef during redraw
-      if (crossChartHighlightRef.current !== effectiveHighlight) {
-        crossChartHighlightRef.current = effectiveHighlight;
+      // Update cross-chart run ID ref and trigger redraw if changed
+      // The stroke function reads from crossChartRunIdRef during redraw
+      if (crossChartRunIdRef.current !== runId) {
+        crossChartRunIdRef.current = runId;
 
         const chart = chartInstanceRef.current;
         if (chart) {
@@ -270,7 +264,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           chart.redraw();
         }
       }
-    }, [chartSyncContext?.highlightedSeriesName, chartSyncContext?.hoveredChartIdRef, chartId, processedLines]);
+    }, [chartSyncContext?.highlightedRunId, chartSyncContext?.highlightedSeriesName, chartSyncContext?.hoveredChartIdRef, chartId]);
 
     // Subscribe to table highlight changes (from runs table row hover)
     // This is separate from cross-chart highlighting to avoid conflicts
@@ -611,7 +605,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       // Series configuration (extracted to lib/series-config.ts)
       const series = buildSeriesConfig(processedLines, xlabel, chartLineWidth, {
         lastFocusedSeriesRef,
-        crossChartHighlightRef,
+        crossChartRunIdRef,
         tableHighlightRef,
       });
 
@@ -733,6 +727,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         isActiveChart,
         lastFocusedSeriesRef,
         highlightedSeriesRef,
+        chartLineWidthRef,
         chartId,
         chartSyncContextRef: chartSyncContextRef as any,
       });
@@ -744,15 +739,17 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       });
 
       // Build bands for min/max envelope rendering
-      // Detects envelope companion series and creates fill between min/max pairs
+      // Detects envelope companion series and creates fill between min/max pairs.
+      // Dashed series get a more prominent envelope fill (Neptune-style: the
+      // auto-smoothed trend line sits on top of a visible data-range band).
       const bands: uPlot.Band[] = [];
-      const envelopePairs = new Map<string, { minIdx?: number; maxIdx?: number; color?: string }>();
+      const envelopePairs = new Map<string, { minIdx?: number; maxIdx?: number; color?: string; parentLabel?: string }>();
       for (let i = 0; i < processedLines.length; i++) {
         const line = processedLines[i];
         if (line.envelopeOf && line.envelopeBound) {
           const key = line.envelopeOf;
           if (!envelopePairs.has(key)) {
-            envelopePairs.set(key, {});
+            envelopePairs.set(key, { parentLabel: key });
           }
           const pair = envelopePairs.get(key)!;
           // uPlot series index = line index + 1 (index 0 is x-axis)
@@ -764,11 +761,17 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           pair.color = line.color;
         }
       }
-      for (const pair of envelopePairs.values()) {
+      for (const [, pair] of envelopePairs) {
         if (pair.minIdx != null && pair.maxIdx != null) {
+          // Check if the parent series is dashed — use higher fill opacity
+          // so the data range band is clearly visible behind the smooth trend line
+          const parentLine = processedLines.find(
+            (l) => l.label === pair.parentLabel && !l.envelopeOf,
+          );
+          const isDashedParent = !!parentLine?.dash;
           bands.push({
             series: [pair.maxIdx, pair.minIdx],
-            fill: applyAlpha(pair.color || "#888", 0.12),
+            fill: applyAlpha(pair.color || "#888", isDashedParent ? 0.22 : 0.12),
           });
         }
       }
@@ -800,6 +803,9 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             isActiveChart, // Checks if this chart is the one being hovered
             highlightedSeriesRef, // For showing highlighted series at top of tooltip
             tooltipInterpolation, // Interpolation mode for missing tooltip values
+            xlabel,
+            title,
+            subtitle,
           }),
         ],
         hooks: {

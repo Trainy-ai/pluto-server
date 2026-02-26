@@ -16,7 +16,7 @@ function makeLine(label: string, color: string): LineData {
 function makeRefs(overrides?: Partial<SeriesConfigRefs>): SeriesConfigRefs {
   return {
     lastFocusedSeriesRef: { current: null },
-    crossChartHighlightRef: { current: null },
+    crossChartRunIdRef: { current: null },
     tableHighlightRef: { current: null },
     ...overrides,
   };
@@ -71,7 +71,7 @@ describe("buildSeriesConfig emphasis (stroke function)", () => {
   });
 
   it("highlights matching cross-chart series and dims non-matching", () => {
-    const refs = makeRefs({ crossChartHighlightRef: { current: "accuracy" } });
+    const refs = makeRefs({ crossChartRunIdRef: { current: "accuracy" } });
     const series = buildSeriesConfig(lines, "step", 1.5, refs);
     const u = fakeUPlot(series);
 
@@ -91,14 +91,14 @@ describe("buildSeriesConfig emphasis (stroke function)", () => {
    * crossChartLabel doesn't match any of its series. Previously, this caused ALL
    * series in Chart B to be dimmed (isFocusActive=true, isHighlighted=false).
    *
-   * The fix ensures crossChartHighlightRef is only set on charts that have a
-   * matching series. This test verifies that when crossChartHighlightRef is null
+   * The fix ensures crossChartRunIdRef is only set on charts that have a
+   * matching series. This test verifies that when crossChartRunIdRef is null
    * (because the chart has no matching series), all series render at full color.
    */
-  it("does NOT dim series when crossChartHighlightRef is null (no matching series in this chart)", () => {
-    // This simulates a chart that correctly has crossChartHighlightRef=null
+  it("does NOT dim series when crossChartRunIdRef is null (no matching series in this chart)", () => {
+    // This simulates a chart that correctly has crossChartRunIdRef=null
     // because it doesn't contain the highlighted series
-    const refs = makeRefs({ crossChartHighlightRef: { current: null } });
+    const refs = makeRefs({ crossChartRunIdRef: { current: null } });
     const singleMetricLines = [makeLine("accuracy", "#00ff00")];
     const series = buildSeriesConfig(singleMetricLines, "step", 1.5, refs);
     const u = fakeUPlot(series);
@@ -108,27 +108,27 @@ describe("buildSeriesConfig emphasis (stroke function)", () => {
   });
 
   /**
-   * Documents what happens when crossChartHighlightRef is set to a label that
+   * Documents what happens when crossChartRunIdRef is set to a label that
    * does NOT match any series in this chart. With the fix in line-uplot.tsx,
    * this scenario should never occur (the ref is only set when there's a match).
    * But if it did, all series would be dimmed - this test documents that behavior.
    */
-  it("dims all series when crossChartHighlightRef is set but matches no series (edge case)", () => {
-    const refs = makeRefs({ crossChartHighlightRef: { current: "nonexistent" } });
+  it("dims all series when crossChartRunIdRef is set but matches no series (edge case)", () => {
+    const refs = makeRefs({ crossChartRunIdRef: { current: "nonexistent" } });
     const singleMetricLines = [makeLine("accuracy", "#00ff00")];
     const series = buildSeriesConfig(singleMetricLines, "step", 1.5, refs);
     const u = fakeUPlot(series);
 
     // When crossChartLabel is set but doesn't match, isFocusActive=true and
     // isHighlighted=false → series is dimmed. The fix prevents this scenario
-    // by not setting crossChartHighlightRef when there's no matching series.
+    // by not setting crossChartRunIdRef when there's no matching series.
     expect(getStroke(series[1], u, 1)).toMatch(/rgba\(.+,\s*0\.05\)/);
   });
 
   it("local focus takes priority over cross-chart highlight", () => {
     const refs = makeRefs({
       lastFocusedSeriesRef: { current: 1 }, // "loss"
-      crossChartHighlightRef: { current: "accuracy" },
+      crossChartRunIdRef: { current: "accuracy" },
     });
     const series = buildSeriesConfig(lines, "step", 1.5, refs);
     const u = fakeUPlot(series);

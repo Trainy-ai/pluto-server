@@ -177,52 +177,96 @@ export function applyDownsampling(
 }
 
 /**
+ * Threshold: auto-smooth series in multi-metric charts above this many
+ * (downsampled) points. In multi-metric charts, dashed lines need smoothing
+ * so dash patterns are visible (canvas path zigzag merges dashes into solid
+ * blur). Solid lines in the same chart also get the same light smoothing so
+ * they look visually consistent with the dashed lines.
+ */
+const AUTO_SMOOTH_THRESHOLD = 500;
+
+/**
+ * Apply a single smoothing pass, respecting valueFlags gaps.
+ * Splits data into contiguous finite segments and smooths each independently.
+ */
+function smoothPass(
+  x: number[],
+  y: number[],
+  algorithm: SmoothingAlgorithm,
+  parameter: number,
+  valueFlags: Map<number, string> | undefined,
+): number[] {
+  if (valueFlags && valueFlags.size > 0) {
+    const result = new Array<number>(x.length);
+    let segStart = -1;
+    for (let i = 0; i <= x.length; i++) {
+      const isFlagged = i < x.length && valueFlags.has(x[i]);
+      if (isFlagged || i === x.length) {
+        if (segStart >= 0) {
+          const segX = x.slice(segStart, i);
+          const segY = y.slice(segStart, i);
+          const smoothed = smoothData(segX, segY, algorithm, parameter);
+          for (let j = 0; j < smoothed.length; j++) {
+            result[segStart + j] = smoothed[j];
+          }
+          segStart = -1;
+        }
+        if (isFlagged) {
+          result[i] = y[i]; // placeholder — will become null gap
+        }
+      } else if (segStart < 0) {
+        segStart = i;
+      }
+    }
+    return result;
+  }
+  return smoothData(x, y, algorithm, parameter);
+}
+
+/**
  * Apply smoothing to chart data. Only smooths main series, not envelope companions.
  * Returns array: smoothed series, plus optionally the original data as a dimmed companion.
+ *
+ * In multi-metric charts, dense series get a light auto-smooth (Gaussian,
+ * sigma=len/640) so dashed lines have visible dash patterns and solid lines
+ * look visually consistent. User smoothing is then applied on top.
  */
 export function applySmoothing(
   chartData: ChartSeriesData,
   smoothingSettings: SmoothingSettings,
+  isMultiMetric: boolean = false,
 ): ChartSeriesData[] {
   // Don't smooth envelope boundary series — pass through as-is
   if (chartData.envelopeOf) {
     return [chartData];
   }
 
-  if (!smoothingSettings.enabled) {
+  // Multi-metric charts auto-smooth dense series so dashed lines have visible
+  // dash patterns and solid lines look visually consistent alongside them.
+  const needsAutoSmooth = isMultiMetric &&
+    chartData.x.length > AUTO_SMOOTH_THRESHOLD;
+
+  if (!smoothingSettings.enabled && !needsAutoSmooth) {
     return [chartData];
   }
 
-  // Split data into contiguous segments of finite values and smooth each
-  // independently. This prevents smoothing from interpolating across
-  // NaN/Inf/-Inf gaps — the smoothed curve has the same gaps as the raw
-  // data, and the EMA state resets after each gap.
-  let finalY: number[];
-  if (chartData.valueFlags && chartData.valueFlags.size > 0) {
-    finalY = new Array(chartData.x.length);
-    let segStart = -1;
-    for (let i = 0; i <= chartData.x.length; i++) {
-      const isFlagged = i < chartData.x.length && chartData.valueFlags.has(chartData.x[i]);
-      if (isFlagged || i === chartData.x.length) {
-        // End of a contiguous finite segment — smooth it independently
-        if (segStart >= 0) {
-          const segX = chartData.x.slice(segStart, i);
-          const segY = chartData.y.slice(segStart, i);
-          const smoothedSeg = smoothData(segX, segY, smoothingSettings.algorithm, smoothingSettings.parameter);
-          for (let j = 0; j < smoothedSeg.length; j++) {
-            finalY[segStart + j] = smoothedSeg[j];
-          }
-          segStart = -1;
-        }
-        if (isFlagged) {
-          finalY[i] = chartData.y[i]; // placeholder — will become null gap
-        }
-      } else if (segStart < 0) {
-        segStart = i;
-      }
-    }
-  } else {
-    finalY = smoothData(chartData.x, chartData.y, smoothingSettings.algorithm, smoothingSettings.parameter);
+  let finalY = chartData.y;
+
+  // Pass 1: auto-smooth for multi-metric charts.
+  // Light Gaussian smoothing — the envelope bands from downsampling show
+  // the actual data range underneath.
+  if (needsAutoSmooth) {
+    const sigma = Math.max(4, Math.floor(chartData.x.length / 360));
+    finalY = smoothPass(chartData.x, finalY, "gaussian", sigma, chartData.valueFlags);
+  }
+
+  // Pass 2: user smoothing on top (if enabled)
+  if (smoothingSettings.enabled) {
+    finalY = smoothPass(
+      chartData.x, finalY,
+      smoothingSettings.algorithm, smoothingSettings.parameter,
+      chartData.valueFlags,
+    );
   }
 
   const data: ChartSeriesData[] = [
@@ -235,10 +279,11 @@ export function applySmoothing(
     },
   ];
 
-  if (smoothingSettings.showOriginalData) {
+  // Show raw companion for user smoothing (envelope bands cover the dash auto-smooth case).
+  if (smoothingSettings.enabled && smoothingSettings.showOriginalData) {
     data.push({
       ...chartData,
-      opacity: 0.1,
+      opacity: 0.07,
       hideFromLegend: true,
       label: chartData.label + " (original)",
     });
@@ -255,7 +300,8 @@ export function downsampleAndSmooth(
   baseData: BaseSeriesData,
   maxPoints: number,
   smoothingSettings: SmoothingSettings,
+  isMultiMetric: boolean = false,
 ): ChartSeriesData[] {
   const downsampledSeries = applyDownsampling(baseData, maxPoints);
-  return downsampledSeries.flatMap((s) => applySmoothing(s, smoothingSettings));
+  return downsampledSeries.flatMap((s) => applySmoothing(s, smoothingSettings, isMultiMetric));
 }

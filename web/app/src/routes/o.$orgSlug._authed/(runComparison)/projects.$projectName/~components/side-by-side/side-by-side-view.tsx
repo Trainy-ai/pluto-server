@@ -1,6 +1,6 @@
 import { useMemo, useState, useCallback, useRef, useEffect } from "react";
 import type { Run } from "../../~queries/list-runs";
-import { useRunMetricNames, useMetricSummaries } from "../../~queries/metric-summaries";
+import { useRunMetricNames, usePerMetricSummaries } from "../../~queries/metric-summaries";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -463,22 +463,22 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
   const { data: metricNamesData } = useRunMetricNames(organizationId, projectName, selectedRunIds);
   const allMetricNames = useMemo(() => metricNamesData?.metricNames ?? [], [metricNamesData]);
 
-  // Only fetch summaries for expanded metrics (lazy-load to avoid URL-too-long errors)
+  // One query per expanded metric — each is independently cached so expanding
+  // a new metric only fetches that one; previously expanded metrics stay cached.
   const expandedMetricNames = useMemo(
     () => allMetricNames.filter((name) => expandedMetrics[name]),
     [allMetricNames, expandedMetrics],
   );
 
-  const metricSpecs = useMemo(
-    () => expandedMetricNames.flatMap((name) => METRIC_AGGS.map((agg) => ({ logName: name, aggregation: agg }))),
-    [expandedMetricNames],
-  );
-
-  const { data: metricSummariesData } = useMetricSummaries(
+  const { summaries: mergedSummaries } = usePerMetricSummaries(
     organizationId,
     projectName,
     selectedRunIds,
-    metricSpecs,
+    expandedMetricNames,
+  );
+  const metricSummariesData = useMemo(
+    () => ({ summaries: mergedSummaries }),
+    [mergedSummaries],
   );
 
   const {

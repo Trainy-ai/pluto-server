@@ -1,7 +1,7 @@
 // Dashboard view configuration types
 // These types mirror the server-side types in web/server/lib/dashboard-types.ts
 
-export type WidgetType = "chart" | "scatter" | "single-value" | "histogram" | "logs" | "file-series";
+export type WidgetType = "chart" | "scatter" | "single-value" | "histogram" | "logs" | "file-series" | "file-group";
 
 export type AggregationType = "LAST" | "AVG" | "MIN" | "MAX" | "VARIANCE";
 
@@ -57,8 +57,11 @@ export interface SingleValueWidgetConfig extends BaseWidgetConfig {
 // Histogram widget config
 export interface HistogramWidgetConfig extends BaseWidgetConfig {
   metric: string;
-  bins: number;
-  step: "first" | "last" | "all";
+}
+
+// File group widget config (multiple files: histograms, images, videos, audio)
+export interface FileGroupWidgetConfig extends BaseWidgetConfig {
+  files: string[];
 }
 
 // Logs widget config
@@ -79,6 +82,7 @@ export type WidgetConfig =
   | ScatterWidgetConfig
   | SingleValueWidgetConfig
   | HistogramWidgetConfig
+  | FileGroupWidgetConfig
   | LogsWidgetConfig
   | FileSeriesWidgetConfig;
 
@@ -108,6 +112,8 @@ export interface Section {
   name: string;
   collapsed: boolean;
   widgets: Widget[];
+  dynamicPattern?: string;
+  dynamicPatternMode?: "search" | "regex";
 }
 
 // Dashboard settings

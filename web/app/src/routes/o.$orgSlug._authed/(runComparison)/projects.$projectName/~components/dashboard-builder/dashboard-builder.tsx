@@ -1,6 +1,6 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { toast } from "sonner";
-import { PlusIcon, SaveIcon, XIcon, AlertTriangleIcon, RotateCcwIcon, GridIcon, SlidersHorizontalIcon, ArchiveRestoreIcon } from "lucide-react";
+import { PlusIcon, SaveIcon, XIcon, AlertTriangleIcon, RotateCcwIcon, GridIcon, SlidersHorizontalIcon, ArchiveRestoreIcon, ChevronsUpDownIcon, ChevronsDownUpIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -15,6 +15,7 @@ import { SectionContainer, AddSectionButton } from "./section-container";
 import { WidgetGrid } from "./widget-grid";
 import { WidgetRenderer } from "./widget-renderer";
 import { AddWidgetModal } from "./add-widget-modal";
+import { DynamicSectionGrid } from "./dynamic-section-grid";
 import { useDraftSave } from "./use-auto-save";
 import { useNavigationGuard } from "./use-navigation-guard";
 import {
@@ -59,6 +60,9 @@ export function DashboardBuilder({
   const [showDraftRestore, setShowDraftRestore] = useState(false);
   const [fullscreenWidget, setFullscreenWidget] = useState<Widget | null>(null);
   const [coarseMode, setCoarseMode] = useState(true);
+  const [dynamicWidgetCounts, setDynamicWidgetCounts] = useState<Record<string, number>>({});
+
+  const selectedRunIds = useMemo(() => Object.keys(selectedRuns), [selectedRuns]);
 
   const updateMutation = useUpdateDashboardView(organizationId, projectName);
 
@@ -86,11 +90,17 @@ export function DashboardBuilder({
     return () => observer.disconnect();
   }, []);
 
-  // Update config when view changes — open all sections by default
+  // Update config when view changes — preserve current collapse state, default new sections to open
   useEffect(() => {
-    setConfig({
-      ...view.config,
-      sections: view.config.sections.map((s) => ({ ...s, collapsed: false })),
+    setConfig((prev) => {
+      const collapseState = new Map(prev.sections.map((s) => [s.id, s.collapsed]));
+      return {
+        ...view.config,
+        sections: view.config.sections.map((s) => ({
+          ...s,
+          collapsed: collapseState.get(s.id) ?? false,
+        })),
+      };
     });
     setHasChanges(false);
   }, [view.config]);
@@ -174,6 +184,15 @@ export function DashboardBuilder({
     setShowCancelConfirm(false);
   }, [view.config, clearDraft]);
 
+  const toggleSectionCollapse = useCallback((sectionId: string) => {
+    setConfig((prev) => ({
+      ...prev,
+      sections: prev.sections.map((s) =>
+        s.id === sectionId ? { ...s, collapsed: !s.collapsed } : s
+      ),
+    }));
+  }, []);
+
   const updateSection = useCallback((sectionId: string, section: Section) => {
     setConfig((prev) => ({
       ...prev,
@@ -192,12 +211,14 @@ export function DashboardBuilder({
     setHasChanges(true);
   }, []);
 
-  const addSection = useCallback((name: string) => {
+  const addSection = useCallback((name: string, dynamicPattern?: string, dynamicPatternMode?: "search" | "regex") => {
     const newSection: Section = {
       id: `section-${generateId()}`,
       name,
       collapsed: false,
       widgets: [],
+      dynamicPattern,
+      dynamicPatternMode,
     };
 
     setConfig((prev) => ({
@@ -267,7 +288,6 @@ export function DashboardBuilder({
         ),
       })),
     }));
-    setHasChanges(true);
   }, []);
 
   const resetAllWidgetBounds = useCallback(() => {
@@ -284,7 +304,25 @@ export function DashboardBuilder({
         }),
       })),
     }));
-    setHasChanges(true);
+  }, []);
+
+  const allCollapsed = config.sections.length > 0 && config.sections.every((s) => s.collapsed);
+
+  const toggleAllSections = useCallback(() => {
+    setConfig((prev) => ({
+      ...prev,
+      sections: prev.sections.map((s) => ({
+        ...s,
+        collapsed: !prev.sections.every((sec) => sec.collapsed),
+      })),
+    }));
+  }, []);
+
+  const handleDynamicWidgetCount = useCallback((sectionId: string, count: number) => {
+    setDynamicWidgetCounts((prev) => {
+      if (prev[sectionId] === count) return prev;
+      return { ...prev, [sectionId]: count };
+    });
   }, []);
 
   const handleEditWidgetSave = useCallback(
@@ -327,16 +365,39 @@ export function DashboardBuilder({
           )}
         </div>
         <div className="flex items-center gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-8 text-xs text-muted-foreground"
-            onClick={resetAllWidgetBounds}
-            title="Reset all Y-axis bounds"
-          >
-            <RotateCcwIcon className="mr-1.5 size-3.5" />
-            Reset Bounds
-          </Button>
+          {config.sections.length > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 text-xs text-muted-foreground"
+              onClick={resetAllWidgetBounds}
+              title="Reset all Y-axis bounds"
+            >
+              <RotateCcwIcon className="mr-1.5 size-3.5" />
+              Reset Bounds
+            </Button>
+          )}
+          {config.sections.length >= 2 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 text-xs text-muted-foreground"
+              onClick={toggleAllSections}
+              title={allCollapsed ? "Expand all sections" : "Collapse all sections"}
+            >
+              {allCollapsed ? (
+                <>
+                  <ChevronsUpDownIcon className="mr-1.5 size-3.5" />
+                  Expand All
+                </>
+              ) : (
+                <>
+                  <ChevronsDownUpIcon className="mr-1.5 size-3.5" />
+                  Collapse All
+                </>
+              )}
+            </Button>
+          )}
           {isEditing ? (
             <>
               {/* Coarse / Fine toggle */}
@@ -389,13 +450,12 @@ export function DashboardBuilder({
             This dashboard is empty. Start by adding a section.
           </p>
           {isEditing && (
-            <Button
-              variant="outline"
-              onClick={() => addSection("New Section")}
-            >
-              <PlusIcon className="mr-2 size-4" />
-              Add Section
-            </Button>
+            <AddSectionButton
+              onAddSection={addSection}
+              organizationId={organizationId}
+              projectName={projectName}
+              selectedRunIds={selectedRunIds}
+            />
           )}
         </div>
       ) : (
@@ -405,37 +465,61 @@ export function DashboardBuilder({
               key={section.id}
               section={section}
               onUpdate={(s) => updateSection(section.id, s)}
+              onToggleCollapse={() => toggleSectionCollapse(section.id)}
               onDelete={() => deleteSection(section.id)}
               onAddWidget={() => setAddWidgetSectionId(section.id)}
               isEditing={isEditing}
+              dynamicWidgetCount={dynamicWidgetCounts[section.id]}
+              organizationId={organizationId}
+              projectName={projectName}
+              selectedRunIds={selectedRunIds}
             >
-              <WidgetGrid
-                widgets={section.widgets}
-                onLayoutChange={(widgets) => updateWidgets(section.id, widgets)}
-                onEditWidget={(widget) => editWidget(section.id, widget)}
-                onDeleteWidget={(widgetId) => deleteWidget(section.id, widgetId)}
-                onFullscreenWidget={setFullscreenWidget}
-                onUpdateWidgetBounds={updateWidgetBounds}
-                isEditing={isEditing}
-                coarseMode={coarseMode}
-                containerWidth={containerWidth - 48} // Account for padding
-                renderWidget={(widget, onDataRange, onResetBounds) => (
-                  <WidgetRenderer
-                    widget={widget}
-                    groupedMetrics={groupedMetrics}
-                    selectedRuns={selectedRuns}
-                    organizationId={organizationId}
-                    projectName={projectName}
-                    onDataRange={onDataRange}
-                    onResetBounds={onResetBounds}
-                  />
-                )}
-              />
+              {section.dynamicPattern ? (
+                <DynamicSectionGrid
+                  sectionId={section.id}
+                  pattern={section.dynamicPattern}
+                  patternMode={section.dynamicPatternMode}
+                  organizationId={organizationId}
+                  projectName={projectName}
+                  selectedRunIds={selectedRunIds}
+                  groupedMetrics={groupedMetrics}
+                  selectedRuns={selectedRuns}
+                  onWidgetCountChange={(count) => handleDynamicWidgetCount(section.id, count)}
+                />
+              ) : (
+                <WidgetGrid
+                  widgets={section.widgets}
+                  onLayoutChange={(widgets) => updateWidgets(section.id, widgets)}
+                  onEditWidget={(widget) => editWidget(section.id, widget)}
+                  onDeleteWidget={(widgetId) => deleteWidget(section.id, widgetId)}
+                  onFullscreenWidget={setFullscreenWidget}
+                  onUpdateWidgetBounds={updateWidgetBounds}
+                  isEditing={isEditing}
+                  coarseMode={coarseMode}
+                  containerWidth={containerWidth - 48} // Account for padding
+                  renderWidget={(widget, onDataRange, onResetBounds) => (
+                    <WidgetRenderer
+                      widget={widget}
+                      groupedMetrics={groupedMetrics}
+                      selectedRuns={selectedRuns}
+                      organizationId={organizationId}
+                      projectName={projectName}
+                      onDataRange={onDataRange}
+                      onResetBounds={onResetBounds}
+                    />
+                  )}
+                />
+              )}
             </SectionContainer>
           ))}
 
           {isEditing && (
-            <AddSectionButton onAddSection={addSection} />
+            <AddSectionButton
+              onAddSection={addSection}
+              organizationId={organizationId}
+              projectName={projectName}
+              selectedRunIds={selectedRunIds}
+            />
           )}
         </div>
       )}
@@ -450,11 +534,10 @@ export function DashboardBuilder({
           }
         }}
         onAdd={editingWidget ? handleEditWidgetSave : (w) => addWidgetSectionId && addWidget(addWidgetSectionId, w)}
-        groupedMetrics={groupedMetrics}
         organizationId={organizationId}
         projectName={projectName}
         editWidget={editingWidget ?? undefined}
-        selectedRunIds={Object.keys(selectedRuns)}
+        selectedRunIds={selectedRunIds}
       />
 
       {/* Fullscreen Chart Dialog */}
@@ -468,7 +551,9 @@ export function DashboardBuilder({
             fullscreenWidget.config.title ||
             (fullscreenWidget.type === "chart"
               ? (fullscreenWidget.config as ChartWidgetConfig).metrics[0] || "Chart"
-              : "Widget")
+              : fullscreenWidget.type === "file-group"
+                ? `${(fullscreenWidget.config as { files?: string[] }).files?.length ?? 0} files`
+                : "Widget")
           }
           yMin={fullscreenWidget.type === "chart" ? (fullscreenWidget.config as ChartWidgetConfig).yMin : undefined}
           yMax={fullscreenWidget.type === "chart" ? (fullscreenWidget.config as ChartWidgetConfig).yMax : undefined}

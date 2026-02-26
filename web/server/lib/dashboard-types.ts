@@ -8,6 +8,7 @@ export const WidgetTypeSchema = z.enum([
   "histogram",
   "logs",
   "file-series",
+  "file-group",
 ]);
 export type WidgetType = z.infer<typeof WidgetTypeSchema>;
 
@@ -85,10 +86,14 @@ export type SingleValueWidgetConfig = z.infer<typeof SingleValueWidgetConfigSche
 // Histogram widget config
 export const HistogramWidgetConfigSchema = BaseWidgetConfigSchema.extend({
   metric: z.string(),
-  bins: z.number().positive().default(50),
-  step: z.enum(["first", "last", "all"]).default("last"),
 });
 export type HistogramWidgetConfig = z.infer<typeof HistogramWidgetConfigSchema>;
+
+// File group widget config (multiple files: histograms, images, videos, audio)
+export const FileGroupWidgetConfigSchema = BaseWidgetConfigSchema.extend({
+  files: z.array(z.string()), // literal names or "glob:..."/"regex:..." patterns
+});
+export type FileGroupWidgetConfig = z.infer<typeof FileGroupWidgetConfigSchema>;
 
 // Logs widget config
 export const LogsWidgetConfigSchema = BaseWidgetConfigSchema.extend({
@@ -108,14 +113,21 @@ export const FileSeriesWidgetConfigSchema = BaseWidgetConfigSchema.extend({
 });
 export type FileSeriesWidgetConfig = z.infer<typeof FileSeriesWidgetConfigSchema>;
 
-// Union of all widget configs
+// Union of all widget configs.
+// IMPORTANT: FileSeriesWidgetConfigSchema must come BEFORE LogsWidgetConfigSchema
+// because both share `logName`. Zod's union tries schemas in order and strips
+// unknown fields on match — if LogsWidgetConfig matches first (logName present,
+// maxLines gets default), it strips `mediaType`, causing the superRefine to fail.
+// Placing file-series first ensures `mediaType` (required) fails for logs configs,
+// so Zod correctly falls through to LogsWidgetConfig.
 export const WidgetConfigSchema = z.union([
   ChartWidgetConfigSchema,
   ScatterWidgetConfigSchema,
   SingleValueWidgetConfigSchema,
+  FileGroupWidgetConfigSchema,
   HistogramWidgetConfigSchema,
-  LogsWidgetConfigSchema,
   FileSeriesWidgetConfigSchema,
+  LogsWidgetConfigSchema,
 ]);
 export type WidgetConfig = z.infer<typeof WidgetConfigSchema>;
 
@@ -153,6 +165,9 @@ export const WidgetSchema = z.object({
     case "histogram":
       schema = HistogramWidgetConfigSchema;
       break;
+    case "file-group":
+      schema = FileGroupWidgetConfigSchema;
+      break;
     case "logs":
       schema = LogsWidgetConfigSchema;
       break;
@@ -180,6 +195,8 @@ export const SectionSchema = z.object({
   name: z.string(),
   collapsed: z.boolean().default(false),
   widgets: z.array(WidgetSchema).default([]),
+  dynamicPattern: z.string().optional(),
+  dynamicPatternMode: z.enum(["search", "regex"]).optional(),
 });
 export type Section = z.infer<typeof SectionSchema>;
 
@@ -225,8 +242,10 @@ export const createDefaultWidgetConfig = (type: WidgetType): WidgetConfig => {
     case "histogram":
       return {
         metric: "",
-        bins: 50,
-        step: "last",
+      };
+    case "file-group":
+      return {
+        files: [],
       };
     case "logs":
       return {

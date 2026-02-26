@@ -13,6 +13,7 @@ import { distinctColumnKeysProcedure, searchColumnKeysProcedure } from "./procs/
 import { getLogsByRunIdsProcedure } from "./procs/get-logs-by-run-ids";
 import { getFieldValuesProcedure } from "./procs/get-field-values";
 import { distinctMetricNamesProcedure } from "./procs/distinct-metric-names";
+import { distinctFileLogNamesProcedure } from "./procs/distinct-file-log-names";
 import { metricSummariesProcedure } from "./procs/metric-summaries";
 
 export const runsRouter = router({
@@ -29,6 +30,7 @@ export const runsRouter = router({
   getLogsByRunIds: getLogsByRunIdsProcedure,
   getFieldValues: getFieldValuesProcedure,
   distinctMetricNames: distinctMetricNamesProcedure,
+  distinctFileLogNames: distinctFileLogNamesProcedure,
   metricSummaries: metricSummariesProcedure,
   // Routers
   data: dataRouter,
