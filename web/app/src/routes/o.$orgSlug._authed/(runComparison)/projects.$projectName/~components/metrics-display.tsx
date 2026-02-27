@@ -194,7 +194,6 @@ export const MetricsDisplay = memo(function MetricsDisplay({
             selectedRuns={selectedRuns}
             organizationId={organizationId}
             projectName={projectName}
-            searchState={searchState}
           />
         </div>
       </ChartSyncProvider>

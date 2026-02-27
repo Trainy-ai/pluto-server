@@ -31,7 +31,6 @@ import {
 } from "../../~types/dashboard-types";
 import type { GroupedMetrics } from "@/lib/grouping/types";
 import type { SelectedRunWithColor } from "../../~hooks/use-selected-runs";
-import { searchUtils, type SearchState } from "../../~lib/search-utils";
 
 interface DashboardBuilderProps {
   view: DashboardView;
@@ -40,7 +39,6 @@ interface DashboardBuilderProps {
   organizationId: string;
   projectName: string;
   onClose?: () => void;
-  searchState?: SearchState;
 }
 
 export function DashboardBuilder({
@@ -50,7 +48,6 @@ export function DashboardBuilder({
   organizationId,
   projectName,
   onClose,
-  searchState,
 }: DashboardBuilderProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(1200);
@@ -107,26 +104,6 @@ export function DashboardBuilder({
     });
     setHasChanges(false);
   }, [view.config]);
-
-  // Filter sections/widgets based on search state
-  const filteredSections = useMemo(() => {
-    if (!searchState || !searchState.query.trim()) {
-      return config.sections;
-    }
-    return config.sections
-      .map((section) => ({
-        ...section,
-        widgets: section.widgets.filter((widget) =>
-          searchUtils.doesWidgetMatchSearch(widget, searchState)
-        ),
-      }))
-      .filter((section) =>
-        // Keep dynamic sections (DynamicSectionGrid handles its own filtering)
-        section.dynamicPattern || section.widgets.length > 0
-      );
-  }, [config.sections, searchState]);
-
-  const isSearching = !!searchState?.query.trim();
 
   // Show draft restore prompt when entering edit mode with a pending draft
   const handleEnterEditMode = useCallback(() => {
@@ -489,14 +466,12 @@ export function DashboardBuilder({
       </div>
 
       {/* Sections */}
-      {filteredSections.length === 0 ? (
+      {config.sections.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 text-center">
           <p className="text-muted-foreground mb-4">
-            {isSearching
-              ? "No widgets match your search."
-              : "This dashboard is empty. Start by adding a section."}
+            This dashboard is empty. Start by adding a section.
           </p>
-          {isEditing && !isSearching && (
+          {isEditing && (
             <AddSectionButton
               onAddSection={addSection}
               organizationId={organizationId}
@@ -507,7 +482,7 @@ export function DashboardBuilder({
         </div>
       ) : (
         <div className="space-y-4">
-          {filteredSections.map((section) => (
+          {config.sections.map((section) => (
             <SectionContainer
               key={section.id}
               section={section}
@@ -531,7 +506,6 @@ export function DashboardBuilder({
                   selectedRunIds={selectedRunIds}
                   groupedMetrics={groupedMetrics}
                   selectedRuns={selectedRuns}
-                  searchState={searchState}
                   onWidgetCountChange={(count) => handleDynamicWidgetCount(section.id, count)}
                 />
               ) : (

@@ -4,11 +4,10 @@ import { VirtualizedChart } from "@/components/core/virtualized-chart";
 import { useDynamicSectionWidgets } from "./use-dynamic-section";
 import { WidgetRenderer } from "./widget-renderer";
 import { ChartFullscreenDialog } from "@/components/charts/chart-fullscreen-dialog";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect } from "react";
 import type { Widget, ChartWidgetConfig } from "../../~types/dashboard-types";
 import type { GroupedMetrics } from "@/lib/grouping/types";
 import type { SelectedRunWithColor } from "../../~hooks/use-selected-runs";
-import { searchUtils, type SearchState } from "../../~lib/search-utils";
 
 interface DynamicSectionGridProps {
   sectionId: string;
@@ -19,7 +18,6 @@ interface DynamicSectionGridProps {
   selectedRunIds: string[];
   groupedMetrics: GroupedMetrics;
   selectedRuns: Record<string, SelectedRunWithColor>;
-  searchState?: SearchState;
   onWidgetCountChange?: (count: number) => void;
 }
 
@@ -32,7 +30,6 @@ export function DynamicSectionGrid({
   selectedRunIds,
   groupedMetrics,
   selectedRuns,
-  searchState,
   onWidgetCountChange,
 }: DynamicSectionGridProps) {
   const { dynamicWidgets, isLoading } = useDynamicSectionWidgets(
@@ -44,20 +41,11 @@ export function DynamicSectionGrid({
     selectedRunIds,
   );
 
-  const filteredWidgets = useMemo(() => {
-    if (!searchState || !searchState.query.trim()) {
-      return dynamicWidgets;
-    }
-    return dynamicWidgets.filter((widget) =>
-      searchUtils.doesWidgetMatchSearch(widget, searchState)
-    );
-  }, [dynamicWidgets, searchState]);
-
   const [fullscreenWidget, setFullscreenWidget] = useState<Widget | null>(null);
 
   useEffect(() => {
-    onWidgetCountChange?.(filteredWidgets.length);
-  }, [filteredWidgets.length, onWidgetCountChange]);
+    onWidgetCountChange?.(dynamicWidgets.length);
+  }, [dynamicWidgets.length, onWidgetCountChange]);
 
   if (isLoading) {
     return (
@@ -69,14 +57,10 @@ export function DynamicSectionGrid({
     );
   }
 
-  if (filteredWidgets.length === 0) {
+  if (dynamicWidgets.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-8 text-center text-muted-foreground">
-        <p>
-          {searchState?.query.trim()
-            ? "No widgets match your search."
-            : `No metrics or files match the pattern "${pattern}"`}
-        </p>
+        <p>No metrics or files match the pattern &quot;{pattern}&quot;</p>
       </div>
     );
   }
@@ -84,7 +68,7 @@ export function DynamicSectionGrid({
   return (
     <>
       <div className="grid grid-cols-2 gap-4">
-        {filteredWidgets.map((widget) => (
+        {dynamicWidgets.map((widget) => (
           <div
             key={widget.id}
             className="relative min-h-[300px] rounded-lg border bg-card p-2 cursor-pointer"
