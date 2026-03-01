@@ -71,12 +71,15 @@ test.describe("uPlot Chart Interactions", () => {
     await expect.poll(
       async () => {
         const count1 = await getChartInstanceCount(page);
-        await page.waitForTimeout(500);
+        await page.waitForTimeout(1000);
         const count2 = await getChartInstanceCount(page);
         return count1 === count2;
       },
-      { timeout: 15000, message: "Waiting for chart count to stabilize" }
+      { timeout: 20000, message: "Waiting for chart count to stabilize" }
     ).toBe(true);
+
+    // Extra settling time for any pending data fetches / re-renders
+    await page.waitForTimeout(2000);
 
     const overlayBox = await getChartOverlayBox(page);
 

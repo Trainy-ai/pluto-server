@@ -20,7 +20,7 @@ import pluto
 
 
 def main():
-    # Pass settings as a dict so pluto.init()'s setup() reads PLUTO_API_TOKEN
+    # Pass settings as a dict so pluto.init()'s setup() reads PLUTO_API_KEY
     # from the environment. Passing a Settings object skips env var reading.
     settings_dict = {}
     if os.getenv("TEST_LOCAL", "").lower() in ("true", "1", "yes"):

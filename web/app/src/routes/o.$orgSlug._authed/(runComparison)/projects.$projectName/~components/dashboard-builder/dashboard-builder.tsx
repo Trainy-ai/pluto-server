@@ -31,6 +31,7 @@ import {
 } from "../../~types/dashboard-types";
 import type { GroupedMetrics } from "@/lib/grouping/types";
 import type { SelectedRunWithColor } from "../../~hooks/use-selected-runs";
+import { searchUtils, type SearchState } from "../../~lib/search-utils";
 
 interface DashboardBuilderProps {
   view: DashboardView;
@@ -39,6 +40,7 @@ interface DashboardBuilderProps {
   organizationId: string;
   projectName: string;
   onClose?: () => void;
+  searchState?: SearchState;
 }
 
 export function DashboardBuilder({
@@ -48,6 +50,7 @@ export function DashboardBuilder({
   organizationId,
   projectName,
   onClose,
+  searchState,
 }: DashboardBuilderProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(1200);
@@ -104,6 +107,31 @@ export function DashboardBuilder({
     });
     setHasChanges(false);
   }, [view.config]);
+
+  // Filter sections/widgets based on search state
+  const filteredSections = useMemo(() => {
+    if (!searchState || !searchState.query.trim()) {
+      return config.sections;
+    }
+    return config.sections
+      .map((section) => ({
+        ...section,
+        widgets: section.widgets.filter((widget) =>
+          searchUtils.doesWidgetMatchSearch(widget, searchState)
+        ),
+      }))
+      .filter((section) => {
+        if (section.dynamicPattern) {
+          // Dynamic sections: use reported widget count (0 or undefined means hide)
+          return (dynamicWidgetCounts[section.id] ?? 0) > 0;
+        }
+        return section.widgets.length > 0;
+      });
+  }, [config.sections, searchState, dynamicWidgetCounts]);
+
+  const isSearching = !!searchState?.query.trim();
+  const isSearchingRef = useRef(false);
+  isSearchingRef.current = isSearching;
 
   // Show draft restore prompt when entering edit mode with a pending draft
   const handleEnterEditMode = useCallback(() => {
@@ -250,6 +278,9 @@ export function DashboardBuilder({
   );
 
   const updateWidgets = useCallback((sectionId: string, widgets: Widget[]) => {
+    // Skip layout updates while searching — the filtered widget list passed
+    // to WidgetGrid would permanently remove hidden widgets from config
+    if (isSearchingRef.current) return;
     setConfig((prev) => ({
       ...prev,
       sections: prev.sections.map((s) =>
@@ -466,12 +497,14 @@ export function DashboardBuilder({
       </div>
 
       {/* Sections */}
-      {config.sections.length === 0 ? (
+      {filteredSections.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 text-center">
           <p className="text-muted-foreground mb-4">
-            This dashboard is empty. Start by adding a section.
+            {isSearching
+              ? "No widgets match your search."
+              : "This dashboard is empty. Start by adding a section."}
           </p>
-          {isEditing && (
+          {isEditing && !isSearching && (
             <AddSectionButton
               onAddSection={addSection}
               organizationId={organizationId}
@@ -482,7 +515,7 @@ export function DashboardBuilder({
         </div>
       ) : (
         <div className="space-y-4">
-          {config.sections.map((section) => (
+          {filteredSections.map((section) => (
             <SectionContainer
               key={section.id}
               section={section}
@@ -506,6 +539,7 @@ export function DashboardBuilder({
                   selectedRunIds={selectedRunIds}
                   groupedMetrics={groupedMetrics}
                   selectedRuns={selectedRuns}
+                  searchState={searchState}
                   onWidgetCountChange={(count) => handleDynamicWidgetCount(section.id, count)}
                 />
               ) : (

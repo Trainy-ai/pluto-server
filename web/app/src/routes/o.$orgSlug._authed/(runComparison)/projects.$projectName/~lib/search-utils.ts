@@ -1,4 +1,5 @@
 import type { GroupedMetrics } from "@/lib/grouping/types";
+import type { Widget, ChartWidgetConfig, ScatterWidgetConfig, SingleValueWidgetConfig, HistogramWidgetConfig, FileGroupWidgetConfig, FileSeriesWidgetConfig, LogsWidgetConfig } from "../~types/dashboard-types";
 import { fuzzyFilter } from "@/lib/fuzzy-search";
 
 /**
@@ -146,5 +147,81 @@ export const searchUtils = {
     return sortedGroups.filter(([groupKey]) =>
       searchUtils.doesGroupMatch(groupKey, searchIndex, searchState),
     );
+  },
+
+  /**
+   * Extracts searchable terms from a dashboard widget config.
+   * Returns lowercased strings for title, metric names, and log names.
+   */
+  getWidgetSearchTerms(widget: Widget): string[] {
+    const terms: string[] = [];
+
+    if (widget.config.title) {
+      terms.push(widget.config.title.toLowerCase());
+    }
+
+    switch (widget.type) {
+      case "chart": {
+        const config = widget.config as ChartWidgetConfig;
+        if (config.metrics) {
+          terms.push(
+            ...config.metrics.map((m) =>
+              m.replace(/^(glob:|regex:)/, "").toLowerCase(),
+            ),
+          );
+        }
+        break;
+      }
+      case "scatter": {
+        const config = widget.config as ScatterWidgetConfig;
+        if (config.xMetric) terms.push(config.xMetric.toLowerCase());
+        if (config.yMetric) terms.push(config.yMetric.toLowerCase());
+        break;
+      }
+      case "single-value":
+      case "histogram": {
+        const config = widget.config as SingleValueWidgetConfig | HistogramWidgetConfig;
+        if (config.metric) terms.push(config.metric.toLowerCase());
+        break;
+      }
+      case "file-group": {
+        const config = widget.config as FileGroupWidgetConfig;
+        if (config.files) {
+          terms.push(
+            ...config.files.map((f) =>
+              f.replace(/^(glob:|regex:)/, "").toLowerCase(),
+            ),
+          );
+        }
+        break;
+      }
+      case "file-series":
+      case "logs": {
+        const config = widget.config as FileSeriesWidgetConfig | LogsWidgetConfig;
+        if (config.logName) terms.push(config.logName.toLowerCase());
+        break;
+      }
+    }
+
+    return terms;
+  },
+
+  /**
+   * Checks whether a widget matches the current search state.
+   * Uses substring matching (not fuzzy) for precise widget filtering.
+   */
+  doesWidgetMatchSearch(widget: Widget, searchState: SearchState): boolean {
+    if (!searchState.query.trim()) return true;
+    if (searchState.isRegex && !searchState.regex) return false;
+
+    const terms = searchUtils.getWidgetSearchTerms(widget);
+    if (terms.length === 0) return false;
+
+    if (searchState.isRegex && searchState.regex) {
+      return terms.some((term) => searchState.regex!.test(term));
+    }
+
+    const query = searchState.query.toLowerCase();
+    return terms.some((term) => term.includes(query));
   },
 };
