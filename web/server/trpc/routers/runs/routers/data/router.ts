@@ -8,6 +8,7 @@ import { graphBatchProcedure } from "./procs/graph-batch";
 import { logsProcedure } from "./procs/logs";
 import { modelGraphProcedure } from "./procs/model-graph";
 import { tableProcedure } from "./procs/table";
+import { metricValuesProcedure } from "./procs/metric-values";
 export const dataRouter = router({
   files: filesProcedure,
   fileTree: fileTreeProcedure,
@@ -18,4 +19,5 @@ export const dataRouter = router({
   logs: logsProcedure,
   modelGraph: modelGraphProcedure,
   table: tableProcedure,
+  metricValues: metricValuesProcedure,
 });

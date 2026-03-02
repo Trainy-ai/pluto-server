@@ -93,6 +93,71 @@ describe("smoothData", () => {
     });
   });
 
+  describe("mean preservation", () => {
+    // Generate a longer dataset with known mean to test mean preservation.
+    // This is the key invariant: smoothing should not shift the overall level
+    // of the data. A violation here would manifest as the smoothed line
+    // appearing at a different vertical position than the raw data.
+    const longX = Array.from({ length: 200 }, (_, i) => i);
+
+    // gpu_util-like data: oscillating around 87 with noise
+    const gpuUtilData = longX.map(
+      (_, i) => 80 + 15 * Math.sin(i * 0.3) * 0.5 + 7.5,
+    );
+    const gpuUtilMean =
+      gpuUtilData.reduce((a, b) => a + b, 0) / gpuUtilData.length;
+
+    // loss-like data: exponential decay from ~2.0 to ~0.2
+    const lossData = longX.map(
+      (_, i) => Math.exp(-i / 60) * 2 + 0.05,
+    );
+    const lossMean =
+      lossData.reduce((a, b) => a + b, 0) / lossData.length;
+
+    const algorithms: Array<{ name: string; algo: string; param: number }> = [
+      { name: "gaussian (sigma=2)", algo: "gaussian", param: 2 },
+      { name: "gaussian (sigma=5)", algo: "gaussian", param: 5 },
+      { name: "running (window=5)", algo: "running", param: 5 },
+      { name: "running (window=15)", algo: "running", param: 15 },
+      { name: "ema (alpha=0.3)", algo: "ema", param: 0.3 },
+      { name: "ema (alpha=0.6)", algo: "ema", param: 0.6 },
+      { name: "twema (halfLife=5)", algo: "twema", param: 5 },
+    ];
+
+    for (const { name, algo, param } of algorithms) {
+      it(`${name} preserves mean of stationary data (gpu_util-like)`, () => {
+        const smoothed = smoothData(
+          longX,
+          gpuUtilData,
+          algo as "gaussian" | "running" | "ema" | "twema",
+          param,
+        );
+        const smoothedMean =
+          smoothed.reduce((a, b) => a + b, 0) / smoothed.length;
+        // Mean should stay within 10% of the original
+        const relativeShift =
+          Math.abs(smoothedMean - gpuUtilMean) /
+          Math.max(Math.abs(gpuUtilMean), 1);
+        expect(relativeShift).toBeLessThan(0.1);
+      });
+
+      it(`${name} preserves mean of decaying data (loss-like)`, () => {
+        const smoothed = smoothData(
+          longX,
+          lossData,
+          algo as "gaussian" | "running" | "ema" | "twema",
+          param,
+        );
+        const smoothedMean =
+          smoothed.reduce((a, b) => a + b, 0) / smoothed.length;
+        const relativeShift =
+          Math.abs(smoothedMean - lossMean) /
+          Math.max(Math.abs(lossMean), 1);
+        expect(relativeShift).toBeLessThan(0.1);
+      });
+    }
+  });
+
   describe("edge cases", () => {
     it("handles empty arrays", () => {
       const result = smoothData([], [], "ema", 0.6);
