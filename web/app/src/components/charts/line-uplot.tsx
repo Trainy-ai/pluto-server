@@ -116,6 +116,33 @@ const DEFAULT_SYNC_KEY = "uplot-global-sync";
 
 
 // ============================
+// Helpers
+// ============================
+
+/**
+ * Compute data min/max from uPlot series data when uPlot passes null bounds
+ * (happens when auto:false is set, since uPlot skips data range accumulation).
+ * For log scale, only positive values are considered.
+ */
+function computeFallbackRange(u: uPlot, isLog: boolean): [number, number] | null {
+  let min = Infinity;
+  let max = -Infinity;
+  for (let i = 1; i < u.data.length; i++) {
+    const s = u.data[i] as (number | null | undefined)[];
+    if (!s) { continue; }
+    for (let j = 0; j < s.length; j++) {
+      const v = s[j];
+      if (v != null && Number.isFinite(v) && (!isLog || v > 0)) {
+        if (v < min) { min = v; }
+        if (v > max) { max = v; }
+      }
+    }
+  }
+  return min > max ? null : [min, max];
+}
+
+
+// ============================
 // Main Component
 // ============================
 
@@ -627,9 +654,12 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             ? {
                 distr: 3,
                 auto: false,
-                range: (u: uPlot, dataMin: number, dataMax: number): uPlot.Range.MinMax => {
-                  // For log scale, dataMin/dataMax are already log-filtered (positive only)
-                  // Apply manual bounds, falling back to data range
+                range: (u: uPlot, dataMin: number | null, dataMax: number | null): uPlot.Range.MinMax => {
+                  if (dataMin == null || dataMax == null) {
+                    const fallback = computeFallbackRange(u, true);
+                    if (!fallback) { return [yMinProp ?? 1, yMaxProp ?? 10]; }
+                    [dataMin, dataMax] = fallback;
+                  }
                   return [yMinProp ?? dataMin, yMaxProp ?? dataMax];
                 },
               }
@@ -637,7 +667,12 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           : (yMinProp != null || yMaxProp != null)
             ? {
                 auto: false,
-                range: (u: uPlot, dataMin: number, dataMax: number): uPlot.Range.MinMax => {
+                range: (u: uPlot, dataMin: number | null, dataMax: number | null): uPlot.Range.MinMax => {
+                  if (dataMin == null || dataMax == null) {
+                    const fallback = computeFallbackRange(u, false);
+                    if (!fallback) { return [yMinProp ?? 0, yMaxProp ?? 1]; }
+                    [dataMin, dataMax] = fallback;
+                  }
                   const range = dataMax - dataMin;
                   const padding = Math.max(range * 0.05, Math.abs(dataMax) * 0.02, 0.1);
                   const autoMin = dataMin >= 0 ? Math.max(0, dataMin - padding) : dataMin - padding;
