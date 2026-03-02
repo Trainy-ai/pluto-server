@@ -35,6 +35,8 @@ interface WidgetRendererProps {
   onDataRange?: (dataMin: number, dataMax: number) => void;
   /** Callback fired on double-click to reset Y-axis bounds for this chart */
   onResetBounds?: () => void;
+  /** When provided, reads line settings from this runId instead of the "full" key */
+  settingsRunId?: string;
 }
 
 export function WidgetRenderer({
@@ -45,6 +47,7 @@ export function WidgetRenderer({
   projectName,
   onDataRange,
   onResetBounds,
+  settingsRunId,
 }: WidgetRendererProps) {
   switch (widget.type) {
     case "chart":
@@ -57,6 +60,7 @@ export function WidgetRenderer({
           projectName={projectName}
           onDataRange={onDataRange}
           onResetBounds={onResetBounds}
+          settingsRunId={settingsRunId}
         />
       );
     case "histogram":
@@ -95,6 +99,7 @@ function ChartWidget({
   projectName,
   onDataRange,
   onResetBounds,
+  settingsRunId,
 }: {
   config: ChartWidgetConfig;
   groupedMetrics: GroupedMetrics;
@@ -103,6 +108,7 @@ function ChartWidget({
   projectName: string;
   onDataRange?: (dataMin: number, dataMax: number) => void;
   onResetBounds?: () => void;
+  settingsRunId?: string;
 }) {
   // Build lines array from selected runs
   const lines = useMemo(() => {
@@ -250,8 +256,9 @@ function ChartWidget({
         yMax={config.yMax}
         onDataRange={onDataRange}
         onResetBounds={onResetBounds}
-        logXAxis={config.xAxisScale === "log"}
-        logYAxis={config.yAxisScale === "log"}
+        logXAxis={config.xAxisScale === "log" ? true : undefined}
+        logYAxis={config.yAxisScale === "log" ? true : undefined}
+        settingsRunId={settingsRunId}
       />
     </div>
   );

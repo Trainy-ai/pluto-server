@@ -134,7 +134,6 @@ const LineSettings = ({
       <Drawer
         direction="right"
         onDrag={(e) => e.preventDefault()}
-        modal={false}
       >
         <DrawerTrigger asChild>
           <Button
@@ -365,6 +364,53 @@ const LineSettings = ({
                     className="transition-colors data-[state=checked]:bg-primary"
                   />
                 </div>
+              </div>
+            </SettingsSection>
+
+            <SettingsSection
+              title="Performance"
+              description="Settings to improve chart rendering performance"
+            >
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Label
+                      htmlFor="max-points"
+                      className="flex items-center gap-1.5 text-sm"
+                    >
+                      Max points displayed
+                      <InfoTooltip
+                        title="Display Resolution"
+                        description="Limits the number of data points drawn per series for faster rendering. The full dataset is still loaded — only the display is thinned using LTTB. Shaded min/max envelope bands preserve anomalies (spikes/dips) even at low point counts."
+                        link={{
+                          url: "https://skemman.is/bitstream/1946/15343/3/SS_MSthesis.pdf",
+                          label: "Learn about LTTB algorithm",
+                        }}
+                      />
+                    </Label>
+                  </div>
+                  <span className="rounded bg-muted px-2 py-0.5 text-sm font-medium">
+                    {settings.maxPointsPerSeries === 0
+                      ? "No limit"
+                      : settings.maxPointsPerSeries}
+                  </span>
+                </div>
+                <Select
+                  value={String(settings.maxPointsPerSeries)}
+                  onValueChange={(value) =>
+                    updateSettings("maxPointsPerSeries", Number(value))
+                  }
+                >
+                  <SelectTrigger id="max-points" className="h-9 rounded-md border border-input text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="rounded-md border border-input">
+                    <SelectItem value="500">500 points (fastest)</SelectItem>
+                    <SelectItem value="2000">2,000 points (recommended)</SelectItem>
+                    <SelectItem value="5000">5,000 points (detailed)</SelectItem>
+                    <SelectItem value="0">All points (may be slow)</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
             </SettingsSection>
 

@@ -660,7 +660,10 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
                     if (!fallback) { return [yMinProp ?? 1, yMaxProp ?? 10]; }
                     [dataMin, dataMax] = fallback;
                   }
-                  return [yMinProp ?? dataMin, yMaxProp ?? dataMax];
+                  let lo = yMinProp ?? dataMin;
+                  let hi = yMaxProp ?? dataMax;
+                  if (lo >= hi) { hi = lo * 10 || 10; }
+                  return [lo, hi];
                 },
               }
             : { distr: 3 }
@@ -677,7 +680,11 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
                   const padding = Math.max(range * 0.05, Math.abs(dataMax) * 0.02, 0.1);
                   const autoMin = dataMin >= 0 ? Math.max(0, dataMin - padding) : dataMin - padding;
                   const autoMax = dataMax + padding;
-                  return [yMinProp ?? autoMin, yMaxProp ?? autoMax];
+                  let lo = yMinProp ?? autoMin;
+                  let hi = yMaxProp ?? autoMax;
+                  // Prevent axis flip when user-set min >= auto-computed max
+                  if (lo >= hi) { hi = lo + Math.max(Math.abs(lo) * 0.1, padding, 0.1); }
+                  return [lo, hi];
                 },
               }
             : yRange[2]

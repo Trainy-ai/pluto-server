@@ -40,6 +40,8 @@ interface DashboardBuilderProps {
   organizationId: string;
   projectName: string;
   onClose?: () => void;
+  /** When provided, reads line settings from this runId instead of the "full" key */
+  settingsRunId?: string;
   searchState?: SearchState;
 }
 
@@ -50,6 +52,7 @@ export function DashboardBuilder({
   organizationId,
   projectName,
   onClose,
+  settingsRunId,
   searchState,
 }: DashboardBuilderProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -541,6 +544,7 @@ export function DashboardBuilder({
                   selectedRuns={selectedRuns}
                   searchState={searchState}
                   onWidgetCountChange={(count) => handleDynamicWidgetCount(section.id, count)}
+                  settingsRunId={settingsRunId}
                 />
               ) : (
                 <WidgetGrid
@@ -563,6 +567,7 @@ export function DashboardBuilder({
                       projectName={projectName}
                       onDataRange={onDataRange}
                       onResetBounds={onResetBounds}
+                      settingsRunId={settingsRunId}
                     />
                   )}
                 />
@@ -675,6 +680,7 @@ export function DashboardBuilder({
             selectedRuns={selectedRuns}
             organizationId={organizationId}
             projectName={projectName}
+            settingsRunId={settingsRunId}
           />
         </ChartFullscreenDialog>
       )}

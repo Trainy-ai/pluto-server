@@ -14,6 +14,7 @@ interface DataGroupProps {
   tenantId: string;
   projectName: string;
   runId: string;
+  boundsResetKey?: number;
 }
 
 // Internal base component that handles the rendering logic
@@ -22,6 +23,7 @@ const DataGroupBase = ({
   tenantId,
   projectName,
   runId,
+  boundsResetKey,
 }: DataGroupProps) => {
   const groupId = `metrics-${group.groupName}`;
 
@@ -42,9 +44,10 @@ const DataGroupBase = ({
         tenantId={tenantId}
         projectName={projectName}
         runId={runId}
+        boundsResetKey={boundsResetKey}
       />
     ));
-  }, [sortedLogs, tenantId, projectName, runId]);
+  }, [sortedLogs, tenantId, projectName, runId, boundsResetKey]);
 
   return (
     <DropdownRegion
@@ -64,6 +67,7 @@ interface LogViewProps {
   tenantId: string;
   projectName: string;
   runId: string;
+  boundsResetKey?: number;
 }
 
 const LogView = memo(
@@ -72,6 +76,7 @@ const LogView = memo(
     tenantId,
     projectName,
     runId,
+    boundsResetKey,
   }: LogViewProps) => {
     if (log.logType === "METRIC") {
       return (
@@ -80,6 +85,7 @@ const LogView = memo(
           tenantId={tenantId}
           projectName={projectName}
           runId={runId}
+          boundsResetKey={boundsResetKey}
         />
       );
     }

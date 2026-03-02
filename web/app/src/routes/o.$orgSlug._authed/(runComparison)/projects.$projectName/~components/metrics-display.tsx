@@ -14,8 +14,6 @@ import {
 } from "../~lib/search-utils";
 import LineSettings from "./line-settings";
 import { SmoothingSlider } from "@/components/charts/smoothing-slider";
-import { InterpolationSelector } from "@/components/charts/interpolation-selector";
-import type { TooltipInterpolation } from "@/lib/math/interpolation";
 
 import { useLineSettings } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/use-line-settings";
 import { DashboardViewSelector, DashboardBuilder } from "./dashboard-builder";
@@ -150,26 +148,21 @@ export const MetricsDisplay = memo(function MetricsDisplay({
     return (
       <ChartSyncProvider syncKey={`dashboard-${selectedViewId}`}>
         <div className="flex-1 space-y-4">
-          <div className="sticky top-0 z-20 flex items-center justify-between gap-4 bg-background pb-2">
-            <div className="flex items-center gap-4">
-              <DashboardViewSelector
-                organizationId={organizationId}
-                projectName={projectName}
-                selectedViewId={selectedViewId}
-                onViewChange={setSelectedViewId}
+          <div className="sticky top-0 z-20 flex items-center gap-4 bg-background pb-2">
+            <DashboardViewSelector
+              organizationId={organizationId}
+              projectName={projectName}
+              selectedViewId={selectedViewId}
+              onViewChange={setSelectedViewId}
+            />
+            <div className="flex-1 max-w-[320px]">
+              <LogSearch
+                onSearch={handleSearch}
+                placeholder="Search groups and metrics..."
               />
-              <div className="flex-1">
-                <LogSearch
-                  onSearch={handleSearch}
-                  placeholder="Search groups and metrics..."
-                />
-              </div>
             </div>
-            <div className="flex items-center gap-3">
-              <InterpolationSelector
-                value={settings.tooltipInterpolation}
-                onChange={(v) => updateSettings("tooltipInterpolation", v)}
-              />
+            <div className="ml-auto flex items-center gap-3">
+
               <SmoothingSlider
                 settings={settings}
                 updateSmoothingSettings={updateSmoothingSettings}
@@ -205,22 +198,20 @@ export const MetricsDisplay = memo(function MetricsDisplay({
   return (
     <ChartSyncProvider syncKey={`all-metrics-${projectName}`}>
       <div className="flex-1 space-y-4">
-        <div className="sticky top-0 z-10 flex items-center justify-between gap-4 bg-background pb-2">
-          <div className="flex items-center gap-4">
-            <DashboardViewSelector
-              organizationId={organizationId}
-              projectName={projectName}
-              selectedViewId={selectedViewId}
-              onViewChange={setSelectedViewId}
+        <div className="sticky top-0 z-10 flex items-center gap-4 bg-background pb-2">
+          <DashboardViewSelector
+            organizationId={organizationId}
+            projectName={projectName}
+            selectedViewId={selectedViewId}
+            onViewChange={setSelectedViewId}
+          />
+          <div className="flex-1 max-w-[320px]">
+            <LogSearch
+              onSearch={handleSearch}
+              placeholder="Search groups and metrics..."
             />
-            <div className="flex-1">
-              <LogSearch
-                onSearch={handleSearch}
-                placeholder="Search groups and metrics..."
-              />
-            </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="ml-auto flex items-center gap-3">
             <Button
               variant="ghost"
               size="sm"
@@ -231,10 +222,6 @@ export const MetricsDisplay = memo(function MetricsDisplay({
               <RotateCcwIcon className="mr-1.5 size-3.5" />
               Reset Bounds
             </Button>
-            <InterpolationSelector
-              value={settings.tooltipInterpolation}
-              onChange={(v) => updateSettings("tooltipInterpolation", v)}
-            />
             <SmoothingSlider
               settings={settings}
               updateSmoothingSettings={updateSmoothingSettings}

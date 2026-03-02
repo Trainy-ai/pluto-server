@@ -21,9 +21,13 @@ import {
   useDashboardView,
 } from "../../(runComparison)/projects.$projectName/~queries/dashboard-views";
 import { ChartSyncProvider } from "@/components/charts/context/chart-sync-context";
+import { clearAllChartBounds } from "../../(runComparison)/projects.$projectName/~components/multi-group/chart-card-wrapper";
+import { searchUtils, type SearchState } from "../../(runComparison)/projects.$projectName/~lib/search-utils";
 import { useRunDashboardData } from "./~hooks/use-run-dashboard";
+import { RotateCcwIcon } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
-import { useMemo, useEffect, useRef, useCallback } from "react";
+import { useMemo, useState, useEffect, useRef, useCallback } from "react";
 
 // Search params for run route - supports ?chart=viewId to deep-link to a dashboard view
 interface RunSearchParams {
@@ -83,7 +87,7 @@ function RouteComponent() {
     getSmoothingConfig,
   } = useLineSettings(organizationId, projectName, runId);
 
-  const { filteredLogGroups, handleSearch } = useFilteredLogs({
+  const { filteredLogGroups, handleSearch: handleLogSearch } = useFilteredLogs({
     logs: runData?.logs || [],
     groupFilter: (group) =>
       // Exclude file-based logs from metrics view (they're shown on summary page)
@@ -94,6 +98,18 @@ function RouteComponent() {
           log.logType === "ARTIFACT",
       ),
   });
+
+  // Search state for dashboard widget filtering
+  const [searchState, setSearchState] = useState<SearchState>({
+    query: "",
+    isRegex: false,
+    regex: null,
+  });
+
+  const handleSearch = useCallback((query: string, isRegex: boolean) => {
+    handleLogSearch(query, isRegex);
+    setSearchState(searchUtils.createSearchState(query, isRegex));
+  }, [handleLogSearch]);
 
   // --- Dashboard view integration ---
   const navigate = useNavigate();
@@ -145,6 +161,13 @@ function RouteComponent() {
   // Build dashboard data (groupedMetrics + selectedRuns) from single run
   const { groupedMetrics, selectedRuns } = useRunDashboardData(runData, runId);
 
+  // Bounds reset - clearing localStorage + remounting charts via key change
+  const [boundsResetKey, setBoundsResetKey] = useState(0);
+  const handleResetAllBounds = useCallback(() => {
+    clearAllChartBounds();
+    setBoundsResetKey((k) => k + 1);
+  }, []);
+
   // Memoize the rendered DataGroups for "All Metrics" view
   const dataGroups = useMemo(() => {
     return filteredLogGroups.map((group: LogGroup) => (
@@ -154,9 +177,10 @@ function RouteComponent() {
         tenantId={organizationId}
         projectName={projectName}
         runId={runId}
+        boundsResetKey={boundsResetKey}
       />
     ));
-  }, [filteredLogGroups, organizationId, projectName, runId]);
+  }, [filteredLogGroups, organizationId, projectName, runId, boundsResetKey]);
 
   if (isLoading || !runData) {
     return (
@@ -173,56 +197,71 @@ function RouteComponent() {
       runId={runId}
       title={`${runData.name}`}
       organizationId={organizationId}
+      disableScroll
     >
-      <div className="flex flex-col gap-4 p-4">
-        <div className="flex flex-col gap-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <DashboardViewSelector
-                organizationId={organizationId}
-                projectName={projectName}
-                selectedViewId={selectedViewId}
-                onViewChange={handleViewChange}
-              />
-            </div>
-            <div className="flex items-center gap-3">
-              <SmoothingSlider
-                settings={settings}
-                updateSmoothingSettings={updateSmoothingSettings}
-                updateSettings={updateSettings}
-                getSmoothingConfig={getSmoothingConfig}
-              />
-              <RefreshButton
-                onRefresh={handleRefresh}
-                lastRefreshed={lastRefreshTime || undefined}
-                defaultInterval={runData.status === "RUNNING" ? 5_000 : null}
-                storageKey={`refresh-interval:run:${runId}`}
-              />
-              <LineSettings
-                organizationId={organizationId}
-                projectName={projectName}
-                runId={runId}
-              />
-            </div>
+      <div className="flex h-full flex-col overflow-y-auto overscroll-y-contain">
+        <div className="sticky top-0 z-10 flex items-center gap-4 bg-background px-4 pt-4 pb-2">
+          <DashboardViewSelector
+            organizationId={organizationId}
+            projectName={projectName}
+            selectedViewId={selectedViewId}
+            onViewChange={handleViewChange}
+          />
+          <div className="flex-1 max-w-[320px]">
+            <LogSearch onSearch={handleSearch} placeholder="Search groups and metrics..." />
+          </div>
+          <div className="ml-auto flex items-center gap-3">
+            {!isDashboardView && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 text-xs text-muted-foreground"
+                onClick={handleResetAllBounds}
+                title="Reset all Y-axis bounds"
+              >
+                <RotateCcwIcon className="mr-1.5 size-3.5" />
+                Reset Bounds
+              </Button>
+            )}
+            <SmoothingSlider
+              settings={settings}
+              updateSmoothingSettings={updateSmoothingSettings}
+              updateSettings={updateSettings}
+              getSmoothingConfig={getSmoothingConfig}
+            />
+            <RefreshButton
+              onRefresh={handleRefresh}
+              lastRefreshed={lastRefreshTime || undefined}
+              defaultInterval={runData.status === "RUNNING" ? 5_000 : null}
+              storageKey={`refresh-interval:run:${runId}`}
+            />
+            <LineSettings
+              organizationId={organizationId}
+              projectName={projectName}
+              runId={runId}
+            />
           </div>
         </div>
 
-        {isDashboardView ? (
-          <ChartSyncProvider syncKey={`run-dashboard-${selectedViewId}`}>
-            <DashboardBuilder
-              view={selectedView}
-              groupedMetrics={groupedMetrics}
-              selectedRuns={selectedRuns}
-              organizationId={organizationId}
-              projectName={projectName}
-            />
-          </ChartSyncProvider>
-        ) : (
-          <ChartSyncProvider syncKey={`run-all-metrics-${runId}`}>
-            <LogSearch onSearch={handleSearch} placeholder="Search metrics..." />
-            {dataGroups}
-          </ChartSyncProvider>
-        )}
+        <div className="flex flex-col gap-4 px-4 pb-4">
+          {isDashboardView ? (
+            <ChartSyncProvider syncKey={`run-dashboard-${selectedViewId}`}>
+              <DashboardBuilder
+                view={selectedView}
+                groupedMetrics={groupedMetrics}
+                selectedRuns={selectedRuns}
+                organizationId={organizationId}
+                projectName={projectName}
+                settingsRunId={runId}
+                searchState={searchState}
+              />
+            </ChartSyncProvider>
+          ) : (
+            <ChartSyncProvider syncKey={`run-all-metrics-${runId}`}>
+              {dataGroups}
+            </ChartSyncProvider>
+          )}
+        </div>
       </div>
     </Layout>
   );

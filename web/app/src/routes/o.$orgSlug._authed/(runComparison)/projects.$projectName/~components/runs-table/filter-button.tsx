@@ -123,6 +123,17 @@ export function FilterButton({
     return { filtered, pinned, system, config, sysMeta };
   }, [filterableFields, activeColumnKey, filters]);
 
+  // Set of metric names that are active table columns (for pinning in the menu)
+  const activeMetricNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const c of activeColumnIds ?? []) {
+      if (c.source === "metric") {
+        names.add(c.id);
+      }
+    }
+    return names;
+  }, [activeColumnIds]);
+
   // Map of metricName → Set<aggregation> for metrics that have active filters
   const metricFilterInfo = useMemo(() => {
     const map = new Map<string, Set<string>>();
@@ -407,7 +418,7 @@ export function FilterButton({
                       })}
                     </CommandGroup>
                   )}
-                  {grouped.pinned.length > 0 && (
+                  {(grouped.pinned.length > 0 || activeMetricNames.size > 0) && (
                     <CommandGroup heading="Active Columns">
                       {grouped.pinned.map((f) => {
                         const key = `${f.source}:${f.id}`;
@@ -424,6 +435,23 @@ export function FilterButton({
                           </CommandItem>
                         );
                       })}
+                      {/* Active metric columns: show those in metricNames first, then any extras */}
+                      {(() => {
+                        const metricNamesSet = new Set(metricNames);
+                        const inList = metricNames.filter((name) => activeMetricNames.has(name));
+                        const notInList = [...activeMetricNames].filter((name) => !metricNamesSet.has(name));
+                        return [...inList, ...notInList].map((name) => (
+                          <FilterMetricExpandableItem
+                            key={`pinned:metric:${name}`}
+                            metricName={name}
+                            isExpanded={expandedMetric === name}
+                            onExpand={() => setExpandedMetric(expandedMetric === name ? null : name)}
+                            activeAggregations={metricFilterInfo.get(name)}
+                            onSelectAgg={(agg) => handleSelectMetricAgg(name, agg)}
+                            showBadge={true}
+                          />
+                        ));
+                      })()}
                     </CommandGroup>
                   )}
                   {grouped.system.length > 0 && (
@@ -440,18 +468,20 @@ export function FilterButton({
                       ))}
                     </CommandGroup>
                   )}
-                  {metricNames.length > 0 && (
+                  {metricNames.some((name) => !activeMetricNames.has(name)) && (
                     <CommandGroup heading="Metrics (A-Z, max 500 — search for more)">
-                      {metricNames.map((name) => (
-                        <FilterMetricExpandableItem
-                          key={`metric-${name}`}
-                          metricName={name}
-                          isExpanded={expandedMetric === name}
-                          onExpand={() => setExpandedMetric(expandedMetric === name ? null : name)}
-                          activeAggregations={metricFilterInfo.get(name)}
-                          onSelectAgg={(agg) => handleSelectMetricAgg(name, agg)}
-                        />
-                      ))}
+                      {metricNames
+                        .filter((name) => !activeMetricNames.has(name))
+                        .map((name) => (
+                          <FilterMetricExpandableItem
+                            key={`metric-${name}`}
+                            metricName={name}
+                            isExpanded={expandedMetric === name}
+                            onExpand={() => setExpandedMetric(expandedMetric === name ? null : name)}
+                            activeAggregations={metricFilterInfo.get(name)}
+                            onSelectAgg={(agg) => handleSelectMetricAgg(name, agg)}
+                          />
+                        ))}
                     </CommandGroup>
                   )}
                   {grouped.config.length > 0 && (

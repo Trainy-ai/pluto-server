@@ -388,7 +388,7 @@ const LineSettings = ({
                     updateSettings("maxPointsPerSeries", Number(value))
                   }
                 >
-                  <SelectTrigger className="h-9 rounded-md border border-input text-sm">
+                  <SelectTrigger id="max-points" className="h-9 rounded-md border border-input text-sm">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent className="rounded-md border border-input">
