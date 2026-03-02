@@ -67,6 +67,17 @@ const METRIC_NAMES = [
 // plus a rare-spike metric for testing envelope/downsampling detection
 const TEST_METRIC_NAMES = ['horizontal', 'slanted_up', 'slanted_down', 'rare_spike'];
 
+// 3-level nested metrics (e.g., eval/small/loss) to test deep folder hierarchy
+// group must match getLogGroupName() output: everything except the last path segment
+const NESTED_METRICS: { group: string; name: string }[] = [
+  { group: 'eval/small', name: 'eval/small/loss' },
+  { group: 'eval/small', name: 'eval/small/accuracy' },
+  { group: 'eval/large', name: 'eval/large/loss' },
+  { group: 'train/optimizer', name: 'train/optimizer/grad_norm' },
+  { group: 'train/optimizer', name: 'train/optimizer/lr_scaled' },
+  { group: 'system/gpu', name: 'system/gpu/temperature' },
+];
+
 // ============================================================================
 // Story Runs Configuration - Runs with interesting patterns for Claude to analyze
 // ============================================================================
@@ -104,7 +115,7 @@ const STANDARD_LOGS = 200;         // Standard runs
  * First few metrics are "test" group with parallel lines for visual debugging.
  */
 function getMetricName(metricIndex: number): { group: string; name: string; isTestMetric: boolean } {
-  // First 3 metrics are test metrics (parallel lines)
+  // First few metrics are test metrics (parallel lines)
   if (metricIndex < TEST_METRIC_NAMES.length) {
     return {
       group: 'test',
@@ -113,8 +124,19 @@ function getMetricName(metricIndex: number): { group: string; name: string; isTe
     };
   }
 
-  // Rest are normal metrics
-  const adjustedIndex = metricIndex - TEST_METRIC_NAMES.length;
+  // Next batch: 3-level nested metrics (e.g., eval/small/loss)
+  const nestedStart = TEST_METRIC_NAMES.length;
+  if (metricIndex < nestedStart + NESTED_METRICS.length) {
+    const nested = NESTED_METRICS[metricIndex - nestedStart];
+    return {
+      group: nested.group,
+      name: nested.name,
+      isTestMetric: false,
+    };
+  }
+
+  // Rest are normal 2-level metrics
+  const adjustedIndex = metricIndex - nestedStart - NESTED_METRICS.length;
   const nonTestGroups = METRIC_GROUPS.filter(g => g !== 'test');
   const groupIndex = Math.floor(adjustedIndex / METRIC_NAMES.length) % nonTestGroups.length;
   const nameIndex = adjustedIndex % METRIC_NAMES.length;
@@ -184,26 +206,36 @@ function getMetricValue(metricIndex: number, step: number, totalSteps: number, r
     }
   }
 
-  // Normal metrics
-  const adjustedIndex = metricIndex - TEST_METRIC_NAMES.length;
+  // Normal metrics (skip test metrics and nested metrics to get the right name)
+  const nestedStart = TEST_METRIC_NAMES.length;
+  // Nested metrics reuse the same value generation as their base metric name
+  if (metricIndex >= nestedStart && metricIndex < nestedStart + NESTED_METRICS.length) {
+    const nested = NESTED_METRICS[metricIndex - nestedStart];
+    const leafName = nested.name.split('/').pop()!;
+    return getMetricValueByName(leafName, step, totalSteps, runIndex);
+  }
+
+  const adjustedIndex = metricIndex - nestedStart - NESTED_METRICS.length;
   const nameIndex = adjustedIndex % METRIC_NAMES.length;
   const metricName = METRIC_NAMES[nameIndex];
-  const progress = step / totalSteps;
+  return getMetricValueByName(metricName, step, totalSteps, runIndex);
+}
 
-  // Get story config for this run (if applicable)
+/**
+ * Generates a realistic metric value based on metric name, step, and run story.
+ */
+function getMetricValueByName(metricName: string, step: number, totalSteps: number, runIndex: number): number {
+  const progress = step / totalSteps;
   const storyConfig = STORY_RUNS[runIndex];
 
-  // Early stop: return NaN to indicate no more data
   if (storyConfig?.earlyStop && progress > storyConfig.earlyStop) {
     return NaN;
   }
 
-  // Calculate base value based on metric type
   let baseValue: number;
   switch (metricName) {
     case 'loss':
       baseValue = Math.exp(-step / (totalSteps / 3)) * 2 + Math.random() * 0.1;
-      // Apply slow convergence modifier
       if (storyConfig?.slowConvergence) {
         baseValue = Math.exp(-step / (totalSteps / 1.5)) * 2.5 + Math.random() * 0.1;
       }
@@ -222,17 +254,17 @@ function getMetricValue(metricIndex: number, step: number, totalSteps: number, r
       baseValue = 100 * Math.exp(-step / (totalSteps / 2)) + 10 + Math.random() * 5;
       break;
     case 'lr':
-      // Warmup then decay
+    case 'lr_scaled':
       baseValue = step < totalSteps * 0.1
         ? 0.001 * (step / (totalSteps * 0.1))
         : 0.001 * Math.exp(-(step - totalSteps * 0.1) / totalSteps);
       break;
     case 'gpu_util':
+    case 'temperature':
       baseValue = 80 + Math.random() * 15;
       break;
     case 'memory_used':
       baseValue = 0.7 + Math.random() * 0.2;
-      // Run 3 (lr-search-001) has increasing memory usage leading to OOM
       if (runIndex === 3) {
         baseValue = 0.5 + progress * 0.5 + Math.random() * 0.05;
       }
@@ -243,27 +275,26 @@ function getMetricValue(metricIndex: number, step: number, totalSteps: number, r
     case 'latency':
       baseValue = 10 + Math.random() * 5;
       break;
+    case 'grad_norm':
+      baseValue = 1.0 + Math.random() * 0.5;
+      break;
     default:
       baseValue = Math.random() * 0.01 + 0.001;
   }
 
-  // Apply high noise modifier
   if (storyConfig?.highNoise) {
     baseValue += (Math.random() - 0.5) * 0.3;
   }
 
-  // Apply loss spike modifier (affects loss-like metrics)
   if (storyConfig?.lossSpike && (metricName === 'loss' || metricName === 'perplexity')) {
     const { start, end, multiplier } = storyConfig.lossSpike;
     if (progress >= start && progress <= end) {
-      // Create a spike that peaks in the middle and recovers
       const spikeProgress = (progress - start) / (end - start);
       const spikeFactor = Math.sin(spikeProgress * Math.PI) * (multiplier - 1) + 1;
       baseValue *= spikeFactor;
     }
   }
 
-  // Invert spike effect for accuracy metrics (they should drop during issues)
   if (storyConfig?.lossSpike && ['accuracy', 'precision', 'recall', 'f1', 'auc'].includes(metricName)) {
     const { start, end, multiplier } = storyConfig.lossSpike;
     if (progress >= start && progress <= end) {
@@ -299,6 +330,14 @@ async function seedClickHouseMetrics(
     username: clickhouseUser,
     password: clickhousePassword,
   });
+
+  // Clear old data for this tenant before re-seeding
+  console.log('   Clearing old ClickHouse data...');
+  for (const table of ['mlop_metrics', 'mlop_metric_summaries', 'mlop_logs', 'mlop_files', 'mlop_data']) {
+    await clickhouse.command({ query: `ALTER TABLE ${table} DELETE WHERE tenantId = '${tenantId}'` });
+  }
+  // Wait for mutations to complete
+  await new Promise(resolve => setTimeout(resolve, 2000));
 
   // Calculate total rows with high-fidelity subset, single-point test run, and step-frequency runs
   const highFidelityRows = Math.min(HIGH_FIDELITY_RUNS, runs.length) * METRICS_PER_RUN * HIGH_FIDELITY_DATAPOINTS;

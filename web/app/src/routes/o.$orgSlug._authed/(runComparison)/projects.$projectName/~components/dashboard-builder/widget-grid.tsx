@@ -267,7 +267,7 @@ export function WidgetGrid({
       }}
       resizeConfig={{
         enabled: isEditing,
-        handles: coarseMode ? ["se"] : ["se", "e"],
+        handles: ["se", "e"],
       }}
     >
       {widgets.map((widget) => {

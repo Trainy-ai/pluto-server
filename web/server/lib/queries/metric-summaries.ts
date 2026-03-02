@@ -456,3 +456,58 @@ function buildMetricFilterCondition(
       return null;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Single-run metric latest values (for file view)
+// ---------------------------------------------------------------------------
+
+export interface RunMetricValue {
+  logName: string;
+  lastValue: number;
+  minValue: number;
+  maxValue: number;
+  avgValue: number;
+  count: number;
+}
+
+/**
+ * Fetch the latest value (and summary stats) for ALL metrics of a single run.
+ * Used by the file view to display metrics alongside files (Neptune-style).
+ */
+export async function queryRunMetricValues(
+  ch: typeof clickhouse,
+  params: {
+    organizationId: string;
+    projectName: string;
+    runId: number;
+    limit?: number;
+  },
+): Promise<RunMetricValue[]> {
+  const { organizationId, projectName, runId, limit = 1000 } = params;
+
+  const query = `
+    SELECT
+      logName,
+      ${aggExpression("LAST")} AS lastValue,
+      ${aggExpression("MIN")} AS minValue,
+      ${aggExpression("MAX")} AS maxValue,
+      ${aggExpression("AVG")} AS avgValue,
+      sum(count_value) AS count
+    FROM mlop_metric_summaries
+    WHERE tenantId = {tenantId: String}
+      AND projectName = {projectName: String}
+      AND runId = {runId: UInt64}
+    GROUP BY logName
+    ORDER BY logName ASC
+    LIMIT {limit: UInt32}
+  `;
+
+  const result = await ch.query(query, {
+    tenantId: organizationId,
+    projectName,
+    runId,
+    limit,
+  });
+
+  return (await result.json()) as RunMetricValue[];
+}
