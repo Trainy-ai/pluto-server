@@ -35,6 +35,7 @@ interface LayoutProps extends PropsWithChildren {
   runId: string;
   title: string;
   organizationId: string;
+  disableScroll?: boolean;
 }
 
 const CancelRunButton = ({
@@ -124,6 +125,7 @@ export const Layout = ({
   runId,
   title,
   organizationId,
+  disableScroll = false,
 }: LayoutProps) => {
   const updateTagsMutation = useUpdateTags(organizationId, projectName, runId);
 
@@ -146,6 +148,7 @@ export const Layout = ({
   return (
     <RunsLayout>
       <PageLayout
+        disableScroll={disableScroll}
         headerLeft={
           <div className="flex items-center gap-4">
             <OrganizationPageTitle

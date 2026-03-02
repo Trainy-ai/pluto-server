@@ -186,7 +186,7 @@ export function DashboardViewSelector({
       <div className="flex items-center">
         {/* Tabs container */}
         <div className="flex items-center rounded-lg border bg-muted p-1">
-          {/* All Metrics Tab */}
+          {/* Charts Tab */}
           <button
             onClick={() => onViewChange(null)}
             className={cn(
@@ -196,10 +196,10 @@ export function DashboardViewSelector({
                 : "text-muted-foreground hover:text-foreground"
             )}
           >
-            All Metrics
+            Charts
           </button>
 
-          {/* Charts Tab with Dropdown */}
+          {/* Dashboards Tab with Dropdown */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
@@ -210,14 +210,14 @@ export function DashboardViewSelector({
                     : "text-muted-foreground hover:text-foreground"
                 )}
               >
-                <span>{isChartsTab && selectedView ? selectedView.name : "Charts"}</span>
+                <span>{isChartsTab && selectedView ? selectedView.name : "Dashboards"}</span>
                 <ChevronDownIcon className="size-4" />
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-[200px]">
+            <DropdownMenuContent align="start" className="w-[240px]">
               {views.length === 0 ? (
                 <div className="px-2 py-1.5 text-sm text-muted-foreground">
-                  No saved charts yet
+                  No saved dashboards yet
                 </div>
               ) : (
                 views.map((view: DashboardView) => (
@@ -239,7 +239,7 @@ export function DashboardViewSelector({
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={() => setIsCreateDialogOpen(true)}>
                 <PlusIcon className="mr-2 size-4" />
-                Create New Chart
+                Create New Dashboard
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -304,16 +304,16 @@ export function DashboardViewSelector({
       }}>
         <DialogContent className="sm:max-w-[500px]">
           <DialogHeader>
-            <DialogTitle>Create New Chart</DialogTitle>
+            <DialogTitle>Create New Dashboard</DialogTitle>
             <DialogDescription>
-              Create a new chart from scratch or import an existing dashboard configuration.
+              Create a new dashboard from scratch or import an existing dashboard configuration.
             </DialogDescription>
           </DialogHeader>
           <Tabs value={createMode} onValueChange={(v) => setCreateMode(v as "new" | "import")}>
             <TabsList className="grid w-full grid-cols-2">
               <TabsTrigger value="new">
                 <PlusIcon className="mr-2 size-4" />
-                New Chart
+                New Dashboard
               </TabsTrigger>
               <TabsTrigger value="import">
                 <UploadIcon className="mr-2 size-4" />
@@ -322,10 +322,10 @@ export function DashboardViewSelector({
             </TabsList>
             <TabsContent value="new" className="space-y-4 pt-4">
               <div className="grid gap-2">
-                <Label htmlFor="name">Chart Name</Label>
+                <Label htmlFor="name">Dashboard Name</Label>
                 <Input
                   id="name"
-                  placeholder="My Custom Chart"
+                  placeholder="My Custom Dashboard"
                   value={newViewName}
                   onChange={(e) => setNewViewName(e.target.value)}
                   onKeyDown={(e) => {
@@ -365,10 +365,10 @@ export function DashboardViewSelector({
                 )}
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="import-name">Chart Name</Label>
+                <Label htmlFor="import-name">Dashboard Name</Label>
                 <Input
                   id="import-name"
-                  placeholder="My Imported Chart"
+                  placeholder="My Imported Dashboard"
                   value={newViewName}
                   onChange={(e) => setNewViewName(e.target.value)}
                   onKeyDown={(e) => {
@@ -405,7 +405,7 @@ export function DashboardViewSelector({
       <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
         <DialogContent className="sm:max-w-[425px]">
           <DialogHeader>
-            <DialogTitle>Delete Chart</DialogTitle>
+            <DialogTitle>Delete Dashboard</DialogTitle>
             <DialogDescription>
               Are you sure you want to delete "{viewToDelete?.name}"? This action
               cannot be undone.

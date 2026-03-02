@@ -25,6 +25,7 @@ interface LineChartWithFetchProps {
   tenantId: string;
   projectName: string;
   runId: string;
+  boundsResetKey?: number;
 }
 
 type ChartData = {
@@ -339,6 +340,7 @@ export const LineChartWithFetch = memo(
     tenantId,
     projectName,
     runId,
+    boundsResetKey,
   }: LineChartWithFetchProps) => {
     useCheckDatabaseSize(metricsCache);
 
@@ -457,6 +459,7 @@ export const LineChartWithFetch = memo(
         groupId={`run-${runId}`}
         globalLogXAxis={settings.xAxisLogScale}
         globalLogYAxis={settings.yAxisLogScale}
+        boundsResetKey={boundsResetKey}
         renderChart={(yMin, yMax, onDataRange, onResetBounds, logXAxis, logYAxis) => {
           const commonProps = {
             className: "h-full",

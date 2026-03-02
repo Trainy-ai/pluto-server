@@ -24,6 +24,7 @@ import GIF from "gif.js";
 import { toast } from "@/components/ui/sonner";
 import { useGetHistogram } from "../../~queries/get-histogram";
 import { StepNavigator } from "../shared/step-navigator";
+import { useHistogramCanvas } from "@/routes/o.$orgSlug._authed/(runComparison)/projects.$projectName/~components/multi-group/hooks/use-histogram-canvas";
 
 // ---------------------- Constants ----------------------
 const ANIMATION_CONFIG = {
@@ -39,6 +40,9 @@ const TICK_CONFIG = {
   Y_AXIS_TICKS: 5,
   TICK_LENGTH: 5,
 } as const;
+
+// Default color for single-run histograms (matches line chart color)
+const DEFAULT_HISTOGRAM_COLOR = "hsl(216, 66%, 60%)";
 
 // ---------------------- Utility Functions ----------------------
 function generateNiceNumbers(
@@ -293,91 +297,45 @@ function drawYTicks(
 }
 
 // Canvas for rendering histogram for a given step
+// Uses the shared useHistogramCanvas hook for visual consistency with the project dashboard
 const HistogramCanvas = React.forwardRef<
   HTMLCanvasElement,
   HistogramCanvasProps
 >(({ data, theme, globalMaxFreq, xAxisRange }, forwardedRef) => {
+  const containerRef = useRef<HTMLDivElement>(null);
   const internalCanvasRef = useRef<HTMLCanvasElement>(null);
   const canvasRef =
     (forwardedRef as React.RefObject<HTMLCanvasElement>) || internalCanvasRef;
-
-  const drawHistogram = useCallback(() => {
-    if (!canvasRef.current || !data) return;
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const padding = 60;
-    const width = canvas.width - padding * 2;
-    const height = canvas.height - padding * 2;
-
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    drawAxes(ctx, canvas, theme, xAxisRange, globalMaxFreq, padding);
-    drawXTicks(ctx, canvas, theme, xAxisRange, width, padding);
-    drawYTicks(ctx, canvas, theme, globalMaxFreq, height, padding);
-
-    // Draw histogram bars
-    const { freq, bins } = data.histogramData;
-    const dataBinWidth = (bins.max - bins.min) / bins.num;
-    const visibleStartBin = Math.max(
-      0,
-      Math.floor((xAxisRange.min - bins.min) / dataBinWidth),
-    );
-    const visibleEndBin = Math.min(
-      bins.num - 1,
-      Math.ceil((xAxisRange.max - bins.min) / dataBinWidth),
-    );
-
-    for (let i = visibleStartBin; i <= visibleEndBin; i++) {
-      const frequency = freq[i];
-      if (frequency === undefined) continue;
-
-      const binStart = bins.min + i * dataBinWidth;
-      const binEnd = binStart + dataBinWidth;
-      const xStart =
-        padding +
-        ((binStart - xAxisRange.min) / (xAxisRange.max - xAxisRange.min)) *
-          width;
-      const xEnd =
-        padding +
-        ((binEnd - xAxisRange.min) / (xAxisRange.max - xAxisRange.min)) * width;
-      const barWidth = xEnd - xStart;
-      const barHeight = (frequency / globalMaxFreq) * height;
-      const y = canvas.height - padding - barHeight;
-
-      const gradient = ctx.createLinearGradient(
-        xStart,
-        y,
-        xStart,
-        canvas.height - padding,
-      );
-      gradient.addColorStop(0, "rgba(59, 130, 246, 0.8)");
-      gradient.addColorStop(1, "rgba(59, 130, 246, 0.2)");
-      ctx.fillStyle = gradient;
-      ctx.fillRect(xStart, y, barWidth, barHeight);
-    }
-    // Step annotation
-    ctx.fillStyle = theme === "dark" ? "#94a3b8" : "#666";
-    ctx.font = "14px sans-serif";
-    ctx.textAlign = "right";
-    ctx.fillText(
-      `Step: ${formatNumber(data.step, true)}`,
-      canvas.width - padding,
-      padding - 10,
-    );
-  }, [data, theme, globalMaxFreq, xAxisRange, canvasRef]);
+  const { drawSingleHistogram } = useHistogramCanvas();
 
   useEffect(() => {
-    const frameId = requestAnimationFrame(drawHistogram);
-    return () => cancelAnimationFrame(frameId);
-  }, [drawHistogram]);
+    if (!containerRef.current || !canvasRef.current || !data) return;
+
+    const draw = () => {
+      if (!canvasRef.current || !data) return;
+      canvasRef.current.style.width = "100%";
+      canvasRef.current.style.height = "100%";
+      drawSingleHistogram({
+        canvas: canvasRef.current,
+        data,
+        xAxisRange,
+        theme,
+        globalMaxFreq,
+        color: DEFAULT_HISTOGRAM_COLOR,
+        hideStepLabel: true,
+      });
+    };
+
+    draw();
+    const observer = new ResizeObserver(draw);
+    observer.observe(containerRef.current);
+    return () => observer.disconnect();
+  }, [data, theme, globalMaxFreq, xAxisRange, canvasRef, drawSingleHistogram]);
 
   return (
-    <canvas
-      ref={canvasRef}
-      width={800}
-      height={400}
-      className="w-full rounded-lg bg-background"
-    />
+    <div ref={containerRef} className="relative min-h-[200px] w-full overflow-hidden rounded-lg bg-background/50">
+      <canvas ref={canvasRef} className="absolute inset-0" />
+    </div>
   );
 });
 HistogramCanvas.displayName = "HistogramCanvas";

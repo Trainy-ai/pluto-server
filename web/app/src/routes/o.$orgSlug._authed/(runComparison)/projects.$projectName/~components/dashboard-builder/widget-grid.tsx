@@ -1,4 +1,4 @@
-import { useMemo, useCallback, useState, useRef } from "react";
+import { useMemo, useCallback, useState, useRef, type ReactNode } from "react";
 import GridLayout, { type Layout, type LayoutItem, verticalCompactor } from "react-grid-layout";
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
@@ -28,7 +28,7 @@ interface WidgetGridProps {
   onLayoutChange: (widgets: Widget[]) => void;
   onEditWidget: (widget: Widget) => void;
   onDeleteWidget: (widgetId: string) => void;
-  renderWidget: (widget: Widget, onDataRange?: (dataMin: number, dataMax: number) => void, onResetBounds?: () => void) => React.ReactNode;
+  renderWidget: (widget: Widget, onDataRange?: (dataMin: number, dataMax: number) => void, onResetBounds?: () => void) => ReactNode;
   onFullscreenWidget?: (widget: Widget) => void;
   onUpdateWidgetBounds?: (widgetId: string, yMin?: number, yMax?: number) => void;
   onUpdateWidgetScale?: (widgetId: string, axis: "x" | "y", value: boolean) => void;

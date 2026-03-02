@@ -86,6 +86,8 @@ interface MultiLineChartProps {
   logXAxis?: boolean;
   /** Override log Y-axis scale (per-widget config takes precedence over global settings) */
   logYAxis?: boolean;
+  /** When provided, reads line settings from this runId instead of the "full" key */
+  settingsRunId?: string;
 }
 
 /** Props for the inner memo'd component (includes syncedZoomRange) */
@@ -123,6 +125,7 @@ const MultiLineChartInner = memo(
     syncedZoomRange,
     logXAxis: logXAxisOverride,
     logYAxis: logYAxisOverride,
+    settingsRunId,
   }: MultiLineChartInnerProps) => {
     useCheckDatabaseSize(metricsCache);
 
@@ -134,8 +137,8 @@ const MultiLineChartInner = memo(
     const isMultiMetric = metricNames.length > 1;
     const isMultiRun = lines.length > 1;
 
-    // Use global chart settings with runId="full"
-    const { settings } = useLineSettings(organizationId, projectName, "full");
+    // Use run-specific settings when available, otherwise fall back to "full"
+    const { settings } = useLineSettings(organizationId, projectName, settingsRunId ?? "full");
 
     // Per-widget log scale overrides take precedence over global settings
     const logXAxis = logXAxisOverride ?? settings.xAxisLogScale;
