@@ -19,16 +19,3 @@ export function resetPostHogUser(): void {
   posthog.reset();
 }
 
-/**
- * Track a custom event
- */
-export function trackEvent(
-  eventName: string,
-  properties?: Record<string, unknown>,
-): void {
-  if (!isPostHogEnabled()) {
-    return;
-  }
-
-  posthog.capture(eventName, properties);
-}

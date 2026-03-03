@@ -1,7 +1,4 @@
-import {
-  createTRPCContext,
-  createTRPCOptionsProxy,
-} from "@trpc/tanstack-react-query";
+import { createTRPCOptionsProxy } from "@trpc/tanstack-react-query";
 
 import type { AppRouter } from "../../../server/trpc/router";
 import { QueryCache, QueryClient } from "@tanstack/react-query";
@@ -25,9 +22,6 @@ const getTRPCUrl = () => {
 };
 
 const trpcUrl = getTRPCUrl();
-
-export const { TRPCProvider, useTRPC, useTRPCClient } =
-  createTRPCContext<AppRouter>();
 
 export const queryClient = new QueryClient({
   defaultOptions: {

@@ -96,21 +96,3 @@ export async function initRedis(): Promise<void> {
     console.log("[Cache] Redis connection failed - falling back to L1 (in-memory) cache only");
   }
 }
-
-/**
- * Gracefully disconnect Redis client.
- * Call this during server shutdown.
- */
-export async function disconnectRedis(): Promise<void> {
-  if (client && isConnected) {
-    try {
-      await client.quit();
-      console.log("[Redis] Disconnected gracefully");
-    } catch (err) {
-      console.warn("[Redis] Error during disconnect:", err);
-    } finally {
-      isConnected = false;
-      client = null;
-    }
-  }
-}

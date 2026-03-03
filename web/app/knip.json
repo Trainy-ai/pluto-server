@@ -1,0 +1,31 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "entry": [
+    "src/main.tsx",
+    "src/routes/**/*.tsx",
+    "src/routes/**/*.ts"
+  ],
+  "project": ["src/**/*.{ts,tsx}"],
+  "ignore": [
+    "src/routeTree.gen.ts",
+    "eslint.config*.js",
+    "src/components/ui/**",
+    "src/lib/filters.ts",
+    "src/components/charts/context/chart-sync-context.tsx",
+    "src/lib/db/refresh-time.ts",
+    "src/lib/hooks/use-local-query.ts",
+    "src/lib/hooks/use-theme.ts"
+  ],
+  "ignoreDependencies": [
+    "postcss",
+    "tailwindcss",
+    "tailwindcss-animate",
+    "@radix-ui/react-hover-card",
+    "@trpc/react-query",
+    "reactflow",
+    "@testing-library/jest-dom",
+    "@testing-library/user-event",
+    "@types/react-grid-layout"
+  ],
+  "ignoreExportsUsedInFile": true
+}

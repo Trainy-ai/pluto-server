@@ -279,8 +279,3 @@ export const createEmptyDashboardConfig = (): DashboardViewConfig => ({
     compactType: "vertical",
   },
 });
-
-// Helper to generate unique IDs
-export const generateId = () => {
-  return crypto.randomUUID();
-};

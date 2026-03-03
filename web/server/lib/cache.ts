@@ -109,20 +109,6 @@ export async function setCached<T>(
 }
 
 /**
- * Delete a cached value from both L1 and L2.
- */
-export async function deleteCached(key: string): Promise<void> {
-  l1Cache.delete(key);
-
-  const redis = await getRedisClient();
-  if (redis) {
-    redis.del(key).catch((err: unknown) => {
-      console.warn("[Cache] Redis delete failed:", err);
-    });
-  }
-}
-
-/**
  * Build a deterministic cache key from procedure name and parameters.
  * Parameters are sorted to ensure consistent keys regardless of object key order.
  */
@@ -136,21 +122,6 @@ export function buildCacheKey(
     .map((k) => `${k}=${params[k]}`)
     .join(":");
   return `mlop:${procedure}:${sortedParams}`;
-}
-
-/**
- * Get cache statistics for monitoring.
- */
-export function getCacheStats(): {
-  l1Size: number;
-  l1MaxSize: number;
-  redisConnected: boolean;
-} {
-  return {
-    l1Size: l1Cache.size,
-    l1MaxSize: l1Cache.max,
-    redisConnected: isRedisAvailable(),
-  };
 }
 
 /**

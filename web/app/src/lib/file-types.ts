@@ -2,7 +2,7 @@
  * Extensions that can be displayed as plaintext with syntax highlighting.
  * These files will be rendered in the TextView component.
  */
-export const PLAINTEXT_EXTENSIONS = new Set([
+const PLAINTEXT_EXTENSIONS = new Set([
   // Text
   "txt",
   "text",
