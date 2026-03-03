@@ -9,14 +9,10 @@
     "eslint-rules/**",
     "eslint.config*.js",
     "scripts/seed-demo.ts",
-    "trpc/routers/organization/routers/usage/procs/hour-usage.ts",
-    "lib/dashboard-types.ts",
-    "lib/cache.ts",
     "lib/clickhouse.ts",
     "lib/queries/projects.ts",
-    "lib/redis.ts",
     "lib/s3.ts",
-    "lib/stripe.ts"
+    "lib/dashboard-types.ts"
   ],
   "ignoreDependencies": [
     "@hono/node-server",

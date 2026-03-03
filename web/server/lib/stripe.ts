@@ -154,43 +154,6 @@ export async function createPortalSession(
   });
 }
 
-export async function getOrCreateStripeCustomer(
-  email: string,
-  organizationName: string,
-  organizationId: string
-): Promise<string> {
-  const stripe = getStripe();
-
-  // Check if customer already exists
-  const existingCustomers = await stripe.customers.list({
-    email,
-    limit: 1,
-  });
-
-  if (existingCustomers.data.length > 0) {
-    return existingCustomers.data[0].id;
-  }
-
-  // Create new customer
-  const customer = await stripe.customers.create({
-    email,
-    name: organizationName,
-    metadata: {
-      organizationId,
-    },
-  });
-
-  return customer.id;
-}
-
-export async function cancelSubscription(
-  subscriptionId: string
-): Promise<Stripe.Subscription> {
-  const stripe = getStripe();
-
-  return stripe.subscriptions.cancel(subscriptionId);
-}
-
 export function constructWebhookEvent(
   payload: string | Buffer,
   signature: string

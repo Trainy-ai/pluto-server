@@ -1,6 +1,6 @@
 import "@tanstack/table-core";
-import type { AccessorFn, Column, Row, RowData } from "@tanstack/react-table";
-import type { ColumnMeta, Table } from "@tanstack/react-table";
+import type { Column, Row, RowData } from "@tanstack/react-table";
+import type { ColumnMeta } from "@tanstack/react-table";
 import {
   endOfDay,
   isAfter,
@@ -44,34 +44,6 @@ declare module "@tanstack/react-table" {
     /* Background color for the column (hex color string). */
     backgroundColor?: string;
   }
-}
-
-/* TODO: Allow both accessorFn and accessorKey */
-export function defineMeta<
-  TData,
-  /* Only accessorFn - WORKS */
-  TAccessor extends AccessorFn<TData>,
-  TVal extends ReturnType<TAccessor>,
-  /* Only accessorKey - WORKS */
-  // TAccessor extends DeepKeys<TData>,
-  // TVal extends DeepValue<TData, TAccessor>,
-
-  /* Both accessorKey and accessorFn - BROKEN */
-  /* ISSUE: Won't infer transformOptionFn input type correctly. */
-  // TAccessor extends AccessorFn<TData> | DeepKeys<TData>,
-  // TVal extends TAccessor extends AccessorFn<TData>
-  // ? ReturnType<TAccessor>
-  // : TAccessor extends DeepKeys<TData>
-  // ? DeepValue<TData, TAccessor>
-  // : never,
-  TType extends ColumnDataType,
->(
-  accessor: TAccessor,
-  meta: Omit<ColumnMeta<TData, TVal>, "type"> & {
-    type: TType;
-  },
-): ColumnMeta<TData, TVal> {
-  return meta;
 }
 
 /*
@@ -538,53 +510,13 @@ type FilterTypeOperatorDetails = {
   [key in ColumnDataType]: FilterDetails<key>;
 };
 
-export const filterTypeOperatorDetails: FilterTypeOperatorDetails = {
+const filterTypeOperatorDetails: FilterTypeOperatorDetails = {
   text: textFilterDetails,
   number: numberFilterDetails,
   date: dateFilterDetails,
   option: optionFilterDetails,
   multiOption: multiOptionFilterDetails,
 };
-
-/*
- *
- * Determines the new operator for a filter based on the current operator, old and new filter values.
- *
- * This handles cases where the filter values have transitioned from a single value to multiple values (or vice versa),
- * and the current operator needs to be transitioned to its plural form (or singular form).
- *
- * For example, if the current operator is 'is', and the new filter values have a length of 2, the
- * new operator would be 'is any of'.
- *
- */
-export function determineNewOperator<T extends ColumnDataType>(
-  type: T,
-  oldVals: Array<FilterTypes[T]>,
-  nextVals: Array<FilterTypes[T]>,
-  currentOperator: FilterOperators[T],
-): FilterOperators[T] {
-  const a =
-    Array.isArray(oldVals) && Array.isArray(oldVals[0])
-      ? oldVals[0].length
-      : oldVals.length;
-  const b =
-    Array.isArray(nextVals) && Array.isArray(nextVals[0])
-      ? nextVals[0].length
-      : nextVals.length;
-
-  // If filter size has not transitioned from single to multiple (or vice versa)
-  // or is unchanged, return the current operator.
-  if (a === b || (a >= 2 && b >= 2) || (a <= 1 && b <= 1))
-    return currentOperator;
-
-  const opDetails = filterTypeOperatorDetails[type][currentOperator];
-
-  // Handle transition from single to multiple filter values.
-  if (a < b && b >= 2) return opDetails.singularOf ?? currentOperator;
-  // Handle transition from multiple to single filter values.
-  if (a > b && b <= 1) return opDetails.pluralOf ?? currentOperator;
-  return currentOperator;
-}
 
 /**********************************************************************************************************
  ***** Filter Functions ******
@@ -598,27 +530,6 @@ export function determineNewOperator<T extends ColumnDataType>(
  *
  * __optionFilterFn is a private function that is used by filterFn to perform the actual filtering.
  * *********************************************************************************************************/
-
-/*
- * Returns a filter function for a given column data type.
- * This function is used to determine the appropriate filter function to use based on the column data type.
- */
-export function filterFn(dataType: ColumnDataType) {
-  switch (dataType) {
-    case "option":
-      return optionFilterFn;
-    case "multiOption":
-      return multiOptionFilterFn;
-    case "date":
-      return dateFilterFn;
-    case "text":
-      return textFilterFn;
-    case "number":
-      return numberFilterFn;
-    default:
-      throw new Error("Invalid column data type");
-  }
-}
 
 export function optionFilterFn<TData>(
   row: Row<TData>,
@@ -643,7 +554,7 @@ export function optionFilterFn<TData>(
   return __optionFilterFn(sanitizedValue.value, filterValue);
 }
 
-export function __optionFilterFn<TData>(
+function __optionFilterFn<TData>(
   inputData: string,
   filterValue: FilterModel<"option", TData>,
 ) {
@@ -713,7 +624,7 @@ export function multiOptionFilterFn<TData>(
   );
 }
 
-export function __multiOptionFilterFn<TData>(
+function __multiOptionFilterFn<TData>(
   inputData: string[],
   filterValue: FilterModel<"multiOption", TData>,
 ) {
@@ -756,7 +667,7 @@ export function dateFilterFn<TData>(
   return __dateFilterFn(valueStr, filterValue);
 }
 
-export function __dateFilterFn<TData>(
+function __dateFilterFn<TData>(
   inputData: Date,
   filterValue: FilterModel<"date", TData>,
 ) {
@@ -816,7 +727,7 @@ export function textFilterFn<TData>(
   return __textFilterFn(value, filterValue);
 }
 
-export function __textFilterFn<TData>(
+function __textFilterFn<TData>(
   inputData: string,
   filterValue: FilterModel<"text", TData>,
 ) {
@@ -847,7 +758,7 @@ export function numberFilterFn<TData>(
   return __numberFilterFn(value, filterValue);
 }
 
-export function __numberFilterFn<TData>(
+function __numberFilterFn<TData>(
   inputData: number,
   filterValue: FilterModel<"number", TData>,
 ) {
@@ -884,87 +795,3 @@ export function __numberFilterFn<TData>(
   }
 }
 
-export function createNumberRange(values: number[] | undefined) {
-  let a = 0;
-  let b = 0;
-
-  if (!values || values.length === 0) return [a, b];
-  if (values.length === 1) {
-    a = values[0];
-  } else {
-    a = values[0];
-    b = values[1];
-  }
-
-  const [min, max] = a < b ? [a, b] : [b, a];
-
-  return [min, max];
-}
-
-/*** Table helpers ***/
-
-export function getColumn<TData>(table: Table<TData>, id: string) {
-  const column = table.getColumn(id);
-
-  if (!column) {
-    throw new Error(`Column with id ${id} not found`);
-  }
-
-  return column;
-}
-
-export function getColumnMeta<TData>(table: Table<TData>, id: string) {
-  const column = getColumn(table, id);
-
-  if (!column.columnDef.meta) {
-    throw new Error(`Column meta not found for column ${id}`);
-  }
-
-  return column.columnDef.meta;
-}
-
-/*** Table Filter Helpers ***/
-
-export function isFilterableColumn<TData>(column: Column<TData>) {
-  // 'auto' filterFn doesn't count!
-  const hasFilterFn =
-    column.columnDef.filterFn && column.columnDef.filterFn !== "auto";
-
-  if (
-    column.getCanFilter() &&
-    column.accessorFn &&
-    hasFilterFn &&
-    column.columnDef.meta
-  )
-    return true;
-
-  if (!column.accessorFn || !column.columnDef.meta) {
-    // 1) Column has no accessor function
-    //    We assume this is a display column and thus has no filterable data
-    // 2) Column has no meta
-    //    We assume this column is not intended to be filtered using this component
-    return false;
-  }
-
-  if (!column.accessorFn) {
-    warn(`Column "${column.id}" ignored - no accessor function`);
-  }
-
-  if (!column.getCanFilter()) {
-    warn(`Column "${column.id}" ignored - not filterable`);
-  }
-
-  if (!hasFilterFn) {
-    warn(
-      `Column "${column.id}" ignored - no filter function. use the provided filterFn() helper function`,
-    );
-  }
-
-  return false;
-}
-
-function warn(...messages: string[]) {
-  if (process.env.NODE_ENV !== "production") {
-    console.warn("[◐] [filters]", ...messages);
-  }
-}
