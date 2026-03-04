@@ -54,8 +54,7 @@ test.describe("Run Table Hover → Chart Highlight", () => {
     // Verify the row has the hover highlight data attribute
     await expect(firstSelectedRow).toHaveAttribute("data-hover-highlight", "true", { timeout: 3000 });
 
-    // Check that the chart highlight system was triggered by inspecting
-    // series widths on uPlot instances. Use polling for reliability.
+    // Check that the matching series' width differs from its _baseWidth (i.e., highlight was applied)
     await expect.poll(
       async () => {
         return page.evaluate((expectedRunId) => {
@@ -66,9 +65,12 @@ test.describe("Run Table Hover → Chart Highlight", () => {
             if (!uplotInstance) continue;
 
             for (let si = 1; si < uplotInstance.series.length; si++) {
-              if (uplotInstance.series[si]._seriesId === expectedRunId) {
-                // Found matching series — check if it's highlighted (width=4)
-                return uplotInstance.series[si].width === 4;
+              const s = uplotInstance.series[si];
+              const sid = s._seriesId;
+              const isMatch = sid === expectedRunId || (sid && sid.startsWith(expectedRunId + ':'));
+              if (isMatch && s._baseWidth != null) {
+                // Highlighted series should have width > _baseWidth
+                return s.width > s._baseWidth;
               }
             }
           }
@@ -83,7 +85,7 @@ test.describe("Run Table Hover → Chart Highlight", () => {
     await page.mouse.move(0, 0);
     await waitForInteraction(page);
 
-    // Verify highlight is cleared — series widths should be back to default (2.5)
+    // Verify highlight is cleared — every series' width should equal its _baseWidth
     await expect.poll(
       async () => {
         return page.evaluate(() => {
@@ -94,8 +96,9 @@ test.describe("Run Table Hover → Chart Highlight", () => {
             if (!uplotInstance) continue;
 
             for (let si = 1; si < uplotInstance.series.length; si++) {
-              if (uplotInstance.series[si].width !== 2.5) {
-                return false;
+              const s = uplotInstance.series[si];
+              if (s.show !== false && s._baseWidth != null) {
+                if (s.width !== s._baseWidth) return false;
               }
             }
           }
@@ -140,7 +143,7 @@ test.describe("Run Table Hover → Chart Highlight", () => {
     await firstNonSelectedRow.hover();
     await waitForInteraction(page);
 
-    // Verify no chart highlight was triggered — all widths should remain default
+    // Verify no highlight — every series' width should equal its _baseWidth
     const allDefault = await page.evaluate(() => {
       const charts = document.querySelectorAll(".uplot");
       for (let ci = 0; ci < charts.length; ci++) {
@@ -149,8 +152,9 @@ test.describe("Run Table Hover → Chart Highlight", () => {
         if (!uplotInstance) continue;
 
         for (let si = 1; si < uplotInstance.series.length; si++) {
-          if (uplotInstance.series[si].width !== 2.5) {
-            return false;
+          const s = uplotInstance.series[si];
+          if (s.show !== false && s._baseWidth != null) {
+            if (s.width !== s._baseWidth) return false;
           }
         }
       }

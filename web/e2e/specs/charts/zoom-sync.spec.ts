@@ -195,6 +195,113 @@ test.describe("Chart Zoom Synchronization", () => {
     }
   });
 
+  test("zoom should persist on newly rendered charts after scroll", async ({
+    page,
+  }) => {
+    const projectHref = await navigateToFirstProject(page, orgSlug);
+    if (!projectHref) {
+      test.skip();
+      return;
+    }
+
+    try {
+      await waitForCharts(page);
+    } catch {
+      test.skip();
+      return;
+    }
+
+    const chartCount = await getChartCount(page);
+    if (chartCount < 2) {
+      test.skip();
+      return;
+    }
+
+    // Step 1: Zoom on first visible chart
+    const overlayBox = await getChartOverlayBox(page, ".uplot .u-over", 0);
+    const startX = overlayBox.x + overlayBox.width * 0.2;
+    const endX = overlayBox.x + overlayBox.width * 0.6;
+    const centerY = overlayBox.y + overlayBox.height / 2;
+
+    await page.mouse.move(startX, centerY);
+    await waitForInteraction(page);
+    await page.mouse.down();
+    await page.mouse.move(endX, centerY, { steps: 10 });
+    await page.mouse.up();
+    await waitForInteraction(page, 500);
+
+    // Record the zoomed X range (skip if uPlot instance not accessible)
+    const zoomedRange = await getChartXScaleRange(page, 0);
+    if (!zoomedRange) {
+      test.skip();
+      return;
+    }
+
+    // Step 2: Intercept tRPC graph data requests with a delay.
+    // This guarantees that after scroll, newly mounted charts will first
+    // render with cached/stale data, then receive a delayed data refresh
+    // that triggers the setData() code path — exactly the bug scenario.
+    // Without the fix, setData() resets the X scale and zoom is lost.
+    let delayedRequestCount = 0;
+    await page.route(
+      (url) => url.pathname.includes("/trpc") && url.href.includes("graph"),
+      async (route) => {
+        delayedRequestCount++;
+        // 800ms delay ensures chart mounts and applies zoom first,
+        // then data arrives and triggers setData() path
+        await new Promise((r) => setTimeout(r, 800));
+        await route.continue();
+      }
+    );
+
+    // Step 3: Scroll down significantly to trigger VirtualizedChart unmount/remount
+    for (let i = 0; i < 5; i++) {
+      await page.mouse.wheel(0, 600);
+      await waitForInteraction(page, 200);
+    }
+
+    // Step 4: Wait for new charts to render and delayed data to arrive
+    await waitForCharts(page);
+    // Wait long enough for delayed responses (800ms) to arrive and setData() to fire
+    await waitForInteraction(page, 2000);
+
+    // Step 5: Verify ALL visible charts have the zoomed X range
+    await expect
+      .poll(
+        async () => {
+          const visibleChartCount = await getChartCount(page);
+          if (visibleChartCount === 0) return "no charts";
+
+          for (let i = 0; i < visibleChartCount; i++) {
+            const range = await getChartXScaleRange(page, i);
+            if (!range || !zoomedRange) continue;
+
+            const totalSpan = zoomedRange[1] - zoomedRange[0];
+            const tolerance = totalSpan * 0.1; // 10% tolerance
+
+            const minDiff = Math.abs(range[0] - zoomedRange[0]);
+            const maxDiff = Math.abs(range[1] - zoomedRange[1]);
+
+            if (minDiff > tolerance || maxDiff > tolerance) {
+              return `chart ${i} out of range: [${range[0]}, ${range[1]}] vs expected [${zoomedRange[0]}, ${zoomedRange[1]}]`;
+            }
+          }
+          return "ok";
+        },
+        {
+          timeout: 10000,
+          message:
+            "All visible charts should have the synced zoom range after delayed data refresh",
+        }
+      )
+      .toBe("ok");
+
+    // Remove the route handler
+    await page.unroute(
+      (url) => url.pathname.includes("/trpc") && url.href.includes("graph")
+    );
+  });
+
   test("no spurious zoom broadcast during scroll", async ({ page }) => {
     const projectHref = await navigateToFirstProject(page, orgSlug);
     if (!projectHref) {
