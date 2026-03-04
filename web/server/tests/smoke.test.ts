@@ -1548,6 +1548,61 @@ describe('SDK API Endpoints (with API Key)', () => {
       // Mark as cleaned up
       testViewId = null;
     });
+
+    it('Test 15.7: All widget types round-trip', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+
+      const allWidgetTypes = {
+        version: 1,
+        sections: [{
+          id: 'all-types',
+          name: 'All Widget Types',
+          collapsed: false,
+          widgets: [
+            { id: 'w-chart', type: 'chart', config: { metrics: ['loss'], xAxis: 'step', yAxisScale: 'linear', xAxisScale: 'linear', aggregation: 'LAST', showOriginal: false }, layout: { x: 0, y: 0, w: 6, h: 4 } },
+            { id: 'w-scatter', type: 'scatter', config: { xMetric: 'lr', yMetric: 'loss', xScale: 'linear', yScale: 'linear', xAggregation: 'LAST', yAggregation: 'LAST' }, layout: { x: 6, y: 0, w: 6, h: 4 } },
+            { id: 'w-single', type: 'single-value', config: { metric: 'accuracy', aggregation: 'LAST' }, layout: { x: 0, y: 4, w: 4, h: 2 } },
+            { id: 'w-hist', type: 'histogram', config: { metric: 'weights' }, layout: { x: 4, y: 4, w: 4, h: 2 } },
+            { id: 'w-logs', type: 'logs', config: { logName: 'stdout', maxLines: 100 }, layout: { x: 8, y: 4, w: 4, h: 2 } },
+            { id: 'w-fseries', type: 'file-series', config: { logName: 'images', mediaType: 'IMAGE' }, layout: { x: 0, y: 6, w: 6, h: 4 } },
+            { id: 'w-fgroup', type: 'file-group', config: { files: ['output.png'] }, layout: { x: 6, y: 6, w: 6, h: 4 } },
+          ],
+        }],
+        settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
+      };
+
+      // Create dashboard with all widget types
+      const createRes = await makeTrpcRequest('dashboardViews.create', {
+        projectName: TEST_PROJECT_NAME,
+        name: `Widget Types Test ${Date.now()}`,
+        config: allWidgetTypes,
+      }, { 'Cookie': sessionCookie }, 'POST');
+      expect(createRes.status).toBe(200);
+      const createData = await createRes.json();
+      const viewId = createData.result?.data?.id;
+      expect(viewId).toBeDefined();
+
+      // Read back and verify all 7 widget types survived
+      const getRes = await makeTrpcRequest('dashboardViews.get', {
+        viewId,
+      }, { 'Cookie': sessionCookie }, 'GET');
+      expect(getRes.status).toBe(200);
+      const getData = await getRes.json();
+      const widgets = getData.result?.data?.config?.sections?.[0]?.widgets;
+      expect(widgets).toHaveLength(7);
+      const types = widgets.map((w: any) => w.type).sort();
+      expect(types).toEqual(['chart', 'file-group', 'file-series', 'histogram', 'logs', 'scatter', 'single-value']);
+
+      // Verify file-group config specifically
+      const fgWidget = widgets.find((w: any) => w.type === 'file-group');
+      expect(fgWidget.config.files).toEqual(['output.png']);
+
+      // Cleanup
+      await makeTrpcRequest('dashboardViews.delete', { viewId }, { 'Cookie': sessionCookie }, 'POST');
+    });
   });
 
   // NOTE: Test Suites 16 and 17 are temporarily disabled until we can properly
@@ -2940,6 +2995,55 @@ describe('SDK API Endpoints (with API Key)', () => {
       expect(metricNames).toBeDefined();
       expect(metricNames.length).toBe(1);
       expect(metricNames[0]).toBe('train/metric_00');
+    });
+
+    it('Test 24.2b: Distinct metric names scoped to NaN/Inf run includes non-finite metrics', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+
+      // Find the nan-inf-metrics run
+      const listResponse = await makeTrpcRequest('runs.list', {
+        projectName: TEST_PROJECT_NAME,
+        search: 'nan-inf-metrics',
+        limit: 5,
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(listResponse.status).toBe(200);
+      const listData = await listResponse.json();
+      const runs = listData.result?.data?.runs;
+      expect(runs).toBeDefined();
+      expect(runs.length).toBeGreaterThan(0);
+
+      const nanInfRun = runs.find((r: any) => r.name === 'nan-inf-metrics');
+      expect(nanInfRun).toBeDefined();
+
+      // Query distinct metric names scoped to only this run.
+      // The nan-inf-metrics run has metrics with all-NaN/all-Inf values that
+      // are absent from mlop_metric_summaries (filtered by isFinite in the MV).
+      // PR #236 fix: queryDistinctMetrics queries mlop_metrics when runIds are
+      // provided, so these non-finite-only metrics still appear.
+      const response = await makeTrpcRequest('runs.distinctMetricNames', {
+        projectName: TEST_PROJECT_NAME,
+        runIds: [nanInfRun.id],
+        search: 'train/',
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      const metricNames: string[] = data.result?.data?.metricNames;
+      expect(metricNames).toBeDefined();
+
+      // The run has 14 train/* metrics in mlop_metrics, but only 6 in summaries.
+      // With the fix, all 14 should be returned.
+      expect(metricNames.length).toBe(14);
+
+      // Verify specific NaN/Inf-only metrics are present (these have no finite
+      // values and would be missing if querying mlop_metric_summaries)
+      for (const metric of ['train/loss', 'train/accuracy', 'train/lr', 'train/grad_norm']) {
+        expect(metricNames).toContain(metric);
+      }
     });
 
     it('Test 24.3: Batch fetch metric summaries', async () => {

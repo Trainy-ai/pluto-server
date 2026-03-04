@@ -151,6 +151,91 @@ async function seedClickHouseMetrics(
   await clickhouse.close();
 }
 
+/**
+ * Seeds NaN/Inf metric values for the nan-inf-metrics run via raw SQL.
+ * JSON.stringify converts NaN/Infinity to null, so we must use raw SQL
+ * with ClickHouse's native nan/inf literals.
+ *
+ * Layout (14 train/* metrics):
+ * - Indices 0-3:   all NaN   (invisible in summaries MV)
+ * - Indices 4-7:   all Inf   (invisible in summaries MV)
+ * - Indices 8-11:  mixed     (10% NaN, 90% finite — visible in summaries)
+ * - Indices 12-13: all finite (visible in summaries)
+ */
+async function seedNanInfMetrics(
+  runId: bigint,
+  tenantId: string,
+  projectName: string,
+): Promise<void> {
+  const clickhouseUrl = process.env.CLICKHOUSE_URL;
+  const clickhouseUser = process.env.CLICKHOUSE_USER || 'default';
+  const clickhousePassword = process.env.CLICKHOUSE_PASSWORD || '';
+
+  if (!clickhouseUrl) {
+    console.log('   ⚠ CLICKHOUSE_URL not set, skipping NaN/Inf seeding');
+    return;
+  }
+
+  const clickhouse = createClient({
+    url: clickhouseUrl,
+    username: clickhouseUser,
+    password: clickhousePassword,
+  });
+
+  const metricNames = [
+    'train/loss', 'train/accuracy', 'train/lr', 'train/grad_norm',
+    'train/epoch_time', 'train/precision', 'train/recall', 'train/f1',
+    'train/auc', 'train/perplexity', 'train/gpu_util', 'train/memory_used',
+    'train/throughput', 'train/latency',
+  ];
+  const STEPS = 100;
+  const baseTime = Date.now() - STEPS * 1000;
+  const rows: string[] = [];
+
+  for (let m = 0; m < metricNames.length; m++) {
+    const metricName = metricNames[m];
+    for (let step = 0; step < STEPS; step++) {
+      const time = new Date(baseTime + step * 1000)
+        .toISOString()
+        .replace('T', ' ')
+        .replace('Z', '');
+
+      let value: string;
+      if (m < 4) {
+        // All NaN (loss, accuracy, lr, grad_norm)
+        value = 'nan';
+      } else if (m < 8) {
+        // All Inf (epoch_time, precision, recall, f1)
+        value = m % 2 === 0 ? 'inf' : '-inf';
+      } else if (m < 12) {
+        // Mixed: first 10% NaN, rest finite (auc, perplexity, gpu_util, memory_used)
+        value = step / STEPS < 0.1 ? 'nan' : String(Math.random() * 10);
+      } else {
+        // All finite (throughput, latency)
+        value = String(Math.random() * 10);
+      }
+
+      rows.push(
+        `('${tenantId}','${projectName}',${Number(runId)},'train','${metricName}','${time}',${step},${value})`
+      );
+    }
+  }
+
+  console.log(`   📊 Inserting ${rows.length} NaN/Inf metric rows...`);
+
+  const CHUNK = 5000;
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    const chunk = rows.slice(i, i + CHUNK);
+    await clickhouse.command({
+      query: `INSERT INTO mlop_metrics (tenantId, projectName, runId, logGroup, logName, time, step, value)
+              VALUES ${chunk.join(',')}`,
+    });
+  }
+
+  await clickhouse.close();
+  console.log(`   ✓ Inserted ${rows.length} NaN/Inf metric rows`);
+}
+
 interface OrgSetupResult {
   org: { id: string; name: string; slug: string; createdAt: Date };
 }
@@ -607,6 +692,19 @@ async function setupTestData(): Promise<TestData> {
       updatedAt: new Date(),
     });
 
+    // Add nan-inf-metrics run for Test 24.2b (NaN/Inf metric visibility)
+    bulkRunData.push({
+      name: 'nan-inf-metrics',
+      organizationId: org.id,
+      projectId: project.id,
+      createdById: user.id,
+      creatorApiKeyId: apiKey.id,
+      status: 'COMPLETED' as const,
+      config: { epochs: 100, lr: 0.001 },
+      systemMetadata: { hostname: 'test-host', python: '3.11' },
+      updatedAt: new Date(),
+    });
+
     // Bulk create all runs at once
     await prisma.runs.createMany({
       data: bulkRunData,
@@ -663,6 +761,39 @@ async function setupTestData(): Promise<TestData> {
       METRICS_PER_RUN,
       DATAPOINTS_PER_METRIC,
     );
+
+    // Seed NaN/Inf metrics for the nan-inf-metrics run (Test 24.2b)
+    const nanInfRun = await prisma.runs.findFirst({
+      where: {
+        projectId: project.id,
+        organizationId: org.id,
+        name: 'nan-inf-metrics',
+      },
+      select: { id: true, name: true },
+    });
+
+    if (nanInfRun) {
+      // Register 14 train/* metric names in run_logs
+      const nanInfMetricNames = [
+        'loss', 'accuracy', 'lr', 'grad_norm', 'epoch_time',
+        'precision', 'recall', 'f1', 'auc', 'perplexity',
+        'gpu_util', 'memory_used', 'throughput', 'latency',
+      ];
+      const nanInfRunLogData = nanInfMetricNames.map((name) => ({
+        runId: nanInfRun.id,
+        logName: `train/${name}`,
+        logGroup: 'train',
+        logType: 'METRIC' as const,
+      }));
+      await prisma.runLogs.createMany({
+        data: nanInfRunLogData,
+        skipDuplicates: true,
+      });
+      console.log(`   ✓ Registered ${nanInfMetricNames.length} NaN/Inf metric names in run_logs`);
+
+      // Insert NaN/Inf metric values via raw SQL
+      await seedNanInfMetrics(nanInfRun.id, org.id, project.name);
+    }
   } else {
     console.log(`   ✓ Bulk runs already exist (found needle run)`);
   }
