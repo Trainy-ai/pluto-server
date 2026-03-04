@@ -4045,4 +4045,256 @@ describe('SDK API Endpoints (with API Key)', () => {
       expect(response.status).toBe(401);
     });
   });
+
+  // ============================================================================
+  // Test Suite 26: Resume Existing Run (POST /api/runs/resume)
+  // ============================================================================
+  describe('Test Suite 26: Resume Existing Run', () => {
+    const hasApiKey = TEST_API_KEY.length > 0;
+
+    describe.skipIf(!hasApiKey)('Resume run by various ID types', () => {
+      it('Test 26.1: Resume by numeric runId returns resumed: true with correct info', async () => {
+        // First, create a run
+        const createResponse = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `resume-target-${Date.now()}`,
+          }),
+        });
+        expect(createResponse.status).toBe(200);
+        const createData = await createResponse.json();
+        expect(createData.runId).toBeDefined();
+
+        // Now resume by runId
+        const resumeResponse = await makeRequest('/api/runs/resume', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            runId: createData.runId,
+          }),
+        });
+
+        expect(resumeResponse.status).toBe(200);
+        const resumeData = await resumeResponse.json();
+        expect(resumeData.resumed).toBe(true);
+        expect(resumeData.runId).toBe(createData.runId);
+        expect(resumeData.projectName).toBe(createData.projectName);
+        expect(resumeData.organizationSlug).toBe(createData.organizationSlug);
+        expect(resumeData.url).toBe(createData.url);
+        expect(resumeData.number).toBe(createData.number);
+        expect(resumeData.displayId).toBe(createData.displayId);
+      });
+
+      it('Test 26.2: Resume by displayId returns correct run', async () => {
+        // Create a run to get its displayId
+        const createResponse = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `resume-display-${Date.now()}`,
+          }),
+        });
+        expect(createResponse.status).toBe(200);
+        const createData = await createResponse.json();
+        expect(createData.displayId).toBeDefined();
+
+        // Resume by displayId (e.g., "MMP-1")
+        const resumeResponse = await makeRequest('/api/runs/resume', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            displayId: createData.displayId,
+          }),
+        });
+
+        expect(resumeResponse.status).toBe(200);
+        const resumeData = await resumeResponse.json();
+        expect(resumeData.resumed).toBe(true);
+        expect(resumeData.runId).toBe(createData.runId);
+        expect(resumeData.displayId).toBe(createData.displayId);
+      });
+
+      it('Test 26.3: Resume by externalId returns correct run', async () => {
+        const externalId = `resume-ext-${Date.now()}`;
+
+        // Create a run with externalId
+        const createResponse = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `resume-external-${Date.now()}`,
+            externalId,
+          }),
+        });
+        expect(createResponse.status).toBe(200);
+        const createData = await createResponse.json();
+
+        // Resume by externalId
+        const resumeResponse = await makeRequest('/api/runs/resume', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            externalId,
+            projectName: TEST_PROJECT_NAME,
+          }),
+        });
+
+        expect(resumeResponse.status).toBe(200);
+        const resumeData = await resumeResponse.json();
+        expect(resumeData.resumed).toBe(true);
+        expect(resumeData.runId).toBe(createData.runId);
+      });
+
+      it('Test 26.4: Resume by externalId without projectName returns 400', async () => {
+        const resumeResponse = await makeRequest('/api/runs/resume', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            externalId: 'some-id',
+          }),
+        });
+
+        expect(resumeResponse.status).toBe(400);
+      });
+
+      it('Test 26.5: Resume a non-existent run returns 404', async () => {
+        const resumeResponse = await makeRequest('/api/runs/resume', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            runId: 999999999,
+          }),
+        });
+
+        expect(resumeResponse.status).toBe(404);
+        const data = await resumeResponse.json();
+        expect(data.error).toBeDefined();
+      });
+
+      it('Test 26.6: Resume sets run status back to RUNNING', async () => {
+        // Create a run
+        const createResponse = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `resume-status-${Date.now()}`,
+          }),
+        });
+        expect(createResponse.status).toBe(200);
+        const createData = await createResponse.json();
+
+        // Mark it as completed
+        const statusResponse = await makeRequest('/api/runs/status/update', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            runId: createData.runId,
+            status: 'COMPLETED',
+          }),
+        });
+        expect(statusResponse.status).toBe(200);
+
+        // Resume the completed run
+        const resumeResponse = await makeRequest('/api/runs/resume', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            runId: createData.runId,
+          }),
+        });
+        expect(resumeResponse.status).toBe(200);
+        const resumeData = await resumeResponse.json();
+        expect(resumeData.resumed).toBe(true);
+
+        // Verify the status is now RUNNING by fetching run details
+        const detailsResponse = await makeRequest(`/api/runs/details/${createData.runId}`, {
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+        });
+        expect(detailsResponse.status).toBe(200);
+        const details = await detailsResponse.json();
+        expect(details.status).toBe('RUNNING');
+      });
+
+      it('Test 26.7: Resume without auth returns 401', async () => {
+        const resumeResponse = await makeRequest('/api/runs/resume', {
+          method: 'POST',
+          body: JSON.stringify({
+            runId: 1,
+          }),
+        });
+
+        expect(resumeResponse.status).toBe(401);
+      });
+
+      it('Test 26.8: Resume with no ID provided returns 400', async () => {
+        const resumeResponse = await makeRequest('/api/runs/resume', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({}),
+        });
+
+        expect(resumeResponse.status).toBe(400);
+      });
+
+      it('Test 26.9: Resume with multiple IDs returns 400', async () => {
+        const resumeResponse = await makeRequest('/api/runs/resume', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            runId: 123,
+            displayId: 'MMP-1',
+          }),
+        });
+
+        expect(resumeResponse.status).toBe(400);
+      });
+
+      it('Test 26.10: Resume with invalid displayId format returns 400', async () => {
+        const resumeResponse = await makeRequest('/api/runs/resume', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            displayId: 'not-a-valid-format-',
+          }),
+        });
+
+        expect(resumeResponse.status).toBe(400);
+      });
+    });
+  });
 });
