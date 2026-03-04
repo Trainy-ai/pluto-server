@@ -19,6 +19,14 @@ import { applyAlpha } from "@/lib/math/color-alpha";
 // Extracted modules
 import { formatAxisLabels, smartDateFormatter } from "./lib/format";
 import { arrayMin, arrayMax, filterDataForLogScale, alignDataForUPlot } from "./lib/data-processing";
+
+/** Check if a zoom range [min, max] overlaps with the data in an x-axis array. */
+function zoomOverlapsData(zoom: [number, number], xData: readonly number[]): boolean {
+  if (xData.length === 0) return false;
+  const dataMin = arrayMin(xData as number[]);
+  const dataMax = arrayMax(xData as number[]);
+  return zoom[0] < dataMax && zoom[1] > dataMin;
+}
 import { tooltipPlugin, type HoverState } from "./lib/tooltip-plugin";
 import { buildSeriesConfig } from "./lib/series-config";
 import { buildFocusDetectionHook, buildInterpolationDotsHook } from "./lib/cursor-hooks";
@@ -574,15 +582,10 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       // Validate syncedZoom - if it doesn't overlap with THIS chart's data, fall back to globalRange
       // IMPORTANT: Do NOT clear syncedZoomRange in context here! Other charts may still have
       // overlapping data. Each chart should just locally fall back to globalRange.
-      if (syncedZoom && dataMin !== null && dataMax !== null) {
-        const [zoomMin, zoomMax] = syncedZoom;
-        // Check if zoom range has any overlap with data range
-        const hasOverlap = zoomMin < dataMax && zoomMax > dataMin;
-        if (!hasOverlap) {
-          // Zoom is completely outside THIS chart's data range - fall back to global range locally
-          rangeToApply = globalRange;
-          // Don't clear syncedZoomRange - other charts may still use it
-        }
+      if (syncedZoom && !zoomOverlapsData(syncedZoom, xData)) {
+        // Zoom is completely outside THIS chart's data range - fall back to global range locally
+        rangeToApply = globalRange;
+        // Don't clear syncedZoomRange - other charts may still use it
       }
 
       if (!rangeToApply) return;
@@ -933,6 +936,69 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
               // Manual focus detection in setCursor handles emphasis instead
             },
           ],
+          draw: [
+            (u) => {
+              // Re-stroke highlighted series on top so it isn't obscured by later-indexed series.
+              // uPlot draws series in array order; this hook fires after ALL series are drawn.
+              const localFocusIdx = lastFocusedSeriesRef.current;
+              const crossChartRunId = crossChartRunIdRef.current;
+              const tableId = tableHighlightRef.current;
+
+              if (localFocusIdx === null && crossChartRunId === null && tableId === null) return;
+
+              // Collect highlighted series indices
+              const highlightedIndices: number[] = [];
+              for (let si = 1; si < u.series.length; si++) {
+                if (!u.series[si].show) continue;
+                if (localFocusIdx !== null) {
+                  if (si === localFocusIdx) highlightedIndices.push(si);
+                } else {
+                  const seriesId = (u.series[si] as any)?._seriesId;
+                  const matchId = crossChartRunId ?? tableId;
+                  if (seriesId === matchId || (seriesId && seriesId.startsWith(matchId + ':'))) {
+                    highlightedIndices.push(si);
+                  }
+                }
+              }
+              if (highlightedIndices.length === 0) return;
+
+              const ctx = u.ctx;
+              const { left, top, width: bboxW, height: bboxH } = u.bbox;
+
+              for (const si of highlightedIndices) {
+                const s = u.series[si];
+                const paths = (s as any)._paths;
+                if (!paths?.stroke) continue;
+
+                const lineWidth = Math.round((s.width ?? 1.5) * devicePixelRatio * 1000) / 1000;
+                const offset = (lineWidth % 2) / 2;
+
+                ctx.save();
+
+                // Clip to plot area (mirrors uPlot's boundsClip)
+                const boundsClip = new Path2D();
+                boundsClip.rect(left - lineWidth / 2, top - lineWidth / 2, bboxW + lineWidth, bboxH + lineWidth);
+                ctx.clip(boundsClip);
+
+                // Apply gap clipping if present
+                if (paths.clip) ctx.clip(paths.clip);
+
+                // Pixel alignment
+                if (offset > 0) ctx.translate(offset, offset);
+
+                ctx.lineWidth = lineWidth;
+                ctx.strokeStyle = typeof s.stroke === 'function' ? s.stroke(u, si) : (s.stroke as string);
+                ctx.lineJoin = 'round';
+                ctx.lineCap = ((s as any).cap ?? 'butt') as CanvasLineCap;
+                if (s.dash) ctx.setLineDash(s.dash.map((v: number) => v * devicePixelRatio));
+
+                ctx.stroke(paths.stroke);
+
+                if (offset > 0) ctx.translate(-offset, -offset);
+                ctx.restore();
+              }
+            },
+          ],
           setScale: [
             (u, scaleKey) => {
               // Handle X-axis scale changes (zoom)
@@ -1198,12 +1264,25 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           prevDataStructureRef.current &&
           prevDataStructureRef.current.seriesCount === currentSeriesCount
         ) {
-          // Structure and options are the same - use setData() to preserve zoom
+          // Structure and options are the same - use setData() for efficiency, then restore zoom
           try {
             isProgrammaticScaleRef.current = true;
             chartRef.current.batch(() => {
               chartRef.current!.setData(uplotData);
             });
+
+            // Re-apply synced zoom after setData (which resets scales to auto).
+            // Without this, data refreshes (standard query replacing preview,
+            // stale-time refetch) reset the X scale to full data range, losing zoom.
+            // Mirrors the pattern in the zoom re-downsample path (~line 1039-1041).
+            if (!logXAxis && !isDateTime) {
+              const syncedZoom = chartSyncContextRef.current?.syncedZoomRange;
+              if (syncedZoom && zoomOverlapsData(syncedZoom, uplotData[0] as number[])) {
+                chartRef.current.batch(() => {
+                  chartRef.current!.setScale("x", { min: syncedZoom[0], max: syncedZoom[1] });
+                });
+              }
+            }
           } finally {
             isProgrammaticScaleRef.current = false;
           }
@@ -1244,6 +1323,9 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       }
       chartRef.current = chart;
       chartCreatedRef.current = true;
+
+      // Expose uPlot instance on root DOM element for E2E test access
+      (chart.root as any)._uplot = chart;
 
       // Hide legend rows for "(original)" smoothing companion series
       // so the legend matches the tooltip format (combined values per run)
@@ -1300,18 +1382,16 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         if (syncedZoom) {
           // Validate synced zoom overlaps with data
           const xData = uplotData[0] as number[];
-          if (xData.length > 0) {
-            const dataMin = arrayMin(xData);
-            const dataMax = arrayMax(xData);
-            const hasOverlap = syncedZoom[0] < dataMax && syncedZoom[1] > dataMin;
-            if (process.env.NODE_ENV === 'development') {
-              console.log(`[uPlot ${chartId}] Zoom validation - syncedZoom: [${syncedZoom[0]}, ${syncedZoom[1]}], dataRange: [${dataMin}, ${dataMax}], hasOverlap: ${hasOverlap}`);
-            }
-            if (hasOverlap) {
-              rangeToApply = syncedZoom;
-              isUserZoom = true;
-            }
-          } else if (process.env.NODE_ENV === 'development') {
+          const hasOverlap = zoomOverlapsData(syncedZoom, xData);
+          if (process.env.NODE_ENV === 'development') {
+            const dataMin = xData.length > 0 ? arrayMin(xData) : null;
+            const dataMax = xData.length > 0 ? arrayMax(xData) : null;
+            console.log(`[uPlot ${chartId}] Zoom validation - syncedZoom: [${syncedZoom[0]}, ${syncedZoom[1]}], dataRange: [${dataMin}, ${dataMax}], hasOverlap: ${hasOverlap}`);
+          }
+          if (hasOverlap) {
+            rangeToApply = syncedZoom;
+            isUserZoom = true;
+          } else if (process.env.NODE_ENV === 'development' && xData.length === 0) {
             console.log(`[uPlot ${chartId}] No xData to validate zoom against`);
           }
         }
@@ -1452,26 +1532,21 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           const lateSyncedZoom = ctx?.syncedZoomRange;
           if (lateSyncedZoom && chart) {
             const xData = chart.data[0] as number[];
-            if (xData && xData.length > 0) {
-              const dataMin = arrayMin(xData);
-              const dataMax = arrayMax(xData);
-              const hasOverlap = lateSyncedZoom[0] < dataMax && lateSyncedZoom[1] > dataMin;
-              if (hasOverlap && !lastAppliedGlobalRangeRef.current) {
-                if (process.env.NODE_ENV === 'development') {
-                  console.log(`[uPlot ${chartId}] Late sync - applying zoom: [${lateSyncedZoom[0]}, ${lateSyncedZoom[1]}]`);
-                }
-                lastAppliedGlobalRangeRef.current = lateSyncedZoom;
-                userHasZoomedRef.current = true;
-                try {
-                  isProgrammaticScaleRef.current = true;
-                  chart.batch(() => {
-                    chart.setScale("x", { min: lateSyncedZoom[0], max: lateSyncedZoom[1] });
-                  });
-                } catch {
-                  // Chart may have been destroyed
-                } finally {
-                  isProgrammaticScaleRef.current = false;
-                }
+            if (xData && zoomOverlapsData(lateSyncedZoom, xData) && !lastAppliedGlobalRangeRef.current) {
+              if (process.env.NODE_ENV === 'development') {
+                console.log(`[uPlot ${chartId}] Late sync - applying zoom: [${lateSyncedZoom[0]}, ${lateSyncedZoom[1]}]`);
+              }
+              lastAppliedGlobalRangeRef.current = lateSyncedZoom;
+              userHasZoomedRef.current = true;
+              try {
+                isProgrammaticScaleRef.current = true;
+                chart.batch(() => {
+                  chart.setScale("x", { min: lateSyncedZoom[0], max: lateSyncedZoom[1] });
+                });
+              } catch {
+                // Chart may have been destroyed
+              } finally {
+                isProgrammaticScaleRef.current = false;
               }
             }
           }
