@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/tooltip";
 import { ChevronDown, ChevronRight, Eye, EyeOff, Search, X, Code2, Text, GitCompareArrows } from "lucide-react";
 import { formatValue } from "@/lib/flatten-object";
+import { getDisplayIdForRun } from "../../~lib/metrics-utils";
 
 interface SideBySideViewProps {
   selectedRunsWithColors: Record<string, { run: Run; color: string }>;
@@ -582,6 +583,10 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
       getValue: (run: Run) => run.name || "-",
     },
     {
+      key: "Display ID",
+      getValue: (run: Run) => getDisplayIdForRun(run) || "-",
+    },
+    {
       key: "Id",
       getValue: (run: Run) => run.id,
     },
@@ -891,6 +896,12 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
                     )}
                     <span className="truncate text-xs" title={run.name}>
                       {run.name}
+                      {(() => {
+                        const displayId = getDisplayIdForRun(run);
+                        return displayId ? (
+                          <span className="ml-1 text-muted-foreground">({displayId})</span>
+                        ) : null;
+                      })()}
                     </span>
                     {isRef && (
                       <span className="shrink-0 rounded bg-destructive/20 px-1 py-0.5 text-[9px] font-bold uppercase leading-none text-destructive">
