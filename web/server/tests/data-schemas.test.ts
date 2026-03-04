@@ -656,3 +656,87 @@ describe('DashboardViewConfigSchema: full dashboard save', () => {
     expect(logsWidget.config).toHaveProperty('logName', 'stdout');
   });
 });
+
+// ============================================================================
+// Suite 8: Chart widget xAxis — new values accepted, backward compat preserved
+// ============================================================================
+
+describe('Dashboard WidgetSchema: chart xAxis values', () => {
+  const baseChart = {
+    metrics: ['train/loss'],
+    yAxisScale: 'linear',
+    xAxisScale: 'linear',
+    aggregation: 'LAST',
+    showOriginal: false,
+  };
+
+  it.each([
+    ['step', 'step'],
+    ['time', 'time'],
+    ['absolute-time', 'absolute-time'],
+    ['relative-time', 'relative-time'],
+  ])('accepts built-in xAxis value "%s"', (xAxis, expected) => {
+    const widget = mkWidget('chart', { ...baseChart, xAxis });
+    const result = WidgetSchema.safeParse(widget);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.config).toHaveProperty('xAxis', expected);
+    }
+  });
+
+  it('accepts custom metric name as xAxis (parametric curve)', () => {
+    const widget = mkWidget('chart', { ...baseChart, xAxis: 'learning_rate' });
+    const result = WidgetSchema.safeParse(widget);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.config).toHaveProperty('xAxis', 'learning_rate');
+    }
+  });
+
+  it('accepts nested metric path as xAxis', () => {
+    const widget = mkWidget('chart', { ...baseChart, xAxis: 'training/epoch_loss' });
+    const result = WidgetSchema.safeParse(widget);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.config).toHaveProperty('xAxis', 'training/epoch_loss');
+    }
+  });
+
+  it('defaults xAxis to "step" when omitted', () => {
+    const widget = mkWidget('chart', { ...baseChart });
+    const result = WidgetSchema.safeParse(widget);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.config).toHaveProperty('xAxis', 'step');
+    }
+  });
+
+  it('xAxis survives full dashboard save → load round-trip', () => {
+    const dashboard = {
+      version: 1,
+      sections: [{
+        id: 's1',
+        name: 'Custom Axes',
+        collapsed: false,
+        widgets: [
+          { id: 'w-step', type: 'chart', config: { ...baseChart, xAxis: 'step' }, layout },
+          { id: 'w-abs', type: 'chart', config: { ...baseChart, xAxis: 'absolute-time' }, layout },
+          { id: 'w-rel', type: 'chart', config: { ...baseChart, xAxis: 'relative-time' }, layout },
+          { id: 'w-custom', type: 'chart', config: { ...baseChart, xAxis: 'learning_rate' }, layout },
+          { id: 'w-legacy', type: 'chart', config: { ...baseChart, xAxis: 'time' }, layout },
+        ],
+      }],
+      settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' as const },
+    };
+
+    const first = DashboardViewConfigSchema.parse(dashboard);
+    const second = DashboardViewConfigSchema.parse(first);
+
+    const widgets = second.sections[0].widgets;
+    expect(widgets[0].config).toHaveProperty('xAxis', 'step');
+    expect(widgets[1].config).toHaveProperty('xAxis', 'absolute-time');
+    expect(widgets[2].config).toHaveProperty('xAxis', 'relative-time');
+    expect(widgets[3].config).toHaveProperty('xAxis', 'learning_rate');
+    expect(widgets[4].config).toHaveProperty('xAxis', 'time');
+  });
+});
