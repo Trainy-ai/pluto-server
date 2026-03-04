@@ -55,6 +55,11 @@ const STEP_FREQ_CONFIGS: Record<number, { stepInterval: number; label: string }>
 };
 const STEP_FREQ_MAX_STEP = 10_000;
 
+// NaN/Inf test run: metrics with non-finite values to test that the
+// mlop_metric_summaries materialized view (which filters isFinite) doesn't
+// hide these metrics from the widget config dialog.
+const NAN_INF_RUN_INDEX = 16; // 'nan-inf-metrics' run index
+
 // Metric groups and names for realistic variety
 const METRIC_GROUPS = ['train', 'eval', 'system', 'custom', 'test'];
 const METRIC_NAMES = [
@@ -471,6 +476,79 @@ async function seedClickHouseMetrics(
 }
 
 /**
+ * Seeds NaN/Inf metric values for the nan-inf-metrics run via raw SQL.
+ * JSON.stringify converts NaN/Infinity to null, so we must use raw SQL
+ * with ClickHouse's native nan/inf literals.
+ *
+ * Layout (metric indices 4-15, i.e. first 12 non-test metrics):
+ * - Indices 4-7:   all NaN  (invisible in summaries MV)
+ * - Indices 8-11:  all Inf  (invisible in summaries MV)
+ * - Indices 12-15: mixed    (NaN for first 10% of steps, then finite)
+ */
+async function seedNanInfMetrics(
+  runId: bigint,
+  tenantId: string,
+  projectName: string,
+): Promise<void> {
+  const clickhouseUrl = process.env.CLICKHOUSE_URL;
+  const clickhouseUser = process.env.CLICKHOUSE_USER || 'default';
+  const clickhousePassword = process.env.CLICKHOUSE_PASSWORD || '';
+
+  if (!clickhouseUrl) return;
+
+  const clickhouse = createClient({
+    url: clickhouseUrl,
+    username: clickhouseUser,
+    password: clickhousePassword,
+  });
+
+  const STEPS = 100; // Enough to demonstrate the issue
+  const baseTime = Date.now() - STEPS * 1000;
+  const rows: string[] = [];
+
+  for (let m = TEST_METRIC_NAMES.length; m < TEST_METRIC_NAMES.length + 12; m++) {
+    const { group, name } = getMetricName(m);
+    for (let step = 0; step < STEPS; step++) {
+      const time = new Date(baseTime + step * 1000)
+        .toISOString()
+        .replace('T', ' ')
+        .replace('Z', '');
+
+      let value: string;
+      if (m < TEST_METRIC_NAMES.length + 4) {
+        // All NaN
+        value = 'nan';
+      } else if (m < TEST_METRIC_NAMES.length + 8) {
+        // All Inf (alternate +/-)
+        value = m % 2 === 0 ? 'inf' : '-inf';
+      } else {
+        // Mixed: first 10% NaN, rest finite
+        value = step / STEPS < 0.1 ? 'nan' : String(Math.random() * 10);
+      }
+
+      rows.push(
+        `('${tenantId}','${projectName}',${Number(runId)},'${group}','${name}','${time}',${step},${value})`
+      );
+    }
+  }
+
+  console.log(`   Inserting ${rows.length} NaN/Inf metric rows for nan-inf-metrics run...`);
+
+  // Insert in chunks to avoid query size limits
+  const CHUNK = 5000;
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    const chunk = rows.slice(i, i + CHUNK);
+    await clickhouse.command({
+      query: `INSERT INTO mlop_metrics (tenantId, projectName, runId, logGroup, logName, time, step, value)
+              VALUES ${chunk.join(',')}`,
+    });
+  }
+
+  await clickhouse.close();
+  console.log(`   Inserted ${rows.length} NaN/Inf metric rows`);
+}
+
+/**
  * Generates a config prefix string for log messages.
  */
 function getConfigPrefix(runIndex: number): string {
@@ -863,6 +941,7 @@ async function backfillMetricSummaries(
           sum(value * value)
         FROM mlop_metrics
         WHERE tenantId = {tenantId:String} AND projectName = {projectName:String}
+          AND isFinite(value)
         GROUP BY tenantId, projectName, runId, logName`,
       query_params: { tenantId, projectName },
     });
@@ -1509,6 +1588,7 @@ async function main() {
       'freq-every-5',      // Index 13 - Logs every 5 steps (step 0,5,10,...,10000)
       'freq-every-10',     // Index 14 - Logs every 10 steps (step 0,10,20,...,10000)
       'freq-every-50',     // Index 15 - Logs every 50 steps (step 0,50,100,...,10000)
+      'nan-inf-metrics',   // Index 16 - Some metrics are all NaN/Inf (tests summaries MV filtering)
     ];
 
     // Unique tag per run for stress testing (170 unique tags)
@@ -1623,6 +1703,13 @@ async function main() {
 
   // Always seed ClickHouse (check if metrics exist first)
   await seedClickHouseMetrics(allRuns, org.id, project.name);
+
+  // Seed NaN/Inf metrics for the nan-inf-metrics run via raw SQL
+  // (JSON.stringify can't represent NaN/Infinity, so these must be inserted separately)
+  const nanInfRun = allRuns[NAN_INF_RUN_INDEX];
+  if (nanInfRun) {
+    await seedNanInfMetrics(nanInfRun.id, org.id, project.name);
+  }
 
   // Seed ClickHouse logs with story-driven patterns
   await seedClickHouseLogs(allRuns, org.id, project.name);

@@ -176,9 +176,19 @@ export async function queryDistinctMetrics(
     queryParams.runIds = runIds;
   }
 
+  // When scoped to specific runs, query mlop_metrics (the source table) instead of
+  // mlop_metric_summaries. The materialized view that populates summaries has a
+  // WHERE isFinite(value) filter, so metrics whose values are all non-finite
+  // (NaN/Inf) for a run won't appear in the summaries table even though the
+  // metric data exists. The mlop_metrics primary index on
+  // (tenantId, projectName, runId, logGroup, logName) keeps this efficient.
+  const table = runIds && runIds.length > 0
+    ? "mlop_metrics"
+    : "mlop_metric_summaries";
+
   const query = `
     SELECT DISTINCT logName
-    FROM mlop_metric_summaries
+    FROM ${table}
     WHERE tenantId = {tenantId: String}
       AND projectName = {projectName: String}
       ${searchFilter}
