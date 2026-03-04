@@ -295,6 +295,154 @@ router.openapi(createRunRoute, async (c) => {
   }, 200);
 });
 
+// ============= Resume Existing Run =============
+const resumeRunRoute = createRoute({
+  method: "post",
+  path: "/resume",
+  tags: ["Runs"],
+  summary: "Resume an existing run",
+  description: "Resumes an existing run, setting its status back to RUNNING. Returns the same response format as create. Use this when you want to log additional data (e.g., evaluation metrics) to a previously completed run. Provide exactly one of: runId (numeric), displayId (e.g., 'MMP-1'), or externalId (user-provided).",
+  security: [{ bearerAuth: [] }],
+  request: {
+    body: {
+      content: {
+        "application/json": {
+          schema: z.object({
+            runId: z.number().optional().openapi({ description: "Numeric ID of the run to resume", example: 123 }),
+            displayId: z.string().optional().openapi({ description: "Human-readable display ID (e.g., 'MMP-1')", example: "MMP-1" }),
+            externalId: z.string().optional().openapi({ description: "User-provided external ID", example: "my-training-run-v1" }),
+            projectName: z.string().optional().openapi({ description: "Project name (required when using externalId, since externalId is scoped to a project)", example: "my-project" }),
+          }).refine(
+            (data) => [data.runId, data.displayId, data.externalId].filter((v) => v !== undefined).length === 1,
+            { message: "Provide exactly one of: runId, displayId, or externalId" },
+          ),
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: "Run resumed successfully",
+      content: {
+        "application/json": {
+          schema: z.object({
+            runId: z.number().openapi({ description: "Numeric ID of the resumed run" }),
+            number: z.number().nullable().openapi({ description: "Sequential run number within the project" }),
+            displayId: z.string().nullable().openapi({ description: "Human-readable display ID (e.g., 'MMP-1')" }),
+            projectName: z.string().openapi({ description: "Name of the project" }),
+            organizationSlug: z.string().openapi({ description: "Organization slug" }),
+            url: z.string().openapi({ description: "URL to view the run" }),
+            resumed: z.boolean().openapi({ description: "Always true for this endpoint" }),
+          }).openapi("ResumeRunResponse"),
+        },
+      },
+    },
+    400: {
+      description: "Bad request",
+      content: { "application/json": { schema: ErrorSchema } },
+    },
+    401: {
+      description: "Unauthorized",
+      content: { "application/json": { schema: ErrorSchema } },
+    },
+    404: {
+      description: "Run not found",
+      content: { "application/json": { schema: ErrorSchema } },
+    },
+  },
+});
+
+router.use(resumeRunRoute.path, withApiKey);
+router.openapi(resumeRunRoute, async (c) => {
+  const apiKey = c.get("apiKey");
+  const body = c.req.valid("json");
+
+  const ctx = await createContext({ hono: c });
+  const organizationId = apiKey.organization.id;
+
+  let run: {
+    id: bigint;
+    number: number | null;
+    status: string;
+    project: { name: string; runPrefix: string | null };
+  } | null = null;
+
+  if (body.runId !== undefined) {
+    // Lookup by numeric ID
+    run = await ctx.prisma.runs.findFirst({
+      where: { id: body.runId, organizationId },
+      select: {
+        id: true, number: true, status: true,
+        project: { select: { name: true, runPrefix: true } },
+      },
+    });
+  } else if (body.displayId !== undefined) {
+    // Parse display ID (e.g., "MMP-1" → prefix "MMP", number 1)
+    const match = body.displayId.match(/^([^-]+)-(\d+)$/);
+    if (!match) {
+      return c.json({ error: "Invalid displayId format. Expected PREFIX-NUMBER (e.g., 'MMP-1')" }, 400);
+    }
+    const [, prefix, numberStr] = match;
+    run = await ctx.prisma.runs.findFirst({
+      where: {
+        number: parseInt(numberStr, 10),
+        organizationId,
+        project: { runPrefix: prefix.toUpperCase() },
+      },
+      select: {
+        id: true, number: true, status: true,
+        project: { select: { name: true, runPrefix: true } },
+      },
+    });
+  } else if (body.externalId !== undefined) {
+    // Lookup by external ID (requires projectName since externalId is scoped to project)
+    if (!body.projectName) {
+      return c.json({ error: "projectName is required when using externalId" }, 400);
+    }
+    run = await ctx.prisma.runs.findFirst({
+      where: {
+        externalId: body.externalId,
+        organizationId,
+        project: { name: body.projectName, organizationId },
+      },
+      select: {
+        id: true, number: true, status: true,
+        project: { select: { name: true, runPrefix: true } },
+      },
+    });
+  }
+
+  if (!run) {
+    return c.json({ error: "Run not found" }, 404);
+  }
+
+  // Set run status back to RUNNING so the SDK can log new data
+  if (run.status !== RunStatus.RUNNING) {
+    await ctx.prisma.runs.update({
+      where: { id: run.id },
+      data: { status: RunStatus.RUNNING, statusUpdated: new Date() },
+    });
+  }
+
+  const encodedRunId = sqidEncode(run.id);
+  const projectName = run.project.name;
+  const runUrl = `${env.BETTER_AUTH_URL}/o/${apiKey.organization.slug}/projects/${encodeURIComponent(projectName)}/${encodedRunId}`;
+
+  const computedDisplayId = run.number != null && run.project.runPrefix
+    ? `${run.project.runPrefix}-${run.number}`
+    : null;
+
+  return c.json({
+    runId: Number(run.id),
+    number: run.number,
+    displayId: computedDisplayId,
+    projectName,
+    organizationSlug: apiKey.organization.slug,
+    url: runUrl,
+    resumed: true,
+  }, 200);
+});
+
 // ============= Update Status =============
 const updateStatusRoute = createRoute({
   method: "post",
