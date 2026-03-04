@@ -21,6 +21,7 @@ import { formatRunLabel } from "@/lib/format-run-label";
 import { getDisplayIdForRun } from "../../~lib/metrics-utils";
 import { SYNTHETIC_CONSOLE_ENTRIES, isConsoleLogType } from "./console-log-constants";
 import { ConsoleLogWidget } from "./console-log-widget";
+import { mapXAxisToDisplayLogName } from "./x-axis-utils";
 
 /** Cap parallel pattern-resolution queries per widget to prevent request storms */
 const MAX_PATTERN_QUERIES = 20;
@@ -259,6 +260,7 @@ function ChartWidget({
         onResetBounds={onResetBounds}
         logXAxis={config.xAxisScale === "log" ? true : undefined}
         logYAxis={config.yAxisScale === "log" ? true : undefined}
+        xAxisOverride={mapXAxisToDisplayLogName(config.xAxis)}
         settingsRunId={settingsRunId}
       />
     </div>

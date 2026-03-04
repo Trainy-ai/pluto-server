@@ -13,7 +13,9 @@ import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -429,23 +431,16 @@ function ChartConfigForm({
         </div>
       )}
 
-      <div className="grid grid-cols-2 gap-4">
-        <div className="grid gap-2">
-          <Label>X-Axis</Label>
-          <Select
-            value={config.xAxis ?? "step"}
-            onValueChange={(value) => onChange({ ...config, xAxis: value })}
-          >
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="step">Step</SelectItem>
-              <SelectItem value="time">Time</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
+      <XAxisSelector
+        value={config.xAxis ?? "step"}
+        onChange={(value) => onChange({ ...config, xAxis: value })}
+        yMetrics={config.metrics ?? []}
+        organizationId={organizationId}
+        projectName={projectName}
+        selectedRunIds={selectedRunIds}
+      />
 
+      <div className="grid grid-cols-2 gap-4">
         <div className="grid gap-2">
           <Label>Aggregation</Label>
           <Select
@@ -514,6 +509,104 @@ function ChartConfigForm({
           </Select>
         </div>
       </div>
+    </div>
+  );
+}
+
+// X-Axis selector with built-in options and custom metric support
+function XAxisSelector({
+  value,
+  onChange,
+  yMetrics,
+  organizationId,
+  projectName,
+  selectedRunIds,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  yMetrics: string[];
+  organizationId: string;
+  projectName: string;
+  selectedRunIds?: string[];
+}) {
+  const { data: runMetrics } = useRunMetricNames(
+    organizationId,
+    projectName,
+    selectedRunIds ?? [],
+  );
+
+  // Build list of available metrics for custom x-axis, excluding y-axis metrics
+  const customMetrics = useMemo(() => {
+    const names = runMetrics?.metricNames ?? [];
+    const ySet = new Set(yMetrics);
+    return names.filter((m) => !ySet.has(m)).sort((a, b) => a.localeCompare(b));
+  }, [runMetrics, yMetrics]);
+
+  // Normalize legacy "time" value to "absolute-time"
+  const normalizedValue = value === "time" ? "absolute-time" : value;
+
+  // Check if current value is a custom metric (not a built-in option)
+  const isCustomMetric =
+    normalizedValue !== "step" &&
+    normalizedValue !== "absolute-time" &&
+    normalizedValue !== "relative-time";
+
+  // Display label for the current value
+  const displayLabel = useMemo(() => {
+    switch (normalizedValue) {
+      case "step":
+        return "Step";
+      case "absolute-time":
+        return "Absolute Time";
+      case "relative-time":
+        return "Relative Time";
+      default:
+        return normalizedValue;
+    }
+  }, [normalizedValue]);
+
+  return (
+    <div className="grid gap-2">
+      <Label>X-Axis</Label>
+      <Select value={normalizedValue} onValueChange={onChange}>
+        <SelectTrigger>
+          <SelectValue>{displayLabel}</SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          <SelectGroup>
+            <SelectLabel>Built-in</SelectLabel>
+            <SelectItem value="step">Step</SelectItem>
+            <SelectItem value="absolute-time">Absolute Time</SelectItem>
+            <SelectItem value="relative-time">Relative Time</SelectItem>
+          </SelectGroup>
+          {customMetrics.length > 0 && (
+            <SelectGroup>
+              <SelectLabel>Metrics (parametric)</SelectLabel>
+              {customMetrics.slice(0, 50).map((metric) => (
+                <SelectItem key={metric} value={metric}>
+                  {metric}
+                </SelectItem>
+              ))}
+              {customMetrics.length > 50 && (
+                <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                  +{customMetrics.length - 50} more (use line settings for full list)
+                </div>
+              )}
+            </SelectGroup>
+          )}
+          {/* Keep selected value visible even if not in the lists above */}
+          {isCustomMetric && !customMetrics.includes(normalizedValue) && (
+            <SelectGroup>
+              <SelectItem value={normalizedValue}>{normalizedValue}</SelectItem>
+            </SelectGroup>
+          )}
+        </SelectContent>
+      </Select>
+      {isCustomMetric && (
+        <p className="text-xs text-muted-foreground">
+          Parametric curve: plots y-metrics vs. <code className="rounded bg-muted px-1">{normalizedValue}</code>, joined by step.
+        </p>
+      )}
     </div>
   );
 }

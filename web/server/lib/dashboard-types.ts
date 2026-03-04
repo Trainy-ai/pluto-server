@@ -50,7 +50,13 @@ export const BaseWidgetConfigSchema = z.object({
 // Chart widget config (line graph)
 export const ChartWidgetConfigSchema = BaseWidgetConfigSchema.extend({
   metrics: z.array(z.string()), // ["training/loss", "validation/loss"]
-  xAxis: z.string().default("step"), // "step", "time", or specific metric name
+  // X-axis mode:
+  //   "step"           → training step number (integer sequence, default)
+  //   "absolute-time"  → wall-clock timestamp (DateTime)
+  //   "relative-time"  → elapsed time since first data point
+  //   "time"           → legacy alias for "absolute-time" (backward compat)
+  //   "<metric-name>"  → any other string = custom metric (parametric curve, joined by step)
+  xAxis: z.string().default("step"),
   yAxisScale: ScaleTypeSchema.default("linear"),
   xAxisScale: ScaleTypeSchema.default("linear"),
   aggregation: AggregationTypeSchema.default("LAST"),

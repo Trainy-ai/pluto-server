@@ -22,6 +22,12 @@ export interface BaseWidgetConfig {
 // Chart widget config (line graph)
 export interface ChartWidgetConfig extends BaseWidgetConfig {
   metrics: string[];
+  // X-axis mode:
+  //   "step"           → training step number (integer sequence, default)
+  //   "absolute-time"  → wall-clock timestamp (DateTime)
+  //   "relative-time"  → elapsed time since first data point
+  //   "time"           → legacy alias for "absolute-time" (backward compat)
+  //   "<metric-name>"  → any other string = custom metric (parametric curve, joined by step)
   xAxis: string;
   yAxisScale: ScaleType;
   xAxisScale: ScaleType;

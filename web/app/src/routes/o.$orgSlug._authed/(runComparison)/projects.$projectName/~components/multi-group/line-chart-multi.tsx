@@ -9,7 +9,7 @@ import { trpc, trpcClient } from "@/utils/trpc";
 import { useCheckDatabaseSize } from "@/lib/db/local-cache";
 import { metricsCache, type MetricDataPoint } from "@/lib/db/index";
 import { useLocalQueries } from "@/lib/hooks/use-local-query";
-import { useLineSettings } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/use-line-settings";
+import { useLineSettings, type DisplayLogName } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/use-line-settings";
 import { useZoomRefetch, zoomKey } from "@/lib/hooks/use-zoom-refetch";
 import { useChartSyncContext } from "@/components/charts/context/chart-sync-context";
 import {
@@ -86,6 +86,9 @@ interface MultiLineChartProps {
   logXAxis?: boolean;
   /** Override log Y-axis scale (per-widget config takes precedence over global settings) */
   logYAxis?: boolean;
+  /** Override x-axis mode (per-widget config takes precedence over global line settings).
+   *  Values: "Step", "Absolute Time", "Relative Time", or a custom metric name. */
+  xAxisOverride?: DisplayLogName;
   /** When provided, reads line settings from this runId instead of the "full" key */
   settingsRunId?: string;
 }
@@ -125,6 +128,7 @@ const MultiLineChartInner = memo(
     syncedZoomRange,
     logXAxis: logXAxisOverride,
     logYAxis: logYAxisOverride,
+    xAxisOverride,
     settingsRunId,
   }: MultiLineChartInnerProps) => {
     useCheckDatabaseSize(metricsCache);
@@ -140,9 +144,10 @@ const MultiLineChartInner = memo(
     // Use run-specific settings when available, otherwise fall back to "full"
     const { settings } = useLineSettings(organizationId, projectName, settingsRunId ?? "full");
 
-    // Per-widget log scale overrides take precedence over global settings
+    // Per-widget overrides take precedence over global settings
     const logXAxis = logXAxisOverride ?? settings.xAxisLogScale;
     const logYAxis = logYAxisOverride ?? settings.yAxisLogScale;
+    const effectiveXAxis: DisplayLogName = xAxisOverride ?? settings.selectedLog;
 
     // Use Infinity staleTime for completed runs since their data won't change
     const staleTime = allRunsCompleted ? COMPLETED_RUN_STALE_TIME : ACTIVE_RUN_STALE_TIME;
@@ -233,18 +238,18 @@ const MultiLineChartInner = memo(
       return map;
     }, [metricNames, previewQueries]);
 
-    // If the selected log is not a standard one, fetch that data for each run
+    // If the effective x-axis is not a standard one, fetch that data for each run
     // to use as x-axis values (only need one per run, not per metric)
     const customLogQueries = useLocalQueries<MetricDataPoint>(
-      settings.selectedLog !== "Step" &&
-        settings.selectedLog !== "Absolute Time" &&
-        settings.selectedLog !== "Relative Time"
+      effectiveXAxis !== "Step" &&
+        effectiveXAxis !== "Absolute Time" &&
+        effectiveXAxis !== "Relative Time"
         ? lines.map((line) => {
             const opts = {
               organizationId,
               projectName,
               runId: line.runId,
-              logName: settings.selectedLog,
+              logName: effectiveXAxis,
             };
 
             const queryOptions = trpc.runs.data.graph.queryOptions(opts);
@@ -268,7 +273,7 @@ const MultiLineChartInner = memo(
       projectName,
       logNames: metricNames,
       runIds,
-      selectedLog: settings.selectedLog,
+      selectedLog: effectiveXAxis,
       staleTime,
       syncedZoomRange,
     });
@@ -430,8 +435,8 @@ const MultiLineChartInner = memo(
         };
       }
 
-      // Handle different chart types based on settings
-      switch (settings.selectedLog) {
+      // Handle different chart types based on effective x-axis
+      switch (effectiveXAxis) {
         case "Absolute Time": {
           const data = allData
             .filter((item) => item.data.length > 0)
@@ -616,13 +621,13 @@ const MultiLineChartInner = memo(
             type: "data" as const,
             data,
             rawLines: collectRaw ? rawLines : undefined,
-            xlabel: settings.selectedLog,
+            xlabel: effectiveXAxis,
             isDateTime: false,
             className: "h-full w-full",
           };
         }
       }
-    }, [allData, customLogData, settings, title, xlabel, hasAnyData, queryPairs, getSeriesLabel, zoomDataMap]);
+    }, [allData, customLogData, settings, effectiveXAxis, title, xlabel, hasAnyData, queryPairs, getSeriesLabel, zoomDataMap]);
 
     // Callback for zoom-aware re-downsampling: slices raw data to visible range
     // and runs the full downsample+smooth pipeline to produce consistent series structure.
@@ -740,7 +745,7 @@ const MultiLineChartInner = memo(
             Could not compare{" "}
             <code className="rounded bg-muted px-1">{title}</code> with{" "}
             <code className="rounded bg-muted px-1">
-              {settings.selectedLog}
+              {effectiveXAxis}
             </code>
           </p>
         </div>
