@@ -661,6 +661,55 @@ router.openapi(updateTagsRoute, async (c) => {
   return c.json({ success: true }, 200);
 });
 
+// ============= Update Notes =============
+const updateNotesRoute = createRoute({
+  method: "post",
+  path: "/notes/update",
+  tags: ["Runs"],
+  summary: "Update run notes",
+  description: "Updates the notes/description on a run. Set to null or empty string to clear.",
+  security: [{ bearerAuth: [] }],
+  request: {
+    body: {
+      content: {
+        "application/json": {
+          schema: z.object({
+            runId: z.number().openapi({ description: "Numeric ID of the run" }),
+            notes: z.string().max(1000).nullable().openapi({ description: "Notes/description for the run (max 1000 chars). Set to null or empty string to clear." }),
+          }),
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: "Notes updated successfully",
+      content: { "application/json": { schema: SuccessSchema } },
+    },
+    404: {
+      description: "Run not found",
+      content: { "application/json": { schema: ErrorSchema } },
+    },
+  },
+});
+
+router.use(updateNotesRoute.path, withApiKey);
+router.openapi(updateNotesRoute, async (c) => {
+  const apiKey = c.get("apiKey");
+  const { runId, notes } = c.req.valid("json");
+
+  const result = await c.get("prisma").runs.updateMany({
+    where: { id: runId, organizationId: apiKey.organization.id },
+    data: { notes: notes || null },
+  });
+
+  if (result.count === 0) {
+    return c.json({ error: "Run not found" }, 404);
+  }
+
+  return c.json({ success: true }, 200);
+});
+
 // ============= Update Config =============
 const updateConfigRoute = createRoute({
   method: "post",

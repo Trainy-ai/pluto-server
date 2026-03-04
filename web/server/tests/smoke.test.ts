@@ -4297,4 +4297,138 @@ describe('SDK API Endpoints (with API Key)', () => {
       });
     });
   });
+
+  // ============================================================================
+  // Test Suite 27: Notes Update via HTTP API
+  // ============================================================================
+  describe('Test Suite 27: Notes Update via HTTP API', () => {
+    const hasApiKey = TEST_API_KEY.length > 0;
+
+    describe.skipIf(!hasApiKey)('Update Notes', () => {
+      it('Test 27.1: Update notes on existing run', async () => {
+        // Create a run first
+        const createResponse = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `update-notes-http-${Date.now()}`,
+          }),
+        });
+
+        expect(createResponse.status).toBe(200);
+        const { runId } = await createResponse.json();
+
+        // Update notes via HTTP API
+        const updateResponse = await makeRequest('/api/runs/notes/update', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            runId: runId,
+            notes: 'This is a test note for the run.',
+          }),
+        });
+
+        expect(updateResponse.status).toBe(200);
+        const data = await updateResponse.json();
+        expect(data.success).toBe(true);
+      });
+
+      it('Test 27.2: Clear notes (set to null)', async () => {
+        // Create a run first
+        const createResponse = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `clear-notes-http-${Date.now()}`,
+          }),
+        });
+
+        expect(createResponse.status).toBe(200);
+        const { runId } = await createResponse.json();
+
+        // Set notes then clear them
+        await makeRequest('/api/runs/notes/update', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            runId: runId,
+            notes: 'Temporary note',
+          }),
+        });
+
+        const clearResponse = await makeRequest('/api/runs/notes/update', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            runId: runId,
+            notes: null,
+          }),
+        });
+
+        expect(clearResponse.status).toBe(200);
+        const data = await clearResponse.json();
+        expect(data.success).toBe(true);
+      });
+
+      it('Test 27.3: Clear notes (set to empty string)', async () => {
+        const createResponse = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `clear-notes-empty-${Date.now()}`,
+          }),
+        });
+
+        expect(createResponse.status).toBe(200);
+        const { runId } = await createResponse.json();
+
+        const clearResponse = await makeRequest('/api/runs/notes/update', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            runId: runId,
+            notes: '',
+          }),
+        });
+
+        expect(clearResponse.status).toBe(200);
+        const data = await clearResponse.json();
+        expect(data.success).toBe(true);
+      });
+
+      it('Test 27.4: Reject update for non-existent run', async () => {
+        const updateResponse = await makeRequest('/api/runs/notes/update', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+          },
+          body: JSON.stringify({
+            runId: 999999999,
+            notes: 'Should fail',
+          }),
+        });
+
+        expect(updateResponse.status).toBe(404);
+        const data = await updateResponse.json();
+        expect(data.error).toBe('Run not found');
+      });
+    });
+  });
 });
