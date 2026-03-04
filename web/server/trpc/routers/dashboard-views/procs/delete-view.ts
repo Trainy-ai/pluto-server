@@ -6,7 +6,7 @@ import { protectedOrgProcedure } from "../../../../lib/trpc";
 export const deleteViewProcedure = protectedOrgProcedure
   .input(
     z.object({
-      viewId: z.string(),
+      viewId: z.coerce.string(),
     })
   )
   .mutation(async ({ ctx, input }) => {

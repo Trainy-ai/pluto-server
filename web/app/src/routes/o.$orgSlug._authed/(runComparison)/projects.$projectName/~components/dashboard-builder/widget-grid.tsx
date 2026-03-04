@@ -88,7 +88,7 @@ export function WidgetGrid({
     return Math.max(2, widgets[0].layout.h);
   }, [coarseMode, widgets]);
 
-  // Convert widgets to react-grid-layout format
+  // Convert visible widgets to react-grid-layout format
   const layout: Layout = useMemo(() => {
     if (coarseMode) {
       // Coarse mode: all widgets uniform size, sort by stored position to preserve Free-mode reordering
@@ -289,6 +289,7 @@ export function WidgetGrid({
         return (
           <div
             key={widget.id}
+            data-testid="dashboard-widget"
             className={cn(
               "group relative rounded-lg border bg-card shadow-sm",
               isEditing && "ring-1 ring-transparent hover:ring-primary/50"

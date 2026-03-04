@@ -220,6 +220,7 @@ function ChartWidget({
   // Tooltip subtitle: always show chip names (separate from title so both can appear)
   const tooltipSubtitle = chipLabel;
 
+
   if (!metrics || metrics.length === 0) {
     return (
       <div className="flex h-full items-center justify-center text-muted-foreground">

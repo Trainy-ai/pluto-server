@@ -39,6 +39,8 @@ import type { Section } from "../../~types/dashboard-types";
 
 interface SectionContainerProps {
   section: Section;
+  /** Number of visible widgets (after hiding empty pattern widgets). Defaults to section.widgets.length. */
+  visibleWidgetCount?: number;
   onUpdate: (section: Section) => void;
   onToggleCollapse: () => void;
   onDelete: () => void;
@@ -53,6 +55,7 @@ interface SectionContainerProps {
 
 export function SectionContainer({
   section,
+  visibleWidgetCount,
   onUpdate,
   onToggleCollapse,
   onDelete,
@@ -76,7 +79,7 @@ export function SectionContainer({
   const isDynamic = !!section.dynamicPattern;
   const widgetCount = isDynamic
     ? (dynamicWidgetCount ?? 0)
-    : section.widgets.length;
+    : (visibleWidgetCount ?? section.widgets.length);
 
   const handleToggleCollapse = () => {
     onToggleCollapse();
@@ -106,7 +109,7 @@ export function SectionContainer({
 
   return (
     <>
-      <div className="rounded-lg border bg-card">
+      <div className="rounded-lg border bg-card" data-testid="dashboard-section" data-section-name={section.name}>
         <Collapsible open={!section.collapsed} onOpenChange={handleToggleCollapse}>
           <div className="flex items-center justify-between border-b px-4 py-2">
             <CollapsibleTrigger asChild>

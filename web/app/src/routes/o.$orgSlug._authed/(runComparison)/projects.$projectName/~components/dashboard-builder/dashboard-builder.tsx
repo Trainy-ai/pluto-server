@@ -18,6 +18,7 @@ import { AddWidgetModal } from "./add-widget-modal";
 import { DynamicSectionGrid } from "./dynamic-section-grid";
 import { useDraftSave } from "./use-auto-save";
 import { useNavigationGuard } from "./use-navigation-guard";
+import { useHiddenPatternWidgets } from "./use-hidden-pattern-widgets";
 import {
   useUpdateDashboardView,
   type DashboardView,
@@ -81,6 +82,15 @@ export function DashboardBuilder({
 
   // Block navigation when there are unsaved changes during editing
   const navGuard = useNavigationGuard(isEditing && hasChanges);
+
+  // Compute which pattern-only widgets should be hidden (view mode only)
+  const hiddenWidgetIds = useHiddenPatternWidgets({
+    sections: config.sections,
+    selectedRunIds,
+    organizationId,
+    projectName,
+    isEditing,
+  });
 
   // Track container width for responsive grid
   useEffect(() => {
@@ -492,7 +502,7 @@ export function DashboardBuilder({
               </Button>
             </>
           ) : (
-            <Button variant="outline" size="sm" onClick={handleEnterEditMode}>
+            <Button variant="outline" size="sm" onClick={handleEnterEditMode} data-testid="edit-dashboard-btn">
               Edit Dashboard
             </Button>
           )}
@@ -518,62 +528,75 @@ export function DashboardBuilder({
         </div>
       ) : (
         <div className="space-y-4">
-          {filteredSections.map((section) => (
-            <SectionContainer
-              key={section.id}
-              section={section}
-              onUpdate={(s) => updateSection(section.id, s)}
-              onToggleCollapse={() => toggleSectionCollapse(section.id)}
-              onDelete={() => deleteSection(section.id)}
-              onAddWidget={() => setAddWidgetSectionId(section.id)}
-              isEditing={isEditing}
-              dynamicWidgetCount={dynamicWidgetCounts[section.id]}
-              organizationId={organizationId}
-              projectName={projectName}
-              selectedRunIds={selectedRunIds}
-            >
-              {section.dynamicPattern ? (
-                <DynamicSectionGrid
-                  sectionId={section.id}
-                  pattern={section.dynamicPattern}
-                  patternMode={section.dynamicPatternMode}
-                  organizationId={organizationId}
-                  projectName={projectName}
-                  selectedRunIds={selectedRunIds}
-                  groupedMetrics={groupedMetrics}
-                  selectedRuns={selectedRuns}
-                  searchState={searchState}
-                  onWidgetCountChange={(count) => handleDynamicWidgetCount(section.id, count)}
-                  settingsRunId={settingsRunId}
-                />
-              ) : (
-                <WidgetGrid
-                  widgets={section.widgets}
-                  onLayoutChange={(widgets) => updateWidgets(section.id, widgets)}
-                  onEditWidget={(widget) => editWidget(section.id, widget)}
-                  onDeleteWidget={(widgetId) => deleteWidget(section.id, widgetId)}
-                  onFullscreenWidget={setFullscreenWidget}
-                  onUpdateWidgetBounds={updateWidgetBounds}
-                  onUpdateWidgetScale={updateWidgetScale}
-                  isEditing={isEditing}
-                  coarseMode={coarseMode}
-                  containerWidth={containerWidth - 48} // Account for padding
-                  renderWidget={(widget, onDataRange, onResetBounds) => (
-                    <WidgetRenderer
-                      widget={widget}
-                      groupedMetrics={groupedMetrics}
-                      selectedRuns={selectedRuns}
-                      organizationId={organizationId}
-                      projectName={projectName}
-                      onDataRange={onDataRange}
-                      onResetBounds={onResetBounds}
-                      settingsRunId={settingsRunId}
-                    />
-                  )}
-                />
-              )}
-            </SectionContainer>
-          ))}
+          {filteredSections.map((section) => {
+            // Filter out hidden widgets in view mode (non-dynamic sections only)
+            const visibleWidgets = isEditing || section.dynamicPattern
+              ? section.widgets
+              : section.widgets.filter((w) => !hiddenWidgetIds.has(w.id));
+
+            // Skip entire section when all widgets are hidden (view mode only, non-dynamic)
+            if (!isEditing && !section.dynamicPattern && visibleWidgets.length === 0 && section.widgets.length > 0) {
+              return null;
+            }
+
+            return (
+              <SectionContainer
+                key={section.id}
+                section={section}
+                visibleWidgetCount={section.dynamicPattern ? undefined : visibleWidgets.length}
+                onUpdate={(s) => updateSection(section.id, s)}
+                onToggleCollapse={() => toggleSectionCollapse(section.id)}
+                onDelete={() => deleteSection(section.id)}
+                onAddWidget={() => setAddWidgetSectionId(section.id)}
+                isEditing={isEditing}
+                dynamicWidgetCount={dynamicWidgetCounts[section.id]}
+                organizationId={organizationId}
+                projectName={projectName}
+                selectedRunIds={selectedRunIds}
+              >
+                {section.dynamicPattern ? (
+                  <DynamicSectionGrid
+                    sectionId={section.id}
+                    pattern={section.dynamicPattern}
+                    patternMode={section.dynamicPatternMode}
+                    organizationId={organizationId}
+                    projectName={projectName}
+                    selectedRunIds={selectedRunIds}
+                    groupedMetrics={groupedMetrics}
+                    selectedRuns={selectedRuns}
+                    searchState={searchState}
+                    onWidgetCountChange={(count) => handleDynamicWidgetCount(section.id, count)}
+                    settingsRunId={settingsRunId}
+                  />
+                ) : (
+                  <WidgetGrid
+                    widgets={visibleWidgets}
+                    onLayoutChange={(widgets) => updateWidgets(section.id, widgets)}
+                    onEditWidget={(widget) => editWidget(section.id, widget)}
+                    onDeleteWidget={(widgetId) => deleteWidget(section.id, widgetId)}
+                    onFullscreenWidget={setFullscreenWidget}
+                    onUpdateWidgetBounds={updateWidgetBounds}
+                    onUpdateWidgetScale={updateWidgetScale}
+                    isEditing={isEditing}
+                    coarseMode={coarseMode}
+                    containerWidth={containerWidth - 48} // Account for padding
+                    renderWidget={(widget, onDataRange, onResetBounds) => (
+                      <WidgetRenderer
+                        widget={widget}
+                        groupedMetrics={groupedMetrics}
+                        selectedRuns={selectedRuns}
+                        organizationId={organizationId}
+                        projectName={projectName}
+                        onDataRange={onDataRange}
+                        onResetBounds={onResetBounds}
+                        settingsRunId={settingsRunId}
+                      />
+                    )}
+                  />
+                )}
+              </SectionContainer>
+            );
+          })}
 
           {isEditing && (
             <AddSectionButton

@@ -245,7 +245,7 @@ test.describe("Dashboard Performance Tests", () => {
 
       // Look for a dashboard view selector (custom chart tab)
       // If a custom dashboard view exists, click on it; otherwise this test
-      // validates the default All Metrics grid which also uses LazyChart.
+      // validates the default All Metrics grid which also uses VirtualizedChart.
       const dashboardTab = page.locator('[data-testid="dashboard-view-tab"]').first();
       const hasDashboardTab = await dashboardTab.isVisible({ timeout: 5000 }).catch(() => false);
 

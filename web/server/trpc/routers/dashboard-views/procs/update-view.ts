@@ -7,7 +7,7 @@ import { DashboardViewConfigSchema } from "../../../../lib/dashboard-types";
 export const updateViewProcedure = protectedOrgProcedure
   .input(
     z.object({
-      viewId: z.string(),
+      viewId: z.coerce.string(),
       name: z.string().min(1).max(255).optional(),
       config: DashboardViewConfigSchema.optional(),
       isDefault: z.boolean().optional(),
