@@ -21,6 +21,19 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
   LineChartIcon,
   BarChart3Icon,
   FileTextIcon,
@@ -29,6 +42,7 @@ import {
   MusicIcon,
   Loader2Icon,
   CheckIcon,
+  ChevronsUpDownIcon,
   Code2,
   SparklesIcon,
   TriangleAlertIcon,
@@ -513,7 +527,7 @@ function ChartConfigForm({
   );
 }
 
-// X-Axis selector with built-in options and custom metric support
+// X-Axis selector with built-in options and searchable custom metric support
 function XAxisSelector({
   value,
   onChange,
@@ -529,18 +543,47 @@ function XAxisSelector({
   projectName: string;
   selectedRunIds?: string[];
 }) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+
+  // Debounce search for server-side query
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  const { data: initialMetrics } = useDistinctMetricNames(
+    organizationId,
+    projectName,
+  );
+
   const { data: runMetrics } = useRunMetricNames(
     organizationId,
     projectName,
     selectedRunIds ?? [],
   );
 
+  const { data: searchResults, isFetching: isSearching } =
+    useSearchMetricNames(organizationId, projectName, debouncedSearch);
+
   // Build list of available metrics for custom x-axis, excluding y-axis metrics
   const customMetrics = useMemo(() => {
-    const names = runMetrics?.metricNames ?? [];
+    const initial = initialMetrics?.metricNames ?? [];
+    const searched = searchResults?.metricNames ?? [];
+    const runNames = runMetrics?.metricNames ?? [];
+    const merged = Array.from(new Set([...searched, ...runNames, ...initial]));
     const ySet = new Set(yMetrics);
-    return names.filter((m) => !ySet.has(m)).sort((a, b) => a.localeCompare(b));
-  }, [runMetrics, yMetrics]);
+    const filtered = merged.filter((m) => !ySet.has(m));
+
+    const trimmed = search.trim();
+    if (!trimmed) {
+      return filtered.sort((a, b) => a.localeCompare(b));
+    }
+    return fuzzyFilter(filtered, search);
+  }, [initialMetrics, searchResults, runMetrics, yMetrics, search]);
 
   // Normalize legacy "time" value to "absolute-time"
   const normalizedValue = value === "time" ? "absolute-time" : value;
@@ -565,43 +608,102 @@ function XAxisSelector({
     }
   }, [normalizedValue]);
 
+  // Built-in options filtered by search
+  const builtInOptions = useMemo(() => {
+    const options = [
+      { value: "step", label: "Step" },
+      { value: "absolute-time", label: "Absolute Time" },
+      { value: "relative-time", label: "Relative Time" },
+    ];
+    const trimmed = search.trim();
+    if (!trimmed) return options;
+    const filteredLabels = fuzzyFilter(
+      options.map((o) => o.label),
+      trimmed
+    );
+    return options.filter((o) => filteredLabels.includes(o.label));
+  }, [search]);
+
+  const handleSelect = (selected: string) => {
+    onChange(selected);
+    setOpen(false);
+    setSearch("");
+  };
+
   return (
     <div className="grid gap-2">
       <Label>X-Axis</Label>
-      <Select value={normalizedValue} onValueChange={onChange}>
-        <SelectTrigger>
-          <SelectValue>{displayLabel}</SelectValue>
-        </SelectTrigger>
-        <SelectContent>
-          <SelectGroup>
-            <SelectLabel>Built-in</SelectLabel>
-            <SelectItem value="step">Step</SelectItem>
-            <SelectItem value="absolute-time">Absolute Time</SelectItem>
-            <SelectItem value="relative-time">Relative Time</SelectItem>
-          </SelectGroup>
-          {customMetrics.length > 0 && (
-            <SelectGroup>
-              <SelectLabel>Metrics (parametric)</SelectLabel>
-              {customMetrics.slice(0, 50).map((metric) => (
-                <SelectItem key={metric} value={metric}>
-                  {metric}
-                </SelectItem>
-              ))}
-              {customMetrics.length > 50 && (
-                <div className="px-2 py-1.5 text-xs text-muted-foreground">
-                  +{customMetrics.length - 50} more (use line settings for full list)
-                </div>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <Button
+            variant="outline"
+            role="combobox"
+            aria-expanded={open}
+            className="w-full justify-between font-normal"
+          >
+            <span className="truncate">{displayLabel}</span>
+            <ChevronsUpDownIcon className="ml-2 size-4 shrink-0 opacity-50" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+          <Command shouldFilter={false}>
+            <CommandInput
+              placeholder="Search metrics..."
+              value={search}
+              onValueChange={setSearch}
+            />
+            <CommandList className="max-h-[250px]">
+              {builtInOptions.length > 0 && (
+                <CommandGroup heading="Built-in">
+                  {builtInOptions.map((opt) => (
+                    <CommandItem
+                      key={opt.value}
+                      value={opt.value}
+                      onSelect={() => handleSelect(opt.value)}
+                    >
+                      <CheckIcon
+                        className={cn(
+                          "mr-2 size-4",
+                          normalizedValue === opt.value ? "opacity-100" : "opacity-0"
+                        )}
+                      />
+                      {opt.label}
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
               )}
-            </SelectGroup>
-          )}
-          {/* Keep selected value visible even if not in the lists above */}
-          {isCustomMetric && !customMetrics.includes(normalizedValue) && (
-            <SelectGroup>
-              <SelectItem value={normalizedValue}>{normalizedValue}</SelectItem>
-            </SelectGroup>
-          )}
-        </SelectContent>
-      </Select>
+              {customMetrics.length > 0 && (
+                <CommandGroup heading="Metrics (parametric)">
+                  {customMetrics.map((metric) => (
+                    <CommandItem
+                      key={metric}
+                      value={metric}
+                      onSelect={() => handleSelect(metric)}
+                    >
+                      <CheckIcon
+                        className={cn(
+                          "mr-2 size-4",
+                          normalizedValue === metric ? "opacity-100" : "opacity-0"
+                        )}
+                      />
+                      <span className="truncate">{metric}</span>
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              )}
+              {builtInOptions.length === 0 && customMetrics.length === 0 && (
+                <CommandEmpty>No matching options.</CommandEmpty>
+              )}
+            </CommandList>
+            {isSearching && (
+              <div className="flex items-center justify-center gap-2 border-t py-2 text-xs text-muted-foreground">
+                <Loader2Icon className="size-3 animate-spin" />
+                Searching...
+              </div>
+            )}
+          </Command>
+        </PopoverContent>
+      </Popover>
       {isCustomMetric && (
         <p className="text-xs text-muted-foreground">
           Parametric curve: plots y-metrics vs. <code className="rounded bg-muted px-1">{normalizedValue}</code>, joined by step.
