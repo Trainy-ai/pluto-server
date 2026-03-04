@@ -115,8 +115,40 @@ async function seedClickHouseMetrics(
     insertedCount += batch.length;
   }
 
-  await clickhouse.close();
   console.log(`\r   ✓ Seeded ClickHouse with ${insertedCount.toLocaleString()} metric datapoints`);
+
+  // Populate mlop_metric_summaries directly (the MV may not exist if SQL
+  // files were executed in alphabetical order where metric_summaries_mv.sql
+  // runs before metrics.sql, causing the MV creation to fail).
+  try {
+    await clickhouse.query({
+      query: `
+        INSERT INTO mlop_metric_summaries
+        SELECT
+          tenantId,
+          projectName,
+          runId,
+          logName,
+          min(value)               AS min_value,
+          max(value)               AS max_value,
+          sum(value)               AS sum_value,
+          toUInt64(count())        AS count_value,
+          argMaxState(value, step) AS last_value,
+          sum(value * value)       AS sum_sq_value
+        FROM mlop_metrics
+        WHERE tenantId = {tenantId: String}
+          AND projectName = {projectName: String}
+          AND isFinite(value)
+        GROUP BY tenantId, projectName, runId, logName
+      `,
+      query_params: { tenantId, projectName },
+    });
+    console.log('   ✓ Populated mlop_metric_summaries from mlop_metrics');
+  } catch (err) {
+    console.log('   ⚠ Could not populate mlop_metric_summaries:', (err as Error).message);
+  }
+
+  await clickhouse.close();
 }
 
 interface OrgSetupResult {
@@ -661,6 +693,211 @@ async function setupTestData(): Promise<TestData> {
   } else {
     console.log(`   ✓ Org 2 runs already exist (${existingOrg2Runs.length} runs found)`);
   }
+
+  // 7. Create "Auto-Hide Test" dashboard view for pattern-widget visibility E2E tests
+  console.log('\n7️⃣  Creating Auto-Hide Test dashboard view...');
+
+  const autoHideDashboardConfig = {
+    version: 1,
+    sections: [
+      {
+        id: 'section-matching-patterns',
+        name: 'Matching Patterns',
+        collapsed: false,
+        widgets: [
+          {
+            id: 'widget-glob-train',
+            type: 'chart',
+            config: {
+              metrics: ['glob:train/*'],
+              xAxis: 'step',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+              aggregation: 'LAST',
+              showOriginal: false,
+            },
+            layout: { x: 0, y: 0, w: 4, h: 4 },
+          },
+          {
+            id: 'widget-glob-train-metric0',
+            type: 'chart',
+            config: {
+              metrics: ['glob:train/metric_0*'],
+              xAxis: 'step',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+              aggregation: 'LAST',
+              showOriginal: false,
+            },
+            layout: { x: 4, y: 0, w: 4, h: 4 },
+          },
+          {
+            id: 'widget-regex-train',
+            type: 'chart',
+            config: {
+              metrics: ['regex:^train/metric_[0-2]\\d$'],
+              xAxis: 'step',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+              aggregation: 'LAST',
+              showOriginal: false,
+            },
+            layout: { x: 8, y: 0, w: 4, h: 4 },
+          },
+        ],
+      },
+      {
+        id: 'section-non-matching-patterns',
+        name: 'Non-Matching Patterns',
+        collapsed: false,
+        widgets: [
+          {
+            id: 'widget-glob-validation',
+            type: 'chart',
+            config: {
+              metrics: ['glob:validation/*'],
+              xAxis: 'step',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+              aggregation: 'LAST',
+              showOriginal: false,
+            },
+            layout: { x: 0, y: 0, w: 3, h: 4 },
+          },
+          {
+            id: 'widget-glob-nonexistent',
+            type: 'chart',
+            config: {
+              metrics: ['glob:nonexistent/*'],
+              xAxis: 'step',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+              aggregation: 'LAST',
+              showOriginal: false,
+            },
+            layout: { x: 3, y: 0, w: 3, h: 4 },
+          },
+          {
+            id: 'widget-regex-nonexistent',
+            type: 'chart',
+            config: {
+              metrics: ['regex:^doesnotexist/.*'],
+              xAxis: 'step',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+              aggregation: 'LAST',
+              showOriginal: false,
+            },
+            layout: { x: 6, y: 0, w: 3, h: 4 },
+          },
+          {
+            id: 'widget-glob-gpu',
+            type: 'chart',
+            config: {
+              metrics: ['glob:gpu/*'],
+              xAxis: 'step',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+              aggregation: 'LAST',
+              showOriginal: false,
+            },
+            layout: { x: 9, y: 0, w: 3, h: 4 },
+          },
+        ],
+      },
+      {
+        id: 'section-literal-metrics',
+        name: 'Literal Metrics',
+        collapsed: false,
+        widgets: [
+          {
+            id: 'widget-literal-existing',
+            type: 'chart',
+            config: {
+              metrics: ['train/metric_00'],
+              xAxis: 'step',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+              aggregation: 'LAST',
+              showOriginal: false,
+            },
+            layout: { x: 0, y: 0, w: 6, h: 4 },
+          },
+          {
+            id: 'widget-literal-nonexistent',
+            type: 'chart',
+            config: {
+              metrics: ['nonexistent/metric'],
+              xAxis: 'step',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+              aggregation: 'LAST',
+              showOriginal: false,
+            },
+            layout: { x: 6, y: 0, w: 6, h: 4 },
+          },
+        ],
+      },
+      {
+        id: 'section-mixed',
+        name: 'Mixed',
+        collapsed: false,
+        widgets: [
+          {
+            id: 'widget-mixed-literal-and-pattern',
+            type: 'chart',
+            config: {
+              metrics: ['train/metric_00', 'glob:nonexistent/*'],
+              xAxis: 'step',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+              aggregation: 'LAST',
+              showOriginal: false,
+            },
+            layout: { x: 0, y: 0, w: 6, h: 4 },
+          },
+          {
+            id: 'widget-mixed-patterns-only-matching',
+            type: 'chart',
+            config: {
+              metrics: ['glob:train/*', 'glob:nonexistent/*'],
+              xAxis: 'step',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+              aggregation: 'LAST',
+              showOriginal: false,
+            },
+            layout: { x: 6, y: 0, w: 6, h: 4 },
+          },
+        ],
+      },
+    ],
+    settings: {
+      gridCols: 12,
+      rowHeight: 80,
+      compactType: 'vertical',
+    },
+  };
+
+  await prisma.dashboardView.upsert({
+    where: {
+      organizationId_projectId_name: {
+        organizationId: org.id,
+        projectId: project.id,
+        name: 'Auto-Hide Test',
+      },
+    },
+    update: { config: autoHideDashboardConfig },
+    create: {
+      name: 'Auto-Hide Test',
+      organizationId: org.id,
+      projectId: project.id,
+      createdById: user.id,
+      isDefault: false,
+      config: autoHideDashboardConfig,
+    },
+  });
+  console.log('   ✓ Created Auto-Hide Test dashboard view');
 
   const testData: TestData = {
     userId: user.id,

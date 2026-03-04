@@ -6,7 +6,7 @@ import { DashboardViewConfigSchema } from "../../../../lib/dashboard-types";
 export const getViewProcedure = protectedOrgProcedure
   .input(
     z.object({
-      viewId: z.string(),
+      viewId: z.coerce.string(),
     })
   )
   .query(async ({ ctx, input }) => {
