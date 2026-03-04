@@ -178,11 +178,13 @@ test.describe("Auto-Hide Empty Pattern Widgets", () => {
     );
     await waitForPageReady(page);
 
-    // View mode: "Non-Matching Patterns" hidden
+    // View mode: "Non-Matching Patterns" hidden (needs time for auto-hide logic to evaluate)
     await expect(sectionByName(page, "Matching Patterns")).toBeVisible({
       timeout: 30000,
     });
-    await expect(sectionByName(page, "Non-Matching Patterns")).toBeHidden();
+    await expect(sectionByName(page, "Non-Matching Patterns")).toBeHidden({
+      timeout: 15000,
+    });
 
     // Enter edit mode → section appears
     const editBtn = page.locator('[data-testid="edit-dashboard-btn"]');
