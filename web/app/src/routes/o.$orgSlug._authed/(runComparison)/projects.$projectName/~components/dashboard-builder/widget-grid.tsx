@@ -307,9 +307,16 @@ export function WidgetGrid({
                 {hasWidgetPatterns(widget) && (
                   <ZapIcon className="size-3 shrink-0 text-muted-foreground" />
                 )}
-                <span className="min-w-0 truncate text-sm font-medium">
-                  {widget.config.title || getWidgetTitle(widget)}
-                </span>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="min-w-0 truncate text-sm font-medium">
+                      {widget.config.title || getWidgetTitle(widget)}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    <p className="text-xs">{widget.config.title || getWidgetTitle(widget)}</p>
+                  </TooltipContent>
+                </Tooltip>
                 {clippingInfo && (
                   <Tooltip>
                     <TooltipTrigger asChild>

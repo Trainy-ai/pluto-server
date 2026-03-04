@@ -47,8 +47,8 @@ export function ChartFullscreenDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-w-[95vw] h-[90vh] flex-col p-6">
         <DialogHeader>
-          <div className="flex items-center justify-between pr-8">
-            <DialogTitle>{title}</DialogTitle>
+          <div className="flex items-center justify-between pr-8 min-w-0">
+            <DialogTitle className="truncate" title={title}>{title}</DialogTitle>
             <div className="flex items-center gap-2">
               <ChartExportMenu
                 getContainer={() => chartContentRef.current}

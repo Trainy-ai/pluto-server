@@ -478,9 +478,9 @@ export function DropdownRegion({
               <ChevronDown className="h-5 w-5" />
             )}
           </button>
-          <h2 className="flex w-full items-center justify-center text-center text-lg font-semibold">
-            <div>{title}</div>
-            <span className="ml-3 inline-flex items-center justify-center rounded-full bg-blue-600 px-2 py-1 text-xs leading-none font-bold text-blue-100">
+          <h2 className="flex min-w-0 w-full items-center justify-center text-center text-lg font-semibold">
+            <div className="truncate" title={title}>{title}</div>
+            <span className="ml-3 shrink-0 inline-flex items-center justify-center rounded-full bg-blue-600 px-2 py-1 text-xs leading-none font-bold text-blue-100">
               {components.length}
             </span>
           </h2>
