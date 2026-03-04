@@ -23,6 +23,59 @@ import { tooltipPlugin, type HoverState } from "./lib/tooltip-plugin";
 import { buildSeriesConfig } from "./lib/series-config";
 import { buildFocusDetectionHook, buildInterpolationDotsHook } from "./lib/cursor-hooks";
 import { useContainerSize } from "./hooks/use-container-size";
+import { createPortal } from "react-dom";
+
+
+// ============================
+// Chart title with hover tooltip (avoids Radix TooltipProvider per chart)
+// ============================
+
+const ChartTitle = React.memo(function ChartTitle({
+  title,
+  theme,
+}: {
+  title: string;
+  theme: string;
+}) {
+  const [tooltipPos, setTooltipPos] = React.useState<{ x: number; y: number } | null>(null);
+  const titleRef = useRef<HTMLDivElement>(null);
+
+  const handlePointerEnter = React.useCallback(() => {
+    const el = titleRef.current;
+    if (!el || el.scrollWidth <= el.clientWidth) { return; }
+    const rect = el.getBoundingClientRect();
+    setTooltipPos({ x: rect.left + rect.width / 2, y: rect.top });
+  }, []);
+
+  const handlePointerLeave = React.useCallback(() => {
+    setTooltipPos(null);
+  }, []);
+
+  return (
+    <>
+      <div
+        ref={titleRef}
+        data-testid="chart-title"
+        className="relative z-10 shrink-0 truncate text-center font-mono text-xs px-1"
+        style={{ color: theme === "dark" ? "#fff" : "#000" }}
+        onPointerEnter={handlePointerEnter}
+        onPointerLeave={handlePointerLeave}
+      >
+        {title}
+      </div>
+      {tooltipPos &&
+        createPortal(
+          <div
+            className="pointer-events-none fixed z-50 max-w-sm -translate-x-1/2 -translate-y-full rounded-md bg-muted px-3 py-1.5 text-xs break-all font-mono text-muted-foreground"
+            style={{ left: tooltipPos.x, top: tooltipPos.y - 4 }}
+          >
+            {title}
+          </div>,
+          document.body,
+        )}
+    </>
+  );
+});
 
 
 // ============================
@@ -1580,15 +1633,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         }}
         {...rest}
       >
-        {title && (
-          <div
-            data-testid="chart-title"
-            className="shrink-0 truncate text-center font-mono text-xs px-1"
-            style={{ color: theme === "dark" ? "#fff" : "#000" }}
-          >
-            {title}
-          </div>
-        )}
+        {title && <ChartTitle title={title} theme={theme} />}
         <div
           ref={chartContainerRef}
           data-testid="uplot-render-target"
