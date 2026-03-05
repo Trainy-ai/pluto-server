@@ -888,7 +888,7 @@ export function DataTable({
           <div className="relative flex-1">
             <Search className="absolute top-2.5 left-2 h-4 w-4 text-muted-foreground" />
             <Input
-              placeholder="Search runs..."
+              placeholder="Search by name or ID..."
               value={searchQuery}
               onChange={(e) => onSearchChange(e.target.value)}
               onKeyDown={handleKeyDown}

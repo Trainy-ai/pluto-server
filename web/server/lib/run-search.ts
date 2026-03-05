@@ -44,6 +44,30 @@ const DATE_FIELD_COLUMNS: Record<string, string> = {
   statusUpdated: '"statusUpdated"',
 };
 
+/**
+ * Appends a search condition that matches on run name OR display ID (runPrefix-number).
+ * Returns whether a project JOIN is needed for display ID resolution.
+ */
+function appendSearchCondition(
+  conditions: string[],
+  queryParams: (string | bigint | string[] | number)[],
+  search: string,
+): boolean {
+  queryParams.push(search);
+  const idx = queryParams.length;
+  const hasSearchTerm = search.trim().length > 0;
+
+  if (hasSearchTerm) {
+    conditions.push(
+      `(r."name" ILIKE '%' || $${idx} || '%' OR (p."runPrefix" IS NOT NULL AND r."number" IS NOT NULL AND (p."runPrefix" || '-' || r."number"::text) ILIKE '%' || $${idx} || '%'))`
+    );
+  } else {
+    conditions.push(`r."name" ILIKE '%' || $${idx} || '%'`);
+  }
+
+  return hasSearchTerm;
+}
+
 function appendDateFilters(
   conditions: string[],
   queryParams: (string | bigint | string[] | number)[],
@@ -84,9 +108,7 @@ export function buildRunSearchQuery(params: RunSearchParams): QueryResult {
     conditions.push(`p.name = $${queryParams.length}`);
   }
 
-  // Add search condition using ILIKE for substring matching
-  queryParams.push(search);
-  conditions.push(`r.name ILIKE '%' || $${queryParams.length} || '%'`);
+  const needsProjectJoinForSearch = appendSearchCondition(conditions, queryParams, search);
 
   // Add tags filter if provided
   if (tags && tags.length > 0) {
@@ -107,7 +129,7 @@ export function buildRunSearchQuery(params: RunSearchParams): QueryResult {
   const { needsCreatorJoin } = buildSearchSystemFilterConditions(conditions, queryParams, systemFilters);
 
   const joins: string[] = [];
-  if (needsProjectJoin) {
+  if (needsProjectJoin || needsProjectJoinForSearch) {
     joins.push(`JOIN "projects" p ON r."projectId" = p.id`);
   }
   if (needsCreatorJoin) {
@@ -146,9 +168,7 @@ export function buildRunCountQuery(params: Omit<RunSearchParams, "limit">): Quer
     conditions.push(`p.name = $${queryParams.length}`);
   }
 
-  // Add search condition using ILIKE for substring matching
-  queryParams.push(search);
-  conditions.push(`r.name ILIKE '%' || $${queryParams.length} || '%'`);
+  const needsProjectJoinForSearch = appendSearchCondition(conditions, queryParams, search);
 
   // Add tags filter if provided
   if (tags && tags.length > 0) {
@@ -169,7 +189,7 @@ export function buildRunCountQuery(params: Omit<RunSearchParams, "limit">): Quer
   const { needsCreatorJoin } = buildSearchSystemFilterConditions(conditions, queryParams, systemFilters);
 
   const joins: string[] = [];
-  if (needsProjectJoin) {
+  if (needsProjectJoin || needsProjectJoinForSearch) {
     joins.push(`JOIN "projects" p ON r."projectId" = p.id`);
   }
   if (needsCreatorJoin) {
