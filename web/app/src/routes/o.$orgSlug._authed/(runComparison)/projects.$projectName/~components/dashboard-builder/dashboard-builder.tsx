@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { toast } from "sonner";
-import { PlusIcon, SaveIcon, XIcon, AlertTriangleIcon, RotateCcwIcon, GridIcon, SlidersHorizontalIcon, ArchiveRestoreIcon, ChevronsUpDownIcon, ChevronsDownUpIcon } from "lucide-react";
+import { PlusIcon, SaveIcon, XIcon, AlertTriangleIcon, RotateCcwIcon, GridIcon, SlidersHorizontalIcon, ArchiveRestoreIcon, ChevronsUpDownIcon, ChevronsDownUpIcon, ClipboardPasteIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -68,6 +68,7 @@ export function DashboardBuilder({
   const [fullscreenWidget, setFullscreenWidget] = useState<Widget | null>(null);
   const [coarseMode, setCoarseMode] = useState(true);
   const [dynamicWidgetCounts, setDynamicWidgetCounts] = useState<Record<string, number>>({});
+  const [copiedWidget, setCopiedWidget] = useState<Widget | null>(null);
 
   const selectedRunIds = useMemo(() => Object.keys(selectedRuns), [selectedRuns]);
 
@@ -320,6 +321,33 @@ export function DashboardBuilder({
     setEditingWidget(widget);
   }, []);
 
+  const copyWidget = useCallback((widget: Widget) => {
+    setCopiedWidget(widget);
+    toast.success("Widget copied");
+  }, []);
+
+  const pasteWidget = useCallback(
+    (sectionId: string) => {
+      if (!copiedWidget) return;
+      const newWidget: Widget = {
+        ...copiedWidget,
+        id: `widget-${generateId()}`,
+        config: structuredClone(copiedWidget.config),
+        layout: { ...copiedWidget.layout, y: 9999 }, // Place at bottom
+      };
+      setConfig((prev) => ({
+        ...prev,
+        sections: prev.sections.map((s) =>
+          s.id === sectionId
+            ? { ...s, widgets: [...s.widgets, newWidget] }
+            : s
+        ),
+      }));
+      setHasChanges(true);
+    },
+    [copiedWidget]
+  );
+
   const updateWidgetBounds = useCallback((widgetId: string, yMin?: number, yMax?: number) => {
     setConfig((prev) => ({
       ...prev,
@@ -548,6 +576,8 @@ export function DashboardBuilder({
                 onToggleCollapse={() => toggleSectionCollapse(section.id)}
                 onDelete={() => deleteSection(section.id)}
                 onAddWidget={() => setAddWidgetSectionId(section.id)}
+                onPasteWidget={() => pasteWidget(section.id)}
+                hasCopiedWidget={!!copiedWidget}
                 isEditing={isEditing}
                 dynamicWidgetCount={dynamicWidgetCounts[section.id]}
                 organizationId={organizationId}
@@ -574,6 +604,7 @@ export function DashboardBuilder({
                     onLayoutChange={(widgets) => updateWidgets(section.id, widgets)}
                     onEditWidget={(widget) => editWidget(section.id, widget)}
                     onDeleteWidget={(widgetId) => deleteWidget(section.id, widgetId)}
+                    onCopyWidget={copyWidget}
                     onFullscreenWidget={setFullscreenWidget}
                     onUpdateWidgetBounds={updateWidgetBounds}
                     onUpdateWidgetScale={updateWidgetScale}
