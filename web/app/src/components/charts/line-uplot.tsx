@@ -160,6 +160,8 @@ interface LineChartProps extends React.HTMLAttributes<HTMLDivElement> {
   onZoomRangeChange?: (range: [number, number] | null) => void;
   /** Enable IQR-based outlier detection for Y-axis scaling (default: false) */
   outlierDetection?: boolean;
+  /** When false, lines break at null/missing values instead of connecting across gaps (default: true) */
+  spanGaps?: boolean;
 }
 
 /** Ref handle exposed to parent components */
@@ -232,6 +234,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       reprocessForZoom,
       onZoomRangeChange,
       outlierDetection = false,
+      spanGaps = true,
       className,
       ...rest
     },
@@ -282,6 +285,10 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
     // Ref for line width so event handlers can read the latest value
     const chartLineWidthRef = useRef(chartLineWidth);
     chartLineWidthRef.current = chartLineWidth;
+
+    // Ref for spanGaps so zoom callbacks can read the latest value
+    const spanGapsRef = useRef(spanGaps);
+    spanGapsRef.current = spanGaps;
 
     // Ref to access processedLines in callbacks without causing dependency issues
     const processedLinesRef = useRef<typeof lines>([]);
@@ -373,9 +380,10 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
     }, [isDateTime, processedLines]);
 
     // Convert LineData[] to uPlot data format
+    // Pass spanGaps so alignDataForUPlot can insert gap markers when lines should break
     const uplotData = useMemo<uPlot.AlignedData>(
-      () => alignDataForUPlot(processedLines),
-      [processedLines]
+      () => alignDataForUPlot(processedLines, { spanGaps }),
+      [processedLines, spanGaps]
     );
     // Ref for imperative access to the full-range aligned data (e.g. resetZoom)
     const uplotDataRef = useRef(uplotData);
@@ -668,7 +676,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         lastFocusedSeriesRef,
         crossChartRunIdRef,
         tableHighlightRef,
-      });
+      }, { spanGaps });
 
       // Scales configuration
       // IMPORTANT: Always use auto:true for X-axis to allow zoom to work.
@@ -800,6 +808,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       const focusDetectionHook = buildFocusDetectionHook({
         processedLines,
         tooltipInterpolation,
+        spanGaps,
         isActiveChart,
         lastFocusedSeriesRef,
         highlightedSeriesRef,
@@ -811,6 +820,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       const interpolationDotsHook = buildInterpolationDotsHook({
         processedLines,
         tooltipInterpolation,
+        spanGaps,
         isActiveChart,
       });
 
@@ -879,6 +889,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             isActiveChart, // Checks if this chart is the one being hovered
             highlightedSeriesRef, // For showing highlighted series at top of tooltip
             tooltipInterpolation, // Interpolation mode for missing tooltip values
+            spanGaps, // When false, don't interpolate across data gaps in tooltip
             xlabel,
             title,
             subtitle,
@@ -1129,7 +1140,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
 
                     // Only update if series count matches (setData can't change series count)
                     if (newLines.length === currentLines.length) {
-                      const newAligned = alignDataForUPlot(newLines);
+                      const newAligned = alignDataForUPlot(newLines, { spanGaps: spanGapsRef.current });
                       try {
                         isProgrammaticScaleRef.current = true;
                         chart.batch(() => {
@@ -1176,6 +1187,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       isActiveChart,
       isZoomSourceChart,
       chartLineWidth,
+      spanGaps,
       yMinProp,
       yMaxProp,
       tooltipInterpolation,

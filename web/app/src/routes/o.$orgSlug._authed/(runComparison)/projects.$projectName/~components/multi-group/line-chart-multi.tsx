@@ -777,6 +777,7 @@ const MultiLineChartInner = memo(
           onResetBounds={onResetBounds}
           tooltipInterpolation={settings.tooltipInterpolation}
           outlierDetection={settings.yAxisScaleMode === "outlier-aware"}
+          spanGaps={!settings.skipMissingValues}
           rawLines={chartResult.rawLines}
           downsampleTarget={settings.maxPointsPerSeries}
           reprocessForZoom={reprocessForZoom}

@@ -1,7 +1,7 @@
 import type uPlot from "uplot";
 import type { LineData } from "../line-uplot";
 import { formatAxisLabel, formatStepValue, smartDateFormatter } from "./format";
-import { interpolateValue, type TooltipInterpolation } from "@/lib/math/interpolation";
+import { interpolateValue, isInsideDataGap, type TooltipInterpolation } from "@/lib/math/interpolation";
 
 // ============================
 // Tooltip Plugin
@@ -189,6 +189,8 @@ export interface TooltipPluginOpts {
   highlightedSeriesRef?: { current: string | null };
   /** Tooltip interpolation mode for missing values */
   tooltipInterpolation?: TooltipInterpolation;
+  /** When false, lines break at gaps — tooltip should not interpolate across large gaps */
+  spanGaps?: boolean;
   /** X-axis label (e.g. "step", "absolute time", "relative time (seconds)", or a metric name) */
   xlabel?: string;
   /** Chart/metric title shown in tooltip header */
@@ -198,7 +200,7 @@ export interface TooltipPluginOpts {
 }
 
 export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
-  const { theme, isDateTime, timeRange, lines, hoverStateRef, onHoverChange, isActiveChart, highlightedSeriesRef, tooltipInterpolation = "none", xlabel, title, subtitle } = opts;
+  const { theme, isDateTime, timeRange, lines, hoverStateRef, onHoverChange, isActiveChart, highlightedSeriesRef, tooltipInterpolation = "none", spanGaps = true, xlabel, title, subtitle } = opts;
 
   // DEBUG: Temporary logging to diagnose tooltip persistence issue
   const DEBUG_TOOLTIP = false; // Set to true for debugging
@@ -653,17 +655,27 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
         continue;
       }
 
-      // If value is null and interpolation is enabled, try to interpolate
+      // If value is null and interpolation is enabled, try to interpolate.
+      // When spanGaps is false (skip missing values), don't interpolate across
+      // large data gaps — only interpolate small alignment gaps where a series
+      // logged at slightly different steps than the shared x-axis.
       if (yVal == null && tooltipInterpolation !== "none") {
-        const interpolated = interpolateValue(
-          xValues,
-          u.data[i] as (number | null | undefined)[],
-          idx,
-          tooltipInterpolation,
-        );
-        if (interpolated !== null) {
-          yVal = interpolated;
-          isInterpolated = true;
+        // When spanGaps is false (skip missing values), don't interpolate
+        // across large data gaps — only across small alignment mismatches.
+        const yData = u.data[i] as (number | null | undefined)[];
+        if (!spanGaps && isInsideDataGap(yData, idx)) {
+          // Inside a real data gap — skip interpolation
+        } else {
+          const interpolated = interpolateValue(
+            xValues,
+            u.data[i] as (number | null | undefined)[],
+            idx,
+            tooltipInterpolation,
+          );
+          if (interpolated !== null) {
+            yVal = interpolated;
+            isInterpolated = true;
+          }
         }
       }
 

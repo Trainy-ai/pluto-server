@@ -1,6 +1,6 @@
 import type uPlot from "uplot";
 import type { LineData } from "../line-uplot";
-import { interpolateValue, type TooltipInterpolation } from "@/lib/math/interpolation";
+import { interpolateValue, isInsideDataGap, type TooltipInterpolation } from "@/lib/math/interpolation";
 
 // ============================
 // setCursor Hook Builders
@@ -9,6 +9,7 @@ import { interpolateValue, type TooltipInterpolation } from "@/lib/math/interpol
 export interface FocusDetectionDeps {
   processedLines: LineData[];
   tooltipInterpolation: TooltipInterpolation;
+  spanGaps: boolean;
   isActiveChart: () => boolean;
   lastFocusedSeriesRef: { current: number | null };
   highlightedSeriesRef: { current: string | null };
@@ -58,7 +59,11 @@ export function buildFocusDetectionHook(deps: FocusDetectionDeps): (u: uPlot) =>
       const yData = u.data[si] as (number | null)[];
       let yVal = yData[idx];
       // If null and interpolation is enabled, use interpolated value for distance calc
+      // But don't interpolate across real data gaps when spanGaps is false
       if (yVal == null && deps.tooltipInterpolation !== "none") {
+        if (!deps.spanGaps && isInsideDataGap(yData, idx)) {
+          continue;
+        }
         yVal = interpolateValue(u.data[0] as number[], yData, idx, deps.tooltipInterpolation);
       }
       if (yVal == null) continue;
@@ -117,6 +122,7 @@ export function buildFocusDetectionHook(deps: FocusDetectionDeps): (u: uPlot) =>
 export interface InterpolationDotsDeps {
   processedLines: LineData[];
   tooltipInterpolation: TooltipInterpolation;
+  spanGaps: boolean;
   isActiveChart: () => boolean;
 }
 
@@ -157,9 +163,16 @@ export function buildInterpolationDotsHook(deps: InterpolationDotsDeps): (u: uPl
       }
 
       // Try interpolation for the missing value
+      // Don't interpolate across real data gaps when spanGaps is false
+      const yData = u.data[si] as (number | null | undefined)[];
+      if (!deps.spanGaps && isInsideDataGap(yData, idx)) {
+        dot.style.display = "none";
+        continue;
+      }
+
       const interpolated = interpolateValue(
         u.data[0] as number[],
-        u.data[si] as (number | null | undefined)[],
+        yData,
         idx,
         deps.tooltipInterpolation,
       );
