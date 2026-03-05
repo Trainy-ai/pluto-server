@@ -163,7 +163,9 @@ export async function queryDistinctMetrics(
     queryParams.regex = regex.trim();
   } else if (search && search.trim()) {
     const trimmed = search.trim();
-    searchFilter = `AND (multiFuzzyMatchAny(lower(logName), if(length({search: String}) < 4, 2, 3), [lower({search: String})]) = 1
+    // Fuzzy match with Levenshtein distance: allow 1 edit for short terms (<4 chars),
+    // 2 edits for longer terms. Lowered from 2/3 to reduce false positives.
+    searchFilter = `AND (multiFuzzyMatchAny(lower(logName), if(length({search: String}) < 4, 1, 2), [lower({search: String})]) = 1
          OR logName ILIKE {searchPattern: String})`;
     queryParams.search = trimmed;
     queryParams.searchPattern = `%${trimmed}%`;

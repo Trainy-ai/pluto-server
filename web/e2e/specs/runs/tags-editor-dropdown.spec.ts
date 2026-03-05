@@ -34,20 +34,18 @@ test.describe("Tags Editor Dropdown UI", () => {
 
     // Click the edit button and wait for popover to appear
     // Use toPass() for resilience against animation/rendering delays
-    await expect(async () => {
-      await editTagsButton.click();
-      const searchInput = page.locator('[placeholder="Search or add tag..."]');
-      await expect(searchInput).toBeVisible({ timeout: 2000 });
-    }).toPass({ timeout: 10000 });
-
     const searchInput = page.locator('[placeholder="Search or add tag..."]');
-
-    // Verify popover content structure (use more specific selector since multiple popovers may exist)
-    // Find the popover that contains the search input
     const popoverContent = page.locator('[data-radix-popper-content-wrapper]').filter({
       has: searchInput
     });
-    await expect(popoverContent).toBeVisible();
+
+    await expect(async () => {
+      // Only click if popover isn't already open (avoids toggling it closed)
+      if (!(await popoverContent.isVisible())) {
+        await editTagsButton.click();
+      }
+      await expect(popoverContent).toBeVisible({ timeout: 2000 });
+    }).toPass({ timeout: 10000 });
 
     // Close by clicking outside
     await page.click('body', { position: { x: 10, y: 10 } });
