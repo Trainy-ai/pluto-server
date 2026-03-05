@@ -17,10 +17,11 @@ interface SyncResult {
 
 interface SyncRun {
   id: bigint;
+  number: number | null;
   name: string;
   status: string;
   createdAt: Date;
-  project: { name: string };
+  project: { name: string; runPrefix: string | null };
 }
 
 // ---------------------------------------------------------------------------
@@ -149,10 +150,11 @@ async function syncRunsToLinearIssueInternal({ prisma, organizationId, issueIden
       },
       select: {
         id: true,
+        number: true,
         name: true,
         status: true,
         createdAt: true,
-        project: { select: { name: true } },
+        project: { select: { name: true, runPrefix: true } },
       },
       orderBy: { createdAt: "desc" },
     });
@@ -217,7 +219,10 @@ async function syncRunsToLinearIssueInternal({ prisma, organizationId, issueIden
     const projectName = run.project.name;
     const url = `${env.BETTER_AUTH_URL}/o/${orgSlug}/projects/${encodeURIComponent(projectName)}/${encodedId}`;
     const date = run.createdAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-    return `| [${escapeMarkdown(run.name)}](${url}) | ${escapeMarkdown(projectName)} | ${run.status} | ${date} |`;
+    const displayId = run.number != null && run.project.runPrefix
+      ? `${run.project.runPrefix}-${run.number}`
+      : encodedId;
+    return `| ${escapeMarkdown(displayId)} | [${escapeMarkdown(run.name)}](${url}) | ${escapeMarkdown(projectName)} | ${run.status} | ${date} |`;
   });
 
   // Build comparison URLs grouped by project
@@ -240,8 +245,8 @@ async function syncRunsToLinearIssueInternal({ prisma, organizationId, issueIden
   const body = [
     "## Pluto Experiments",
     "",
-    "| Run | Project | Status | Created |",
-    "|-----|---------|--------|---------|",
+    "| Run ID | Run | Project | Status | Created |",
+    "|--------|-----|---------|--------|---------|",
     ...rows,
     "",
     comparisonLinks.join(" · "),
