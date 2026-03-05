@@ -5,6 +5,7 @@ import PageLayout from "@/components/layout/page-layout";
 import { OrganizationPageTitle } from "@/components/layout/page-title";
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import type { SortingState } from "@tanstack/react-table";
+import { useQuery } from "@tanstack/react-query";
 import { useSelectedRuns } from "./~hooks/use-selected-runs";
 import { prefetchListRuns, useListRuns, type Run } from "./~queries/list-runs";
 import { useSelectedRunLogs } from "./~queries/selected-run-logs";
@@ -90,12 +91,46 @@ function RouteComponent() {
   const { chart, runs: urlRunsParam } = Route.useSearch();
   const navigate = useNavigate();
 
-  // Parse comma-separated run IDs from URL into array
-  const urlRunIds = useMemo(() => {
+  // Parse comma-separated run IDs from URL into array (may be display IDs like "MMP-1" or SQIDs)
+  const rawUrlRunIds = useMemo(() => {
     if (!urlRunsParam) return undefined;
     const ids = urlRunsParam.split(",").map((id) => id.trim()).filter(Boolean);
     return ids.length > 0 ? ids : undefined;
   }, [urlRunsParam]);
+
+  // Pre-fetch runs specified in URL params (they may not be in the paginated results)
+  // The getByIds endpoint resolves both display IDs (MMP-1) and SQIDs to actual runs
+  const { data: prefetchedUrlRuns } = useQuery(
+    trpc.runs.getByIds.queryOptions(
+      {
+        organizationId,
+        projectName,
+        runIds: rawUrlRunIds ?? [],
+      },
+      { enabled: !!rawUrlRunIds?.length },
+    ),
+  );
+
+  // Map URL run IDs to SQIDs for selection matching.
+  // URL may contain display IDs (MMP-1) but useSelectedRuns matches on SQIDs.
+  const urlRunIds = useMemo(() => {
+    if (!rawUrlRunIds?.length) return undefined;
+    if (!prefetchedUrlRuns?.runs?.length) return rawUrlRunIds; // pass through until resolved
+    // Build display-ID → SQID mapping from prefetched runs
+    const displayIdToSqid = new Map<string, string>();
+    for (const run of prefetchedUrlRuns.runs) {
+      // Map SQID to itself (for when URL already contains SQIDs)
+      displayIdToSqid.set(run.id, run.id);
+      // Map display ID (e.g., "MMP-179") to SQID
+      if (run.number != null && run.project?.runPrefix) {
+        displayIdToSqid.set(`${run.project.runPrefix}-${run.number}`, run.id);
+      }
+    }
+    const resolved = rawUrlRunIds
+      .map((id) => displayIdToSqid.get(id))
+      .filter((id): id is string => id != null);
+    return resolved.length > 0 ? resolved : undefined;
+  }, [rawUrlRunIds, prefetchedUrlRuns]);
 
   // Handler for changing the selected dashboard view (syncs with URL)
   const handleViewChange = useCallback(
@@ -520,6 +555,7 @@ function RouteComponent() {
   }, [updateColumns, setAllOverrides, setAllFilters, getDefaultPageSize]);
 
   // Flatten the pages to get all runs, deduplicating by ID.
+  // Also merges pre-fetched URL runs that may not be in paginated results.
   const allLoadedRuns = useMemo(() => {
     if (!data?.pages) return [];
 
@@ -536,8 +572,17 @@ function RouteComponent() {
       }
     });
 
+    // Merge pre-fetched URL runs (may not be in paginated results)
+    if (prefetchedUrlRuns?.runs) {
+      for (const run of prefetchedUrlRuns.runs) {
+        if (run.id && !uniqueRuns.has(run.id)) {
+          uniqueRuns.set(run.id, run);
+        }
+      }
+    }
+
     return Array.from(uniqueRuns.values());
-  }, [data]);
+  }, [data, prefetchedUrlRuns]);
 
   // Extract metric column specs for the summaries query
   const metricColumnSpecs = useMemo(() => {

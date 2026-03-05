@@ -1,6 +1,7 @@
 import { router } from "../../../lib/trpc";
 
 import { getRunProcedure } from "./procs/get-run";
+import { getByIdsProcedure } from "./procs/get-runs-by-ids";
 import { listRunsProcedure } from "./procs/list-runs";
 import { latestRunsProcedure } from "./procs/latest-runs";
 import { dataRouter } from "./routers/data/router";
@@ -20,6 +21,7 @@ export const runsRouter = router({
   // Procedures
   list: listRunsProcedure,
   get: getRunProcedure,
+  getByIds: getByIdsProcedure,
   latest: latestRunsProcedure,
   count: countRunsProcedure,
   updateTags: updateTagsProcedure,
