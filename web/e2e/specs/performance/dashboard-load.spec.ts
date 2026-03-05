@@ -27,8 +27,10 @@ async function waitForRenderedChart(page: import("@playwright/test").Page, timeo
   // First wait for wrapper to exist
   await page.waitForSelector(CHART_WRAPPER_SELECTOR, { state: "attached", timeout });
 
-  // Scroll first chart into view to trigger IntersectionObserver
-  await page.locator(CHART_WRAPPER_SELECTOR).first().scrollIntoViewIfNeeded();
+  // Retry scroll — LazyChart's IntersectionObserver may remount the element
+  await expect(async () => {
+    await page.locator(CHART_WRAPPER_SELECTOR).first().scrollIntoViewIfNeeded();
+  }).toPass({ timeout: 10000 });
 
   // Wait for canvas with actual dimensions (not 0x0)
   await page.waitForFunction(

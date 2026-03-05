@@ -37,7 +37,10 @@ async function waitForRenderedChart(
     state: "attached",
     timeout,
   });
-  await page.locator(CHART_WRAPPER_SELECTOR).first().scrollIntoViewIfNeeded();
+  // Retry scroll — LazyChart's IntersectionObserver may remount the element
+  await expect(async () => {
+    await page.locator(CHART_WRAPPER_SELECTOR).first().scrollIntoViewIfNeeded();
+  }).toPass({ timeout: 10000 });
   await page.waitForFunction(
     () => {
       const canvases = document.querySelectorAll(".uplot canvas");

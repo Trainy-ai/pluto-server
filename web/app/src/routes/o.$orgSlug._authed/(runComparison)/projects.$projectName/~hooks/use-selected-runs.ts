@@ -350,6 +350,32 @@ export function useSelectedRuns(
     }
   }, [runs, urlRunIds, buildSelectionFromUrlParams]);
 
+  // Keep stored run objects in sync when the upstream `runs` array is enriched
+  // (e.g., when fieldValuesData loads and merges _flatConfig/_flatSystemMetadata).
+  // Without this, selectedRunsWithColors holds stale run objects that lack these fields.
+  useEffect(() => {
+    if (!runs?.length) return;
+    const currentSelected = selectedRunsRef.current;
+    if (Object.keys(currentSelected).length === 0) return;
+
+    const runsById = new Map(runs.map((r) => [r.id, r]));
+    let updated: Record<RunId, { run: Run; color: Color }> | null = null;
+
+    for (const [id, entry] of Object.entries(currentSelected)) {
+      const freshRun = runsById.get(id);
+      if (freshRun && freshRun !== entry.run) {
+        if (!updated) {
+          updated = { ...currentSelected };
+        }
+        updated[id] = { ...entry, run: freshRun };
+      }
+    }
+
+    if (updated) {
+      setSelectedRunsWithColors(updated);
+    }
+  }, [runs]);
+
   // Notify parent when selection changes (for URL sync)
   useEffect(() => {
     if (onSelectionChange) {
