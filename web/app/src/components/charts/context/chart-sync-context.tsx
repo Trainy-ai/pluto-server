@@ -106,6 +106,8 @@ interface ChartSyncContextValue {
   // Table-driven series highlighting - when a run row is hovered in the runs table
   // Separate from chart-driven highlighting to avoid conflicts
   tableHighlightedSeries: string | null;
+  /** Ref to current table-highlighted series — updated imperatively by DOM event, read by chart draw hooks */
+  tableHighlightedSeriesRef: React.RefObject<string | null>;
 
   // Ref to check if syncXScale is currently propagating (prevents target charts from broadcasting)
   isSyncingZoomRef: React.RefObject<boolean>;
@@ -460,6 +462,7 @@ export function ChartSyncProvider({
       // tableHighlightedSeries is now handled imperatively via DOM events
       // to avoid re-rendering the entire component tree on hover
       tableHighlightedSeries: null,
+      tableHighlightedSeriesRef,
       isSyncingZoomRef,
     }),
     [

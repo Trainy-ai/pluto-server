@@ -2,11 +2,11 @@ import * as React from "react"
 
 import { cn } from "@/lib/utils"
 
-function Table({ className, ...props }: React.ComponentProps<"table">) {
+function Table({ className, wrapperClassName, ...props }: React.ComponentProps<"table"> & { wrapperClassName?: string }) {
   return (
     <div
       data-slot="table-container"
-      className="relative min-h-full w-full overflow-x-auto"
+      className={cn("relative min-h-full w-full overflow-x-auto", wrapperClassName)}
     >
       <table
         data-slot="table"

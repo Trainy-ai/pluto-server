@@ -271,7 +271,10 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
     const crossChartRunIdRef = useRef<string | null>(null);
 
     // Track table-driven highlighted series name (from runs table hover)
-    const tableHighlightRef = useRef<string | null>(null);
+    // Prefer the context's imperative ref (updated by DOM event handler) over local ref.
+    // The local ref fallback is for when there's no sync context.
+    const localTableHighlightRef = useRef<string | null>(null);
+    const tableHighlightRef = chartSyncContext?.tableHighlightedSeriesRef ?? localTableHighlightRef;
 
     // Ref for tooltip to access highlighted series name synchronously
     const highlightedSeriesRef = useRef<string | null>(null);
@@ -354,35 +357,10 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       }
     }, [chartSyncContext?.highlightedRunId, chartSyncContext?.highlightedSeriesName, chartSyncContext?.hoveredChartIdRef, chartId]);
 
-    // Subscribe to table highlight changes (from runs table row hover)
-    // This is separate from cross-chart highlighting to avoid conflicts
-    useEffect(() => {
-      const tableHighlightName = chartSyncContext?.tableHighlightedSeries ?? null;
-      const prevValue = tableHighlightRef.current;
-      tableHighlightRef.current = tableHighlightName;
-
-      // Skip if unchanged
-      if (prevValue === tableHighlightName) return;
-
-      // Clear stale local focus so table highlight can take effect in stroke function.
-      // Without this, a leftover lastFocusedSeriesRef from a previous chart hover
-      // takes priority over tableId in the stroke function's 3-tier priority chain.
-      if (tableHighlightName !== null) {
-        lastFocusedSeriesRef.current = null;
-      }
-
-      // Only trigger redraw if no chart hover is active (table highlight is lowest priority)
-      const isActive = chartSyncContext?.hoveredChartIdRef?.current === chartId;
-      const crossChartActive = chartSyncContext?.highlightedSeriesName !== null &&
-        chartSyncContext?.highlightedSeriesName !== tableHighlightName;
-
-      if (!isActive && !crossChartActive) {
-        const chart = chartInstanceRef.current;
-        if (chart) {
-          chart.redraw();
-        }
-      }
-    }, [chartSyncContext?.tableHighlightedSeries, chartSyncContext?.hoveredChartIdRef, chartSyncContext?.highlightedSeriesName, chartId]);
+    // Table highlight is now handled imperatively: the DOM event handler in
+    // chart-sync-context updates tableHighlightedSeriesRef and calls
+    // applySeriesHighlight + redraw on all registered charts directly.
+    // The draw hook reads tableHighlightRef (aliased to context ref) for z-order.
 
     // Calculate time range for datetime formatting
     const timeRange = useMemo(() => {
