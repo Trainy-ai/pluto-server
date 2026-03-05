@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/table";
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import { ChevronLeft, ChevronRight, Columns, GripVertical, Search } from "lucide-react";
+import { ChevronLeft, ChevronRight, Columns, GripVertical, PanelLeft, PanelRight, Search } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { columns } from "./columns";
 import type { Run } from "../../~queries/list-runs";
@@ -226,6 +227,10 @@ interface DataTableProps {
   onSearchChange: (query: string) => void;
   viewMode: ViewMode;
   onViewModeChange: (mode: ViewMode) => void;
+  // Panel layout toggle
+  panelLayout?: "both" | "list-only" | "graphs-only";
+  onToggleListPanel?: () => void;
+  onToggleGraphsPanel?: () => void;
   // Visibility options
   onSelectFirstN: (n: number) => void;
   onSelectAllByIds: (runIds: string[]) => void;
@@ -293,6 +298,9 @@ export function DataTable({
   onSearchChange,
   viewMode,
   onViewModeChange,
+  panelLayout = "both",
+  onToggleListPanel,
+  onToggleGraphsPanel,
   onSelectFirstN,
   onSelectAllByIds,
   onDeselectAll,
@@ -616,6 +624,46 @@ export function DataTable({
             )}
           </div>
           <div className="flex shrink-0 items-center gap-2">
+            <div className="flex items-center gap-0.5">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className={cn(
+                      "h-9 w-9",
+                      panelLayout === "graphs-only" && "border-primary bg-accent"
+                    )}
+                    onClick={onToggleListPanel}
+                  >
+                    <PanelLeft className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {panelLayout === "graphs-only" ? "Show runs list" : "Hide runs list"}{" "}
+                  <kbd className="ml-1 inline-flex h-5 min-w-5 items-center justify-center rounded border border-border bg-background px-1 font-mono text-[10px] font-medium text-muted-foreground">[</kbd>
+                </TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className={cn(
+                      "h-9 w-9",
+                      panelLayout === "list-only" && "border-primary bg-accent"
+                    )}
+                    onClick={onToggleGraphsPanel}
+                  >
+                    <PanelRight className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {panelLayout === "list-only" ? "Show graphs" : "Hide graphs"}{" "}
+                  <kbd className="ml-1 inline-flex h-5 min-w-5 items-center justify-center rounded border border-border bg-background px-1 font-mono text-[10px] font-medium text-muted-foreground">]</kbd>
+                </TooltipContent>
+              </Tooltip>
+            </div>
             <Button
               variant="outline"
               size="sm"
