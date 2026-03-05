@@ -1,3 +1,4 @@
+import logging
 import os
 import sys
 import time
@@ -12,6 +13,14 @@ from python.server import process_runs
 
 load_dotenv()
 
+# Configure logging to stdout so k8s can capture it
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [stale-run-job] %(levelname)s %(message)s",
+    stream=sys.stdout,
+)
+logger = logging.getLogger("stale-run-job")
+
 SMTP_CONFIG = get_smtp_config()
 DATABASE_URL = get_database_url()
 CH_URL = os.getenv("CLICKHOUSE_URL", "url")
@@ -21,13 +30,13 @@ try:
     CH_HOST = CH_URL.split("://")[1].split(":")[0]
     CH_PORT = CH_URL.split("://")[1].split(":")[1]
 except Exception as e:
-    print(f"Error parsing CH_URL: {e}")
+    logger.error(f"Error parsing CH_URL: {e}")
     sys.exit(1)
 
 
 def start():
     if not DATABASE_URL:
-        print("DATABASE_URL is not set")
+        logger.error("DATABASE_URL is not set")
         sys.exit(1)
     engine = create_engine(
         DATABASE_URL,
@@ -36,26 +45,39 @@ def start():
         else {},
     )
     Session = sessionmaker(bind=engine)
-    session = Session()
     ch_client = get_clickhouse_client(
         host=CH_HOST,
         port=CH_PORT,
         username=CH_USER,
         password=CH_PASSWORD,
     )
-    return engine, session, ch_client
+    return engine, Session, ch_client
 
 
 if __name__ == "__main__":
+    engine = None
     try:
-        engine, session, ch_client = start()
+        engine, Session, ch_client = start()
+        logger.info("Stale run job started, checking every 60s")
+        cycle = 0
         while True:
-            process_runs(session, ch_client, smtp_config=SMTP_CONFIG)
-            time.sleep(60)  # Check every 60 seconds (reduced from 10s to lower ClickHouse load)
+            cycle += 1
+            # Create a fresh session each cycle so we always see the latest DB state.
+            # Reusing a single session causes SQLAlchemy's identity map to cache stale
+            # query results, meaning new RUNNING runs are invisible to subsequent cycles.
+            session = Session()
+            try:
+                logger.info(f"Cycle {cycle}: starting stale run check")
+                process_runs(session, ch_client, smtp_config=SMTP_CONFIG)
+            except Exception as err:
+                logger.exception(f"Cycle {cycle}: error during processing")
+            finally:
+                session.close()
+            time.sleep(60)
     except Exception as err:
-        print("Processing failed:", err)
+        logger.exception("Fatal error")
     finally:
-        session.close()
-        engine.dispose()
-        print("Restarting script...")
+        if engine:
+            engine.dispose()
+        logger.info("Restarting stale run job...")
         os.execv(sys.executable, [sys.executable] + sys.argv)

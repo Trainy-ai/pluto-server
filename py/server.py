@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from compat.migrate import get_client, list_runs, migrate_all, migrate_run_v1
 from python.env import get_database_url, get_smtp_config
 from python.models import Run, RunStatus, RunTriggers, RunTriggerType
-from python.server import check_run, send_alert, check_api_key
+from python.server import check_run, send_alert, check_api_key, process_runs
 
 load_dotenv()
 
@@ -121,6 +121,39 @@ async def set_run_alerts(
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to send alert: {e}")
+
+
+@app.post("/api/stale-runs/trigger")
+async def trigger_stale_run_check():
+    """Manually trigger one cycle of the stale run job."""
+    from clickhouse_connect import get_client as get_clickhouse_client
+
+    ch_url = os.getenv("CLICKHOUSE_URL", "")
+    ch_user = os.getenv("CLICKHOUSE_USER", "default")
+    ch_password = os.getenv("CLICKHOUSE_PASSWORD", "")
+
+    try:
+        ch_host = ch_url.split("://")[1].split(":")[0]
+        ch_port = ch_url.split("://")[1].split(":")[1]
+    except (IndexError, AttributeError):
+        raise HTTPException(status_code=500, detail="CLICKHOUSE_URL not configured")
+
+    ch_client = get_clickhouse_client(
+        host=ch_host, port=ch_port, username=ch_user, password=ch_password
+    )
+
+    session = SessionLocal()
+    try:
+        failed_ids = process_runs(session, ch_client, smtp_config=SMTP_CONFIG)
+        return {
+            "processed": len(failed_ids) if failed_ids is not None else 0,
+            "marked_failed": failed_ids or [],
+            "grace_seconds": 1800,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Stale run check failed: {e}")
+    finally:
+        session.close()
 
 
 @app.post("/api/compat/w/viewer")  # TODO: protect

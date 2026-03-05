@@ -1,8 +1,10 @@
 import hashlib
+import logging
 import os
 from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from python.emails import send_email
@@ -18,6 +20,8 @@ from python.models import (
 )
 from python.templates import process_run_email
 from python.utils import get_run_url
+
+logger = logging.getLogger("stale-run-job")
 
 
 def get_last_update_times(ch_client, run_ids):
@@ -49,33 +53,45 @@ def get_last_update_times(ch_client, run_ids):
                 last_updates[run_id] = last_update_time
         return last_updates
     except Exception as e:
-        print(f"Error querying ClickHouse for batch: {e}")
+        logger.exception("Error querying ClickHouse for batch")
         return None
 
 
-def process_runs(session, ch_client, smtp_config, grace=600):
+STALE_RUN_LOCK_ID = 8675309  # arbitrary unique ID for pg_try_advisory_lock
+
+
+def process_runs(session, ch_client, smtp_config, grace=1800):
+    # Acquire a Postgres advisory lock so only one instance runs per cycle.
+    # pg_try_advisory_xact_lock is non-blocking and auto-releases at transaction end.
+    acquired = session.execute(
+        text("SELECT pg_try_advisory_xact_lock(:lock_id)"),
+        {"lock_id": STALE_RUN_LOCK_ID},
+    ).scalar()
+    if not acquired:
+        logger.info("Another instance holds the lock, skipping this cycle")
+        return []
+
     runs = session.query(Run).filter(Run.status == "RUNNING").all()
-    print(f"Processing {len(runs)} runs")
+    logger.info(f"Found {len(runs)} RUNNING runs")
 
     if not runs:
-        print("No running runs to process.")
-        return
+        return []
 
     # Filter runs with valid projects
     valid_runs = [run for run in runs if run.project]
     if len(valid_runs) != len(runs):
-        print(f"Skipping {len(runs) - len(valid_runs)} runs without associated projects.")
+        logger.warning(f"Skipping {len(runs) - len(valid_runs)} runs without associated projects")
 
     # Single batch query for all runs (instead of N individual queries)
     run_ids = [run.id for run in valid_runs]
     last_updates = get_last_update_times(ch_client, run_ids)
 
     if last_updates is None:
-        print("Failed to get last update times from ClickHouse, skipping this cycle.")
-        return
+        logger.error("Failed to get last update times from ClickHouse, skipping this cycle")
+        return None
 
     now_utc = datetime.now(timezone.utc)
-    updated_count = 0
+    failed_run_ids = []
 
     for run in valid_runs:
         last_update_time = last_updates.get(run.id)
@@ -86,8 +102,10 @@ def process_runs(session, ch_client, smtp_config, grace=600):
 
         time_diff = now_utc - last_update_time
         if timedelta(seconds=grace) < time_diff < timedelta(days=16384):
-            print(
-                f"Run {run.id} (Project: {run.project.name}) last update at {last_update_time} is older than {grace} seconds."
+            logger.info(
+                f"Marking run {run.id} as FAILED (project={run.project.name}, "
+                f"last_update={last_update_time.isoformat()}, "
+                f"stale_for={int(time_diff.total_seconds())}s)"
             )
             run.status = "FAILED"
             send_alert(
@@ -100,10 +118,10 @@ def process_runs(session, ch_client, smtp_config, grace=600):
                 level=NotificationType.RUN_FAILED,
                 email=False,
             )
-            updated_count += 1
+            failed_run_ids.append(run.id)
 
         # Check thresholds (still per-run, only for runs with triggers configured)
-        if run.loggerSettings.get("trigger"):
+        if run.loggerSettings and run.loggerSettings.get("trigger"):
             for k, v in run.loggerSettings["trigger"].items():
                 if v.get("operator") and isinstance(k, str):
                     check_threshold(
@@ -118,13 +136,15 @@ def process_runs(session, ch_client, smtp_config, grace=600):
 
     try:
         session.commit()
-        if updated_count > 0:
-            print(f"Updated {updated_count} runs to FAILED status.")
+        if failed_run_ids:
+            logger.info(f"Marked {len(failed_run_ids)} runs as FAILED: {failed_run_ids}")
         else:
-            print("No stale runs found.")
+            logger.info("No stale runs found")
     except Exception as e:
-        print(f"Error committing updates: {e}")
+        logger.exception("Error committing updates")
         session.rollback()
+
+    return failed_run_ids
 
 
 def get_emails(session, organization_id):
@@ -138,7 +158,7 @@ def get_emails(session, organization_id):
         emails = [member[0] for member in members]
         return emails
     except Exception as e:
-        print(f"Error retrieving organization emails: {e}")
+        logger.error(f"Error retrieving organization emails: {e}")
         return []
 
 
@@ -146,7 +166,7 @@ def check_threshold(
     session, ch_client, smtp_config, run, log_name, threshold, operator=">="
 ):
     if not (operator in ["<", "<=", ">", ">="] and isinstance(threshold, (int, float))):
-        print(f"Invalid operator: {operator}")
+        logger.warning(f"Invalid operator: {operator}")
         return False
     project_name = run.project.name
 
@@ -173,11 +193,11 @@ def check_threshold(
     try:
         result = ch_client.query(ch_query, parameters=ch_params)
     except Exception as e:
-        print(f"Error querying ClickHouse for run {run.id} threshold check: {e}")
+        logger.error(f"Error querying ClickHouse for run {run.id} threshold check: {e}")
         return None
 
     if not result.result_rows or result.result_rows[0][0] is None:
-        print(f"No threshold violation found for run {run.id} on {log_name}.")
+        logger.debug(f"No threshold violation found for run {run.id} on {log_name}")
         return None
 
     last_update_time = result.result_rows[0][0]
@@ -187,14 +207,14 @@ def check_threshold(
         try:
             last_update_time = datetime.fromisoformat(last_update_time)
         except ValueError as e:
-            print(f"Error parsing metric time for run {run.id}: {e}")
+            logger.error(f"Error parsing metric time for run {run.id}: {e}")
             return None
 
     if last_update_time.tzinfo is None:
         last_update_time = last_update_time.replace(tzinfo=timezone.utc)
 
-    print(
-        f"Run {run.id} (Project: {project_name}) {log_name} value {violation_value} {operator} {threshold} at {last_update_time}."
+    logger.info(
+        f"Run {run.id} (Project: {project_name}) {log_name} value {violation_value} {operator} {threshold} at {last_update_time}"
     )
 
     run.status = RunStatus.CANCELLED  # run.status = "FAILED"
@@ -231,11 +251,11 @@ def check_run_time(session, ch_client, smtp_config, run, grace):
     try:
         result = ch_client.query(ch_query, parameters=ch_params)
     except Exception as e:
-        print(f"Error querying ClickHouse for run {run.id}: {e}")
+        logger.error(f"Error querying ClickHouse for run {run.id}: {e}")
         return None
 
     if not result.result_rows or result.result_rows[0][0] is None:
-        print(f"No metric data for run {run.id}.")
+        logger.debug(f"No metric data for run {run.id}")
         return None
 
     last_update_time = result.result_rows[0][0]
@@ -243,7 +263,7 @@ def check_run_time(session, ch_client, smtp_config, run, grace):
         try:
             last_update_time = datetime.fromisoformat(last_update_time)
         except ValueError as e:
-            print(f"Error parsing update time for run {run.id}: {e}")
+            logger.error(f"Error parsing update time for run {run.id}: {e}")
             return None
     if last_update_time.tzinfo is None:
         last_update_time = last_update_time.replace(tzinfo=timezone.utc)
@@ -256,8 +276,8 @@ def check_run_time(session, ch_client, smtp_config, run, grace):
 
     time_diff = now_utc - last_update_time
     if timedelta(seconds=grace) < time_diff < timedelta(days=16384):
-        print(
-            f"Run {run.id} (Project: {project_name}) last update at {last_update_time} is older than {grace} seconds."
+        logger.info(
+            f"Run {run.id} (Project: {project_name}) last update at {last_update_time} is older than {grace} seconds"
         )
         run.status = "FAILED"
         send_alert(
@@ -271,8 +291,8 @@ def check_run_time(session, ch_client, smtp_config, run, grace):
             email=False,
         )
     else:
-        print(
-            f"Run {run.id} (Project: {project_name}) is active. Last update at {last_update_time}."
+        logger.debug(
+            f"Run {run.id} (Project: {project_name}) is active. Last update at {last_update_time}"
         )
     return True
 
@@ -318,18 +338,18 @@ def check_api_key(session: Session, authorization: str):
     raw_api_key = authorization.replace("Bearer ", "")
     hashed_key = hash_api_key(raw_api_key)
     if not hashed_key:
-        print("Invalid API key format")
+        logger.warning("Invalid API key format")
         return False
 
     api_key_record = session.query(ApiKey).filter(ApiKey.key == hashed_key).first()
     if not api_key_record:
-        print(f"API key {raw_api_key} not found in {os.getenv("DATABASE_URL")}")
+        logger.warning(f"API key not found")
         return False
 
     if api_key_record.expiresAt and api_key_record.expiresAt < datetime.now(
         timezone.utc
     ):
-        print(f"API key {api_key_record.id} has expired.")
+        logger.warning(f"API key {api_key_record.id} has expired")
         return False
 
     # api_key_record.lastUsed = datetime.now(timezone.utc)

@@ -2,6 +2,7 @@ import enum
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     Column,
     DateTime,
@@ -40,7 +41,7 @@ class NotificationType(enum.Enum):
 
 class Project(Base):
     __tablename__ = "projects"
-    id = Column(Integer, primary_key=True)
+    id = Column(BigInteger, primary_key=True)
     name = Column(String)
 
     def __repr__(self):
@@ -49,9 +50,9 @@ class Project(Base):
 
 class Run(Base):
     __tablename__ = "runs"
-    id = Column(Integer, primary_key=True)
+    id = Column(BigInteger, primary_key=True)
     name = Column(String)
-    projectId = Column(Integer, ForeignKey("projects.id"))
+    projectId = Column(BigInteger, ForeignKey("projects.id"))
     organizationId = Column(String, ForeignKey("organization.id"))
     loggerSettings = Column(JSON)
     status = Column(Enum(RunStatus))
@@ -72,8 +73,8 @@ class Run(Base):
 
 class Notification(Base):
     __tablename__ = "notifications"
-    id = Column(Integer, primary_key=True)
-    runId = Column(Integer, ForeignKey("runs.id"))
+    id = Column(BigInteger, primary_key=True)
+    runId = Column(BigInteger, ForeignKey("runs.id"))
     organizationId = Column(String)
     createdAt = Column(DateTime(timezone=True), server_default=func.now())
     type = Column(Enum(NotificationType, name="NotificationType", create_type=False))
@@ -137,8 +138,8 @@ class Member(Base):
 
 class RunTriggers(Base):
     __tablename__ = "run_triggers"
-    id = Column(Integer, primary_key=True)
-    runId = Column(Integer, ForeignKey("runs.id"))
+    id = Column(BigInteger, primary_key=True)
+    runId = Column(BigInteger, ForeignKey("runs.id"))
     trigger = Column(String)
     createdAt = Column(DateTime(timezone=True), server_default=func.now())
     triggerType = Column(Enum(RunTriggerType))
@@ -151,8 +152,8 @@ class RunTriggers(Base):
 
 class RunGraphNode(Base):
     __tablename__ = "run_graph_nodes"
-    id = Column(Integer, primary_key=True)
-    runId = Column(Integer, ForeignKey("runs.id"))
+    id = Column(BigInteger, primary_key=True)
+    runId = Column(BigInteger, ForeignKey("runs.id"))
     name = Column(String)
     type = Column(String)
     order = Column(Integer, nullable=True)
@@ -175,8 +176,8 @@ class RunGraphNode(Base):
 
 class RunGraphEdge(Base):
     __tablename__ = "run_graph_edges"
-    id = Column(Integer, primary_key=True)
-    runId = Column(Integer, ForeignKey("runs.id"))
+    id = Column(BigInteger, primary_key=True)
+    runId = Column(BigInteger, ForeignKey("runs.id"))
     sourceId = Column(String)
     targetId = Column(String)
 

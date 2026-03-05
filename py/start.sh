@@ -1,4 +1,4 @@
 #!/bin/bash
 
-python main.py &
+PYTHONUNBUFFERED=1 python main.py &
 python server.py
