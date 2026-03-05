@@ -28,6 +28,7 @@ import {
   ResizablePanel,
   ResizableHandle,
 } from "@/components/ui/resizable";
+import type { PanelImperativeHandle } from "react-resizable-panels";
 import { useDebouncedCallback } from "@/lib/hooks/use-debounced-callback";
 import { useFieldValues } from "./~queries/field-values";
 import { RunTableViewSelector } from "./~components/runs-table/run-table-view-selector";
@@ -131,6 +132,68 @@ function RouteComponent() {
 
   // View mode state - "charts" (default) or "side-by-side"
   const [viewMode, setViewMode] = useState<ViewMode>("charts");
+
+  // Panel layout state - which panels are visible
+  type PanelLayout = "both" | "list-only" | "graphs-only";
+  const [panelLayout, setPanelLayout] = useState<PanelLayout>("both");
+  const listPanelRef = useRef<PanelImperativeHandle | null>(null);
+  const graphsPanelRef = useRef<PanelImperativeHandle | null>(null);
+
+  const toggleListPanel = useCallback(() => {
+    setPanelLayout((prev) => {
+      if (prev === "graphs-only") {
+        // List is hidden — expand it to show both
+        listPanelRef.current?.expand();
+        return "both";
+      }
+      if (prev === "list-only") {
+        // List is the only visible panel — expand graphs to show both
+        graphsPanelRef.current?.expand();
+        return "both";
+      }
+      // Both visible — collapse list
+      listPanelRef.current?.collapse();
+      return "graphs-only";
+    });
+  }, []);
+
+  const toggleGraphsPanel = useCallback(() => {
+    setPanelLayout((prev) => {
+      if (prev === "list-only") {
+        // Graphs hidden — expand to show both
+        graphsPanelRef.current?.expand();
+        return "both";
+      }
+      if (prev === "graphs-only") {
+        // Graphs is the only visible panel — expand list to show both
+        listPanelRef.current?.expand();
+        return "both";
+      }
+      // Both visible — collapse graphs
+      graphsPanelRef.current?.collapse();
+      return "list-only";
+    });
+  }, []);
+
+  // Keyboard shortcuts for panel toggle
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      // Don't trigger if user is typing in an input/textarea
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (e.target as HTMLElement)?.isContentEditable) {
+        return;
+      }
+      if (e.key === "[") {
+        e.preventDefault();
+        toggleListPanel();
+      } else if (e.key === "]") {
+        e.preventDefault();
+        toggleGraphsPanel();
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [toggleListPanel, toggleGraphsPanel]);
 
   // Table hover → chart highlighting is handled entirely via DOM events
   // ("run-table-hover" dispatched by data-table.tsx, consumed by chart-sync-context.tsx)
@@ -695,8 +758,19 @@ function RouteComponent() {
           }}
         >
           <ResizablePanel
+            panelRef={listPanelRef}
             id="runs-list"
+            defaultSize={30}
             minSize={15}
+            collapsible
+            collapsedSize={0}
+            onResize={(size) => {
+              if (size.asPercentage === 0) {
+                setPanelLayout("graphs-only");
+              } else {
+                setPanelLayout((prev) => prev === "graphs-only" ? "both" : prev);
+              }
+            }}
             className="overflow-hidden"
           >
             <div className="flex h-full min-h-0 flex-col overflow-hidden pr-2">
@@ -730,6 +804,9 @@ function RouteComponent() {
                 onSearchChange={handleSearchChange}
                 viewMode={viewMode}
                 onViewModeChange={setViewMode}
+                panelLayout={panelLayout}
+                onToggleListPanel={toggleListPanel}
+                onToggleGraphsPanel={toggleGraphsPanel}
                 onSelectFirstN={selectFirstN}
                 onSelectAllByIds={selectAllByIds}
                 onDeselectAll={deselectAll}
@@ -782,7 +859,18 @@ function RouteComponent() {
           </ResizablePanel>
           <ResizableHandle withHandle />
           <ResizablePanel
+            panelRef={graphsPanelRef}
             id="metrics-display"
+            defaultSize={70}
+            collapsible
+            collapsedSize={0}
+            onResize={(size) => {
+              if (size.asPercentage === 0) {
+                setPanelLayout("list-only");
+              } else {
+                setPanelLayout((prev) => prev === "list-only" ? "both" : prev);
+              }
+            }}
           >
             <div className="flex h-full flex-col overflow-y-auto overscroll-y-contain pl-2">
               {(isLoading || runCountLoading) && runs.length === 0 ? (
