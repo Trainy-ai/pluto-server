@@ -76,6 +76,34 @@ function createMockPrisma(overrides: {
 }
 
 // ---------------------------------------------------------------------------
+// Mock run factory
+// ---------------------------------------------------------------------------
+
+function createMockRun(overrides: {
+  id?: bigint;
+  number?: number | null;
+  name?: string;
+  status?: string;
+  createdAt?: Date;
+  project?: { name?: string; runPrefix?: string | null };
+} = {}) {
+  const { project, ...rest } = overrides;
+  return {
+    id: BigInt(1),
+    number: 1,
+    name: "test-run",
+    status: "COMPLETED",
+    createdAt: new Date("2026-01-01"),
+    ...rest,
+    project: {
+      name: "test-project",
+      runPrefix: "TP",
+      ...project,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -139,20 +167,8 @@ describe("triggerLinearSyncForTags", () => {
 describe("syncRunsToLinearIssue", () => {
   it("should create a new comment when no existing comment", async () => {
     const runs = [
-      {
-        id: BigInt(1),
-        name: "training-v1",
-        status: "COMPLETED",
-        createdAt: new Date("2026-02-09"),
-        project: { name: "my-project" },
-      },
-      {
-        id: BigInt(2),
-        name: "training-v2",
-        status: "RUNNING",
-        createdAt: new Date("2026-02-10"),
-        project: { name: "my-project" },
-      },
+      createMockRun({ id: BigInt(1), number: 1, name: "training-v1", createdAt: new Date("2026-02-09"), project: { name: "my-project", runPrefix: "MMP" } }),
+      createMockRun({ id: BigInt(2), number: 2, name: "training-v2", status: "RUNNING", createdAt: new Date("2026-02-10"), project: { name: "my-project", runPrefix: "MMP" } }),
     ];
 
     const prisma = createMockPrisma({ runs });
@@ -187,13 +203,7 @@ describe("syncRunsToLinearIssue", () => {
 
   it("should update existing comment when comment ID exists in metadata", async () => {
     const runs = [
-      {
-        id: BigInt(1),
-        name: "run-1",
-        status: "COMPLETED",
-        createdAt: new Date("2026-02-09"),
-        project: { name: "proj" },
-      },
+      createMockRun({ name: "run-1", createdAt: new Date("2026-02-09"), project: { name: "proj", runPrefix: "PRJ" } }),
     ];
 
     const prisma = createMockPrisma({
@@ -225,13 +235,7 @@ describe("syncRunsToLinearIssue", () => {
 
   it("should fall back to createComment when update fails and no Pluto comment found on issue", async () => {
     const runs = [
-      {
-        id: BigInt(1),
-        name: "run-1",
-        status: "COMPLETED",
-        createdAt: new Date("2026-02-09"),
-        project: { name: "proj" },
-      },
+      createMockRun({ name: "run-1", createdAt: new Date("2026-02-09"), project: { name: "proj", runPrefix: "PRJ" } }),
     ];
 
     const prisma = createMockPrisma({
@@ -266,13 +270,7 @@ describe("syncRunsToLinearIssue", () => {
 
   it("should recover orphaned comment when update fails but Pluto comment exists on issue", async () => {
     const runs = [
-      {
-        id: BigInt(1),
-        name: "run-1",
-        status: "COMPLETED",
-        createdAt: new Date("2026-02-09"),
-        project: { name: "proj" },
-      },
+      createMockRun({ name: "run-1", createdAt: new Date("2026-02-09"), project: { name: "proj", runPrefix: "PRJ" } }),
     ];
 
     const prisma = createMockPrisma({
@@ -320,13 +318,7 @@ describe("syncRunsToLinearIssue", () => {
 
   it("should find orphaned Pluto comment when no stored ID exists (idempotent)", async () => {
     const runs = [
-      {
-        id: BigInt(1),
-        name: "run-1",
-        status: "COMPLETED",
-        createdAt: new Date("2026-02-09"),
-        project: { name: "proj" },
-      },
+      createMockRun({ name: "run-1", createdAt: new Date("2026-02-09"), project: { name: "proj", runPrefix: "PRJ" } }),
     ];
 
     const prisma = createMockPrisma({ runs }); // metadata has empty commentIds
@@ -362,13 +354,7 @@ describe("syncRunsToLinearIssue", () => {
 
   it("should hyperlink run names (not a separate Link column)", async () => {
     const runs = [
-      {
-        id: BigInt(42),
-        name: "my-run",
-        status: "COMPLETED",
-        createdAt: new Date("2026-02-10"),
-        project: { name: "my-project" },
-      },
+      createMockRun({ id: BigInt(42), number: 7, name: "my-run", createdAt: new Date("2026-02-10"), project: { name: "my-project", runPrefix: "MMP" } }),
     ];
 
     const prisma = createMockPrisma({ runs });
@@ -391,6 +377,11 @@ describe("syncRunsToLinearIssue", () => {
     // Run name should be a markdown link
     expect(body).toContain("[my\\-run](http://localhost:3000/o/dev-org/projects/my-project/sqid_42)");
 
+    // Should have a "Run ID" column header
+    expect(body).toContain("| Run ID |");
+    // Run ID value (display ID) should appear in the row
+    expect(body).toContain("MMP\\-7");
+
     // Should NOT have a "Link" column header
     expect(body).not.toContain("| Link |");
     expect(body).not.toContain("View in Pluto");
@@ -398,20 +389,8 @@ describe("syncRunsToLinearIssue", () => {
 
   it("should include comparison link below the table", async () => {
     const runs = [
-      {
-        id: BigInt(1),
-        name: "run-a",
-        status: "COMPLETED",
-        createdAt: new Date("2026-02-09"),
-        project: { name: "my-project" },
-      },
-      {
-        id: BigInt(2),
-        name: "run-b",
-        status: "RUNNING",
-        createdAt: new Date("2026-02-10"),
-        project: { name: "my-project" },
-      },
+      createMockRun({ id: BigInt(1), number: 1, name: "run-a", createdAt: new Date("2026-02-09"), project: { name: "my-project", runPrefix: "MMP" } }),
+      createMockRun({ id: BigInt(2), number: 2, name: "run-b", status: "RUNNING", createdAt: new Date("2026-02-10"), project: { name: "my-project", runPrefix: "MMP" } }),
     ];
 
     const prisma = createMockPrisma({ runs });
@@ -524,13 +503,7 @@ describe("syncRunsToLinearIssue", () => {
 
   it("should return error when Linear issue not found", async () => {
     const runs = [
-      {
-        id: BigInt(1),
-        name: "run-1",
-        status: "COMPLETED",
-        createdAt: new Date("2026-02-09"),
-        project: { name: "proj" },
-      },
+      createMockRun({ name: "run-1", createdAt: new Date("2026-02-09"), project: { name: "proj", runPrefix: "PRJ" } }),
     ];
     const prisma = createMockPrisma({ runs });
 
@@ -548,13 +521,7 @@ describe("syncRunsToLinearIssue", () => {
 
   it("should save comment ID to integration metadata", async () => {
     const runs = [
-      {
-        id: BigInt(1),
-        name: "run-1",
-        status: "COMPLETED",
-        createdAt: new Date("2026-02-09"),
-        project: { name: "proj" },
-      },
+      createMockRun({ name: "run-1", createdAt: new Date("2026-02-09"), project: { name: "proj", runPrefix: "PRJ" } }),
     ];
 
     const prisma = createMockPrisma({ runs });
@@ -589,20 +556,8 @@ describe("syncRunsToLinearIssue", () => {
 
   it("should sort runs newest-first (desc)", async () => {
     const runs = [
-      {
-        id: BigInt(2),
-        name: "newer-run",
-        status: "RUNNING",
-        createdAt: new Date("2026-02-10"),
-        project: { name: "proj" },
-      },
-      {
-        id: BigInt(1),
-        name: "older-run",
-        status: "COMPLETED",
-        createdAt: new Date("2026-02-09"),
-        project: { name: "proj" },
-      },
+      createMockRun({ id: BigInt(2), number: 2, name: "newer-run", status: "RUNNING", createdAt: new Date("2026-02-10"), project: { name: "proj", runPrefix: "PRJ" } }),
+      createMockRun({ id: BigInt(1), number: 1, name: "older-run", createdAt: new Date("2026-02-09"), project: { name: "proj", runPrefix: "PRJ" } }),
     ];
 
     const prisma = createMockPrisma({ runs });
@@ -633,13 +588,7 @@ describe("syncRunsToLinearIssue", () => {
     // see the comment ID saved by the first and update instead of creating.
     let callCount = 0;
     const runs = [
-      {
-        id: BigInt(1),
-        name: "run-1",
-        status: "COMPLETED" as const,
-        createdAt: new Date("2026-02-09"),
-        project: { name: "proj" },
-      },
+      createMockRun({ name: "run-1", createdAt: new Date("2026-02-09"), project: { name: "proj", runPrefix: "PRJ" } }),
     ];
 
     // Build a mock prisma where integration.findUnique returns the latest
@@ -702,13 +651,7 @@ describe("syncRunsToLinearIssue", () => {
 
   it("should allow concurrent syncs for different issues to run in parallel", async () => {
     const runs = [
-      {
-        id: BigInt(1),
-        name: "run-1",
-        status: "COMPLETED" as const,
-        createdAt: new Date("2026-02-09"),
-        project: { name: "proj" },
-      },
+      createMockRun({ name: "run-1", createdAt: new Date("2026-02-09"), project: { name: "proj", runPrefix: "PRJ" } }),
     ];
 
     const prisma = createMockPrisma({ runs });
@@ -735,20 +678,8 @@ describe("syncRunsToLinearIssue", () => {
 
   it("should handle runs across multiple projects in comparison links", async () => {
     const runs = [
-      {
-        id: BigInt(1),
-        name: "run-a",
-        status: "COMPLETED",
-        createdAt: new Date("2026-02-09"),
-        project: { name: "project-alpha" },
-      },
-      {
-        id: BigInt(2),
-        name: "run-b",
-        status: "RUNNING",
-        createdAt: new Date("2026-02-10"),
-        project: { name: "project-beta" },
-      },
+      createMockRun({ id: BigInt(1), number: 1, name: "run-a", createdAt: new Date("2026-02-09"), project: { name: "project-alpha", runPrefix: "PA" } }),
+      createMockRun({ id: BigInt(2), number: 2, name: "run-b", status: "RUNNING", createdAt: new Date("2026-02-10"), project: { name: "project-beta", runPrefix: "PB" } }),
     ];
 
     const prisma = createMockPrisma({ runs });
