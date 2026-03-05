@@ -33,15 +33,15 @@ describe('buildRunSearchQuery', () => {
     expect(query).toContain('"organizationId" = $1');
     expect(params[0]).toBe('org-123');
 
-    // Should add ILIKE search on name
+    // Should add ILIKE search on name and display ID (OR condition)
     expect(query).toContain("ILIKE '%' || $2 || '%'");
     expect(params[1]).toBe('train');
 
     // Should order by createdAt descending (newest first)
     expect(query).toContain('ORDER BY r."createdAt" DESC');
 
-    // Should NOT include a JOIN when no project filter is used
-    expect(query).not.toContain('JOIN');
+    // Search requires project JOIN for display ID matching
+    expect(query).toContain('JOIN "projects" p');
   });
 
   // --- Project filtering ---
@@ -244,6 +244,58 @@ describe('buildRunSearchQuery', () => {
     expect(params[0]).toBe('org-123');
   });
 
+  // --- Display ID search ---
+
+  it('adds display ID matching condition alongside name search', () => {
+    // When searching, the query should also match against the display ID
+    // (project.runPrefix || '-' || runs.number), e.g., "MMP-1"
+    const { query, params } = buildRunSearchQuery({
+      organizationId: 'org-123',
+      search: 'MMP-1',
+    });
+
+    // Should match name OR display ID
+    expect(query).toContain('ILIKE');
+    expect(query).toContain('r."name"');
+    // Display ID condition: concatenation of runPrefix + '-' + number
+    expect(query).toContain('p."runPrefix"');
+    expect(query).toContain('r."number"');
+    expect(params).toContain('MMP-1');
+  });
+
+  it('includes project JOIN for display ID search even without project filter', () => {
+    // Display ID search requires access to project.runPrefix, so a JOIN is always needed
+    const { query } = buildRunSearchQuery({
+      organizationId: 'org-123',
+      search: 'MMP',
+    });
+
+    expect(query).toContain('JOIN "projects" p');
+  });
+
+  it('does not duplicate project JOIN when project name filter is also present', () => {
+    const { query } = buildRunSearchQuery({
+      organizationId: 'org-123',
+      search: 'MMP-1',
+      projectName: 'my-project',
+    });
+
+    // Should have exactly one JOIN to projects
+    const joinMatches = query.match(/JOIN "projects" p/g);
+    expect(joinMatches?.length).toBe(1);
+  });
+
+  it('matches display ID with just a number search', () => {
+    // Searching "42" should match runs with number=42 (display ID like "MMP-42")
+    const { query } = buildRunSearchQuery({
+      organizationId: 'org-123',
+      search: '42',
+    });
+
+    expect(query).toContain('p."runPrefix"');
+    expect(query).toContain('r."number"');
+  });
+
   // --- LIMIT ---
 
   it('adds LIMIT when specified', () => {
@@ -328,5 +380,17 @@ describe('buildRunCountQuery', () => {
     });
 
     expect(query).toContain('COUNT(*)::int');
+  });
+
+  it('includes display ID matching when search is non-empty', () => {
+    const { query } = buildRunCountQuery({
+      organizationId: 'org-123',
+      search: 'MMP-1',
+    });
+
+    // Should match both name and display ID
+    expect(query).toContain('p."runPrefix"');
+    expect(query).toContain('r."number"');
+    expect(query).toContain('JOIN "projects" p');
   });
 });
