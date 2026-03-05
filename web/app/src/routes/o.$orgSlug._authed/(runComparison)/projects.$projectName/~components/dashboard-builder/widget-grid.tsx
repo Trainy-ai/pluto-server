@@ -4,7 +4,7 @@ import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
 import "./widget-grid.css";
 import { cn } from "@/lib/utils";
-import { MoreHorizontalIcon, PencilIcon, Trash2Icon, MoveIcon, Maximize2Icon, SlidersHorizontalIcon, TriangleAlertIcon, ZapIcon } from "lucide-react";
+import { MoreHorizontalIcon, PencilIcon, Trash2Icon, MoveIcon, Maximize2Icon, SlidersHorizontalIcon, TriangleAlertIcon, ZapIcon, CopyIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -28,6 +28,7 @@ interface WidgetGridProps {
   onLayoutChange: (widgets: Widget[]) => void;
   onEditWidget: (widget: Widget) => void;
   onDeleteWidget: (widgetId: string) => void;
+  onCopyWidget?: (widget: Widget) => void;
   renderWidget: (widget: Widget, onDataRange?: (dataMin: number, dataMax: number) => void, onResetBounds?: () => void) => ReactNode;
   onFullscreenWidget?: (widget: Widget) => void;
   onUpdateWidgetBounds?: (widgetId: string, yMin?: number, yMax?: number) => void;
@@ -44,6 +45,7 @@ export function WidgetGrid({
   onLayoutChange,
   onEditWidget,
   onDeleteWidget,
+  onCopyWidget,
   renderWidget,
   onFullscreenWidget,
   onUpdateWidgetBounds,
@@ -392,6 +394,10 @@ export function WidgetGrid({
                       <DropdownMenuItem onClick={() => onEditWidget(widget)}>
                         <PencilIcon className="mr-2 size-4" />
                         Edit Widget
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => onCopyWidget?.(widget)}>
+                        <CopyIcon className="mr-2 size-4" />
+                        Copy Widget
                       </DropdownMenuItem>
                       <DropdownMenuItem
                         className="text-destructive"

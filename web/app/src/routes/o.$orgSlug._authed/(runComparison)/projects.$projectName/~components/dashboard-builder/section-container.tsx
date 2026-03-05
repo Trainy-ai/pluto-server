@@ -7,6 +7,7 @@ import {
   PencilIcon,
   Trash2Icon,
   ZapIcon,
+  ClipboardPasteIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -45,6 +46,8 @@ interface SectionContainerProps {
   onToggleCollapse: () => void;
   onDelete: () => void;
   onAddWidget: () => void;
+  onPasteWidget?: () => void;
+  hasCopiedWidget?: boolean;
   children: React.ReactNode;
   isEditing?: boolean;
   dynamicWidgetCount?: number;
@@ -60,6 +63,8 @@ export function SectionContainer({
   onToggleCollapse,
   onDelete,
   onAddWidget,
+  onPasteWidget,
+  hasCopiedWidget = false,
   children,
   isEditing = false,
   dynamicWidgetCount,
@@ -135,17 +140,32 @@ export function SectionContainer({
             {isEditing && (
               <div className="flex items-center gap-2">
                 {!isDynamic && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onAddWidget();
-                    }}
-                  >
-                    <PlusIcon className="mr-1 size-4" />
-                    Add Widget
-                  </Button>
+                  <>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onAddWidget();
+                      }}
+                    >
+                      <PlusIcon className="mr-1 size-4" />
+                      Add Widget
+                    </Button>
+                    {hasCopiedWidget && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onPasteWidget?.();
+                        }}
+                      >
+                        <ClipboardPasteIcon className="mr-1 size-4" />
+                        Paste Widget
+                      </Button>
+                    )}
+                  </>
                 )}
 
                 <DropdownMenu>
@@ -179,10 +199,18 @@ export function SectionContainer({
                 <div className="flex flex-col items-center justify-center py-8 text-center text-muted-foreground">
                   <p className="mb-2">No widgets in this section yet.</p>
                   {isEditing && (
-                    <Button variant="outline" size="sm" onClick={onAddWidget}>
-                      <PlusIcon className="mr-2 size-4" />
-                      Add your first widget
-                    </Button>
+                    <div className="flex items-center gap-2">
+                      <Button variant="outline" size="sm" onClick={onAddWidget}>
+                        <PlusIcon className="mr-2 size-4" />
+                        Add your first widget
+                      </Button>
+                      {hasCopiedWidget && (
+                        <Button variant="outline" size="sm" onClick={onPasteWidget}>
+                          <ClipboardPasteIcon className="mr-2 size-4" />
+                          Paste Widget
+                        </Button>
+                      )}
+                    </div>
                   )}
                 </div>
               ) : (
