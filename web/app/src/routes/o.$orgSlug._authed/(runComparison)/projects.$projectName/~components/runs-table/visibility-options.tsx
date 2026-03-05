@@ -14,6 +14,8 @@ interface VisibilityOptionsProps {
   onShuffleColors: () => void;
   showOnlySelected: boolean;
   onShowOnlySelectedChange: (value: boolean) => void;
+  pinSelectedToTop: boolean;
+  onPinSelectedToTopChange: (value: boolean) => void;
   pageRunIds: string[];
   totalRunCount: number;
 }
@@ -26,6 +28,8 @@ export const VisibilityOptions = memo(function VisibilityOptions({
   onShuffleColors,
   showOnlySelected,
   onShowOnlySelectedChange,
+  pinSelectedToTop,
+  onPinSelectedToTopChange,
   pageRunIds,
   totalRunCount,
 }: VisibilityOptionsProps) {
@@ -143,6 +147,21 @@ export const VisibilityOptions = memo(function VisibilityOptions({
                 id="show-only-selected"
                 checked={showOnlySelected}
                 onCheckedChange={onShowOnlySelectedChange}
+              />
+            </div>
+
+            {/* Pin selected to top toggle */}
+            <div className="flex items-center justify-between">
+              <Label
+                htmlFor="pin-selected-top"
+                className="text-sm cursor-pointer"
+              >
+                Pin selected to top
+              </Label>
+              <Switch
+                id="pin-selected-top"
+                checked={pinSelectedToTop}
+                onCheckedChange={onPinSelectedToTopChange}
               />
             </div>
 

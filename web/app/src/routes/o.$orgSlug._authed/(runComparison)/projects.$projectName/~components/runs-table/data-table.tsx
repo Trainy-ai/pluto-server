@@ -1,5 +1,6 @@
 "use client";
 
+import React from "react";
 import {
   type ColumnDef,
   flexRender,
@@ -38,6 +39,8 @@ import { VisibilityOptions } from "./visibility-options";
 import { ColumnPicker } from "./column-picker";
 import { FilterButton } from "./filter-button";
 import type { RunFilter, FilterableField } from "@/lib/run-filters";
+import type { Row, Header } from "@tanstack/react-table";
+import { computeRowSelection, filterToSelected } from "./selection-utils";
 
 const MIN_COL_WIDTH = 50;
 
@@ -145,17 +148,20 @@ function useColumnResize() {
       // Visual feedback via DOM (no state)
       handle.classList.add("bg-primary", "shadow-sm");
 
-      // Find DOM elements for direct manipulation during drag
-      const container = handle.closest("[data-table-container]");
-      const tableEl = container?.querySelector("table");
+      // Find ALL table elements in the outer border container — covers both
+      // pinned and unpinned tables so column resize stays in sync.
+      const outerBorder = handle.closest(".rounded-md.border");
+      const tableEls = outerBorder
+        ? Array.from(outerBorder.querySelectorAll("table"))
+        : [];
 
       const handleMouseMove = (moveEvent: MouseEvent) => {
         const diff = moveEvent.clientX - startX;
         const newWidth = Math.max(MIN_COL_WIDTH, startWidth + diff);
         columnWidthsRef.current[columnId] = newWidth;
 
-        // Direct DOM updates — no React re-renders during drag
-        if (tableEl) {
+        // Direct DOM updates on ALL tables — no React re-renders during drag
+        for (const tableEl of tableEls) {
           const colEl = tableEl.querySelector(
             `col[data-col-id="${CSS.escape(columnId)}"]`,
           );
@@ -347,12 +353,36 @@ export function DataTable({
 
   // Visibility options state
   const [showOnlySelected, setShowOnlySelected] = useState(false);
+  const [pinSelectedToTop, setPinSelectedToTop] = useState(false);
 
-  // Filter runs based on showOnlySelected
+  // When pinning is active, split into pinned (sticky, always-visible) and unpinned (paginated).
+  // Pinned runs come from selectedRunsWithColors so they persist across pages.
+  // Works with "Display only selected" too — pinned rows show at top, unpinned section is empty.
+  const isPinningActive = pinSelectedToTop && Object.keys(selectedRunsWithColors).length > 0;
+
+  const pinnedRuns = useMemo(() => {
+    if (!isPinningActive) return [] as Run[];
+    return Object.values(selectedRunsWithColors).map((v) => v.run);
+  }, [isPinningActive, selectedRunsWithColors]);
+
+  // The main table data: either filtered-to-selected minus pinned, unpinned only, or all runs
   const displayedRuns = useMemo(() => {
-    if (!showOnlySelected) return runs;
-    return runs.filter((run) => selectedRunsWithColors[run.id]);
-  }, [runs, showOnlySelected, selectedRunsWithColors]);
+    if (isPinningActive) {
+      // When pinning is active, the unpinned section shows non-selected runs
+      // (or nothing when "Display only selected" is also on)
+      const pinnedIds = new Set(Object.keys(selectedRunsWithColors));
+      const base = showOnlySelected
+        ? filterToSelected(runs, selectedRunsWithColors)
+        : runs;
+      return base.filter((r) => !pinnedIds.has(r.id));
+    }
+    if (showOnlySelected) {
+      return filterToSelected(runs, selectedRunsWithColors);
+    }
+    return runs;
+  }, [runs, showOnlySelected, isPinningActive, selectedRunsWithColors]);
+
+  const theadRef = useRef<HTMLTableSectionElement>(null);
 
   // Keep track of previous data length to maintain pagination position
   const prevDataLengthRef = useRef(runs.length);
@@ -411,29 +441,18 @@ export function DataTable({
     return [...basePinned, ...customPinned, ...customUnpinned];
   }, [customColumns]);
 
-  // Calculate current row selection based on actual selectedRunsWithColors
-  // This ensures the table checkboxes stay in sync with the actual selected runs
-  // Optimized: only include selected rows (TanStack Table treats missing keys as false)
-  const currentRowSelection = useMemo(() => {
-    const selection: Record<number, boolean> = {};
+  // Calculate current row selection based on actual selectedRunsWithColors.
+  // IMPORTANT: Must use displayedRuns (not runs) — see selection-utils.ts for details.
+  const currentRowSelection = useMemo(
+    () => computeRowSelection(displayedRuns, selectedRunsWithColors),
+    [displayedRuns, selectedRunsWithColors],
+  );
 
-    // Only add entries for selected runs - much faster than iterating all runs
-    if (runs && runs.length > 0) {
-      // Create a Set of selected IDs for O(1) lookup
-      const selectedIds = new Set(Object.keys(selectedRunsWithColors));
-
-      // Only iterate if there are selected runs
-      if (selectedIds.size > 0) {
-        runs.forEach((run, index) => {
-          if (run?.id && selectedIds.has(run.id)) {
-            selection[index] = true;
-          }
-        });
-      }
-    }
-
-    return selection;
-  }, [runs, selectedRunsWithColors]);
+  // Row selection for pinned table (all rows are selected by definition)
+  const pinnedRowSelection = useMemo(
+    () => computeRowSelection(pinnedRuns, selectedRunsWithColors),
+    [pinnedRuns, selectedRunsWithColors],
+  );
 
   // Memoize the columns configuration to prevent unnecessary recalculations
   // Note: getRunColor is a stable callback that uses a ref internally,
@@ -564,6 +583,18 @@ export function DataTable({
     // onSortingChange called from column header dropdown menus.
   });
 
+  // Separate table instance for pinned (sticky) rows — always called, empty data when off
+  const pinnedTable = useReactTable({
+    data: pinnedRuns,
+    columns: memoizedColumns,
+    getCoreRowModel: getCoreRowModel(),
+    state: {
+      rowSelection: pinnedRowSelection,
+      columnOrder,
+    },
+    enableRowSelection: true,
+  });
+
   // Compute dynamic pinned column map from the actual rendered header order + widths.
   // This replaces the old static PINNED_COLUMNS constant.
   const pinnedColumnMap = useMemo(() => {
@@ -595,6 +626,181 @@ export function DataTable({
         table.nextPage();
       }
     }
+  };
+
+  const mainScrollRef = useRef<HTMLDivElement>(null);
+
+  // Shared table width and colgroup for both pinned and main tables
+  const tableWidth = useMemo(() =>
+    table.getHeaderGroups()[0]?.headers.reduce((sum, h) => {
+      const def = h.column.columnDef;
+      const isFixed = def.enableResizing === false;
+      return sum + (isFixed ? (def.size ?? 150) : getWidth(h.column.id, def.size ?? 150));
+    }, 0) ?? 0,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [table, getWidth, resizeGeneration],
+  );
+
+  const renderColGroup = useCallback(() =>
+    table.getHeaderGroups()[0]?.headers.map((header) => {
+      const def = header.column.columnDef;
+      const isFixed = def.enableResizing === false;
+      const w = isFixed ? (def.size ?? 150) : getWidth(header.column.id, def.size ?? 150);
+      return (
+        <col
+          key={header.id}
+          data-col-id={header.column.id}
+          style={{ width: w, minWidth: def.minSize ?? MIN_COL_WIDTH }}
+        />
+      );
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [table, getWidth, resizeGeneration],
+  );
+
+  // Shared row renderer for both pinned and unpinned table bodies.
+  // Uses the table-container div for hover highlights so it works across both tbodies.
+  const renderRunRow = (row: Row<Run>) => (
+    <TableRow
+      key={row.id}
+      className="group/row"
+      data-run-id={row.original.id}
+      data-run-name={row.original.name}
+      data-state={row.getIsSelected() ? "selected" : ""}
+      onMouseEnter={() => {
+        if (row.getIsSelected()) {
+          const prev = hoveredRunIdRef.current;
+          hoveredRunIdRef.current = row.original.id;
+          const container = tableBodyRef.current?.closest("[data-table-container]");
+          if (prev !== row.original.id && container) {
+            if (prev) {
+              container
+                .querySelector(`[data-run-id="${prev}"]`)
+                ?.removeAttribute("data-hover-highlight");
+            }
+            (
+              container.querySelector(
+                `[data-run-id="${row.original.id}"]`,
+              ) as HTMLElement | null
+            )?.setAttribute("data-hover-highlight", "true");
+          }
+          document.dispatchEvent(
+            new CustomEvent("run-table-hover", { detail: row.original.id }),
+          );
+        }
+      }}
+      onMouseLeave={() => {
+        const prev = hoveredRunIdRef.current;
+        hoveredRunIdRef.current = null;
+        const container = tableBodyRef.current?.closest("[data-table-container]");
+        if (prev && container) {
+          container
+            .querySelector(`[data-run-id="${prev}"]`)
+            ?.removeAttribute("data-hover-highlight");
+        }
+        document.dispatchEvent(
+          new CustomEvent("run-table-hover", { detail: null }),
+        );
+      }}
+    >
+      {row.getVisibleCells().map((cell) => {
+        const cellBgColor = (cell.column.columnDef.meta as any)?.backgroundColor;
+        const colPinned = pinnedColumnMap[cell.column.id];
+        return (
+          <TableCell
+            key={cell.id}
+            className={cn(
+              "px-2 py-2 text-sm",
+              colPinned && [
+                "sticky",
+                "before:absolute before:inset-0 before:-z-10 before:bg-background",
+                "group-hover/row:bg-muted/50",
+                "group-data-[state=selected]/row:bg-muted",
+              ],
+            )}
+            style={{
+              ...(cellBgColor
+                ? colPinned
+                  ? { background: `linear-gradient(${cellBgColor}10, ${cellBgColor}10), hsl(var(--background))` }
+                  : { backgroundColor: `${cellBgColor}10` }
+                : undefined),
+              ...(colPinned && {
+                left: colPinned.left,
+                zIndex: 1,
+                ...(colPinned.isLast && { boxShadow: '3px 0 6px -2px rgba(0,0,0,0.15)' }),
+              }),
+            }}
+          >
+            <div className="truncate">
+              {flexRender(
+                cell.column.columnDef.cell,
+                cell.getContext(),
+              )}
+            </div>
+          </TableCell>
+        );
+      })}
+    </TableRow>
+  );
+
+  // Shared header cell renderer for both pinned and standard layouts
+  const renderHeaderCell = (header: Header<Run, unknown>) => {
+    const def = header.column.columnDef;
+    const isFixed = def.enableResizing === false;
+    const canResize = !isFixed;
+    const w = isFixed ? (def.size ?? 150) : getWidth(header.column.id, def.size ?? 150);
+
+    const bgColor = (header.column.columnDef.meta as any)?.backgroundColor;
+    const isCustom = header.column.id.startsWith("custom-");
+    const isDragOver = isCustom && dragOverId === header.column.id && draggedId !== header.column.id;
+    const pinned = pinnedColumnMap[header.column.id];
+
+    return (
+      <TableHead
+        key={header.id}
+        className={cn(
+          "group overflow-hidden px-2 py-2 text-left text-sm font-medium whitespace-nowrap text-muted-foreground",
+          pinned ? "sticky" : "relative",
+          isCustom && "cursor-grab",
+          isDragOver && "border-l-2 border-primary",
+        )}
+        style={{
+          ...(bgColor
+            ? pinned
+              ? { background: `linear-gradient(${bgColor}20, ${bgColor}20), hsl(var(--background))` }
+              : { backgroundColor: `${bgColor}20` }
+            : { backgroundColor: 'hsl(var(--background))' }),
+          ...(pinned && {
+            left: pinned.left,
+            zIndex: 20,
+            ...(pinned.isLast && { boxShadow: '3px 0 6px -2px rgba(0,0,0,0.15)' }),
+          }),
+        }}
+        draggable={isCustom}
+        onDragStart={isCustom ? (e) => handleDragStart(header.column.id, e) : undefined}
+        onDragOver={isCustom ? (e) => handleDragOver(header.column.id, e) : undefined}
+        onDrop={isCustom ? (e) => handleDrop(header.column.id, e) : undefined}
+        onDragEnd={isCustom ? handleDragEnd : undefined}
+      >
+        <div className="flex items-center">
+          {isCustom && (
+            <GripVertical className="h-3.5 w-0 shrink-0 group-hover:w-3.5 group-hover:mr-1 overflow-hidden text-muted-foreground/40 transition-all duration-150" />
+          )}
+          {header.isPlaceholder
+            ? null
+            : flexRender(
+                header.column.columnDef.header,
+                header.getContext(),
+              )}
+        </div>
+        {canResize && (
+          <div
+            onMouseDown={(e) => handleMouseDown(header.column.id, w, e)}
+            className="absolute top-0 right-0 h-full w-1 cursor-col-resize select-none touch-none bg-transparent transition-colors hover:bg-primary/50"
+          />
+        )}
+      </TableHead>
+    );
   };
 
   // Only show skeleton on initial load (no data yet)
@@ -697,6 +903,8 @@ export function DataTable({
             onShuffleColors={onShuffleColors}
             showOnlySelected={showOnlySelected}
             onShowOnlySelectedChange={setShowOnlySelected}
+            pinSelectedToTop={pinSelectedToTop}
+            onPinSelectedToTopChange={setPinSelectedToTop}
             pageRunIds={pageRunIds}
             totalRunCount={runCount}
           />
@@ -735,196 +943,108 @@ export function DataTable({
       </div>
 
       {/* Table section - flex-1 takes remaining space, min-h-0 allows shrinking */}
-      <div className="min-h-0 flex-1 overflow-auto rounded-md border" data-table-container>
-        <Table
-          style={{
-            tableLayout: "fixed",
-            borderCollapse: "separate",
-            borderSpacing: 0,
-            minWidth: "100%",
-            width: table.getHeaderGroups()[0]?.headers.reduce((sum, h) => {
-              const def = h.column.columnDef;
-              const isFixed = def.enableResizing === false;
-              return sum + (isFixed ? (def.size ?? 150) : getWidth(h.column.id, def.size ?? 150));
-            }, 0) ?? 0,
-          }}
-        >
-          <colgroup>
-            {table.getHeaderGroups()[0]?.headers.map((header) => {
-              const def = header.column.columnDef;
-              const isFixed = def.enableResizing === false;
-              const w = isFixed ? (def.size ?? 150) : getWidth(header.column.id, def.size ?? 150);
-              return (
-                <col
-                  key={header.id}
-                  data-col-id={header.column.id}
-                  style={{ width: w, minWidth: def.minSize ?? MIN_COL_WIDTH }}
-                />
-              );
-            })}
-          </colgroup>
-          <TableHeader className="sticky top-0 z-10 bg-background">
-              {table.getHeaderGroups().map((headerGroup) => (
-                <TableRow key={headerGroup.id}>
-                  {headerGroup.headers.map((header) => {
-                    const def = header.column.columnDef;
-                    const isFixed = def.enableResizing === false;
-                    const canResize = !isFixed;
-                    const w = isFixed ? (def.size ?? 150) : getWidth(header.column.id, def.size ?? 150);
-
-                    const bgColor = (header.column.columnDef.meta as any)?.backgroundColor;
-                    const isCustom = header.column.id.startsWith("custom-");
-                    const isDragOver = isCustom && dragOverId === header.column.id && draggedId !== header.column.id;
-                    const pinned = pinnedColumnMap[header.column.id];
-
-                    return (
-                      <TableHead
-                        key={header.id}
-                        className={cn(
-                          "group overflow-hidden px-2 py-2 text-left text-sm font-medium whitespace-nowrap text-muted-foreground",
-                          pinned ? "sticky" : "relative",
-                          isCustom && "cursor-grab",
-                          isDragOver && "border-l-2 border-primary",
-                        )}
-                        style={{
-                          ...(bgColor
-                            ? pinned
-                              ? { background: `linear-gradient(${bgColor}20, ${bgColor}20), hsl(var(--background))` }
-                              : { backgroundColor: `${bgColor}20` }
-                            : { backgroundColor: 'hsl(var(--background))' }),
-                          ...(pinned && {
-                            left: pinned.left,
-                            zIndex: 20,
-                            ...(pinned.isLast && { boxShadow: '3px 0 6px -2px rgba(0,0,0,0.15)' }),
-                          }),
-                        }}
-                        draggable={isCustom}
-                        onDragStart={isCustom ? (e) => handleDragStart(header.column.id, e) : undefined}
-                        onDragOver={isCustom ? (e) => handleDragOver(header.column.id, e) : undefined}
-                        onDrop={isCustom ? (e) => handleDrop(header.column.id, e) : undefined}
-                        onDragEnd={isCustom ? handleDragEnd : undefined}
-                      >
-                        <div className="flex items-center">
-                          {isCustom && (
-                            <GripVertical className="h-3.5 w-0 shrink-0 group-hover:w-3.5 group-hover:mr-1 overflow-hidden text-muted-foreground/40 transition-all duration-150" />
-                          )}
-                          {header.isPlaceholder
-                            ? null
-                            : flexRender(
-                                header.column.columnDef.header,
-                                header.getContext(),
-                              )}
-                        </div>
-                        {canResize && (
-                          <div
-                            onMouseDown={(e) => handleMouseDown(header.column.id, w, e)}
-                            className="absolute top-0 right-0 h-full w-1 cursor-col-resize select-none touch-none bg-transparent transition-colors hover:bg-primary/50"
-                          />
-                        )}
-                      </TableHead>
-                    );
-                  })}
-                </TableRow>
-              ))}
-            </TableHeader>
-            <TableBody ref={tableBodyRef}>
-              {table.getRowModel().rows.length ? (
-                table.getRowModel().rows.map((row) => (
-                  <TableRow
-                    key={row.id}
-                    className="group/row"
-                    data-run-id={row.original.id}
-                    data-run-name={row.original.name}
-                    data-state={row.getIsSelected() ? "selected" : ""}
-                    onMouseEnter={() => {
-                      // Only highlight selected runs (those with visible chart curves)
-                      if (row.getIsSelected()) {
-                        // Update ref + DOM attribute directly (no state → no re-render)
-                        const prev = hoveredRunIdRef.current;
-                        hoveredRunIdRef.current = row.original.id;
-                        if (prev !== row.original.id && tableBodyRef.current) {
-                          if (prev) {
-                            tableBodyRef.current
-                              .querySelector(`[data-run-id="${prev}"]`)
-                              ?.removeAttribute("data-hover-highlight");
-                          }
-                          (
-                            tableBodyRef.current.querySelector(
-                              `[data-run-id="${row.original.id}"]`,
-                            ) as HTMLElement | null
-                          )?.setAttribute("data-hover-highlight", "true");
-                        }
-                        // Notify charts via DOM event (avoids React state → no re-render)
-                        document.dispatchEvent(
-                          new CustomEvent("run-table-hover", { detail: row.original.id }),
-                        );
-                      }
-                    }}
-                    onMouseLeave={() => {
-                      const prev = hoveredRunIdRef.current;
-                      hoveredRunIdRef.current = null;
-                      if (prev && tableBodyRef.current) {
-                        tableBodyRef.current
-                          .querySelector(`[data-run-id="${prev}"]`)
-                          ?.removeAttribute("data-hover-highlight");
-                      }
-                      // Notify charts via DOM event
-                      document.dispatchEvent(
-                        new CustomEvent("run-table-hover", { detail: null }),
-                      );
-                    }}
-                  >
-                    {row.getVisibleCells().map((cell) => {
-                      const cellBgColor = (cell.column.columnDef.meta as any)?.backgroundColor;
-                      const pinned = pinnedColumnMap[cell.column.id];
-                      return (
-                        <TableCell
-                          key={cell.id}
-                          className={cn(
-                            "px-2 py-2 text-sm",
-                            pinned && [
-                              "sticky",
-                              "before:absolute before:inset-0 before:-z-10 before:bg-background",
-                              "group-hover/row:bg-muted/50",
-                              "group-data-[state=selected]/row:bg-muted",
-                            ],
-                          )}
-                          style={{
-                            ...(cellBgColor
-                              ? pinned
-                                ? { background: `linear-gradient(${cellBgColor}10, ${cellBgColor}10), hsl(var(--background))` }
-                                : { backgroundColor: `${cellBgColor}10` }
-                              : undefined),
-                            ...(pinned && {
-                              left: pinned.left,
-                              zIndex: 1,
-                              ...(pinned.isLast && { boxShadow: '3px 0 6px -2px rgba(0,0,0,0.15)' }),
-                            }),
-                          }}
-                        >
-                          <div className="truncate">
-                            {flexRender(
-                              cell.column.columnDef.cell,
-                              cell.getContext(),
-                            )}
-                          </div>
-                        </TableCell>
-                      );
-                    })}
+      <div className="min-h-0 flex-1 flex flex-col overflow-hidden rounded-md border">
+        {/* Pinned rows — single scroll container with sticky pinned section */}
+        {isPinningActive ? (
+          <div
+            ref={mainScrollRef}
+            className="min-h-0 flex-1 overflow-auto"
+            data-table-container
+          >
+            {/* Pinned section: header + pinned rows — sticks to top on vertical scroll */}
+            <div className="sticky top-0 z-10 border-b-2 border-primary/30 bg-background">
+              <Table
+                wrapperClassName="!overflow-x-visible"
+                style={{
+                  tableLayout: "fixed",
+                  borderCollapse: "separate",
+                  borderSpacing: 0,
+                  minWidth: "100%",
+                  width: tableWidth,
+                }}
+              >
+                <colgroup>{renderColGroup()}</colgroup>
+                <TableHeader ref={theadRef} className="bg-background">
+                  {table.getHeaderGroups().map((headerGroup) => (
+                    <TableRow key={headerGroup.id}>
+                      {headerGroup.headers.map((header) => renderHeaderCell(header))}
+                    </TableRow>
+                  ))}
+                </TableHeader>
+                <TableBody>
+                  {pinnedTable.getRowModel().rows.map((row) => renderRunRow(row))}
+                </TableBody>
+              </Table>
+            </div>
+            {/* Unpinned rows */}
+            <Table
+              wrapperClassName="!overflow-x-visible"
+              style={{
+                tableLayout: "fixed",
+                borderCollapse: "separate",
+                borderSpacing: 0,
+                minWidth: "100%",
+                width: tableWidth,
+              }}
+            >
+              <colgroup>{renderColGroup()}</colgroup>
+              <TableBody ref={tableBodyRef}>
+                {table.getRowModel().rows.length ? (
+                  table.getRowModel().rows.map((row) => renderRunRow(row))
+                ) : (
+                  <TableRow>
+                    <TableCell
+                      colSpan={memoizedColumns.length}
+                      className="h-16 text-center text-sm text-muted-foreground"
+                    >
+                      No unpinned runs on this page.
+                    </TableCell>
                   </TableRow>
-                ))
-              ) : (
-                <TableRow>
-                  <TableCell
-                    colSpan={memoizedColumns.length}
-                    className="h-16 text-center text-sm text-muted-foreground"
-                  >
-                    No runs found.
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        ) : (
+          /* Standard layout: single scrollable table with sticky header */
+          <div
+            ref={mainScrollRef}
+            className="min-h-0 flex-1 overflow-auto"
+            data-table-container
+          >
+            <Table
+              style={{
+                tableLayout: "fixed",
+                borderCollapse: "separate",
+                borderSpacing: 0,
+                minWidth: "100%",
+                width: tableWidth,
+              }}
+            >
+              <colgroup>{renderColGroup()}</colgroup>
+              <TableHeader ref={theadRef} className="sticky top-0 z-10 bg-background">
+                {table.getHeaderGroups().map((headerGroup) => (
+                  <TableRow key={headerGroup.id}>
+                    {headerGroup.headers.map((header) => renderHeaderCell(header))}
+                  </TableRow>
+                ))}
+              </TableHeader>
+              <TableBody ref={tableBodyRef}>
+                {table.getRowModel().rows.length ? (
+                  table.getRowModel().rows.map((row) => renderRunRow(row))
+                ) : (
+                  <TableRow>
+                    <TableCell
+                      colSpan={memoizedColumns.length}
+                      className="h-16 text-center text-sm text-muted-foreground"
+                    >
+                      No runs found.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        )}
       </div>
 
       {/* Paginator section - shrink-0 prevents shrinking, stays at bottom */}
@@ -961,18 +1081,16 @@ export function DataTable({
           </Button>
 
           <span className="w-28 text-center text-sm">
-            {Math.min(
-              table.getState().pagination.pageIndex + 1,
-              Math.max(
+            {(() => {
+              const effectiveCount = isPinningActive
+                ? runCount - pinnedRuns.length
+                : runCount;
+              const totalPages = Math.max(
                 1,
-                Math.ceil(runCount / table.getState().pagination.pageSize),
-              ),
-            )}
-            /
-            {Math.max(
-              1,
-              Math.ceil(runCount / table.getState().pagination.pageSize),
-            )}
+                Math.ceil(effectiveCount / table.getState().pagination.pageSize),
+              );
+              return `${Math.min(table.getState().pagination.pageIndex + 1, totalPages)}/${totalPages}`;
+            })()}
           </span>
 
           <Button
