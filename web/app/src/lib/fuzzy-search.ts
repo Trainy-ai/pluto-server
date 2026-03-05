@@ -1,7 +1,10 @@
 import Fuse, { type IFuseOptions } from "fuse.js";
 
 const FUSE_OPTIONS: IFuseOptions<string> = {
-  threshold: 0.4,
+  // 0.0 = perfect match only, 1.0 = match anything.
+  // Lowered from 0.4 to 0.35 to reduce false positives (e.g. "loss" matching "learning_rate")
+  // while still allowing minor typos.
+  threshold: 0.35,
   ignoreLocation: true,
   minMatchCharLength: 1,
 };

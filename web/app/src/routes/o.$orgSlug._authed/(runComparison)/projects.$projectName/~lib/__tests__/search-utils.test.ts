@@ -57,10 +57,16 @@ describe("searchUtils.filterMetrics with fuzzy search", () => {
 describe("searchUtils.doesGroupMatch with fuzzy search", () => {
   const searchIndex = searchUtils.createSearchIndex(MOCK_GROUPED);
 
-  it("fuzzy matches — 'trian' matches group 'train'", () => {
-    const state = searchUtils.createSearchState("trian", false);
+  it("fuzzy matches — 'trai' matches group 'train'", () => {
+    const state = searchUtils.createSearchState("trai", false);
     const result = searchUtils.doesGroupMatch("train", searchIndex, state);
     expect(result).toBe(true);
+  });
+
+  it("does not fuzzy-match distant transpositions — 'trian' does not match group 'train'", () => {
+    const state = searchUtils.createSearchState("trian", false);
+    const result = searchUtils.doesGroupMatch("train", searchIndex, state);
+    expect(result).toBe(false);
   });
 
   it("returns false for unrelated query", () => {

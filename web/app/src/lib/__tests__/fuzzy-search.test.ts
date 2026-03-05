@@ -9,6 +9,9 @@ const SAMPLE_METRICS = [
   "learning_rate",
   "epoch",
   "grad_norm",
+  "system/gpu/temperature",
+  "system/gpu/utilization",
+  "system/cpu/usage",
 ];
 
 describe("fuzzyFilter", () => {
@@ -25,6 +28,8 @@ describe("fuzzyFilter", () => {
     expect(result).toContain("train/loss");
     expect(result).toContain("val/loss");
     expect(result).not.toContain("train/accuracy");
+    expect(result).not.toContain("learning_rate");
+    expect(result).not.toContain("system/gpu/temperature");
   });
 
   it("handles typos — 'lloss' still matches loss metrics", () => {
@@ -56,6 +61,22 @@ describe("fuzzyFilter", () => {
   it("matches partial paths — 'tran/los' matches train/loss", () => {
     const result = fuzzyFilter(SAMPLE_METRICS, "tran/los");
     expect(result).toContain("train/loss");
+  });
+
+  it("does not match unrelated metrics — 'accur' should not match system/gpu/temperature", () => {
+    const result = fuzzyFilter(SAMPLE_METRICS, "accur");
+    expect(result).toContain("train/accuracy");
+    expect(result).toContain("val/accuracy");
+    expect(result).not.toContain("system/gpu/temperature");
+    expect(result).not.toContain("system/gpu/utilization");
+    expect(result).not.toContain("system/cpu/usage");
+  });
+
+  it("matches 'temp' to temperature metrics only", () => {
+    const result = fuzzyFilter(SAMPLE_METRICS, "temp");
+    expect(result).toContain("system/gpu/temperature");
+    expect(result).not.toContain("train/accuracy");
+    expect(result).not.toContain("val/accuracy");
   });
 });
 
