@@ -46,6 +46,8 @@ interface LineChartWrapperProps extends React.HTMLAttributes<HTMLDivElement> {
   onZoomRangeChange?: (range: [number, number] | null) => void;
   /** Enable IQR-based outlier detection for Y-axis scaling */
   outlierDetection?: boolean;
+  /** When false, lines break at null/missing values instead of connecting across gaps */
+  spanGaps?: boolean;
 }
 
 // Loading fallback for lazy-loaded charts
@@ -67,7 +69,7 @@ function ChartLoadingFallback() {
  * - Cross-chart series highlighting
  */
 const LineChartWrapper = forwardRef<LineChartUPlotRef, LineChartWrapperProps>(
-  ({ syncKey, className, tooltipInterpolation, rawLines, downsampleTarget, reprocessForZoom, onZoomRangeChange, outlierDetection, ...props }, ref) => {
+  ({ syncKey, className, tooltipInterpolation, rawLines, downsampleTarget, reprocessForZoom, onZoomRangeChange, outlierDetection, spanGaps, ...props }, ref) => {
     // Use title as key to force remount when switching between different charts
     // This ensures each chart gets a clean uPlot instance with correct data
     const chartKey = props.title || "uplot-chart";
@@ -94,6 +96,7 @@ const LineChartWrapper = forwardRef<LineChartUPlotRef, LineChartWrapperProps>(
             reprocessForZoom={reprocessForZoom}
             onZoomRangeChange={onZoomRangeChange}
             outlierDetection={outlierDetection}
+            spanGaps={spanGaps}
             {...props}
           />
         </Suspense>

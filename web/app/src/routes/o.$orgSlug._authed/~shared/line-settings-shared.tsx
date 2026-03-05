@@ -9,6 +9,9 @@ import {
 
 const PREFERENCE_LOGS = ["epoch", "step", "time"];
 
+/** Shared Tailwind className for Switch components in chart settings panels */
+export const SETTINGS_SWITCH_CLASS = "transition-colors data-[state=checked]:bg-primary";
+
 export function getLogNames(logs: string[]) {
   const data: string[] = ["Step", "Absolute Time", "Relative Time"];
   const secondaryLogs: string[] = [];

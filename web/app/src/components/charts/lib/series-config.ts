@@ -30,7 +30,10 @@ export function buildSeriesConfig(
   xlabel: string | undefined,
   chartLineWidth: number,
   refs: SeriesConfigRefs,
+  options?: { spanGaps?: boolean },
 ): uPlot.Series[] {
+  const spanGaps = options?.spanGaps ?? true;
+
   // Build a mapping from smoothed series to their "(original)" companion
   // so the legend can show combined values like the tooltip: "value (rawValue)"
   const companionDataIdx = new Map<number, number>();
@@ -55,7 +58,7 @@ export function buildSeriesConfig(
           stroke: "transparent",
           width: 0,
           points: { show: false },
-          spanGaps: true,
+          spanGaps,
           value: () => "",
         };
       }
@@ -155,7 +158,7 @@ export function buildSeriesConfig(
           );
           return { dash: compensated, cap: "round" as const };
         })(),
-        spanGaps: true,
+        spanGaps,
         points: {
           // Show points for single-point series since lines need 2+ points to be visible
           show: isSinglePoint,

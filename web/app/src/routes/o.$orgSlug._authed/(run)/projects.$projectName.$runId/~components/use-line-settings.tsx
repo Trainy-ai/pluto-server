@@ -28,6 +28,9 @@ export interface LineChartSettings {
   /** Tooltip interpolation mode for series with missing values at the hovered step.
    *  "none" = only show exact matches, "linear" = linear interpolation, "last" = forward-fill */
   tooltipInterpolation: TooltipInterpolation;
+  /** When true, break lines at missing/null values instead of connecting across gaps.
+   *  Default false (lines connect across gaps). */
+  skipMissingValues: boolean;
 }
 
 export const DEFAULT_SETTINGS: LineChartSettings = {
@@ -46,6 +49,7 @@ export const DEFAULT_SETTINGS: LineChartSettings = {
   // Set to 0 to disable downsampling (may be slow for 100k+ points).
   maxPointsPerSeries: 2000,
   tooltipInterpolation: "linear",
+  skipMissingValues: false,
 };
 
 const lineSettingsDb = new LocalCache<LineChartSettings>(

@@ -41,6 +41,7 @@ import {
   getLogNames,
   InfoTooltip,
   SettingsSection,
+  SETTINGS_SWITCH_CLASS,
 } from "@/routes/o.$orgSlug._authed/~shared/line-settings-shared";
 
 interface LineSettingsProps {
@@ -482,6 +483,34 @@ const LineSettings = ({
                     </SelectItem>
                   </SelectContent>
                 </Select>
+              </div>
+            </SettingsSection>
+
+            <SettingsSection
+              title="Missing Values"
+              description="Control how the chart handles gaps where no data was logged"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Label
+                    htmlFor="skip-missing-values"
+                    className="flex cursor-pointer items-center gap-1.5 text-sm"
+                  >
+                    Skip missing values
+                    <InfoTooltip
+                      title="Skip Missing Values"
+                      description="When enabled, lines will break at missing data points instead of drawing a straight line connecting the values on either side of the gap. Useful when metrics are logged at different frequencies."
+                    />
+                  </Label>
+                </div>
+                <Switch
+                  id="skip-missing-values"
+                  checked={settings.skipMissingValues}
+                  onCheckedChange={(checked) =>
+                    updateSettings("skipMissingValues", checked)
+                  }
+                  className={SETTINGS_SWITCH_CLASS}
+                />
               </div>
             </SettingsSection>
 

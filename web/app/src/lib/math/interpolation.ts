@@ -1,6 +1,23 @@
 export type TooltipInterpolation = "none" | "linear" | "last";
 
 /**
+ * Check if a null value at `idx` is inside a large data gap.
+ * Counts consecutive nulls around the index — a small run (≤3) indicates
+ * alignment mismatch between series (fine to interpolate), while a large
+ * run indicates a real gap in the data (should not interpolate).
+ */
+export function isInsideDataGap(
+  yValues: (number | null | undefined)[],
+  idx: number,
+  maxConsecutiveNulls = 3,
+): boolean {
+  let count = 1;
+  for (let j = idx - 1; j >= 0 && yValues[j] == null; j--) count++;
+  for (let j = idx + 1; j < yValues.length && yValues[j] == null; j++) count++;
+  return count > maxConsecutiveNulls;
+}
+
+/**
  * Interpolates a missing (null) value at the given index in aligned chart data.
  *
  * When comparing experiments that log at different step frequencies,

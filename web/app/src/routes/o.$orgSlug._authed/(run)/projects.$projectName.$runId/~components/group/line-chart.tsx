@@ -468,6 +468,7 @@ export const LineChartWithFetch = memo(
             logYAxis: logYAxis ?? settings.yAxisLogScale,
             tooltipInterpolation: settings.tooltipInterpolation,
             outlierDetection: settings.yAxisScaleMode === "outlier-aware",
+            spanGaps: !settings.skipMissingValues,
           };
 
           return (
