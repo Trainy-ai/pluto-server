@@ -747,7 +747,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           ticks: { stroke: gridColor, size: 3 },
           values: isDateTime
             ? (u, vals) => vals.map((v) => smartDateFormatter(v, timeRange))
-            : (u, vals) => formatAxisLabels(vals),
+            : (u, vals) => formatAxisLabels(vals, logXAxis),
           label: xlabel,
           labelSize: xlabel ? 14 : 0,
           labelFont: "10px ui-monospace, monospace",
@@ -761,7 +761,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           stroke: axisColor,
           grid: { stroke: gridColor, dash: [2, 2] },
           ticks: { stroke: gridColor, size: 3 },
-          values: (u, vals) => formatAxisLabels(vals),
+          values: (u, vals) => formatAxisLabels(vals, logYAxis),
           label: ylabel,
           labelSize: ylabel ? 14 : 0,
           labelFont: "10px ui-monospace, monospace",
