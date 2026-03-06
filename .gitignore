@@ -54,3 +54,7 @@ web/server/test-results/
 .neptune/
 tests/e2e/.pluto/
 tests/e2e/__pycache__/
+
+# Stably CLI (only docs/ are tracked)
+.stably/*
+!.stably/docs/

@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "stably-cli": {
+      "source": "stablyai/agent-skills",
+      "sourceType": "github",
+      "computedHash": "ab79d14e8afe963aaa3853d8bf99210738dd0c4028045426880a9f618edb42fb"
+    }
+  }
+}
