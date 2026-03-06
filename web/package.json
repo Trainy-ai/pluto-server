@@ -12,7 +12,11 @@
     "turbo": "^2.4.4"
   },
   "devDependencies": {
-    "@playwright/test": "^1.57.0"
+    "@playwright/test": "^1.58.2",
+    "@stablyai/email": "^0.1.2",
+    "@stablyai/playwright-test": "^2.1.10",
+    "playwright": "^1.58.2",
+    "stably": "^4.9.0"
   },
   "packageManager": "pnpm@10.9.0",
   "pnpm": {
