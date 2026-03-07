@@ -13,13 +13,8 @@ test.describe("Side-by-side view loading", () => {
   const projectName = TEST_PROJECT.name;
 
   async function clearSelectionCache(page: import("@playwright/test").Page) {
-    await page.evaluate(() => {
-      return new Promise<void>((resolve) => {
-        const deleteRequest = indexedDB.deleteDatabase("run-selection-db");
-        deleteRequest.onsuccess = () => resolve();
-        deleteRequest.onerror = () => resolve();
-        deleteRequest.onblocked = () => resolve();
-      });
+    await page.addInitScript(() => {
+      indexedDB.deleteDatabase("run-selection-db");
     });
   }
 
@@ -61,13 +56,19 @@ test.describe("Side-by-side view loading", () => {
     await waitForRunsData(page);
     await page.waitForLoadState("domcontentloaded");
 
-    // 4. Wait for selection to be applied
-    await expect(async () => {
-      const selectionContainer = page
-        .locator("text=runs selected")
-        .locator("..");
-      await expect(selectionContainer).toContainText("2", { timeout: 2000 });
-    }).toPass({ timeout: 10000 });
+    // 4. Wait for selection to be applied — extract exact count to avoid
+    //    false-positive substring matches (e.g., "2" matching in total "124")
+    const selectionContainer = page.locator("text=runs selected").locator("..");
+    await expect
+      .poll(
+        async () => {
+          const text = await selectionContainer.textContent();
+          const match = text?.match(/(\d+)\s+of\s+\d+/);
+          return match ? parseInt(match[1]) : -1;
+        },
+        { timeout: 15000, message: "Waiting for 2 runs to be selected" }
+      )
+      .toBe(2);
 
     // 5. Click Side-by-side button
     await page.locator('button:has-text("Side-by-side")').click();

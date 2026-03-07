@@ -1,5 +1,5 @@
-import { defineConfig, stablyReporter } from "@stablyai/playwright-test";
-import { devices } from "@playwright/test";
+import { defineConfig, devices } from "@playwright/test";
+import { stablyReporter } from "@stablyai/playwright-test";
 
 /**
  * See https://playwright.dev/docs/test-configuration.
@@ -18,10 +18,14 @@ export default defineConfig({
   reporter: [
     ["html"],
     ["list"],
-    stablyReporter({
-      apiKey: process.env.STABLY_API_KEY,
-      projectId: process.env.STABLY_PROJECT_ID,
-    }),
+    ...(process.env.STABLY_API_KEY
+      ? [
+          stablyReporter({
+            apiKey: process.env.STABLY_API_KEY,
+            projectId: process.env.STABLY_PROJECT_ID,
+          }),
+        ]
+      : []),
     ...(process.env.CI
       ? [["json", { outputFile: "test-results.json" }] as const]
       : []),

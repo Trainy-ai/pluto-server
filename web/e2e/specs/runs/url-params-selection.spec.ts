@@ -17,18 +17,36 @@ test.describe("Run Comparison URL Parameters", () => {
 
   /**
    * Clear IndexedDB cache to ensure URL params take priority over cached selection.
-   * The useSelectedRuns hook caches selection state in IndexedDB, which can
-   * interfere with URL param tests if not cleared.
+   * Uses addInitScript so the deletion runs before app JS on the next navigation,
+   * avoiding the "onblocked" issue when the app holds an open IDB connection.
    */
   async function clearSelectionCache(page: import("@playwright/test").Page) {
-    await page.evaluate(() => {
-      return new Promise<void>((resolve) => {
-        const deleteRequest = indexedDB.deleteDatabase("run-selection-db");
-        deleteRequest.onsuccess = () => resolve();
-        deleteRequest.onerror = () => resolve();
-        deleteRequest.onblocked = () => resolve();
-      });
+    await page.addInitScript(() => {
+      indexedDB.deleteDatabase("run-selection-db");
     });
+  }
+
+  /**
+   * Assert that exactly `expectedCount` runs are selected by extracting
+   * the number from "X of Y runs selected" text. Avoids false-positive
+   * substring matches (e.g., "1" matching in "164").
+   */
+  async function expectSelectionCount(
+    page: import("@playwright/test").Page,
+    expectedCount: number,
+    timeout = 15000
+  ) {
+    const selectionContainer = page.locator("text=runs selected").locator("..");
+    await expect
+      .poll(
+        async () => {
+          const text = await selectionContainer.textContent();
+          const match = text?.match(/(\d+)\s+of\s+\d+/);
+          return match ? parseInt(match[1]) : -1;
+        },
+        { timeout, message: `Waiting for ${expectedCount} runs to be selected` }
+      )
+      .toBe(expectedCount);
   }
 
   /**
@@ -73,11 +91,7 @@ test.describe("Run Comparison URL Parameters", () => {
       await page.waitForLoadState("domcontentloaded");
 
       // Verify the selection counter shows exactly 2 runs selected
-      // Use toPass() for resilience against selection state propagation delays
-      const selectionContainer = page.locator('text=runs selected').locator('..');
-      await expect(async () => {
-        await expect(selectionContainer).toContainText("2", { timeout: 2000 });
-      }).toPass({ timeout: 10000 });
+      await expectSelectionCount(page, 2);
     });
 
     test("?runs= param with single run ID selects that run", async ({ page }) => {
@@ -102,10 +116,7 @@ test.describe("Run Comparison URL Parameters", () => {
       await page.waitForLoadState("domcontentloaded");
 
       // Verify exactly 1 run is selected
-      const selectionContainer = page.locator('text=runs selected').locator('..');
-      await expect(async () => {
-        await expect(selectionContainer).toContainText("1", { timeout: 2000 });
-      }).toPass({ timeout: 10000 });
+      await expectSelectionCount(page, 1);
     });
 
     test("invalid run IDs in ?runs= param are gracefully ignored", async ({ page }) => {
@@ -130,10 +141,7 @@ test.describe("Run Comparison URL Parameters", () => {
       await page.waitForLoadState("domcontentloaded");
 
       // Should only select the valid run (1 selected)
-      const selectionContainer = page.locator('text=runs selected').locator('..');
-      await expect(async () => {
-        await expect(selectionContainer).toContainText("1", { timeout: 2000 });
-      }).toPass({ timeout: 10000 });
+      await expectSelectionCount(page, 1);
     });
 
     test("empty ?runs= param falls back to default selection", async ({ page }) => {
@@ -252,10 +260,7 @@ test.describe("Run Comparison URL Parameters", () => {
       await page.waitForLoadState("domcontentloaded");
 
       // Verify 1 run is selected (runs param works)
-      const selectionContainer = page.locator('text=runs selected').locator('..');
-      await expect(async () => {
-        await expect(selectionContainer).toContainText("1", { timeout: 2000 });
-      }).toPass({ timeout: 10000 });
+      await expectSelectionCount(page, 1);
 
       // Verify URL still has both params (use auto-retrying assertion — URL sync is debounced)
       await expect(page).toHaveURL(/runs=/, { timeout: 5000 });
@@ -293,10 +298,7 @@ test.describe("Run Comparison URL Parameters", () => {
       await newPage.waitForLoadState("domcontentloaded");
 
       // Verify exactly 3 runs are selected
-      const selectionContainer = newPage.locator('text=runs selected').locator('..');
-      await expect(async () => {
-        await expect(selectionContainer).toContainText("3", { timeout: 2000 });
-      }).toPass({ timeout: 10000 });
+      await expectSelectionCount(newPage, 3);
 
       await newContext.close();
     });
