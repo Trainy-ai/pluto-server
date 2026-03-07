@@ -5,6 +5,8 @@ import { fileUrlProcedure } from "./procs/file-url";
 import { histogramProcedure } from "./procs/histogram";
 import { graphProcedure } from "./procs/graph";
 import { graphBatchProcedure } from "./procs/graph-batch";
+import { graphBucketedProcedure } from "./procs/graph-bucketed";
+import { graphBatchBucketedProcedure } from "./procs/graph-batch-bucketed";
 import { logsProcedure } from "./procs/logs";
 import { modelGraphProcedure } from "./procs/model-graph";
 import { tableProcedure } from "./procs/table";
@@ -16,6 +18,8 @@ export const dataRouter = router({
   histogram: histogramProcedure,
   graph: graphProcedure,
   graphBatch: graphBatchProcedure,
+  graphBucketed: graphBucketedProcedure,
+  graphBatchBucketed: graphBatchBucketedProcedure,
   logs: logsProcedure,
   modelGraph: modelGraphProcedure,
   table: tableProcedure,

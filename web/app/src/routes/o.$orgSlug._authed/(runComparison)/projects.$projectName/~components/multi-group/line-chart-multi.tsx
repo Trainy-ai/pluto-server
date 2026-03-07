@@ -1,13 +1,12 @@
 "use client";
 
-import { default as LineChart, type RawLineData } from "@/components/charts/line-wrapper";
-import { Card } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
+import { default as LineChart } from "@/components/charts/line-wrapper";
 import { memo, useMemo } from "react";
-import { useQueries } from "@tanstack/react-query";
+import { useQueries, keepPreviousData } from "@tanstack/react-query";
 import { trpc, trpcClient } from "@/utils/trpc";
 import { useCheckDatabaseSize } from "@/lib/db/local-cache";
-import { metricsCache, type MetricDataPoint } from "@/lib/db/index";
+import { bucketedMetricsCache, metricsCache, type MetricDataPoint } from "@/lib/db/index";
+import type { BucketedChartDataPoint } from "@/lib/chart-data-utils";
 import { useLocalQueries } from "@/lib/hooks/use-local-query";
 import { useLineSettings, type DisplayLogName } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/use-line-settings";
 import { useZoomRefetch, zoomKey } from "@/lib/hooks/use-zoom-refetch";
@@ -15,18 +14,16 @@ import { useChartSyncContext } from "@/components/charts/context/chart-sync-cont
 import {
   getTimeUnitForDisplay,
   alignAndUnzip,
-  downsampleAndSmooth,
-  buildValueFlags,
+  applySmoothing,
+  bucketedAndSmooth,
 } from "@/lib/chart-data-utils";
+import { estimateStandardBuckets, PREVIEW_BUCKETS } from "@/lib/chart-bucket-estimate";
 
 // For active runs, refresh every 30 seconds
 // For completed runs, data never changes so use Infinity
 const ACTIVE_RUN_STALE_TIME = 30 * 1000; // 30 seconds
 const COMPLETED_RUN_STALE_TIME = Infinity; // Never refetch completed runs
 const GC_TIME = 0; // Immediate garbage collection when query is inactive
-
-/** Preview tier: fast LIMIT query via batch, 1k points per run */
-const PREVIEW_MAX_POINTS = 1000;
 
 // Maximum number of series (metrics × runs) before showing a warning
 const MAX_SERIES_COUNT = 200;
@@ -131,7 +128,10 @@ const MultiLineChartInner = memo(
     xAxisOverride,
     settingsRunId,
   }: MultiLineChartInnerProps) => {
-    useCheckDatabaseSize(metricsCache);
+    useCheckDatabaseSize(bucketedMetricsCache);
+
+    // Compute once on mount — changing bucket count changes query key, so avoid recomputing
+    const standardBuckets = useMemo(() => estimateStandardBuckets(), []);
 
     // Resolve metrics list: use prop if provided, otherwise fall back to [title]
     const metricNames = useMemo(
@@ -165,39 +165,51 @@ const MultiLineChartInner = memo(
     // Safety check: too many series
     const tooManySeries = queryPairs.length > MAX_SERIES_COUNT;
 
-    // Fetch data for all metric×run pairs in parallel
-    const queries = useLocalQueries<MetricDataPoint>(
-      tooManySeries
+    const runIds = useMemo(() => lines.map((l) => l.runId), [lines]);
+
+    // === Standard tier: 1 batch query per metric for all runs (globally aligned buckets) ===
+    const standardBatchQueries = useQueries({
+      queries: tooManySeries
         ? []
-        : queryPairs.map((pair) => {
+        : metricNames.map((metric) => {
             const opts = {
               organizationId,
               projectName,
-              runId: pair.line.runId,
-              logName: pair.metric,
+              logName: metric,
+              runIds,
+              buckets: standardBuckets,
             };
-
-            const queryOptions = trpc.runs.data.graph.queryOptions(opts);
-
             return {
-              queryKey: queryOptions.queryKey,
-              queryFn: () => trpcClient.runs.data.graph.query(opts),
+              queryKey: trpc.runs.data.graphBatchBucketed.queryOptions(opts).queryKey,
+              queryFn: () => trpcClient.runs.data.graphBatchBucketed.query(opts),
               staleTime,
               gcTime: GC_TIME,
-              localCache: metricsCache,
-              enabled: true,
+              placeholderData: keepPreviousData,
+              enabled: runIds.length > 0,
             };
           }),
-    );
+    });
 
-    // === Batch preview tier: 1 query per metric for all runs (fast LIMIT) ===
+    // Build a lookup: metric → runId → standard bucketed points
+    const standardDataMap = useMemo(() => {
+      const map = new Map<string, Record<string, BucketedChartDataPoint[]>>();
+      metricNames.forEach((metric, i) => {
+        const data = standardBatchQueries[i]?.data as
+          | Record<string, BucketedChartDataPoint[]>
+          | undefined;
+        if (data) {
+          map.set(metric, data);
+        }
+      });
+      return map;
+    }, [metricNames, standardBatchQueries]);
+
+    // === Batch preview tier: 1 query per metric for all runs (fast bucketed) ===
     // Provides instant chart shapes while individual standard queries load.
     // Disabled once any standard data arrives (preview is lower resolution).
-    const hasAnyStandard = queries.some(
-      (q) => q.data !== undefined && (q.data as MetricDataPoint[]).length > 0,
+    const hasAnyStandard = standardBatchQueries.some(
+      (q) => q.data !== undefined && Object.keys(q.data as Record<string, unknown>).length > 0,
     );
-
-    const runIds = useMemo(() => lines.map((l) => l.runId), [lines]);
 
     const previewQueries = useQueries({
       queries: tooManySeries
@@ -208,15 +220,15 @@ const MultiLineChartInner = memo(
               projectName,
               logName: metric,
               runIds,
-              maxPoints: PREVIEW_MAX_POINTS,
+              buckets: PREVIEW_BUCKETS,
               preview: true,
             };
             return {
               queryKey: [
-                ...trpc.runs.data.graphBatch.queryOptions(opts).queryKey,
+                ...trpc.runs.data.graphBatchBucketed.queryOptions(opts).queryKey,
                 "preview",
               ],
-              queryFn: () => trpcClient.runs.data.graphBatch.query(opts),
+              queryFn: () => trpcClient.runs.data.graphBatchBucketed.query(opts),
               staleTime: Infinity,
               gcTime: 0,
               enabled: runIds.length > 0 && !hasAnyStandard,
@@ -226,10 +238,10 @@ const MultiLineChartInner = memo(
 
     // Build a lookup: metric → runId → preview points
     const previewDataMap = useMemo(() => {
-      const map = new Map<string, Record<string, MetricDataPoint[]>>();
+      const map = new Map<string, Record<string, BucketedChartDataPoint[]>>();
       metricNames.forEach((metric, i) => {
         const data = previewQueries[i]?.data as
-          | Record<string, MetricDataPoint[]>
+          | Record<string, BucketedChartDataPoint[]>
           | undefined;
         if (data) {
           map.set(metric, data);
@@ -240,6 +252,7 @@ const MultiLineChartInner = memo(
 
     // If the effective x-axis is not a standard one, fetch that data for each run
     // to use as x-axis values (only need one per run, not per metric)
+    // Custom log queries still use raw graph endpoint for step-level alignment
     const customLogQueries = useLocalQueries<MetricDataPoint>(
       effectiveXAxis !== "Step" &&
         effectiveXAxis !== "Absolute Time" &&
@@ -266,8 +279,7 @@ const MultiLineChartInner = memo(
         : [],
     );
 
-    // Zoom-triggered server re-fetch for full-resolution data (Step mode only)
-    // Supports single and multi-metric: fires one batch/individual query per metric
+    // Zoom-triggered server re-fetch using bucketed downsampling (Step mode only)
     const { zoomDataMap, onZoomRangeChange, isZoomFetching } = useZoomRefetch({
       organizationId,
       projectName,
@@ -279,7 +291,7 @@ const MultiLineChartInner = memo(
     });
 
     // Check error states and get data
-    const isError = queries.some((query) => query.isError);
+    const isError = standardBatchQueries.some((query) => query.isError);
 
     // Build series label based on multi-metric / multi-run context
     const getSeriesLabel = useMemo(() => {
@@ -298,21 +310,21 @@ const MultiLineChartInner = memo(
     // For each metric×run pair: prefer standard data, fall back to preview
     const allData = useMemo(() => {
       return queryPairs
-        .map((pair, index) => {
-          const stdData = (queries[index]?.data ?? []) as MetricDataPoint[];
-          if (stdData.length > 0) {
-            return { data: stdData, isLoading: false, pair };
+        .map((pair) => {
+          const stdPoints = standardDataMap.get(pair.metric)?.[pair.line.runId];
+          if (stdPoints && stdPoints.length > 0) {
+            return { data: stdPoints, isLoading: false, pair };
           }
           // Fall back to batch preview data for this metric×run
           const previewPoints =
             previewDataMap.get(pair.metric)?.[pair.line.runId];
           if (previewPoints && previewPoints.length > 0) {
-            return { data: previewPoints, isLoading: queries[index]?.isLoading ?? true, pair };
+            return { data: previewPoints, isLoading: !hasAnyStandard, pair };
           }
-          return { data: [] as MetricDataPoint[], isLoading: queries[index]?.isLoading ?? true, pair };
+          return { data: [] as BucketedChartDataPoint[], isLoading: !hasAnyStandard, pair };
         })
         .filter((item) => item.data.length > 0);
-    }, [queries, queryPairs, previewDataMap]);
+    }, [standardDataMap, queryPairs, previewDataMap, hasAnyStandard]);
 
     // Also get custom log data if applicable - memoized
     const customLogData = useMemo(() => {
@@ -323,7 +335,7 @@ const MultiLineChartInner = memo(
     }, [customLogQueries, lines]);
 
     const hasAnyData = allData.some((item) => item.data?.length > 0);
-    const allQueriesDone = queries.every((query) => !query.isLoading);
+    const allQueriesDone = standardBatchQueries.every((query) => !query.isLoading);
     const allPreviewsDone = previewQueries.every((q) => !q.isLoading);
 
     // We're also loading if we're fetching custom log data
@@ -351,10 +363,6 @@ const MultiLineChartInner = memo(
         dash: getDashPattern(pair.metricIndex),
       });
 
-      // Collect raw (pre-downsampled) data for zoom-aware re-downsampling
-      const rawLines: RawLineData[] = [];
-      const collectRaw = settings.maxPointsPerSeries > 0;
-
       // System metrics chart - always uses relative time like in line-chart.tsx
       const isSystemChart = metricNames.every(
         (m) => m.startsWith("sys/") || m.startsWith("_sys/")
@@ -364,20 +372,16 @@ const MultiLineChartInner = memo(
         let unit = "s";
         let divisor = 1;
         if (allData.length > 0 && allData[0].data.length > 0) {
-          // For each run, find the max time span
           const timeSpans = allData.map(({ data }) => {
             if (data.length < 2) return 0;
             const sortedData = [...data].sort(
               (a, b) => new Date(a.time).getTime() - new Date(b.time).getTime(),
             );
             const firstTime = new Date(sortedData[0].time).getTime();
-            const lastTime = new Date(
-              sortedData[sortedData.length - 1].time,
-            ).getTime();
-            return (lastTime - firstTime) / 1000; // time span in seconds
+            const lastTime = new Date(sortedData[sortedData.length - 1].time).getTime();
+            return (lastTime - firstTime) / 1000;
           });
 
-          // Use the largest time span to determine the unit
           const maxTimeSpan = Math.max(...timeSpans);
           const timeUnit = getTimeUnitForDisplay(maxTimeSpan);
           unit = timeUnit.unit;
@@ -390,45 +394,20 @@ const MultiLineChartInner = memo(
             const sortedData = [...data].sort(
               (a, b) => new Date(a.time).getTime() - new Date(b.time).getTime(),
             );
+            const firstTime = new Date(sortedData[0].time).getTime();
+            const props = seriesProps(pair);
+            const getX = (d: BucketedChartDataPoint) =>
+              (new Date(d.time).getTime() - firstTime) / 1000 / divisor;
 
-            // Calculate all time differences in seconds from the first data point
-            const relativeTimes = sortedData.map(
-              (d) =>
-                (new Date(d.time).getTime() -
-                  new Date(sortedData[0].time).getTime()) /
-                1000,
+            return bucketedAndSmooth(
+              sortedData, props.label, props.color,
+              settings.smoothing, isMultiMetric, props.seriesId, props.dash, getX,
             );
-
-            // Convert all values to the selected unit using the consistent divisor
-            const normalizedTimes = relativeTimes.map(
-              (seconds) => seconds / divisor,
-            );
-
-            // Build valueFlags map for non-finite values
-            let valueFlags: Map<number, string> | undefined;
-            for (let i = 0; i < sortedData.length; i++) {
-              const flag = (sortedData[i] as MetricDataPoint).valueFlag;
-              if (flag && flag !== "") {
-                if (!valueFlags) valueFlags = new Map();
-                valueFlags.set(normalizedTimes[i], flag);
-              }
-            }
-
-            const baseData = {
-              x: normalizedTimes,
-              y: sortedData.map((d: MetricDataPoint) => Number(d.value)),
-              ...seriesProps(pair),
-              valueFlags,
-            };
-
-            if (collectRaw) rawLines.push(baseData);
-            return downsampleAndSmooth(baseData, settings.maxPointsPerSeries, settings.smoothing, isMultiMetric);
           });
 
         return {
           type: "system" as const,
           data: chartData,
-          rawLines: collectRaw ? rawLines : undefined,
           xlabel: `relative time (${unit})`,
           isDateTime: false,
           className: "h-full min-h-96 w-full flex-grow",
@@ -441,20 +420,17 @@ const MultiLineChartInner = memo(
           const data = allData
             .filter((item) => item.data.length > 0)
             .flatMap(({ data, pair }) => {
-              const baseData = {
-                x: data.map((d: MetricDataPoint) => new Date(d.time).getTime()),
-                y: data.map((d: MetricDataPoint) => Number(d.value)),
-                ...seriesProps(pair),
-                valueFlags: buildValueFlags(data, (d) => new Date(d.time).getTime()),
-              };
-              if (collectRaw) rawLines.push(baseData);
-              return downsampleAndSmooth(baseData, settings.maxPointsPerSeries, settings.smoothing, isMultiMetric);
+              const props = seriesProps(pair);
+              const getX = (d: BucketedChartDataPoint) => new Date(d.time).getTime();
+              return bucketedAndSmooth(
+                data, props.label, props.color,
+                settings.smoothing, isMultiMetric, props.seriesId, props.dash, getX,
+              );
             });
 
           return {
             type: "data" as const,
             data,
-            rawLines: collectRaw ? rawLines : undefined,
             xlabel: "absolute time",
             isDateTime: true,
             className: "h-full w-full",
@@ -465,40 +441,20 @@ const MultiLineChartInner = memo(
           const data = allData
             .filter((item) => item.data.length > 0)
             .flatMap(({ data, pair }) => {
-              // Calculate relative times in seconds from first data point
               const firstTime = new Date(data[0].time).getTime();
               const relativeTimes = data.map(
                 (d) => (new Date(d.time).getTime() - firstTime) / 1000,
               );
-
-              // Determine appropriate time unit
               const maxSeconds = Math.max(...relativeTimes);
-              const { divisor, unit } = getTimeUnitForDisplay(maxSeconds);
+              const { divisor } = getTimeUnitForDisplay(maxSeconds);
+              const props = seriesProps(pair);
+              const getX = (d: BucketedChartDataPoint) =>
+                (new Date(d.time).getTime() - firstTime) / 1000 / divisor;
 
-              // Convert to appropriate unit
-              const normalizedTimes = relativeTimes.map(
-                (seconds) => seconds / divisor,
+              return bucketedAndSmooth(
+                data, props.label, props.color,
+                settings.smoothing, isMultiMetric, props.seriesId, props.dash, getX,
               );
-
-              // Build valueFlags map for non-finite values
-              let valueFlags: Map<number, string> | undefined;
-              for (let i = 0; i < data.length; i++) {
-                const flag = (data[i] as MetricDataPoint).valueFlag;
-                if (flag && flag !== "") {
-                  if (!valueFlags) valueFlags = new Map();
-                  valueFlags.set(normalizedTimes[i], flag);
-                }
-              }
-
-              const baseData = {
-                x: normalizedTimes,
-                y: data.map((d: MetricDataPoint) => Number(d.value)),
-                ...seriesProps(pair),
-                valueFlags,
-              };
-
-              if (collectRaw) rawLines.push(baseData);
-              return downsampleAndSmooth(baseData, settings.maxPointsPerSeries, settings.smoothing, isMultiMetric);
             });
 
           // Determine time unit from the first dataset
@@ -517,7 +473,6 @@ const MultiLineChartInner = memo(
           return {
             type: "data" as const,
             data,
-            rawLines: collectRaw ? rawLines : undefined,
             xlabel: `relative time (${unit})`,
             isDateTime: false,
             className: "h-full w-full",
@@ -531,26 +486,19 @@ const MultiLineChartInner = memo(
             .filter((item) => item.data.length > 0)
             .flatMap(({ data: tierData, pair }) => {
               const key = zoomKey(pair.line.runId, pair.metric);
-              const isUsingZoomData = zoomDataMap?.has(key) ?? false;
-              const sourceData = (isUsingZoomData ? zoomDataMap?.get(key) : undefined) ?? tierData;
-              const baseData = {
-                x: sourceData.map((d: MetricDataPoint) => Number(d.step)),
-                y: sourceData.map((d: MetricDataPoint) => Number(d.value)),
-                ...seriesProps(pair),
-                valueFlags: buildValueFlags(sourceData, (d) => Number(d.step)),
-              };
-              if (collectRaw) rawLines.push(baseData);
-              // Skip client-side downsampling for zoom data — it's already
-              // range-limited by the server query, so downsampling would
-              // re-introduce step gaps that the zoom refetch was meant to fill.
-              const effectiveMaxPoints = isUsingZoomData ? 0 : settings.maxPointsPerSeries;
-              return downsampleAndSmooth(baseData, effectiveMaxPoints, settings.smoothing, isMultiMetric);
+              const zoomData = zoomDataMap?.get(key);
+              const sourceData = zoomData ?? tierData;
+              const props = seriesProps(pair);
+
+              return bucketedAndSmooth(
+                sourceData, props.label, props.color,
+                settings.smoothing, isMultiMetric, props.seriesId, props.dash,
+              );
             });
 
           return {
             type: "data" as const,
             data,
-            rawLines: collectRaw ? rawLines : undefined,
             xlabel,
             isDateTime: false,
             className: "h-full w-full",
@@ -567,6 +515,7 @@ const MultiLineChartInner = memo(
           }
 
           // Match up x values (selected log) with y values (current log)
+          // Bucketed data has representative steps — alignment still works
           const validChartData: {
             pair: typeof queryPairs[0];
             alignedData: { x: number[]; y: number[] } | null;
@@ -582,8 +531,14 @@ const MultiLineChartInner = memo(
                 return { pair, alignedData: null };
               }
 
-              // Align and unzip x and y data
-              const alignedData = alignAndUnzip(matchingXData, data);
+              // Convert bucketed data to ChartDataPoint for alignment
+              const yData = data.map((d) => ({
+                step: d.step,
+                time: d.time,
+                value: d.value,
+              }));
+
+              const alignedData = alignAndUnzip(matchingXData, yData);
 
               if (alignedData.x.length === 0 || alignedData.y.length === 0) {
                 return { pair, alignedData: null };
@@ -605,62 +560,29 @@ const MultiLineChartInner = memo(
           }
 
           // Create chart data from valid comparisons
+          // Custom log axes can't use server envelopes — apply smoothing only
           const data = validChartData
             .filter((item) => item.alignedData !== null)
             .flatMap(({ pair, alignedData }) => {
+              const props = seriesProps(pair);
               const baseData = {
                 x: alignedData!.x,
                 y: alignedData!.y,
-                ...seriesProps(pair),
+                ...props,
               };
-              if (collectRaw) rawLines.push(baseData);
-              return downsampleAndSmooth(baseData, settings.maxPointsPerSeries, settings.smoothing, isMultiMetric);
+              return applySmoothing(baseData, settings.smoothing, isMultiMetric);
             });
 
           return {
             type: "data" as const,
             data,
-            rawLines: collectRaw ? rawLines : undefined,
             xlabel: effectiveXAxis,
             isDateTime: false,
             className: "h-full w-full",
           };
         }
       }
-    }, [allData, customLogData, settings, effectiveXAxis, title, xlabel, hasAnyData, queryPairs, getSeriesLabel, zoomDataMap]);
-
-    // Callback for zoom-aware re-downsampling: slices raw data to visible range
-    // and runs the full downsample+smooth pipeline to produce consistent series structure.
-    // Stored in a ref inside the chart component, so reference instability is fine.
-    const reprocessForZoom = useMemo(() => {
-      if (settings.maxPointsPerSeries <= 0) return undefined;
-      const smoothing = settings.smoothing;
-      return (raws: RawLineData[], xMin: number, xMax: number) => {
-        return raws.flatMap((raw) => {
-          // Find visible range with 1-point margin on each side
-          let startIdx = 0;
-          let endIdx = raw.x.length;
-          for (let j = 0; j < raw.x.length; j++) {
-            if (raw.x[j] >= xMin) { startIdx = Math.max(0, j - 1); break; }
-          }
-          for (let j = raw.x.length - 1; j >= 0; j--) {
-            if (raw.x[j] <= xMax) { endIdx = Math.min(raw.x.length, j + 2); break; }
-          }
-          const sliced = {
-            x: raw.x.slice(startIdx, endIdx),
-            y: raw.y.slice(startIdx, endIdx),
-            label: raw.label,
-            seriesId: raw.seriesId,
-            color: raw.color,
-            dash: raw.dash,
-          };
-          // Use maxPts=0: show ALL raw data points in the visible range.
-          // applyDownsampling always produces 3 series (main + envelope),
-          // matching the initial render's series count for setData compatibility.
-          return downsampleAndSmooth(sliced, 0, smoothing, isMultiMetric);
-        });
-      };
-    }, [settings.maxPointsPerSeries, settings.smoothing]);
+    }, [allData, customLogData, settings, effectiveXAxis, title, xlabel, hasAnyData, queryPairs, getSeriesLabel, zoomDataMap, isMultiMetric, metricNames]);
 
     // Too many series warning
     if (tooManySeries) {
@@ -778,9 +700,6 @@ const MultiLineChartInner = memo(
           tooltipInterpolation={settings.tooltipInterpolation}
           outlierDetection={settings.yAxisScaleMode === "outlier-aware"}
           spanGaps={!settings.skipMissingValues}
-          rawLines={chartResult.rawLines}
-          downsampleTarget={settings.maxPointsPerSeries}
-          reprocessForZoom={reprocessForZoom}
           onZoomRangeChange={onZoomRangeChange}
         />
       </div>

@@ -92,7 +92,8 @@ export const prefetchGetGraph = (
   });
 
 /**
- * Progressive graph loading — 3-tier: preview (500pts) → standard (10k) → full (all).
+ * Progressive graph loading — 2-tier bucketed: preview (200 buckets) → standard (1000 buckets).
+ * Returns BucketedChartDataPoint[] with server-side min/max envelopes.
  * Use this instead of useGetGraph for progressive chart rendering.
  */
 export const useGetGraphProgressive = (
