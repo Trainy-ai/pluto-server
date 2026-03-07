@@ -29,11 +29,14 @@ test.describe("Graph Visualization", () => {
         await waitForPageReady(page);
 
         // Check for ReactFlow container OR empty state (graph data may not exist)
+        // Use auto-retrying assertion — the page may need time to load graph data or show empty state
         const reactFlowContainer = page.locator(graphSelectors.reactFlowContainer);
         const emptyState = page.getByText(graphSelectors.emptyState);
-        const hasGraph = await reactFlowContainer.isVisible({ timeout: 15000 }).catch(() => false);
-        const hasEmpty = await emptyState.isVisible().catch(() => false);
-        expect(hasGraph || hasEmpty).toBeTruthy();
+        await expect(async () => {
+          const hasGraph = await reactFlowContainer.isVisible().catch(() => false);
+          const hasEmpty = await emptyState.isVisible().catch(() => false);
+          expect(hasGraph || hasEmpty).toBeTruthy();
+        }).toPass({ timeout: 15000 });
       }
     } else {
       // No runs found - skip test

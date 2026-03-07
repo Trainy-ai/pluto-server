@@ -264,7 +264,7 @@ test.describe("Run Comparison URL Parameters", () => {
   });
 
   test.describe("Shareable URLs", () => {
-    test("copied URL with runs param can be shared and reproduced", async ({ page, context }) => {
+    test("copied URL with runs param can be shared and reproduced", async ({ page, browser }) => {
       // Get run IDs
       await page.goto(`/o/${orgSlug}/projects/${projectName}`);
       await waitForRunsData(page);
@@ -280,11 +280,13 @@ test.describe("Run Comparison URL Parameters", () => {
       // Construct a shareable URL
       const shareableUrl = `/o/${orgSlug}/projects/${projectName}?runs=${runIds[0]},${runIds[1]},${runIds[2]}`;
 
-      // Open in a new page (simulating sharing)
-      // Note: IndexedDB is shared within the same browser context, so clear cache first
-      const newPage = await context.newPage();
-      await newPage.goto(`/o/${orgSlug}`);  // Navigate to any page to have context for IndexedDB
-      await clearSelectionCache(newPage);
+      // Open in a NEW browser context with fresh IndexedDB to truly simulate sharing.
+      // A new page in the same context shares IndexedDB, and the original page's
+      // debounced cache writes can race with clearSelectionCache, causing stale state.
+      const newContext = await browser.newContext({
+        storageState: "e2e/.auth/user.json",
+      });
+      const newPage = await newContext.newPage();
 
       await newPage.goto(shareableUrl);
       await waitForRunsData(newPage);
@@ -296,7 +298,7 @@ test.describe("Run Comparison URL Parameters", () => {
         await expect(selectionContainer).toContainText("3", { timeout: 2000 });
       }).toPass({ timeout: 10000 });
 
-      await newPage.close();
+      await newContext.close();
     });
   });
 });

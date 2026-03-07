@@ -200,6 +200,84 @@ test.describe("Visibility Options Dropdown", () => {
     }).toPass({ timeout: 5000 });
   });
 
+  test("switching color palette reassigns all selected run colors", async ({
+    page,
+  }) => {
+    // Find the visibility options button
+    const visibilityButton = page
+      .locator('button[aria-label="Visibility options"]')
+      .first();
+
+    const hasVisibilityButton = (await visibilityButton.count()) > 0;
+    if (!hasVisibilityButton) {
+      test.skip();
+      return;
+    }
+
+    // Collect initial color dots from the first 5 selected runs
+    const colorDots = page.locator(
+      'div.rounded-full[style*="background-color"]'
+    );
+    await expect(colorDots.first()).toBeVisible({ timeout: 5000 });
+    const initialColors: string[] = [];
+    const dotCount = Math.min(5, await colorDots.count());
+    for (let i = 0; i < dotCount; i++) {
+      const style = (await colorDots.nth(i).getAttribute("style")) ?? "";
+      initialColors.push(style);
+    }
+
+    // Open visibility dropdown
+    await visibilityButton.click();
+    const dropdown = page.locator('[data-testid="visibility-dropdown"]');
+    await expect(dropdown).toBeVisible({ timeout: 5000 });
+
+    // Verify palette selector is visible
+    await expect(dropdown.getByText("Color palette")).toBeVisible();
+    await expect(dropdown.getByText("Categorical")).toBeVisible();
+    await expect(dropdown.getByText("Vivid")).toBeVisible();
+
+    // Click Vivid to switch palette
+    await dropdown.getByText("Vivid").click();
+    // Wait for the palette change to propagate and colors to reassign
+    await page.waitForTimeout(500);
+
+    // Dropdown should still be open
+    await expect(dropdown).toBeVisible();
+
+    // Collect new colors — they should have changed
+    const newColors: string[] = [];
+    for (let i = 0; i < dotCount; i++) {
+      const style = (await colorDots.nth(i).getAttribute("style")) ?? "";
+      newColors.push(style);
+    }
+
+    // At least some colors should differ (palettes have different color values)
+    const changedCount = initialColors.filter(
+      (c, i) => c !== newColors[i]
+    ).length;
+    expect(changedCount).toBeGreaterThan(0);
+
+    // Switch back to Categorical
+    await dropdown.getByText("Categorical").click();
+    await page.waitForTimeout(500);
+
+    // Dropdown should still be open
+    await expect(dropdown).toBeVisible();
+
+    // Colors should revert to initial palette
+    const restoredColors: string[] = [];
+    for (let i = 0; i < dotCount; i++) {
+      const style = (await colorDots.nth(i).getAttribute("style")) ?? "";
+      restoredColors.push(style);
+    }
+
+    // Colors should match the initial Categorical palette
+    const restoredCount = initialColors.filter(
+      (c, i) => c === restoredColors[i]
+    ).length;
+    expect(restoredCount).toBe(dotCount);
+  });
+
   test("selection counter shows accurate count", async ({ page }) => {
 
     // Get the selection container - text is split across spans

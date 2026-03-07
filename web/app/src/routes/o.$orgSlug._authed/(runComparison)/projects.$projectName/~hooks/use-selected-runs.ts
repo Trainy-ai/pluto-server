@@ -40,7 +40,7 @@ interface UseSelectedRunsOptions {
 }
 
 interface UseSelectedRunsReturn {
-  /** Map of all run IDs to their assigned colors */
+  /** Map of selected run IDs to their assigned colors */
   runColors: Record<RunId, Color>;
   /** Map of selected run IDs to their run data and color */
   selectedRunsWithColors: Record<RunId, { run: Run; color: Color }>;
@@ -56,32 +56,58 @@ interface UseSelectedRunsReturn {
   deselectAll: () => void;
   /** Shuffle colors for all selected runs */
   shuffleColors: () => void;
+  /** Reassign all selected runs with sequential colors from the current palette */
+  reassignAllColors: () => void;
 }
 
 /**
- * Get a deterministic color based on the run id
- * @param runId - The ID of the run to generate a color for
- * @param colors - The color palette to use (theme-aware)
- * @returns A color from the predefined palette
+ * Get a deterministic color based on the run id (hash-based).
+ * Used for single-run views where sequential assignment isn't needed.
+ * For multi-run comparison, use sequential palette assignment instead.
  */
 export const getColorForRun = (runId: string, colors: string[]): Color => {
-  // Simple hash function to convert string to number
   const hash = runId.split("").reduce((acc, char, index) => {
-    // Add positional weighting to create more variation
     return char.charCodeAt(0) * (index + 1) + ((acc << 5) - acc);
   }, 0);
-
-  // Use the hash to select a color from the palette
-  // The modulo determines which color is selected
   return colors[Math.abs(hash) % colors.length];
 };
+
+/**
+ * Get the next available color from the palette that isn't already in use.
+ * This ensures selected runs always get maximally distinct colors.
+ * Falls back to cycling through the palette if all colors are taken.
+ */
+function getNextAvailableColor(usedColors: Set<string>, palette: string[]): string {
+  for (const color of palette) {
+    if (!usedColors.has(color)) return color;
+  }
+  return palette[usedColors.size % palette.length];
+}
+
+/**
+ * Assign sequential palette colors to a list of runs.
+ * Each run gets the next available distinct color from the palette.
+ */
+function assignSequentialColors(
+  runs: { id: string }[],
+  palette: string[],
+): Record<string, string> {
+  const colors: Record<string, string> = {};
+  const used = new Set<string>();
+  for (const run of runs) {
+    const color = getNextAvailableColor(used, palette);
+    colors[run.id] = color;
+    used.add(color);
+  }
+  return colors;
+}
 
 /**
  * Custom hook for managing run selection and color assignment
  *
  * Features:
- * - Assigns deterministic colors to runs based on their names
- * - Maintains color consistency across selections
+ * - Assigns sequential palette colors to selected runs for maximum visual distinction
+ * - Colors are only assigned to selected runs (not all runs)
  * - Automatically selects the 5 most recent runs initially (unless URL params provided)
  * - Provides handlers for selection and color changes
  * - Persists selections and colors in local cache (scoped per org/project)
@@ -104,7 +130,7 @@ export function useSelectedRuns(
   // Get theme-aware color palette
   const chartColors = useChartColors();
 
-  // Store all run colors, whether selected or not
+  // Store colors for selected runs only (sequential palette assignment)
   const [runColors, setRunColors] = useState<Record<RunId, Color>>({});
   const [selectedRunsWithColors, setSelectedRunsWithColors] = useState<
     Record<RunId, { run: Run; color: Color }>
@@ -116,12 +142,35 @@ export function useSelectedRuns(
 
   // Ref for stable access to colors in callbacks
   const chartColorsRef = useRef(chartColors);
+  // Track whether the palette has been set at least once (to skip initial render)
+  const paletteInitializedRef = useRef(false);
   useEffect(() => {
+    const changed = chartColorsRef.current !== chartColors;
     chartColorsRef.current = chartColors;
+    // When palette changes (theme or palette type switch), reassign all selected runs
+    if (changed && paletteInitializedRef.current) {
+      setSelectedRunsWithColors((current) => {
+        const ids = Object.keys(current);
+        if (ids.length === 0) return current;
+        const colorMap = assignSequentialColors(
+          ids.map((id) => ({ id })),
+          chartColors,
+        );
+        const updated: Record<RunId, { run: Run; color: Color }> = {};
+        for (const id of ids) {
+          updated[id] = { ...current[id], color: colorMap[id] };
+        }
+        setRunColors(colorMap);
+        return updated;
+      });
+    }
+    paletteInitializedRef.current = true;
   }, [chartColors]);
 
   // Track whether initial URL params have been applied
   const urlParamsAppliedRef = useRef(false);
+  // Track whether the initial selection has been set (prevents re-init on effect re-runs)
+  const initializedRef = useRef(false);
   // Track the previous URL run IDs to detect changes
   const prevUrlRunIdsRef = useRef<string[] | undefined>(undefined);
   // Track whether a URL change was triggered by our own selection update
@@ -158,6 +207,7 @@ export function useSelectedRuns(
     setRunColors({});
     setSelectedRunsWithColors({});
     urlParamsAppliedRef.current = false;
+    initializedRef.current = false;
     prevUrlRunIdsRef.current = undefined;
 
     const loadCachedData = async () => {
@@ -207,24 +257,24 @@ export function useSelectedRuns(
 
   // Build a selection map from URL run IDs, matching against available runs.
   // Returns null if urlRunIds is empty or no matching runs are found.
+  // Colors are assigned sequentially from the palette for maximum visual distinction.
   const buildSelectionFromUrlParams = useCallback(
-    (availableRuns: Run[], colorMap: Record<RunId, Color>): Record<RunId, { run: Run; color: Color }> | null => {
+    (availableRuns: Run[]): Record<RunId, { run: Run; color: Color }> | null => {
       if (!urlRunIds?.length) return null;
 
       const runsById = new Map(availableRuns.map((r) => [r.id, r]));
+      const matchedRuns = urlRunIds
+        .map((id) => runsById.get(id))
+        .filter((r): r is Run => r != null);
+
+      if (matchedRuns.length === 0) return null;
+
+      const colorAssignment = assignSequentialColors(matchedRuns, chartColorsRef.current);
       const selected: Record<RunId, { run: Run; color: Color }> = {};
-
-      urlRunIds.forEach((runId) => {
-        const run = runsById.get(runId);
-        if (run) {
-          selected[runId] = {
-            run,
-            color: colorMap[runId] || getColorForRun(runId, chartColorsRef.current),
-          };
-        }
-      });
-
-      return Object.keys(selected).length > 0 ? selected : null;
+      for (const run of matchedRuns) {
+        selected[run.id] = { run, color: colorAssignment[run.id] };
+      }
+      return selected;
     },
     [urlRunIds],
   );
@@ -260,120 +310,108 @@ export function useSelectedRuns(
     }
 
     // If we have runs loaded and URL params changed, apply the new selection
-    const newSelection = buildSelectionFromUrlParams(runs, runColors);
+    const newSelection = buildSelectionFromUrlParams(runs);
     if (newSelection) {
+      const newColors: Record<RunId, Color> = {};
+      for (const [id, entry] of Object.entries(newSelection)) {
+        newColors[id] = entry.color;
+      }
+      setRunColors(newColors);
       setSelectedRunsWithColors(newSelection);
       urlParamsAppliedRef.current = true;
     }
-  }, [urlRunIds, runs, runColors, buildSelectionFromUrlParams]);
+  }, [urlRunIds, runs, buildSelectionFromUrlParams]);
 
-  // Initialize or update colors when runs change.
-  // Uses refs for runColors/selectedRunsWithColors to avoid circular re-runs
-  // (this effect sets both of those values).
+  // Initialize or update selections when runs change.
+  // Colors are only assigned to SELECTED runs (sequential from palette)
+  // so that a small selection always gets maximally distinct colors.
+  // Uses refs for runColors/selectedRunsWithColors to avoid circular re-runs.
   useEffect(() => {
     if (!runs?.length) return;
 
-    const currentRunColors = runColorsRef.current;
     const currentSelectedRuns = selectedRunsRef.current;
 
-    // First run initialization - set initial colors and selections
-    if (Object.keys(currentRunColors).length === 0) {
-      const newColors = runs.reduce<Record<RunId, Color>>((acc, run) => {
-        acc[run.id] = getColorForRun(run.id, chartColorsRef.current);
-        return acc;
-      }, {});
-
-      setRunColors(newColors);
-
-      // Helper to select first 5 runs as default
-      const selectDefaultRuns = () => {
-        const latestRuns = runs.slice(0, 5);
-        return latestRuns.reduce<Record<RunId, { run: Run; color: Color }>>(
-          (acc, run) => {
-            acc[run.id] = { run, color: newColors[run.id] };
-            return acc;
-          },
-          {},
-        );
-      };
-
-      // Initialize selected runs only if none are selected yet
-      if (Object.keys(currentSelectedRuns).length === 0) {
-        // If URL params provided, use those for initial selection
-        if (urlRunIds && urlRunIds.length > 0 && !urlParamsAppliedRef.current) {
-          urlParamsAppliedRef.current = true;
-          const newSelection = buildSelectionFromUrlParams(runs, newColors);
-          if (newSelection) {
-            setSelectedRunsWithColors(newSelection);
-          } else {
-            // Fall back to default: select first 5 runs
-            setSelectedRunsWithColors(selectDefaultRuns());
-          }
-        } else if (!urlParamsAppliedRef.current || !urlRunIds?.length) {
-          // No URL params or already applied - use default selection (first 5 runs)
-          setSelectedRunsWithColors(selectDefaultRuns());
-        }
+    // Helper to select first N runs with sequential palette colors
+    const selectDefaultRuns = (n: number) => {
+      const runsToSelect = runs.slice(0, n);
+      const colorMap = assignSequentialColors(runsToSelect, chartColorsRef.current);
+      const selected: Record<RunId, { run: Run; color: Color }> = {};
+      for (const run of runsToSelect) {
+        selected[run.id] = { run, color: colorMap[run.id] };
       }
-    }
-    // Handle subsequent runs loaded through pagination, or cache loaded before runs
-    else {
-      // If URL params exist and haven't been applied yet, override cached selections.
-      // This handles the race where IndexedDB cache restores stale selections before
-      // runs data arrives from the API.
+      return { selected, colors: colorMap };
+    };
+
+    // Initialize selected runs only if not already initialized and no cache restored.
+    // Use a dedicated ref flag (not selectedRunsRef) since the ref lags behind state.
+    if (!initializedRef.current && Object.keys(currentSelectedRuns).length === 0) {
+      initializedRef.current = true;
       if (urlRunIds && urlRunIds.length > 0 && !urlParamsAppliedRef.current) {
         urlParamsAppliedRef.current = true;
-        const newSelection = buildSelectionFromUrlParams(runs, currentRunColors);
+        const newSelection = buildSelectionFromUrlParams(runs);
         if (newSelection) {
+          const newColors: Record<RunId, Color> = {};
+          for (const [id, entry] of Object.entries(newSelection)) {
+            newColors[id] = entry.color;
+          }
+          setRunColors(newColors);
+          setSelectedRunsWithColors(newSelection);
+        } else {
+          const { selected, colors } = selectDefaultRuns(5);
+          setRunColors(colors);
+          setSelectedRunsWithColors(selected);
+        }
+      } else if (!urlParamsAppliedRef.current || !urlRunIds?.length) {
+        const { selected, colors } = selectDefaultRuns(5);
+        setRunColors(colors);
+        setSelectedRunsWithColors(selected);
+      }
+    } else {
+      initializedRef.current = true;
+      // Cache was restored before runs arrived — check for URL override
+      if (urlRunIds && urlRunIds.length > 0 && !urlParamsAppliedRef.current) {
+        urlParamsAppliedRef.current = true;
+        const newSelection = buildSelectionFromUrlParams(runs);
+        if (newSelection) {
+          const newColors: Record<RunId, Color> = {};
+          for (const [id, entry] of Object.entries(newSelection)) {
+            newColors[id] = entry.color;
+          }
+          setRunColors(newColors);
           setSelectedRunsWithColors(newSelection);
         }
       }
-
-      // Find runs that don't have colors assigned yet
-      const runsWithoutColors = runs.filter((run) => !currentRunColors[run.id]);
-
-      if (runsWithoutColors.length > 0) {
-        // Generate colors for new runs
-        const newColors = runsWithoutColors.reduce<Record<RunId, Color>>(
-          (acc, run) => {
-            acc[run.id] = getColorForRun(run.id, chartColorsRef.current);
-            return acc;
-          },
-          {},
-        );
-
-        // Update the colors state with the new colors
-        setRunColors((prevColors) => ({
-          ...prevColors,
-          ...newColors,
-        }));
-      }
+      // No need to assign colors to unselected runs — colors are only for selected runs
     }
   }, [runs, urlRunIds, buildSelectionFromUrlParams]);
 
   // Keep stored run objects in sync when the upstream `runs` array is enriched
   // (e.g., when fieldValuesData loads and merges _flatConfig/_flatSystemMetadata).
   // Without this, selectedRunsWithColors holds stale run objects that lack these fields.
+  // Uses functional update to read the latest state (not the stale ref), which avoids
+  // overriding URL-param-driven selection that was set in the same render cycle.
   useEffect(() => {
     if (!runs?.length) return;
-    const currentSelected = selectedRunsRef.current;
-    if (Object.keys(currentSelected).length === 0) return;
 
     const runsById = new Map(runs.map((r) => [r.id, r]));
-    let updated: Record<RunId, { run: Run; color: Color }> | null = null;
 
-    for (const [id, entry] of Object.entries(currentSelected)) {
-      const freshRun = runsById.get(id);
-      if (freshRun && freshRun !== entry.run) {
-        if (!updated) {
-          updated = { ...currentSelected };
+    setSelectedRunsWithColors((currentSelected) => {
+      if (Object.keys(currentSelected).length === 0) return currentSelected;
+
+      let updated: Record<RunId, { run: Run; color: Color }> | null = null;
+
+      for (const [id, entry] of Object.entries(currentSelected)) {
+        const freshRun = runsById.get(id);
+        if (freshRun && freshRun !== entry.run) {
+          if (!updated) {
+            updated = { ...currentSelected };
+          }
+          updated[id] = { ...entry, run: freshRun };
         }
-        updated[id] = { ...entry, run: freshRun };
       }
-    }
 
-    if (updated) {
-      setSelectedRunsWithColors(updated);
-    }
+      return updated ?? currentSelected;
+    });
   }, [runs]);
 
   // Notify parent when selection changes (for URL sync)
@@ -415,30 +453,27 @@ export function useSelectedRuns(
           const run = currentRuns.find((r) => r.id === runId);
           if (!run) return prev;
 
-          // Ensure we have a color for this run - always use runId for consistency
-          const currentRunColors = runColorsRef.current;
-          const color = currentRunColors[runId] || getColorForRun(runId, chartColorsRef.current);
+          // Assign the next available palette color (not used by other selected runs)
+          const usedColors = new Set(Object.values(prev).map((e) => e.color));
+          const color = getNextAvailableColor(usedColors, chartColorsRef.current);
 
-          // Update runColors if needed
-          if (!currentRunColors[runId]) {
-            setRunColors((prevColors) => ({
-              ...prevColors,
-              [runId]: color,
-            }));
-          }
+          setRunColors((prevColors) => ({
+            ...prevColors,
+            [runId]: color,
+          }));
 
-          // Add the run to selected runs
           return {
             ...prev,
-            [runId]: {
-              run,
-              color,
-            },
+            [runId]: { run, color },
           };
         }
 
-        // Fast path for deselection - completely remove the run from the selected state
+        // Deselection - remove from selected runs and runColors
         const { [runId]: _, ...rest } = prev;
+        setRunColors((prevColors) => {
+          const { [runId]: _, ...restColors } = prevColors;
+          return restColors;
+        });
         return rest;
       });
     },
@@ -471,55 +506,61 @@ export function useSelectedRuns(
     [], // Stable - uses refs instead of direct dependencies
   );
 
-  // Select the first N runs
+  // Select the first N runs with sequential palette colors
   const selectFirstN = useCallback(
     (n: number) => {
       if (!runs?.length) return;
 
       const firstNRuns = runs.slice(0, n);
+      const colorMap = assignSequentialColors(firstNRuns, chartColorsRef.current);
       const newSelectedRuns: Record<RunId, { run: Run; color: Color }> = {};
 
       firstNRuns.forEach((run) => {
-        const color = runColors[run.id] || getColorForRun(run.id, chartColorsRef.current);
-        newSelectedRuns[run.id] = { run, color };
+        newSelectedRuns[run.id] = { run, color: colorMap[run.id] };
       });
 
+      setRunColors(colorMap);
       setSelectedRunsWithColors(newSelectedRuns);
     },
-    [runs, runColors],
+    [runs],
   );
 
-  // Select all runs with given IDs
-  // Uses Map for O(N+M) instead of O(N*M) complexity
+  // Select all runs with given IDs, assigning next available palette colors
   const selectAllByIds = useCallback(
     (runIds: RunId[]) => {
       if (!runs?.length) return;
 
-      // Pre-compute runs by ID for O(1) lookup instead of O(N) find() calls
       const runsById = new Map(runs.map((r) => [r.id, r]));
+      const currentSelected = selectedRunsRef.current;
+      const usedColors = new Set(Object.values(currentSelected).map((e) => e.color));
 
-      setSelectedRunsWithColors((prev) => {
-        const newSelectedRuns = { ...prev };
+      const newEntries: Record<RunId, { run: Run; color: Color }> = {};
+      const newColors: Record<RunId, Color> = {};
 
-        runIds.forEach((runId) => {
-          if (!newSelectedRuns[runId]) {
-            const run = runsById.get(runId);
-            if (run) {
-              const color = runColors[runId] || getColorForRun(runId, chartColorsRef.current);
-              newSelectedRuns[runId] = { run, color };
-            }
+      runIds.forEach((runId) => {
+        if (!currentSelected[runId]) {
+          const run = runsById.get(runId);
+          if (run) {
+            const color = getNextAvailableColor(usedColors, chartColorsRef.current);
+            newEntries[runId] = { run, color };
+            newColors[runId] = color;
+            usedColors.add(color);
           }
-        });
-
-        return newSelectedRuns;
+        }
       });
+
+      if (Object.keys(newEntries).length > 0) {
+        setSelectedRunsWithColors((prev) => ({ ...prev, ...newEntries }));
+        setRunColors((prev) => ({ ...prev, ...newColors }));
+      }
     },
-    [runs, runColors],
+    [runs],
   );
 
-  // Deselect all runs
+  // Deselect all runs and clear their color assignments
   const deselectAll = useCallback(() => {
     setSelectedRunsWithColors({});
+    setRunColors({});
   }, []);
 
   // Shuffle colors for all selected runs
@@ -542,8 +583,8 @@ export function useSelectedRuns(
       ];
     }
 
-    // Apply shuffled colors
-    const newRunColors = { ...runColors };
+    // Apply shuffled colors — runColors mirrors selectedRunsWithColors
+    const newRunColors: Record<RunId, Color> = {};
     const newSelectedRuns = { ...selectedRunsWithColors };
 
     selectedIds.forEach((id, index) => {
@@ -556,7 +597,28 @@ export function useSelectedRuns(
 
     setRunColors(newRunColors);
     setSelectedRunsWithColors(newSelectedRuns);
-  }, [selectedRunsWithColors, runColors]);
+  }, [selectedRunsWithColors]);
+
+  // Reassign sequential palette colors to all selected runs from the current palette.
+  // Called when the user switches palette type so all curves update at once.
+  const reassignAllColors = useCallback(() => {
+    const selectedIds = Object.keys(selectedRunsWithColors);
+    if (selectedIds.length === 0) return;
+
+    const palette = chartColorsRef.current;
+    const colorMap = assignSequentialColors(
+      selectedIds.map((id) => ({ id })),
+      palette,
+    );
+
+    const newSelectedRuns = { ...selectedRunsWithColors };
+    for (const id of selectedIds) {
+      newSelectedRuns[id] = { ...newSelectedRuns[id], color: colorMap[id] };
+    }
+
+    setRunColors(colorMap);
+    setSelectedRunsWithColors(newSelectedRuns);
+  }, [selectedRunsWithColors]);
 
   return {
     runColors,
@@ -567,5 +629,6 @@ export function useSelectedRuns(
     selectAllByIds,
     deselectAll,
     shuffleColors,
+    reassignAllColors,
   };
 }

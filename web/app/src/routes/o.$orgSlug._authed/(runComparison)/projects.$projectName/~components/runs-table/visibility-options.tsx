@@ -4,6 +4,8 @@ import { Eye, Minus, Plus, Shuffle } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+import { cn } from "@/lib/utils";
+import { usePaletteType, type PaletteType } from "@/components/ui/color-picker";
 import type { Run } from "../../~queries/list-runs";
 
 interface VisibilityOptionsProps {
@@ -12,6 +14,7 @@ interface VisibilityOptionsProps {
   onSelectAllOnPage: (pageRunIds: string[]) => void;
   onDeselectAll: () => void;
   onShuffleColors: () => void;
+  onReassignAllColors: () => void;
   showOnlySelected: boolean;
   onShowOnlySelectedChange: (value: boolean) => void;
   pinSelectedToTop: boolean;
@@ -26,6 +29,7 @@ export const VisibilityOptions = memo(function VisibilityOptions({
   onSelectAllOnPage,
   onDeselectAll,
   onShuffleColors,
+  onReassignAllColors,
   showOnlySelected,
   onShowOnlySelectedChange,
   pinSelectedToTop,
@@ -189,6 +193,9 @@ export const VisibilityOptions = memo(function VisibilityOptions({
 
             <Separator />
 
+            {/* Color palette selector */}
+            <PaletteSelector onPaletteChange={onReassignAllColors} />
+
             {/* Shuffle colors */}
             <Button
               variant="ghost"
@@ -205,3 +212,45 @@ export const VisibilityOptions = memo(function VisibilityOptions({
     </div>
   );
 });
+
+function PaletteSelector({ onPaletteChange }: { onPaletteChange: () => void }) {
+  const [paletteType, setPaletteType] = usePaletteType();
+
+  const handleSwitch = (type: PaletteType) => {
+    if (type === paletteType) return;
+    setPaletteType(type);
+    // Wait a tick for the palette change event to propagate to useChartColors,
+    // then reassign all selected runs with the new palette colors.
+    requestAnimationFrame(() => onPaletteChange());
+  };
+
+  return (
+    <div className="space-y-1.5">
+      <span className="text-xs text-muted-foreground">Color palette</span>
+      <div className="flex gap-1 rounded-md bg-muted p-0.5">
+        <button
+          className={cn(
+            "flex-1 rounded-sm px-2 py-1 text-xs font-medium transition-colors",
+            paletteType === "categorical"
+              ? "bg-background text-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+          onClick={() => handleSwitch("categorical")}
+        >
+          Categorical
+        </button>
+        <button
+          className={cn(
+            "flex-1 rounded-sm px-2 py-1 text-xs font-medium transition-colors",
+            paletteType === "vivid"
+              ? "bg-background text-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+          onClick={() => handleSwitch("vivid")}
+        >
+          Vivid
+        </button>
+      </div>
+    </div>
+  );
+}

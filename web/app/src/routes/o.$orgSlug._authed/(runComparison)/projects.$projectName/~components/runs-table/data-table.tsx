@@ -242,6 +242,7 @@ interface DataTableProps {
   onSelectAllByIds: (runIds: string[]) => void;
   onDeselectAll: () => void;
   onShuffleColors: () => void;
+  onReassignAllColors: () => void;
   // Custom columns
   customColumns?: ColumnConfig[];
   availableConfigKeys?: string[];
@@ -311,6 +312,7 @@ export function DataTable({
   onSelectAllByIds,
   onDeselectAll,
   onShuffleColors,
+  onReassignAllColors,
   customColumns = [],
   availableConfigKeys = [],
   availableSystemMetadataKeys = [],
@@ -901,6 +903,7 @@ export function DataTable({
             onSelectAllOnPage={onSelectAllByIds}
             onDeselectAll={onDeselectAll}
             onShuffleColors={onShuffleColors}
+            onReassignAllColors={onReassignAllColors}
             showOnlySelected={showOnlySelected}
             onShowOnlySelectedChange={setShowOnlySelected}
             pinSelectedToTop={pinSelectedToTop}

@@ -625,6 +625,9 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           // Reset widths on THIS chart, falling back to table highlight if active
           const u = chartInstanceRef.current;
           if (u) {
+            // Clear instance-level overrides so stroke function falls back to refs
+            delete (u as any)._lastFocusedSeriesIdx;
+            (u as any)._crossHighlightRunId = null;
             applySeriesHighlight(u, tableHighlightRef.current, '_seriesId', chartLineWidthRef.current);
             u.redraw(); // Full redraw to reset stroke colors and widths
           }
@@ -676,7 +679,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         lastFocusedSeriesRef,
         crossChartRunIdRef,
         tableHighlightRef,
-      }, { spanGaps });
+      }, { spanGaps, theme });
 
       // Scales configuration
       // IMPORTANT: Always use auto:true for X-axis to allow zoom to work.
@@ -855,9 +858,44 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             (l) => l.label === pair.parentLabel && !l.envelopeOf,
           );
           const isDashedParent = !!parentLine?.dash;
+          const baseAlpha = isDashedParent ? 0.22 : 0.12;
+          const bandColor = pair.color || "#888";
+          // Get the run ID from the envelope's seriesId (for emphasis matching)
+          const envSeriesId = processedLines[pair.minIdx - 1]?.seriesId;
+          const envRunId = envSeriesId ? envSeriesId.split(':')[0] : null;
+
           bands.push({
             series: [pair.maxIdx, pair.minIdx],
-            fill: applyAlpha(pair.color || "#888", isDashedParent ? 0.22 : 0.12),
+            // Dynamic fill: dim bands for non-highlighted runs during emphasis
+            fill: (u: uPlot) => {
+              const localFocus = (u as any)._lastFocusedSeriesIdx !== undefined
+                ? (u as any)._lastFocusedSeriesIdx
+                : lastFocusedSeriesRef.current;
+              const crossId = crossChartRunIdRef.current ?? (u as any)._crossHighlightRunId ?? null;
+              const tableId = tableHighlightRef.current;
+              const activeId = crossId ?? tableId;
+
+              // No emphasis active — show bands at default alpha
+              if (localFocus === null && activeId === null) {
+                return applyAlpha(bandColor, baseAlpha);
+              }
+
+              // For local focus, check if the focused series belongs to this run
+              if (localFocus !== null) {
+                const focusedId = (u.series[localFocus] as any)?._seriesId;
+                const focusedRunId = focusedId ? focusedId.split(':')[0] : null;
+                if (focusedRunId === envRunId) {
+                  return applyAlpha(bandColor, baseAlpha);
+                }
+                return applyAlpha(bandColor, baseAlpha * 0.15);
+              }
+
+              // For cross-chart / table emphasis, match by run ID
+              if (activeId === envRunId) {
+                return applyAlpha(bandColor, baseAlpha);
+              }
+              return applyAlpha(bandColor, baseAlpha * 0.15);
+            },
           });
         }
       }
@@ -873,10 +911,11 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         legend,
         select,
         bands: bands.length > 0 ? bands : undefined,
-        // Top-level focus configuration (required for series highlighting)
-        // alpha < 1 dims unfocused series when one is focused
+        // Disable uPlot's built-in focus dimming — our custom stroke function
+        // in series-config.ts handles all emphasis/dimming via dynamic rgba() colors.
+        // Setting alpha: 1 prevents double-dimming (uPlot globalAlpha * stroke alpha).
         focus: {
-          alpha: 0.3, // Dim unfocused series to 30% opacity
+          alpha: 1,
         },
         plugins: [
           tooltipPlugin({
@@ -929,16 +968,22 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             (u) => {
               // Re-stroke highlighted series on top so it isn't obscured by later-indexed series.
               // uPlot draws series in array order; this hook fires after ALL series are drawn.
-              const localFocusIdx = lastFocusedSeriesRef.current;
-              const crossChartRunId = crossChartRunIdRef.current;
+              // Read from both refs and chart instance (imperative path sets instance values first)
+              const localFocusIdx = (u as any)._lastFocusedSeriesIdx !== undefined
+                ? (u as any)._lastFocusedSeriesIdx
+                : lastFocusedSeriesRef.current;
+              const crossChartRunId = crossChartRunIdRef.current ?? (u as any)._crossHighlightRunId ?? null;
               const tableId = tableHighlightRef.current;
 
               if (localFocusIdx === null && crossChartRunId === null && tableId === null) return;
 
-              // Collect highlighted series indices
+              // Collect highlighted series indices — only primary visible curves
+              // (skip envelope boundaries and raw/original companions)
               const highlightedIndices: number[] = [];
               for (let si = 1; si < u.series.length; si++) {
                 if (!u.series[si].show) continue;
+                const lineData = processedLinesRef.current[si - 1];
+                if (lineData?.envelopeOf || lineData?.hideFromLegend) continue;
                 if (localFocusIdx !== null) {
                   if (si === localFocusIdx) highlightedIndices.push(si);
                 } else {
@@ -954,35 +999,50 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
               const ctx = u.ctx;
               const { left, top, width: bboxW, height: bboxH } = u.bbox;
 
+              // Unified outline for all emphasis types (local, cross-chart, table hover)
+              // Outline width scales with the user's line width setting
+              const outlineColor = theme === "dark" ? "rgba(0,0,0,0.7)" : "rgba(0,0,0,0.45)";
+              const lw = chartLineWidthRef.current;
+              const outlineExtra = Math.max(2, lw * 1.5) * devicePixelRatio;
+
               for (const si of highlightedIndices) {
                 const s = u.series[si];
                 const paths = (s as any)._paths;
                 if (!paths?.stroke) continue;
 
                 const lineWidth = Math.round((s.width ?? 1.5) * devicePixelRatio * 1000) / 1000;
+                const outlineWidth = lineWidth + outlineExtra;
                 const offset = (lineWidth % 2) / 2;
 
+                // --- Pass 1: Dark outline (wider, behind) ---
                 ctx.save();
+                const outClip = new Path2D();
+                outClip.rect(left - outlineWidth / 2, top - outlineWidth / 2, bboxW + outlineWidth, bboxH + outlineWidth);
+                ctx.clip(outClip);
+                if (paths.clip) ctx.clip(paths.clip);
+                if (offset > 0) ctx.translate(offset, offset);
+                ctx.lineWidth = outlineWidth;
+                ctx.strokeStyle = outlineColor;
+                ctx.lineJoin = 'round';
+                ctx.lineCap = ((s as any).cap ?? 'butt') as CanvasLineCap;
+                if (s.dash) ctx.setLineDash(s.dash.map((v: number) => v * devicePixelRatio));
+                ctx.stroke(paths.stroke);
+                if (offset > 0) ctx.translate(-offset, -offset);
+                ctx.restore();
 
-                // Clip to plot area (mirrors uPlot's boundsClip)
+                // --- Pass 2: Colored stroke on top ---
+                ctx.save();
                 const boundsClip = new Path2D();
                 boundsClip.rect(left - lineWidth / 2, top - lineWidth / 2, bboxW + lineWidth, bboxH + lineWidth);
                 ctx.clip(boundsClip);
-
-                // Apply gap clipping if present
                 if (paths.clip) ctx.clip(paths.clip);
-
-                // Pixel alignment
                 if (offset > 0) ctx.translate(offset, offset);
-
                 ctx.lineWidth = lineWidth;
                 ctx.strokeStyle = typeof s.stroke === 'function' ? s.stroke(u, si) : (s.stroke as string);
                 ctx.lineJoin = 'round';
                 ctx.lineCap = ((s as any).cap ?? 'butt') as CanvasLineCap;
                 if (s.dash) ctx.setLineDash(s.dash.map((v: number) => v * devicePixelRatio));
-
                 ctx.stroke(paths.stroke);
-
                 if (offset > 0) ctx.translate(-offset, -offset);
                 ctx.restore();
               }
