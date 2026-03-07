@@ -21,13 +21,6 @@ function getStoredLineWidth(): number {
   return isNaN(parsed) ? 1.5 : parsed;
 }
 
-/**
- * Apply series highlight widths to a uPlot chart.
- * If value is provided and matches a series, highlights it and dims others.
- * If value is null or doesn't match any series, resets all to defaultWidth.
- * @param key - which series property to match against ('label' for cross-chart, '_seriesId' for table highlight)
- * @param defaultWidth - base line width (default 1.5)
- */
 function seriesKeyMatches(seriesValue: string | undefined, target: string, key: string): boolean {
   if (!seriesValue) return false;
   if (seriesValue === target) return true;
@@ -35,20 +28,26 @@ function seriesKeyMatches(seriesValue: string | undefined, target: string, key: 
   return false;
 }
 
+/**
+ * Apply series highlight widths to a uPlot chart.
+ * Only changes line widths — stroke colors are handled by the dynamic stroke function
+ * in series-config.ts which reads the run ID from (chart as any)._crossHighlightRunId.
+ */
 export function applySeriesHighlight(chart: uPlot, value: string | null, key: '_seriesId' | 'label' = 'label', defaultWidth = 1.5): void {
   const hasMatch = value && chart.series.some((s: any) => seriesKeyMatches(s[key], value, key));
 
   if (hasMatch) {
-    const highlightedWidth = Math.max(2.5, defaultWidth * 2);
-    const dimmedWidth = Math.max(0.7, defaultWidth * 0.47);
+    const highlightedWidth = Math.max(1, defaultWidth * 1.25);
+    const dimmedWidth = Math.max(0.4, defaultWidth * 0.85);
     for (let i = 1; i < chart.series.length; i++) {
-      const match = seriesKeyMatches((chart.series[i] as any)[key], value, key);
-      chart.series[i].width = match ? highlightedWidth : dimmedWidth;
+      const s = chart.series[i];
+      const match = seriesKeyMatches((s as any)[key], value, key);
+      s.width = match ? highlightedWidth : dimmedWidth;
     }
   } else {
     for (let i = 1; i < chart.series.length; i++) {
-      // Restore per-series base width (set by buildSeriesConfig for smoothed/raw differentiation)
-      chart.series[i].width = (chart.series[i] as any)._baseWidth ?? defaultWidth;
+      const s = chart.series[i];
+      s.width = (s as any)._baseWidth ?? defaultWidth;
     }
   }
 }
@@ -239,8 +238,10 @@ export function ChartSyncProvider({
 
       const lw = getStoredLineWidth();
       uplotInstancesRef.current.forEach((chart) => {
+        // Store on instance so stroke function can read it synchronously
+        (chart as any)._tableHighlightRunId = runId;
         applySeriesHighlight(chart, runId, '_seriesId', lw);
-        chart.redraw(false);
+        chart.redraw();
       });
     }
     document.addEventListener("run-table-hover", handleRunTableHover);
@@ -318,6 +319,21 @@ export function ChartSyncProvider({
           if (chartMapId === srcId) return; // Skip source chart
 
           const lw = getStoredLineWidth();
+
+          // Store the run ID directly on the chart instance so the stroke function
+          // can read it synchronously during redraw (avoids React state timing issues)
+          (chart as any)._crossHighlightRunId = id;
+
+          if (id !== null) {
+            // Clear local focus on target charts so cross-chart highlight takes priority
+            // in the stroke function's 3-tier priority system
+            (chart as any)._lastFocusedSeriesIdx = null;
+          } else {
+            // Highlight clearing — remove instance override so stroke function
+            // falls back to the component ref for future local focus detection
+            delete (chart as any)._lastFocusedSeriesIdx;
+          }
+
           if (id === null) {
             // Fall back to table highlight if active, otherwise reset to default
             const tableId = tableHighlightedSeriesRef.current;
@@ -326,7 +342,8 @@ export function ChartSyncProvider({
             // Match by _seriesId prefix — handles both "runId" and "runId:metric" formats
             applySeriesHighlight(chart, id, '_seriesId', lw);
           }
-          chart.redraw(false);
+          // Full redraw so stroke functions re-evaluate with new _crossHighlightRunId
+          chart.redraw();
         });
       });
     },

@@ -340,6 +340,7 @@ export const columns = ({
           <div className="flex w-full items-center gap-2 overflow-hidden">
             <ColorPicker
               color={color}
+              defaultColor="#6B7280"
               onChange={(newColor) => onColorChange(runId, newColor)}
               className="h-5 w-5 flex-shrink-0"
             />

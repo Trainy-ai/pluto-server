@@ -30,9 +30,10 @@ export function buildSeriesConfig(
   xlabel: string | undefined,
   chartLineWidth: number,
   refs: SeriesConfigRefs,
-  options?: { spanGaps?: boolean },
+  options?: { spanGaps?: boolean; theme?: "light" | "dark" },
 ): uPlot.Series[] {
   const spanGaps = options?.spanGaps ?? true;
+  const isDark = options?.theme === "dark";
 
   // Build a mapping from smoothed series to their "(original)" companion
   // so the legend can show combined values like the tooltip: "value (rawValue)"
@@ -73,8 +74,12 @@ export function buildSeriesConfig(
         // Use a function for stroke that checks both local and cross-chart focus
         // and applies per-series opacity (used by smoothing to dim raw data)
         stroke: (u: uPlot, seriesIdx: number) => {
-          const localFocusIdx = refs.lastFocusedSeriesRef.current;
-          const crossChartRunId = refs.crossChartRunIdRef.current;
+          // Read from refs (updated by React effects) with fallback to chart instance
+          // (updated synchronously by the imperative cross-chart path in chart-sync-context)
+          const localFocusIdx = (u as any)._lastFocusedSeriesIdx !== undefined
+            ? (u as any)._lastFocusedSeriesIdx
+            : refs.lastFocusedSeriesRef.current;
+          const crossChartRunId = refs.crossChartRunIdRef.current ?? (u as any)._crossHighlightRunId ?? null;
           const tableId = refs.tableHighlightRef.current;
           const thisSeriesLabel = u.series[seriesIdx]?.label;
           const thisSeriesId = (u.series[seriesIdx] as any)?._seriesId;
@@ -122,8 +127,9 @@ export function buildSeriesConfig(
           if (isRawOfHighlighted) {
             return applyAlpha(baseColor, Math.min(lineOpacity * 2.5, 0.35));
           }
-          // Dim unfocused series: combine line opacity with focus dimming
-          return applyAlpha(baseColor, lineOpacity * 0.25);
+          // Dim unfocused series so the highlighted curve pops clearly.
+          const dimAlpha = isDark ? 0.25 : 0.2;
+          return applyAlpha(baseColor, lineOpacity * dimAlpha);
         },
         // Differentiate line widths:
         // - Dashed series: slightly thicker for dash visibility

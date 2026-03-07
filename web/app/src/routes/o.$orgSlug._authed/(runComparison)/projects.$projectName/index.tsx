@@ -756,6 +756,7 @@ function RouteComponent() {
     selectAllByIds,
     deselectAll,
     shuffleColors,
+    reassignAllColors,
   } = useSelectedRuns(runs, organizationId, projectName, {
     urlRunIds,
     onSelectionChange: debouncedSelectionChange,
@@ -856,6 +857,7 @@ function RouteComponent() {
                 onSelectAllByIds={selectAllByIds}
                 onDeselectAll={deselectAll}
                 onShuffleColors={shuffleColors}
+                onReassignAllColors={reassignAllColors}
                 customColumns={customColumns}
                 availableConfigKeys={[
                   ...(columnKeysData?.configKeys?.map((k) => k.key) ?? []),

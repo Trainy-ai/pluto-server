@@ -87,11 +87,15 @@ export function buildFocusDetectionHook(deps: FocusDetectionDeps): (u: uPlot) =>
     if (closestSeriesIdx != null && closestDistance < Infinity) {
       // Update focus ref - stroke functions will read this during redraw
       deps.lastFocusedSeriesRef.current = closestSeriesIdx;
+      // Also update chart instance so the stroke function can read synchronously
+      (u as any)._lastFocusedSeriesIdx = closestSeriesIdx;
+      // Clear cross-chart highlight on the source chart (we're locally focused)
+      (u as any)._crossHighlightRunId = null;
 
       // Apply width emphasis on this chart (matches cross-chart applySeriesHighlight)
       const lw = deps.chartLineWidthRef.current;
-      const highlightedWidth = Math.max(2.5, lw * 2);
-      const dimmedWidth = Math.max(0.7, lw * 0.47);
+      const highlightedWidth = Math.max(1, lw * 1.25);
+      const dimmedWidth = Math.max(0.4, lw * 0.85);
       for (let si = 1; si < u.series.length; si++) {
         u.series[si].width = si === closestSeriesIdx ? highlightedWidth : dimmedWidth;
       }
