@@ -1,0 +1,32 @@
+{
+  "timestamp": "2026-03-07T00:09:54.637Z",
+  "commit": "local",
+  "metrics": [
+    {
+      "name": "table_load_ms",
+      "value": 4378.5966339999995,
+      "unit": "ms",
+      "threshold": 10000,
+      "passed": true
+    },
+    {
+      "name": "rapid_pagination_total_ms",
+      "value": 1740.243410000001,
+      "unit": "ms",
+      "threshold": 15000,
+      "passed": true
+    },
+    {
+      "name": "rapid_pagination_avg_ms",
+      "value": 580.081136666667,
+      "unit": "ms",
+      "threshold": 5000,
+      "passed": true
+    }
+  ],
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0
+  }
+}

@@ -291,6 +291,206 @@ export async function queryRunMetricsByLogName(
  * This reduces N individual queries (one per run) to 1 query, which is critical
  * for comparison pages with 50-100 runs × multiple charts.
  */
+/** Data point returned by bucketed graph queries */
+export interface BucketedMetricDataPoint {
+  step: number;       // min(step) in bucket — representative x
+  time: string;       // time at first step in bucket
+  value: number;      // avg(value) — the line
+  minY: number;       // min(value) — envelope bottom
+  maxY: number;       // max(value) — envelope top
+  count: number;      // points in bucket
+}
+
+const DEFAULT_BUCKETS = 1000;
+const PREVIEW_BUCKETS = 200;
+
+/**
+ * Sanitize bucketed metric rows: null values (from ClickHouse JSON serialization
+ * of NaN/Inf/-Inf) become 0 for value/minY/maxY.
+ */
+function sanitizeBucketedRows<T extends BucketedMetricDataPoint>(rows: T[]): T[] {
+  for (const row of rows) {
+    row.value = row.value ?? 0;
+    row.minY = row.minY ?? 0;
+    row.maxY = row.maxY ?? 0;
+  }
+  return rows;
+}
+
+/**
+ * Query metrics for a single logName using server-side bucketed downsampling.
+ * Returns N buckets with avg/min/max per bucket — enables envelope rendering
+ * without client-side LTTB. ~10x less data transfer than raw point queries.
+ *
+ * When stepMin/stepMax are provided, buckets only the specified range.
+ */
+export async function queryRunMetricsBucketedByLogName(
+  ch: typeof clickhouse,
+  params: {
+    organizationId: string;
+    projectName: string;
+    runId: number;
+    logName: string;
+    buckets?: number;      // default: 1000 (standard), 200 (preview)
+    stepMin?: number;
+    stepMax?: number;
+    preview?: boolean;
+  }
+): Promise<BucketedMetricDataPoint[]> {
+  const { organizationId, projectName, runId, logName, stepMin, stepMax, preview } = params;
+  const logGroup = getLogGroupName(logName);
+  const numBuckets = params.buckets ?? (preview ? PREVIEW_BUCKETS : DEFAULT_BUCKETS);
+
+  const queryParams: Record<string, unknown> = {
+    tenantId: organizationId,
+    projectName,
+    runId,
+    logName,
+    logGroup,
+    numBuckets,
+  };
+
+  let whereClause = `
+    tenantId = {tenantId: String}
+    AND projectName = {projectName: String}
+    AND runId = {runId: UInt64}
+    AND logName = {logName: String}
+    AND logGroup = {logGroup: String}
+  `;
+
+  // Step range filters are built separately for CTE vs main query to avoid
+  // ambiguity with the `step` SELECT alias (which is an aggregate).
+  // In the bounds CTE there's no alias conflict; in the main query we use m.step.
+  let boundsStepRange = "";
+  let mainStepRange = "";
+  if (stepMin !== undefined && stepMax !== undefined) {
+    boundsStepRange = ` AND step >= {stepMin: UInt64} AND step <= {stepMax: UInt64}`;
+    mainStepRange = ` AND m.step >= {stepMin: UInt64} AND m.step <= {stepMax: UInt64}`;
+    queryParams.stepMin = stepMin;
+    queryParams.stepMax = stepMax;
+  }
+
+  const query = `
+    WITH
+      bounds AS (
+        SELECT min(step) AS minStep, max(step) AS maxStep
+        FROM mlop_metrics
+        WHERE ${whereClause}${boundsStepRange}
+      )
+    SELECT
+      intDiv(m.step - b.minStep, greatest(toUInt64(1), intDiv(b.maxStep - b.minStep + 1, toUInt64({numBuckets: UInt32})))) AS bucket,
+      min(m.step) AS step,
+      argMin(m.time, m.step) AS time,
+      avg(m.value) AS value,
+      min(m.value) AS minY,
+      max(m.value) AS maxY,
+      toUInt64(count()) AS count
+    FROM mlop_metrics m
+    CROSS JOIN bounds b
+    WHERE ${whereClause}${mainStepRange}
+    GROUP BY bucket
+    ORDER BY bucket ASC
+  `;
+
+  const result = await ch.query(query, queryParams);
+  return sanitizeBucketedRows((await result.json()) as BucketedMetricDataPoint[]);
+}
+
+/**
+ * Batch query bucketed metrics for multiple runs by logName in a SINGLE ClickHouse query.
+ * Returns a map of runId → bucketed data points.
+ */
+export async function queryRunMetricsBatchBucketedByLogName(
+  ch: typeof clickhouse,
+  params: {
+    organizationId: string;
+    projectName: string;
+    runIds: number[];
+    logName: string;
+    buckets?: number;
+    stepMin?: number;
+    stepMax?: number;
+    preview?: boolean;
+  }
+): Promise<Record<number, BucketedMetricDataPoint[]>> {
+  const { organizationId, projectName, runIds, logName, stepMin, stepMax, preview } = params;
+
+  if (runIds.length === 0) return {};
+
+  const logGroup = getLogGroupName(logName);
+  const numBuckets = params.buckets ?? (preview ? PREVIEW_BUCKETS : DEFAULT_BUCKETS);
+
+  const queryParams: Record<string, unknown> = {
+    tenantId: organizationId,
+    projectName,
+    runIds,
+    logName,
+    logGroup,
+    numBuckets,
+  };
+
+  let whereClause = `
+    tenantId = {tenantId: String}
+    AND projectName = {projectName: String}
+    AND runId IN ({runIds: Array(UInt64)})
+    AND logName = {logName: String}
+    AND logGroup = {logGroup: String}
+  `;
+
+  // Step range filters are built separately for CTE vs main query to avoid
+  // ambiguity with the `step` SELECT alias (which is an aggregate).
+  let boundsStepRange = "";
+  let mainStepRange = "";
+  if (stepMin !== undefined && stepMax !== undefined) {
+    boundsStepRange = ` AND step >= {stepMin: UInt64} AND step <= {stepMax: UInt64}`;
+    mainStepRange = ` AND m.step >= {stepMin: UInt64} AND m.step <= {stepMax: UInt64}`;
+    queryParams.stepMin = stepMin;
+    queryParams.stepMax = stepMax;
+  }
+
+  const query = `
+    WITH
+      bounds AS (
+        SELECT min(step) AS minStep, max(step) AS maxStep
+        FROM mlop_metrics
+        WHERE ${whereClause}${boundsStepRange}
+      ),
+      params AS (
+        SELECT minStep,
+          greatest(toUInt64(1), intDiv(maxStep - minStep + 1, toUInt64({numBuckets: UInt32}))) AS bucketWidth
+        FROM bounds
+      )
+    SELECT
+      m.runId AS runId,
+      intDiv(m.step - p.minStep, p.bucketWidth) AS bucket,
+      any(toUInt64(p.minStep + intDiv(m.step - p.minStep, p.bucketWidth) * p.bucketWidth)) AS step,
+      argMin(m.time, m.step) AS time,
+      avg(m.value) AS value,
+      min(m.value) AS minY,
+      max(m.value) AS maxY,
+      toUInt64(count()) AS count
+    FROM mlop_metrics m
+    CROSS JOIN params p
+    WHERE ${whereClause}${mainStepRange}
+    GROUP BY m.runId, bucket
+    ORDER BY m.runId, bucket ASC
+  `;
+
+  const result = await ch.query(query, queryParams);
+  const rows = sanitizeBucketedRows(
+    (await result.json()) as (BucketedMetricDataPoint & { runId: number })[]
+  );
+
+  // Group flat result set by runId
+  const grouped: Record<number, BucketedMetricDataPoint[]> = {};
+  for (const row of rows) {
+    const arr = grouped[row.runId] ?? (grouped[row.runId] = []);
+    arr.push({ step: row.step, time: row.time, value: row.value, minY: row.minY, maxY: row.maxY, count: row.count });
+  }
+
+  return grouped;
+}
+
 export async function queryRunMetricsBatchByLogName(
   ch: typeof clickhouse,
   params: {

@@ -858,8 +858,9 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             (l) => l.label === pair.parentLabel && !l.envelopeOf,
           );
           const isDashedParent = !!parentLine?.dash;
-          const baseAlpha = isDashedParent ? 0.22 : 0.12;
-          const bandColor = pair.color || "#888";
+          const baseAlpha = isDashedParent ? 0.22 : 0.15;
+          // Use the parent line's color for the band fill so it matches the curve
+          const bandColor = parentLine?.color || pair.color || "#888";
           // Get the run ID from the envelope's seriesId (for emphasis matching)
           const envSeriesId = processedLines[pair.minIdx - 1]?.seriesId;
           const envRunId = envSeriesId ? envSeriesId.split(':')[0] : null;

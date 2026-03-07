@@ -292,6 +292,90 @@ export function applySmoothing(
   return data;
 }
 
+/** Bucketed data point from server-side downsampling (graphBucketed endpoint) */
+export interface BucketedChartDataPoint {
+  step: number;
+  time: string;
+  value: number;   // avg(value) — the line
+  minY: number;    // min(value) — envelope bottom
+  maxY: number;    // max(value) — envelope top
+  count: number;   // points in bucket
+}
+
+/**
+ * Convert server-side bucketed data into 3 chart series (main + min/max envelopes).
+ * This replaces applyDownsampling() for bucketed data paths — no client-side
+ * LTTB needed since the server already aggregated.
+ *
+ * @param getX - Optional custom x-value mapper. Defaults to step. Use for time-based axes.
+ */
+export function applyServerBuckets(
+  bucketedData: BucketedChartDataPoint[],
+  label: string,
+  color: string,
+  seriesId?: string,
+  dash?: number[],
+  getX: (d: BucketedChartDataPoint) => number = (d) => Number(d.step),
+): ChartSeriesData[] {
+  const x = bucketedData.map(getX);
+  const y = bucketedData.map((d) => Number(d.value));
+  const yMin = bucketedData.map((d) => Number(d.minY));
+  const yMax = bucketedData.map((d) => Number(d.maxY));
+
+  const main: ChartSeriesData = {
+    x,
+    y,
+    label,
+    color,
+    seriesId,
+    dash,
+  };
+
+  return [
+    main,
+    {
+      x,
+      y: yMin,
+      label: `${label}_env_min`,
+      seriesId: seriesId ? `${seriesId}_env_min` : undefined,
+      color,
+      hideFromLegend: true,
+      envelopeOf: label,
+      envelopeBound: "min" as const,
+    },
+    {
+      x,
+      y: yMax,
+      label: `${label}_env_max`,
+      seriesId: seriesId ? `${seriesId}_env_max` : undefined,
+      color,
+      hideFromLegend: true,
+      envelopeOf: label,
+      envelopeBound: "max" as const,
+    },
+  ];
+}
+
+/**
+ * Apply smoothing then produce envelope series from server-bucketed data.
+ * Combines applyServerBuckets + applySmoothing in one step.
+ *
+ * @param getX - Optional custom x-value mapper. Defaults to step.
+ */
+export function bucketedAndSmooth(
+  bucketedData: BucketedChartDataPoint[],
+  label: string,
+  color: string,
+  smoothingSettings: SmoothingSettings,
+  isMultiMetric: boolean = false,
+  seriesId?: string,
+  dash?: number[],
+  getX?: (d: BucketedChartDataPoint) => number,
+): ChartSeriesData[] {
+  const series = applyServerBuckets(bucketedData, label, color, seriesId, dash, getX);
+  return series.flatMap((s) => applySmoothing(s, smoothingSettings, isMultiMetric));
+}
+
 /**
  * Apply downsampling then smoothing to chart data.
  * Handles the fact that downsampling produces envelope companion series.

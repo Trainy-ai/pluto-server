@@ -1,0 +1,16 @@
+{
+  "timestamp": "2026-03-07T00:13:54.260Z",
+  "commit": "local",
+  "metrics": [
+    {
+      "name": "get_logs_payload_kb",
+      "value": 30.552734375,
+      "unit": "KB"
+    }
+  ],
+  "summary": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0
+  }
+}
