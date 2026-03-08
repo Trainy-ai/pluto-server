@@ -1,15 +1,7 @@
 "use client";
 
 import React from "react";
-import {
-  type ColumnDef,
-  flexRender,
-  getCoreRowModel,
-  useReactTable,
-  getPaginationRowModel,
-  type PaginationState,
-  type SortingState,
-} from "@tanstack/react-table";
+import { flexRender, type SortingState } from "@tanstack/react-table";
 
 import {
   Table,
@@ -19,187 +11,21 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
-import { Button } from "@/components/ui/button";
-import { ChevronLeft, ChevronRight, Columns, GripVertical, PanelLeft, PanelRight, Search } from "lucide-react";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-} from "@/components/ui/select";
-import { Input } from "@/components/ui/input";
+import { useRef, useMemo, useCallback, useEffect } from "react";
+import { GripVertical } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { columns } from "./columns";
 import type { Run } from "../../~queries/list-runs";
 import type { ColumnConfig, BaseColumnOverrides } from "../../~hooks/use-column-config";
-import { VisibilityOptions } from "./visibility-options";
-import { ColumnPicker } from "./column-picker";
-import { FilterButton } from "./filter-button";
 import type { RunFilter, FilterableField } from "@/lib/run-filters";
-import type { Row, Header } from "@tanstack/react-table";
-import { computeRowSelection, filterToSelected } from "./selection-utils";
-
-const MIN_COL_WIDTH = 50;
-
-// Base columns always pinned to the left (select, status, name)
-const BASE_PINNED_IDS = ["select", "status", "name"] as const;
-
-// Hook for drag-and-drop column reordering (native HTML drag events)
-function useColumnDrag(
-  customColumns: ColumnConfig[],
-  onReorder?: (fromIndex: number, toIndex: number) => void,
-) {
-  const [draggedId, setDraggedId] = useState<string | null>(null);
-  const [dragOverId, setDragOverId] = useState<string | null>(null);
-
-  const getCustomIndex = useCallback(
-    (columnId: string) => {
-      // Column IDs are like "custom-config-lr", "custom-system-createdAt",
-      // or "custom-metric-train/loss-LAST" (with aggregation suffix)
-      const stripped = columnId.replace(/^custom-/, "");
-      return customColumns.findIndex(
-        (col) => {
-          const key = col.source === "metric" && col.aggregation
-            ? `${col.source}-${col.id}-${col.aggregation}`
-            : `${col.source}-${col.id}`;
-          return key === stripped;
-        },
-      );
-    },
-    [customColumns],
-  );
-
-  const handleDragStart = useCallback(
-    (columnId: string, e: React.DragEvent) => {
-      setDraggedId(columnId);
-      e.dataTransfer.effectAllowed = "move";
-      e.dataTransfer.setData("text/plain", columnId);
-      // Make the drag image semi-transparent
-      if (e.currentTarget instanceof HTMLElement) {
-        e.currentTarget.style.opacity = "0.5";
-      }
-    },
-    [],
-  );
-
-  const handleDragOver = useCallback(
-    (columnId: string, e: React.DragEvent) => {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = "move";
-      setDragOverId(columnId);
-    },
-    [],
-  );
-
-  const handleDrop = useCallback(
-    (columnId: string, e: React.DragEvent) => {
-      e.preventDefault();
-      const fromId = e.dataTransfer.getData("text/plain");
-      if (fromId && fromId !== columnId && onReorder) {
-        const fromIndex = getCustomIndex(fromId);
-        const toIndex = getCustomIndex(columnId);
-        if (fromIndex !== -1 && toIndex !== -1) {
-          onReorder(fromIndex, toIndex);
-        }
-      }
-      setDraggedId(null);
-      setDragOverId(null);
-    },
-    [onReorder, getCustomIndex],
-  );
-
-  const handleDragEnd = useCallback((e: React.DragEvent) => {
-    if (e.currentTarget instanceof HTMLElement) {
-      e.currentTarget.style.opacity = "";
-    }
-    setDraggedId(null);
-    setDragOverId(null);
-  }, []);
-
-  return { draggedId, dragOverId, handleDragStart, handleDragOver, handleDrop, handleDragEnd };
-}
-
-// Custom column resize hook — uses refs + direct DOM manipulation during drag
-// to avoid React re-renders entirely. This prevents the "Maximum update depth
-// exceeded" error caused by TanStack Table's internal state machine reacting
-// to state changes during resize. Only triggers one React re-render on mouseup.
-function useColumnResize() {
-  const columnWidthsRef = useRef<Record<string, number>>({});
-  const [resizeGeneration, setRenderTrigger] = useState(0);
-
-  // Stable getter — always reads latest from ref, never causes re-renders
-  const getWidth = useCallback(
-    (columnId: string, defaultWidth: number) =>
-      columnWidthsRef.current[columnId] ?? defaultWidth,
-    [],
-  );
-
-  const handleMouseDown = useCallback(
-    (columnId: string, currentWidth: number, e: React.MouseEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const startX = e.clientX;
-      const startWidth = currentWidth;
-      const handle = e.target as HTMLElement;
-
-      // Visual feedback via DOM (no state)
-      handle.classList.add("bg-primary", "shadow-sm");
-
-      // Find ALL table elements in the outer border container — covers both
-      // pinned and unpinned tables so column resize stays in sync.
-      const outerBorder = handle.closest(".rounded-md.border");
-      const tableEls = outerBorder
-        ? Array.from(outerBorder.querySelectorAll("table"))
-        : [];
-
-      const handleMouseMove = (moveEvent: MouseEvent) => {
-        const diff = moveEvent.clientX - startX;
-        const newWidth = Math.max(MIN_COL_WIDTH, startWidth + diff);
-        columnWidthsRef.current[columnId] = newWidth;
-
-        // Direct DOM updates on ALL tables — no React re-renders during drag
-        for (const tableEl of tableEls) {
-          const colEl = tableEl.querySelector(
-            `col[data-col-id="${CSS.escape(columnId)}"]`,
-          );
-          if (colEl) {
-            (colEl as HTMLElement).style.width = `${newWidth}px`;
-          }
-
-          // Recalculate total table width from all <col> elements
-          const allCols = tableEl.querySelectorAll("col");
-          let total = 0;
-          allCols.forEach((col) => {
-            const w = (col as HTMLElement).style.width;
-            total += w ? parseInt(w, 10) || 150 : 150;
-          });
-          tableEl.style.width = `${total}px`;
-        }
-      };
-
-      const handleMouseUp = () => {
-        handle.classList.remove("bg-primary", "shadow-sm");
-        document.body.style.cursor = "";
-        document.body.style.userSelect = "";
-        document.removeEventListener("mousemove", handleMouseMove);
-        document.removeEventListener("mouseup", handleMouseUp);
-        // Single React re-render to sync state with DOM
-        setRenderTrigger((n) => n + 1);
-      };
-
-      document.body.style.cursor = "col-resize";
-      document.body.style.userSelect = "none";
-      document.addEventListener("mousemove", handleMouseMove);
-      document.addEventListener("mouseup", handleMouseUp);
-    },
-    [],
-  );
-
-  return { getWidth, handleMouseDown, resizeGeneration };
-}
+import type { Header } from "@tanstack/react-table";
+import { computePinnedColumnIds } from "./lib/pinned-columns";
+import { MIN_COL_WIDTH } from "./hooks/use-column-resize";
+import { useDataTableState } from "./hooks/use-data-table-state";
+import { TableToolbar } from "./components/table-toolbar";
+import { TablePagination } from "./components/table-pagination";
+import { RunRow } from "./components/run-row";
 
 type ViewMode = "charts" | "side-by-side";
 
@@ -233,17 +59,14 @@ interface DataTableProps {
   onSearchChange: (query: string) => void;
   viewMode: ViewMode;
   onViewModeChange: (mode: ViewMode) => void;
-  // Panel layout toggle
   panelLayout?: "both" | "list-only" | "graphs-only";
   onToggleListPanel?: () => void;
   onToggleGraphsPanel?: () => void;
-  // Visibility options
   onSelectFirstN: (n: number) => void;
   onSelectAllByIds: (runIds: string[]) => void;
   onDeselectAll: () => void;
   onShuffleColors: () => void;
   onReassignAllColors: () => void;
-  // Custom columns
   customColumns?: ColumnConfig[];
   availableConfigKeys?: string[];
   availableSystemMetadataKeys?: string[];
@@ -253,7 +76,6 @@ interface DataTableProps {
   columnKeysLoading?: boolean;
   onColumnSearch?: (search: string) => void;
   isSearchingColumns?: boolean;
-  // Column header dropdown callbacks
   onColumnRename?: (colId: string, source: string, newName: string, aggregation?: string) => void;
   onColumnSetColor?: (colId: string, source: string, color: string | undefined, aggregation?: string) => void;
   onColumnRemove?: (colId: string, source: string, aggregation?: string) => void;
@@ -261,17 +83,12 @@ interface DataTableProps {
   onNameRename?: (newName: string) => void;
   onNameSetColor?: (color: string | undefined) => void;
   onReorderColumns?: (fromIndex: number, toIndex: number) => void;
-  // Server-side sorting
   sorting: SortingState;
   onSortingChange: (sorting: SortingState) => void;
-  // Page size
   pageSize: number;
   onPageSizeChange: (pageSize: number) => void;
-  // View selector slot
   viewSelector?: React.ReactNode;
-  /** Active chart view ID — passed as search param when navigating to a run */
   activeChartViewId?: string | null;
-  /** Callback to toggle pin on a custom column */
   onToggleColumnPin?: (colId: string, source: string, aggregation?: string) => void;
 }
 
@@ -337,130 +154,25 @@ export function DataTable({
   activeChartViewId,
   onToggleColumnPin,
 }: DataTableProps) {
-  // Internal pagination state (pageIndex only — pageSize is controlled by parent)
-  const [pageIndex, setPageIndex] = useState(0);
-
-  // Custom column resize — uses refs + direct DOM manipulation during drag
-  const { getWidth, handleMouseDown, resizeGeneration } = useColumnResize();
-
-  // Drag-and-drop column reordering (custom columns only)
-  const { draggedId, dragOverId, handleDragStart, handleDragOver, handleDrop, handleDragEnd } =
-    useColumnDrag(customColumns, onReorderColumns);
-
-  // Track which run row is hovered — uses a ref + direct DOM mutation
-  // instead of state to avoid re-rendering the entire table (which would
-  // remount cell components and reset their local state, e.g. open popovers).
-  const hoveredRunIdRef = useRef<string | null>(null);
   const tableBodyRef = useRef<HTMLTableSectionElement>(null);
-
-  // Visibility options state
-  const [showOnlySelected, setShowOnlySelected] = useState(false);
-  const [pinSelectedToTop, setPinSelectedToTop] = useState(false);
-
-  // When pinning is active, split into pinned (sticky, always-visible) and unpinned (paginated).
-  // Pinned runs come from selectedRunsWithColors so they persist across pages.
-  // Works with "Display only selected" too — pinned rows show at top, unpinned section is empty.
-  const isPinningActive = pinSelectedToTop && Object.keys(selectedRunsWithColors).length > 0;
-
-  const pinnedRuns = useMemo(() => {
-    if (!isPinningActive) return [] as Run[];
-    return Object.values(selectedRunsWithColors).map((v) => v.run);
-  }, [isPinningActive, selectedRunsWithColors]);
-
-  // The main table data: either filtered-to-selected minus pinned, unpinned only, or all runs
-  const displayedRuns = useMemo(() => {
-    if (isPinningActive) {
-      // When pinning is active, the unpinned section shows non-selected runs
-      // (or nothing when "Display only selected" is also on)
-      const pinnedIds = new Set(Object.keys(selectedRunsWithColors));
-      const base = showOnlySelected
-        ? filterToSelected(runs, selectedRunsWithColors)
-        : runs;
-      return base.filter((r) => !pinnedIds.has(r.id));
-    }
-    if (showOnlySelected) {
-      return filterToSelected(runs, selectedRunsWithColors);
-    }
-    return runs;
-  }, [runs, showOnlySelected, isPinningActive, selectedRunsWithColors]);
-
   const theadRef = useRef<HTMLTableSectionElement>(null);
+  const mainScrollRef = useRef<HTMLDivElement>(null);
 
-  // Keep track of previous data length to maintain pagination position
-  const prevDataLengthRef = useRef(runs.length);
-  const lastPageIndexRef = useRef(pageIndex);
-
-  // Ref for stable color lookup - avoids column recreation on color changes
+  // Ref-based stable getters to avoid column recreation on every color/tag change
   const runColorsRef = useRef(runColors);
-  useEffect(() => {
-    runColorsRef.current = runColors;
-  }, [runColors]);
+  useEffect(() => { runColorsRef.current = runColors; }, [runColors]);
+  const getRunColor = useCallback((runId: string) => runColorsRef.current[runId], []);
 
-  // Stable getter function for colors - doesn't change reference
-  const getRunColor = useCallback((runId: string) => {
-    return runColorsRef.current[runId];
-  }, []);
-
-  // Ref for stable tag lookup - avoids column recreation on tag changes
   const allTagsRef = useRef(allTags);
-  useEffect(() => {
-    allTagsRef.current = allTags;
-  }, [allTags]);
-
-  // Stable getter function for tags - doesn't change reference
+  useEffect(() => { allTagsRef.current = allTags; }, [allTags]);
   const getAllTags = useCallback(() => allTagsRef.current, []);
 
-  // Compute the set of all pinned column IDs (base + user-pinned custom columns)
-  const pinnedColumnIds = useMemo(() => {
-    const ids = new Set<string>(BASE_PINNED_IDS);
-    for (const col of customColumns) {
-      if (col.isPinned) {
-        const colTableId = col.source === "metric" && col.aggregation
-          ? `custom-${col.source}-${col.id}-${col.aggregation}`
-          : `custom-${col.source}-${col.id}`;
-        ids.add(colTableId);
-      }
-    }
-    return ids;
-  }, [customColumns]);
-
-  // Compute column ordering: pinned columns first (base order, then user-pinned),
-  // followed by unpinned columns in their config order
-  const columnOrder = useMemo(() => {
-    const basePinned = [...BASE_PINNED_IDS] as string[];
-    const customPinned: string[] = [];
-    const customUnpinned: string[] = [];
-    for (const col of customColumns) {
-      const colTableId = col.source === "metric" && col.aggregation
-        ? `custom-${col.source}-${col.id}-${col.aggregation}`
-        : `custom-${col.source}-${col.id}`;
-      if (col.isPinned) {
-        customPinned.push(colTableId);
-      } else {
-        customUnpinned.push(colTableId);
-      }
-    }
-    return [...basePinned, ...customPinned, ...customUnpinned];
-  }, [customColumns]);
-
-  // Calculate current row selection based on actual selectedRunsWithColors.
-  // IMPORTANT: Must use displayedRuns (not runs) — see selection-utils.ts for details.
-  const currentRowSelection = useMemo(
-    () => computeRowSelection(displayedRuns, selectedRunsWithColors),
-    [displayedRuns, selectedRunsWithColors],
+  const pinnedColumnIds = useMemo(
+    () => computePinnedColumnIds(customColumns),
+    [customColumns],
   );
 
-  // Row selection for pinned table (all rows are selected by definition)
-  const pinnedRowSelection = useMemo(
-    () => computeRowSelection(pinnedRuns, selectedRunsWithColors),
-    [pinnedRuns, selectedRunsWithColors],
-  );
-
-  // Memoize the columns configuration to prevent unnecessary recalculations
-  // Note: getRunColor is a stable callback that uses a ref internally,
-  // so column definitions don't recreate when colors change
-  // Note: Visibility-related props (runs, selectedRunsWithColors, etc.) are NOT included
-  // because VisibilityOptions is now rendered separately in the toolbar for better performance
+  // Build column definitions (depends on stable getters above)
   const memoizedColumns = useMemo(
     () =>
       columns({
@@ -487,161 +199,72 @@ export function DataTable({
         onToggleColumnPin,
       }),
     [
-      orgSlug,
-      projectName,
-      organizationId,
-      onColorChange,
-      onSelectionChange,
-      onTagsUpdate,
-      onNotesUpdate,
-      getRunColor,
-      getAllTags,
-      customColumns,
-      onColumnRename,
-      onColumnSetColor,
-      onColumnRemove,
-      nameOverrides,
-      onNameRename,
-      onNameSetColor,
-      sorting,
-      onSortingChange,
-      activeChartViewId,
-      pinnedColumnIds,
-      onToggleColumnPin,
+      orgSlug, projectName, organizationId,
+      onColorChange, onSelectionChange, onTagsUpdate, onNotesUpdate,
+      getRunColor, getAllTags, customColumns,
+      onColumnRename, onColumnSetColor, onColumnRemove,
+      nameOverrides, onNameRename, onNameSetColor,
+      sorting, onSortingChange, activeChartViewId,
+      pinnedColumnIds, onToggleColumnPin,
     ],
   );
 
-  // Get current page run IDs for "Select all on page" functionality
-  const pageRunIds = useMemo(() => {
-    const startIndex = pageIndex * pageSize;
-    const endIndex = startIndex + pageSize;
-    return displayedRuns.slice(startIndex, endIndex).map((run) => run.id);
-  }, [displayedRuns, pageIndex, pageSize]);
-
-  // Row selection is derived directly from currentRowSelection
-  // No separate state needed - this eliminates an extra render cycle on pagination
+  // Delegate all table state management to the hook
+  const {
+    pageIndex,
+    lastPageIndexRef,
+    getWidth,
+    handleMouseDown,
+    resizeGeneration,
+    draggedId,
+    dragOverId,
+    handleDragStart,
+    handleDragOver,
+    handleDrop,
+    handleDragEnd,
+    showOnlySelected,
+    setShowOnlySelected,
+    pinSelectedToTop,
+    setPinSelectedToTop,
+    isPinningActive,
+    pinnedRuns,
+    pageRunIds,
+    pinnedColumnMap,
+    tableWidth,
+    table,
+    pinnedTable,
+  } = useDataTableState({
+    runs,
+    selectedRunsWithColors,
+    customColumns,
+    onReorderColumns,
+    filters,
+    searchQuery,
+    sorting,
+    pageSize,
+    onPageSizeChange,
+    memoizedColumns,
+    pinnedColumnIds,
+  });
 
   // Handle fetching more data without resetting pagination
   const handleFetchNextPage = async () => {
     if (fetchNextPage && !isFetchingNextPage) {
-      // Store current page index before fetching
       lastPageIndexRef.current = pageIndex + 1;
-
-      // Fetch next page of data
       await fetchNextPage();
-
-      // We'll rely on the useEffect below to maintain the page position
     }
   };
 
-  // Maintain pagination position when new data is loaded
-  useEffect(() => {
-    if (runs.length > prevDataLengthRef.current) {
-      // New data was loaded, restore the page index we saved before fetching
-      if (lastPageIndexRef.current !== pageIndex) {
-        setPageIndex(lastPageIndexRef.current);
-      }
-
-      prevDataLengthRef.current = runs.length;
-    }
-  }, [runs.length, pageIndex]);
-
-  // Reset prevDataLengthRef when pageSize changes
-  useEffect(() => {
-    prevDataLengthRef.current = runs.length;
-  }, [pageSize, runs.length]);
-
-  // Reset to page 0 when filters or sorting change to avoid showing empty pages
-  useEffect(() => {
-    setPageIndex(0);
-    prevDataLengthRef.current = 0;
-    lastPageIndexRef.current = 0;
-  }, [filters, searchQuery, sorting]);
-
-  const table = useReactTable({
-    data: displayedRuns,
-    columns: memoizedColumns,
-    getCoreRowModel: getCoreRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
-    manualSorting: true, // sorting is done server-side
-    onPaginationChange: (updater) => {
-      const next = typeof updater === "function" ? updater({ pageIndex, pageSize }) : updater;
-      setPageIndex(next.pageIndex);
-      if (next.pageSize !== pageSize) {
-        onPageSizeChange(next.pageSize);
-      }
-    },
-    state: {
-      rowSelection: currentRowSelection,
-      pagination: { pageIndex, pageSize },
-      sorting,
-      columnOrder,
-    },
-    enableRowSelection: true,
-    // Prevent TanStack Table from auto-resetting pagination
-    autoResetPageIndex: false,
-    // IMPORTANT: Do NOT add onSortingChange here — it causes infinite re-render
-    // loops with the ref-based column resize. Sorting is managed manually via
-    // onSortingChange called from column header dropdown menus.
-  });
-
-  // Separate table instance for pinned (sticky) rows — always called, empty data when off
-  const pinnedTable = useReactTable({
-    data: pinnedRuns,
-    columns: memoizedColumns,
-    getCoreRowModel: getCoreRowModel(),
-    state: {
-      rowSelection: pinnedRowSelection,
-      columnOrder,
-    },
-    enableRowSelection: true,
-  });
-
-  // Compute dynamic pinned column map from the actual rendered header order + widths.
-  // This replaces the old static PINNED_COLUMNS constant.
-  const pinnedColumnMap = useMemo(() => {
-    const map: Record<string, { left: number; isLast: boolean }> = {};
-    const headers = table.getHeaderGroups()[0]?.headers ?? [];
-    let cumulativeLeft = 0;
-    const pinnedHeaders = headers.filter((h) => pinnedColumnIds.has(h.column.id));
-    pinnedHeaders.forEach((h, i) => {
-      const def = h.column.columnDef;
-      const isFixed = def.enableResizing === false;
-      const w = isFixed ? (def.size ?? 150) : getWidth(h.column.id, def.size ?? 150);
-      map[h.column.id] = { left: cumulativeLeft, isLast: i === pinnedHeaders.length - 1 };
-      cumulativeLeft += w;
-    });
-    return map;
-    // resizeGeneration ensures recalc after column resize (getWidth reads from a ref)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [table, pinnedColumnIds, getWidth, resizeGeneration]);
-
-  // Handle Enter key press for search and pagination
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
-      // If on the last page and there are more pages to load, fetch next page
       const isLastPage = pageIndex >= Math.ceil(runs.length / pageSize) - 1;
       if (isLastPage && hasNextPage) {
         handleFetchNextPage();
       } else if (!isLastPage) {
-        // Otherwise, just go to the next page of the currently loaded data
         table.nextPage();
       }
     }
   };
-
-  const mainScrollRef = useRef<HTMLDivElement>(null);
-
-  // Shared table width and colgroup for both pinned and main tables
-  const tableWidth = useMemo(() =>
-    table.getHeaderGroups()[0]?.headers.reduce((sum, h) => {
-      const def = h.column.columnDef;
-      const isFixed = def.enableResizing === false;
-      return sum + (isFixed ? (def.size ?? 150) : getWidth(h.column.id, def.size ?? 150));
-    }, 0) ?? 0,
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [table, getWidth, resizeGeneration],
-  );
 
   const renderColGroup = useCallback(() =>
     table.getHeaderGroups()[0]?.headers.map((header) => {
@@ -660,92 +283,6 @@ export function DataTable({
     [table, getWidth, resizeGeneration],
   );
 
-  // Shared row renderer for both pinned and unpinned table bodies.
-  // Uses the table-container div for hover highlights so it works across both tbodies.
-  const renderRunRow = (row: Row<Run>) => (
-    <TableRow
-      key={row.id}
-      className="group/row"
-      data-run-id={row.original.id}
-      data-run-name={row.original.name}
-      data-state={row.getIsSelected() ? "selected" : ""}
-      onMouseEnter={() => {
-        if (row.getIsSelected()) {
-          const prev = hoveredRunIdRef.current;
-          hoveredRunIdRef.current = row.original.id;
-          const container = tableBodyRef.current?.closest("[data-table-container]");
-          if (prev !== row.original.id && container) {
-            if (prev) {
-              container
-                .querySelector(`[data-run-id="${prev}"]`)
-                ?.removeAttribute("data-hover-highlight");
-            }
-            (
-              container.querySelector(
-                `[data-run-id="${row.original.id}"]`,
-              ) as HTMLElement | null
-            )?.setAttribute("data-hover-highlight", "true");
-          }
-          document.dispatchEvent(
-            new CustomEvent("run-table-hover", { detail: row.original.id }),
-          );
-        }
-      }}
-      onMouseLeave={() => {
-        const prev = hoveredRunIdRef.current;
-        hoveredRunIdRef.current = null;
-        const container = tableBodyRef.current?.closest("[data-table-container]");
-        if (prev && container) {
-          container
-            .querySelector(`[data-run-id="${prev}"]`)
-            ?.removeAttribute("data-hover-highlight");
-        }
-        document.dispatchEvent(
-          new CustomEvent("run-table-hover", { detail: null }),
-        );
-      }}
-    >
-      {row.getVisibleCells().map((cell) => {
-        const cellBgColor = (cell.column.columnDef.meta as any)?.backgroundColor;
-        const colPinned = pinnedColumnMap[cell.column.id];
-        return (
-          <TableCell
-            key={cell.id}
-            className={cn(
-              "px-2 py-2 text-sm",
-              colPinned && [
-                "sticky",
-                "before:absolute before:inset-0 before:-z-10 before:bg-background",
-                "group-hover/row:bg-muted/50",
-                "group-data-[state=selected]/row:bg-muted",
-              ],
-            )}
-            style={{
-              ...(cellBgColor
-                ? colPinned
-                  ? { background: `linear-gradient(${cellBgColor}10, ${cellBgColor}10), hsl(var(--background))` }
-                  : { backgroundColor: `${cellBgColor}10` }
-                : undefined),
-              ...(colPinned && {
-                left: colPinned.left,
-                zIndex: 1,
-                ...(colPinned.isLast && { boxShadow: '3px 0 6px -2px rgba(0,0,0,0.15)' }),
-              }),
-            }}
-          >
-            <div className="truncate">
-              {flexRender(
-                cell.column.columnDef.cell,
-                cell.getContext(),
-              )}
-            </div>
-          </TableCell>
-        );
-      })}
-    </TableRow>
-  );
-
-  // Shared header cell renderer for both pinned and standard layouts
   const renderHeaderCell = (header: Header<Run, unknown>) => {
     const def = header.column.columnDef;
     const isFixed = def.enableResizing === false;
@@ -805,201 +342,87 @@ export function DataTable({
     );
   };
 
-  // Only show skeleton on initial load (no data yet)
   if (isLoading && runs.length === 0) {
     return <LoadingSkeleton />;
   }
 
   return (
     <div className="relative flex h-full min-h-0 w-full min-w-[200px] flex-col overflow-hidden">
-      {/* Header section - shrink-0 prevents shrinking */}
-      <div className="mb-2 shrink-0 space-y-2">
-        <div className="mt-2 flex items-center justify-between gap-x-3">
-          <div className="min-w-0 truncate pl-1 text-sm text-muted-foreground">
-            <span className="font-medium">{Object.keys(selectedRunsWithColors).length}</span>
-            {" of "}
-            <span className="font-medium">{totalRunCount}</span>
-            {" runs selected"}
-            {runCount < totalRunCount && (
-              <>
-                {" "}
-                <span className="text-muted-foreground/50">·</span>
-                {" "}
-                <span className="text-muted-foreground/80">
-                  Filtered to {runCount} runs
-                </span>
-              </>
-            )}
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <div className="flex items-center gap-0.5">
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    className={cn(
-                      "h-9 w-9",
-                      panelLayout === "graphs-only" && "border-primary bg-accent"
-                    )}
-                    onClick={onToggleListPanel}
-                  >
-                    <PanelLeft className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  {panelLayout === "graphs-only" ? "Show runs list" : "Hide runs list"}{" "}
-                  <kbd className="ml-1 inline-flex h-5 min-w-5 items-center justify-center rounded border border-border bg-background px-1 font-mono text-[10px] font-medium text-muted-foreground">[</kbd>
-                </TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    className={cn(
-                      "h-9 w-9",
-                      panelLayout === "list-only" && "border-primary bg-accent"
-                    )}
-                    onClick={onToggleGraphsPanel}
-                  >
-                    <PanelRight className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  {panelLayout === "list-only" ? "Show graphs" : "Hide graphs"}{" "}
-                  <kbd className="ml-1 inline-flex h-5 min-w-5 items-center justify-center rounded border border-border bg-background px-1 font-mono text-[10px] font-medium text-muted-foreground">]</kbd>
-                </TooltipContent>
-              </Tooltip>
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              className={cn(
-                "h-9 gap-1",
-                viewMode === "side-by-side" && "border-primary"
-              )}
-              onClick={() => onViewModeChange(viewMode === "charts" ? "side-by-side" : "charts")}
-            >
-              <Columns className="h-4 w-4" />
-              <span className="hidden sm:inline">Side-by-side</span>
-            </Button>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="relative flex-1">
-            <Search className="absolute top-2.5 left-2 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Search by name or ID..."
-              value={searchQuery}
-              onChange={(e) => onSearchChange(e.target.value)}
-              onKeyDown={handleKeyDown}
-              className="pl-8"
-            />
-          </div>
-          <VisibilityOptions
-            selectedRunsWithColors={selectedRunsWithColors}
-            onSelectFirstN={onSelectFirstN}
-            onSelectAllOnPage={onSelectAllByIds}
-            onDeselectAll={onDeselectAll}
-            onShuffleColors={onShuffleColors}
-            onReassignAllColors={onReassignAllColors}
-            showOnlySelected={showOnlySelected}
-            onShowOnlySelectedChange={setShowOnlySelected}
-            pinSelectedToTop={pinSelectedToTop}
-            onPinSelectedToTopChange={setPinSelectedToTop}
-            pageRunIds={pageRunIds}
-            totalRunCount={runCount}
-          />
-        </div>
-        <div className="flex items-center justify-between gap-2">
-          <div className="shrink-0">
-            {viewSelector}
-          </div>
-          <div className="flex items-center gap-2">
-          <FilterButton
-            filters={filters}
-            filterableFields={filterableFields}
-            activeColumnIds={customColumns}
-            metricNames={availableMetricNames}
-            onAddFilter={onAddFilter}
-            onRemoveFilter={onRemoveFilter}
-            onClearFilters={onClearFilters}
-            onFieldSearch={onFieldSearch}
-            isSearching={isSearchingFields}
-          />
-          {onColumnToggle && onClearColumns && (
-            <ColumnPicker
-              columns={customColumns}
-              configKeys={availableConfigKeys}
-              systemMetadataKeys={availableSystemMetadataKeys}
-              metricNames={availableMetricNames}
-              onColumnToggle={onColumnToggle}
-              onClearColumns={onClearColumns}
-              isLoading={columnKeysLoading}
-              onColumnSearch={onColumnSearch}
-              isSearching={isSearchingColumns}
-            />
-          )}
-          </div>
-        </div>
-      </div>
+      <TableToolbar
+        selectedRunsWithColors={selectedRunsWithColors}
+        runCount={runCount}
+        totalRunCount={totalRunCount}
+        searchQuery={searchQuery}
+        onSearchChange={onSearchChange}
+        onKeyDown={handleKeyDown}
+        viewMode={viewMode}
+        onViewModeChange={onViewModeChange}
+        panelLayout={panelLayout}
+        onToggleListPanel={onToggleListPanel}
+        onToggleGraphsPanel={onToggleGraphsPanel}
+        onSelectFirstN={onSelectFirstN}
+        onSelectAllByIds={onSelectAllByIds}
+        onDeselectAll={onDeselectAll}
+        onShuffleColors={onShuffleColors}
+        onReassignAllColors={onReassignAllColors}
+        showOnlySelected={showOnlySelected}
+        onShowOnlySelectedChange={setShowOnlySelected}
+        pinSelectedToTop={pinSelectedToTop}
+        onPinSelectedToTopChange={setPinSelectedToTop}
+        pageRunIds={pageRunIds}
+        filters={filters}
+        filterableFields={filterableFields}
+        onAddFilter={onAddFilter}
+        onRemoveFilter={onRemoveFilter}
+        onClearFilters={onClearFilters}
+        onFieldSearch={onFieldSearch}
+        isSearchingFields={isSearchingFields}
+        customColumns={customColumns}
+        availableConfigKeys={availableConfigKeys}
+        availableSystemMetadataKeys={availableSystemMetadataKeys}
+        availableMetricNames={availableMetricNames}
+        onColumnToggle={onColumnToggle}
+        onClearColumns={onClearColumns}
+        columnKeysLoading={columnKeysLoading}
+        onColumnSearch={onColumnSearch}
+        isSearchingColumns={isSearchingColumns}
+        viewSelector={viewSelector}
+      />
 
-      {/* Table section - flex-1 takes remaining space, min-h-0 allows shrinking */}
       <div className="min-h-0 flex-1 flex flex-col overflow-hidden rounded-md border">
-        {/* Pinned rows — single scroll container with sticky pinned section */}
         {isPinningActive ? (
-          <div
-            ref={mainScrollRef}
-            className="min-h-0 flex-1 overflow-auto"
-            data-table-container
-          >
-            {/* Pinned section: header + pinned rows — sticks to top on vertical scroll */}
+          <div ref={mainScrollRef} className="min-h-0 flex-1 overflow-auto" data-table-container>
             <div className="sticky top-0 z-10 border-b-2 border-primary/30 bg-background">
               <Table
                 wrapperClassName="!overflow-x-visible"
-                style={{
-                  tableLayout: "fixed",
-                  borderCollapse: "separate",
-                  borderSpacing: 0,
-                  minWidth: "100%",
-                  width: tableWidth,
-                }}
+                style={{ tableLayout: "fixed", borderCollapse: "separate", borderSpacing: 0, minWidth: "100%", width: tableWidth }}
               >
                 <colgroup>{renderColGroup()}</colgroup>
                 <TableHeader ref={theadRef} className="bg-background">
-                  {table.getHeaderGroups().map((headerGroup) => (
-                    <TableRow key={headerGroup.id}>
-                      {headerGroup.headers.map((header) => renderHeaderCell(header))}
-                    </TableRow>
+                  {table.getHeaderGroups().map((hg) => (
+                    <TableRow key={hg.id}>{hg.headers.map((h) => renderHeaderCell(h))}</TableRow>
                   ))}
                 </TableHeader>
                 <TableBody>
-                  {pinnedTable.getRowModel().rows.map((row) => renderRunRow(row))}
+                  {pinnedTable.getRowModel().rows.map((row) => (
+                    <RunRow key={row.id} row={row} pinnedColumnMap={pinnedColumnMap} tableBodyRef={tableBodyRef} />
+                  ))}
                 </TableBody>
               </Table>
             </div>
-            {/* Unpinned rows */}
             <Table
               wrapperClassName="!overflow-x-visible"
-              style={{
-                tableLayout: "fixed",
-                borderCollapse: "separate",
-                borderSpacing: 0,
-                minWidth: "100%",
-                width: tableWidth,
-              }}
+              style={{ tableLayout: "fixed", borderCollapse: "separate", borderSpacing: 0, minWidth: "100%", width: tableWidth }}
             >
               <colgroup>{renderColGroup()}</colgroup>
               <TableBody ref={tableBodyRef}>
                 {table.getRowModel().rows.length ? (
-                  table.getRowModel().rows.map((row) => renderRunRow(row))
+                  table.getRowModel().rows.map((row) => (
+                    <RunRow key={row.id} row={row} pinnedColumnMap={pinnedColumnMap} tableBodyRef={tableBodyRef} />
+                  ))
                 ) : (
                   <TableRow>
-                    <TableCell
-                      colSpan={memoizedColumns.length}
-                      className="h-16 text-center text-sm text-muted-foreground"
-                    >
+                    <TableCell colSpan={memoizedColumns.length} className="h-16 text-center text-sm text-muted-foreground">
                       No unpinned runs on this page.
                     </TableCell>
                   </TableRow>
@@ -1008,38 +431,22 @@ export function DataTable({
             </Table>
           </div>
         ) : (
-          /* Standard layout: single scrollable table with sticky header */
-          <div
-            ref={mainScrollRef}
-            className="min-h-0 flex-1 overflow-auto"
-            data-table-container
-          >
-            <Table
-              style={{
-                tableLayout: "fixed",
-                borderCollapse: "separate",
-                borderSpacing: 0,
-                minWidth: "100%",
-                width: tableWidth,
-              }}
-            >
+          <div ref={mainScrollRef} className="min-h-0 flex-1 overflow-auto" data-table-container>
+            <Table style={{ tableLayout: "fixed", borderCollapse: "separate", borderSpacing: 0, minWidth: "100%", width: tableWidth }}>
               <colgroup>{renderColGroup()}</colgroup>
               <TableHeader ref={theadRef} className="sticky top-0 z-10 bg-background">
-                {table.getHeaderGroups().map((headerGroup) => (
-                  <TableRow key={headerGroup.id}>
-                    {headerGroup.headers.map((header) => renderHeaderCell(header))}
-                  </TableRow>
+                {table.getHeaderGroups().map((hg) => (
+                  <TableRow key={hg.id}>{hg.headers.map((h) => renderHeaderCell(h))}</TableRow>
                 ))}
               </TableHeader>
               <TableBody ref={tableBodyRef}>
                 {table.getRowModel().rows.length ? (
-                  table.getRowModel().rows.map((row) => renderRunRow(row))
+                  table.getRowModel().rows.map((row) => (
+                    <RunRow key={row.id} row={row} pinnedColumnMap={pinnedColumnMap} tableBodyRef={tableBodyRef} />
+                  ))
                 ) : (
                   <TableRow>
-                    <TableCell
-                      colSpan={memoizedColumns.length}
-                      className="h-16 text-center text-sm text-muted-foreground"
-                    >
+                    <TableCell colSpan={memoizedColumns.length} className="h-16 text-center text-sm text-muted-foreground">
                       No runs found.
                     </TableCell>
                   </TableRow>
@@ -1050,94 +457,36 @@ export function DataTable({
         )}
       </div>
 
-      {/* Paginator section - shrink-0 prevents shrinking, stays at bottom */}
-      <div className="flex shrink-0 items-center justify-between pt-2">
-        <div className="flex items-center gap-2">
-          <Select
-            value={`${table.getState().pagination.pageSize}`}
-            onValueChange={(value) => table.setPageSize(Number(value))}
-          >
-            <SelectTrigger className="">
-              <span className="text-xs">
-                {table.getState().pagination.pageSize}
-              </span>
-            </SelectTrigger>
-          <SelectContent side="top">
-            {[5, 10, 15, 20, 50, 100].map((pageSizeVal) => (
-              <SelectItem key={pageSizeVal} value={`${pageSizeVal}`}>
-                <span className="text-xs">{pageSizeVal} Rows</span>
-              </SelectItem>
-            ))}
-          </SelectContent>
-          </Select>
-        </div>
-
-        <div className="flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7"
-            onClick={() => table.previousPage()}
-            disabled={!table.getCanPreviousPage()}
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </Button>
-
-          <span className="w-28 text-center text-sm">
-            {(() => {
-              const effectiveCount = isPinningActive
-                ? runCount - pinnedRuns.length
-                : runCount;
-              const totalPages = Math.max(
-                1,
-                Math.ceil(effectiveCount / table.getState().pagination.pageSize),
-              );
-              return `${Math.min(table.getState().pagination.pageIndex + 1, totalPages)}/${totalPages}`;
-            })()}
-          </span>
-
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7"
-            onClick={() => {
-              // If on the last page and there are more pages to load, fetch next page
-              const isLastPage =
-                pageIndex >= Math.ceil(runs.length / pageSize) - 1;
-              if (isLastPage && hasNextPage) {
-                handleFetchNextPage();
-              } else {
-                table.nextPage();
-              }
-            }}
-            disabled={!table.getCanNextPage() && !hasNextPage}
-            loading={isFetchingNextPage}
-          >
-            <ChevronRight className="h-4 w-4" />
-          </Button>
-        </div>
-      </div>
+      <TablePagination
+        table={table}
+        runCount={runCount}
+        pinnedRunCount={pinnedRuns.length}
+        isPinningActive={isPinningActive}
+        pageIndex={pageIndex}
+        pageSize={pageSize}
+        runsLength={runs.length}
+        hasNextPage={hasNextPage}
+        isFetchingNextPage={isFetchingNextPage}
+        onFetchNextPage={handleFetchNextPage}
+      />
     </div>
   );
 }
 
-const LoadingSkeleton = () => {
-  return (
-    <div className="flex h-full w-full min-w-[200px] flex-col">
-      <div className="mb-2 space-y-2">
-        <div className="mt-2 flex items-center gap-1 pl-1">
-          <Skeleton className="h-5 w-24" />
-        </div>
-        <div className="relative">
-          <Skeleton className="h-9 w-full" />
-        </div>
+const LoadingSkeleton = () => (
+  <div className="flex h-full w-full min-w-[200px] flex-col">
+    <div className="mb-2 space-y-2">
+      <div className="mt-2 flex items-center gap-1 pl-1">
+        <Skeleton className="h-5 w-24" />
       </div>
-
-      <div className="flex-1 overflow-hidden rounded-md border">
-        <div className="h-full overflow-y-auto">
-          <Skeleton className="h-full w-full" />
-        </div>
+      <div className="relative">
+        <Skeleton className="h-9 w-full" />
       </div>
     </div>
-  );
-};
+    <div className="flex-1 overflow-hidden rounded-md border">
+      <div className="h-full overflow-y-auto">
+        <Skeleton className="h-full w-full" />
+      </div>
+    </div>
+  </div>
+);
