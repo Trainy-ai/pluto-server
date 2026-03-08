@@ -27,10 +27,13 @@
       "sharp"
     ],
     "overrides": {
-      "fast-xml-parser": "^5.3.4",
+      "fast-xml-parser": "^5.3.6",
       "diff": "^8.0.3",
       "seroval": "^1.4.1",
-      "seroval-plugins": "^1.4.1"
+      "seroval-plugins": "^1.4.1",
+      "axios": "^1.9.0",
+      "rollup": "^4.59.0",
+      "minimatch": "^9.0.7"
     }
   }
 }
