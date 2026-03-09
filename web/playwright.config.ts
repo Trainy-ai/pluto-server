@@ -42,7 +42,10 @@ export default defineConfig({
     screenshot: "only-on-failure",
 
     /* Capture video only when test fails and we retry */
-    video: "retain-on-failure",
+    video: {
+      mode: "retain-on-failure",
+      size: { width: 1920, height: 1080 },
+    },
 
     /* Maximum time each action such as `click()` can take */
     actionTimeout: 10000,
