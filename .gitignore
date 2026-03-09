@@ -59,3 +59,6 @@ tests/e2e/__pycache__/
 # Stably CLI (only docs/ are tracked)
 .stably/*
 !.stably/docs/
+
+# Auto-generated TanStack Router route tree
+web/app/src/routeTree.gen.ts

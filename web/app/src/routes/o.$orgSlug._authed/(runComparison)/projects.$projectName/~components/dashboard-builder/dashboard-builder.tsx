@@ -123,7 +123,7 @@ export function DashboardBuilder({
     organizationId,
     projectName,
     clearDraft,
-    expectedUpdatedAt: editStartUpdatedAtRef.current ?? undefined,
+    expectedUpdatedAtRef: editStartUpdatedAtRef,
     onSaveSuccess: resetEditState,
     onConflict: useCallback(() => setIsStale(true), []),
   });
@@ -148,10 +148,12 @@ export function DashboardBuilder({
     return () => observer.disconnect();
   }, []);
 
-  // Update config when view changes — preserve current collapse state, default new sections to open
-  // Skip overwriting when the user is editing and a stale state has been detected
+  // Update config when view changes — preserve current collapse state, default new sections to open.
+  // Skip entirely while editing: local changes must not be overwritten by a background refetch
+  // (e.g. window-focus refetch after another user saves). Staleness is detected separately via
+  // the polling effect above and the server-side CONFLICT check on save.
   useEffect(() => {
-    if (isEditing && isStale) return;
+    if (isEditing) return;
     setConfig((prev) => {
       const collapseState = new Map(prev.sections.map((s) => [s.id, s.collapsed]));
       return {
@@ -163,7 +165,7 @@ export function DashboardBuilder({
       };
     });
     setHasChanges(false);
-  }, [view.config, isEditing, isStale]);
+  }, [view.config, isEditing]);
 
   // Filter sections/widgets based on search state
   const filteredSections = useMemo(() => {

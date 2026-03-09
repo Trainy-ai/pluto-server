@@ -1,3 +1,4 @@
+import type React from "react";
 import { useCallback } from "react";
 import { toast } from "sonner";
 import { useUpdateDashboardView, type DashboardView } from "../../~queries/dashboard-views";
@@ -11,8 +12,8 @@ interface UseDashboardSaveOptions {
   projectName: string;
   clearDraft: () => void;
   onSaveSuccess: () => void;
-  /** When provided, enables optimistic concurrency control */
-  expectedUpdatedAt?: string;
+  /** Ref that holds the updatedAt timestamp captured when editing started */
+  expectedUpdatedAtRef: React.RefObject<string | null>;
   /** Called when the server returns a CONFLICT error (stale dashboard) */
   onConflict?: () => void;
 }
@@ -24,12 +25,14 @@ export function useDashboardSave({
   projectName,
   clearDraft,
   onSaveSuccess,
-  expectedUpdatedAt,
+  expectedUpdatedAtRef,
   onConflict,
 }: UseDashboardSaveOptions) {
   const updateMutation = useUpdateDashboardView(organizationId, projectName);
 
   const handleSave = useCallback(() => {
+    // Read the ref at call time so we always get the current value
+    const expectedUpdatedAt = expectedUpdatedAtRef.current ?? undefined;
     updateMutation.mutate(
       {
         organizationId,
@@ -55,7 +58,7 @@ export function useDashboardSave({
         },
       }
     );
-  }, [updateMutation, organizationId, view.id, config, clearDraft, onSaveSuccess, expectedUpdatedAt, onConflict]);
+  }, [updateMutation, organizationId, view.id, config, clearDraft, onSaveSuccess, expectedUpdatedAtRef, onConflict]);
 
   // Force save without concurrency check (override remote changes)
   const handleOverride = useCallback(() => {
