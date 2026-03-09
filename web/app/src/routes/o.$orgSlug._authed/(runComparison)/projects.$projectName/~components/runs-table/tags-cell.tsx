@@ -27,6 +27,8 @@ export function TagsCell({ tags, allTags, onTagsUpdate, organizationId }: TagsCe
   const onPointerLeave = useCallback(() => { leaveTimer.current = setTimeout(() => setIsHovered(false), 100); }, []);
   const visibleTags = tags.slice(0, 2);
   const hasOverflow = tags.length > 2;
+  const hasLongTag = visibleTags.some((tag) => tag.length > 15);
+  const showTooltip = hasOverflow || hasLongTag;
 
   return (
     <div className="flex items-center gap-1 overflow-hidden">
@@ -47,7 +49,7 @@ export function TagsCell({ tags, allTags, onTagsUpdate, organizationId }: TagsCe
             )}
           </div>
         </TooltipTrigger>
-        {hasOverflow && (
+        {showTooltip && (
           <TooltipContent
             side="top"
             className="max-w-64"

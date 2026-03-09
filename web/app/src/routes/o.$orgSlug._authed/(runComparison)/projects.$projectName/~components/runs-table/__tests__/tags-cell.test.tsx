@@ -62,13 +62,24 @@ describe("TagsCell", () => {
     expect(screen.queryByTestId("tooltip-content")).toBeNull();
   });
 
-  it("renders single tag without overflow", () => {
+  it("renders single short tag without tooltip", () => {
     render(<TagsCell {...defaultProps} tags={["only-tag"]} />);
 
     expect(screen.getAllByText("only-tag")).toHaveLength(1);
     expect(screen.queryByText(/^\+\d+$/)).toBeNull();
-    // No tooltip content (overflow tooltip not rendered)
+    // No tooltip content for short tags
     expect(screen.queryByTestId("tooltip-content")).toBeNull();
+  });
+
+  it("renders tooltip for a single long tag that would be truncated", () => {
+    const longTag = "test:resume_reattaches_to_existing_run";
+    render(<TagsCell {...defaultProps} tags={[longTag]} />);
+
+    expect(screen.getAllByText(longTag).length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText(/^\+\d+$/)).toBeNull();
+    // Tooltip content should be rendered for long truncated tags
+    const content = screen.getByTestId("tooltip-content");
+    expect(content.textContent).toContain(longTag);
   });
 
   it("renders empty state without overflow", () => {
