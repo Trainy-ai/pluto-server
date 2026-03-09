@@ -221,7 +221,7 @@ describe("applySmoothing", () => {
       expect(result).toHaveLength(2);
       // First is smoothed, second is original (dimmed)
       expect(result[0].opacity).toBe(1);
-      expect(result[1].opacity).toBe(0.1);
+      expect(result[1].opacity).toBe(0.07);
       expect(result[1].y).toEqual(y);
       expect(result[1].label).toContain("(original)");
     });

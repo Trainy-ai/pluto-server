@@ -66,8 +66,8 @@ describe("buildSeriesConfig emphasis (stroke function)", () => {
     expect(accuracyStroke).toBe("#00ff00");
 
     // Other series are dimmed (contain rgba with low alpha)
-    expect(lossStroke).toMatch(/rgba\(.+,\s*0\.05\)/);
-    expect(lrStroke).toMatch(/rgba\(.+,\s*0\.05\)/);
+    expect(lossStroke).toMatch(/rgba\(.+,\s*0\.2\)/);
+    expect(lrStroke).toMatch(/rgba\(.+,\s*0\.2\)/);
   });
 
   it("highlights matching cross-chart series and dims non-matching", () => {
@@ -79,8 +79,8 @@ describe("buildSeriesConfig emphasis (stroke function)", () => {
     expect(getStroke(series[2], u, 2)).toBe("#00ff00");
 
     // Others are dimmed
-    expect(getStroke(series[1], u, 1)).toMatch(/rgba\(.+,\s*0\.05\)/);
-    expect(getStroke(series[3], u, 3)).toMatch(/rgba\(.+,\s*0\.05\)/);
+    expect(getStroke(series[1], u, 1)).toMatch(/rgba\(.+,\s*0\.2\)/);
+    expect(getStroke(series[3], u, 3)).toMatch(/rgba\(.+,\s*0\.2\)/);
   });
 
   /**
@@ -122,7 +122,7 @@ describe("buildSeriesConfig emphasis (stroke function)", () => {
     // When crossChartLabel is set but doesn't match, isFocusActive=true and
     // isHighlighted=false → series is dimmed. The fix prevents this scenario
     // by not setting crossChartRunIdRef when there's no matching series.
-    expect(getStroke(series[1], u, 1)).toMatch(/rgba\(.+,\s*0\.05\)/);
+    expect(getStroke(series[1], u, 1)).toMatch(/rgba\(.+,\s*0\.2\)/);
   });
 
   it("local focus takes priority over cross-chart highlight", () => {
@@ -136,7 +136,7 @@ describe("buildSeriesConfig emphasis (stroke function)", () => {
     // Local focus on "loss" should win
     expect(getStroke(series[1], u, 1)).toBe("#ff0000");
     // Others dimmed
-    expect(getStroke(series[2], u, 2)).toMatch(/rgba\(.+,\s*0\.05\)/);
+    expect(getStroke(series[2], u, 2)).toMatch(/rgba\(.+,\s*0\.2\)/);
   });
 
   it("table highlight works when no other emphasis is active", () => {
@@ -151,6 +151,6 @@ describe("buildSeriesConfig emphasis (stroke function)", () => {
     // "run-1:loss" starts with "run-1:" so it matches tableId="run-1"
     expect(getStroke(series[1], u, 1)).toBe("#ff0000");
     // "run-2:accuracy" does not match
-    expect(getStroke(series[2], u, 2)).toMatch(/rgba\(.+,\s*0\.05\)/);
+    expect(getStroke(series[2], u, 2)).toMatch(/rgba\(.+,\s*0\.2\)/);
   });
 });

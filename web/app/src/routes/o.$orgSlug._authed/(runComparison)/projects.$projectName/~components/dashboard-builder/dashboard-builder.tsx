@@ -1,38 +1,35 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { toast } from "sonner";
-import { PlusIcon, SaveIcon, XIcon, AlertTriangleIcon, RotateCcwIcon, GridIcon, SlidersHorizontalIcon, ArchiveRestoreIcon, ChevronsUpDownIcon, ChevronsDownUpIcon, ClipboardPasteIcon } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { ChartFullscreenDialog } from "@/components/charts/chart-fullscreen-dialog";
 import { SectionContainer, AddSectionButton } from "./section-container";
 import { WidgetGrid } from "./widget-grid";
 import { WidgetRenderer } from "./widget-renderer";
 import { AddWidgetModal } from "./add-widget-modal";
 import { DynamicSectionGrid } from "./dynamic-section-grid";
+import { DashboardToolbar } from "./dashboard-toolbar";
+import {
+  CancelConfirmDialog,
+  DraftRestoreDialog,
+  NavGuardDialog,
+} from "./dashboard-dialogs";
 import { useDraftSave } from "./use-auto-save";
 import { useNavigationGuard } from "./use-navigation-guard";
 import { useHiddenPatternWidgets } from "./use-hidden-pattern-widgets";
+import { useDashboardSave } from "./use-dashboard-save";
+import type { DashboardView } from "../../~queries/dashboard-views";
 import {
-  useUpdateDashboardView,
-  type DashboardView,
-} from "../../~queries/dashboard-views";
-import {
-  generateId,
   type DashboardViewConfig,
   type Section,
   type Widget,
   type ChartWidgetConfig,
 } from "../../~types/dashboard-types";
+import * as configOps from "./use-dashboard-config";
 import type { GroupedMetrics } from "@/lib/grouping/types";
 import type { SelectedRunWithColor } from "../../~hooks/use-selected-runs";
 import { searchUtils, type SearchState } from "../../~lib/search-utils";
+
+/** Total horizontal padding of section containers (px-6 each side = 24px * 2). */
+const SECTION_HORIZONTAL_PADDING = 48;
 
 interface DashboardBuilderProps {
   view: DashboardView;
@@ -72,8 +69,6 @@ export function DashboardBuilder({
 
   const selectedRunIds = useMemo(() => Object.keys(selectedRuns), [selectedRuns]);
 
-  const updateMutation = useUpdateDashboardView(organizationId, projectName);
-
   const { hasDraft, restoreDraft, clearDraft } = useDraftSave({
     config,
     viewId: view.id,
@@ -81,10 +76,20 @@ export function DashboardBuilder({
     hasChanges,
   });
 
-  // Block navigation when there are unsaved changes during editing
   const navGuard = useNavigationGuard(isEditing && hasChanges);
 
-  // Compute which pattern-only widgets should be hidden (view mode only)
+  const { isSaving, handleSave } = useDashboardSave({
+    view,
+    config,
+    organizationId,
+    projectName,
+    clearDraft,
+    onSaveSuccess: useCallback(() => {
+      setHasChanges(false);
+      setIsEditing(false);
+    }, []),
+  });
+
   const hiddenWidgetIds = useHiddenPatternWidgets({
     sections: config.sections,
     selectedRunIds,
@@ -96,18 +101,16 @@ export function DashboardBuilder({
   // Track container width for responsive grid
   useEffect(() => {
     if (!containerRef.current) return;
-
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) {
         setContainerWidth(entry.contentRect.width);
       }
     });
-
     observer.observe(containerRef.current);
     return () => observer.disconnect();
   }, []);
 
-  // Update config when view changes — preserve current collapse state, default new sections to open
+  // Update config when view changes — preserve current collapse state
   useEffect(() => {
     setConfig((prev) => {
       const collapseState = new Map(prev.sections.map((s) => [s.id, s.collapsed]));
@@ -136,7 +139,6 @@ export function DashboardBuilder({
       }))
       .filter((section) => {
         if (section.dynamicPattern) {
-          // Dynamic sections: use reported widget count (0 or undefined means hide)
           return (dynamicWidgetCounts[section.id] ?? 0) > 0;
         }
         return section.widgets.length > 0;
@@ -147,7 +149,8 @@ export function DashboardBuilder({
   const isSearchingRef = useRef(false);
   isSearchingRef.current = isSearching;
 
-  // Show draft restore prompt when entering edit mode with a pending draft
+  // ─── Edit mode handlers ─────────────────────────────────────────────
+
   const handleEnterEditMode = useCallback(() => {
     setIsEditing(true);
     if (hasDraft) {
@@ -169,47 +172,6 @@ export function DashboardBuilder({
     setShowDraftRestore(false);
   }, [clearDraft]);
 
-  const handleSave = useCallback(() => {
-    // Sanitize config: ensure no non-finite numbers (Infinity, NaN) in layouts or configs
-    const sanitizedConfig: DashboardViewConfig = {
-      ...config,
-      sections: config.sections.map((section) => ({
-        ...section,
-        widgets: section.widgets.map((widget) => ({
-          ...widget,
-          layout: {
-            ...widget.layout,
-            x: Number.isFinite(widget.layout.x) ? widget.layout.x : 0,
-            y: Number.isFinite(widget.layout.y) ? widget.layout.y : 9999,
-            w: Number.isFinite(widget.layout.w) ? widget.layout.w : 6,
-            h: Number.isFinite(widget.layout.h) ? widget.layout.h : 4,
-          },
-        })),
-      })),
-    };
-
-    updateMutation.mutate(
-      {
-        organizationId,
-        viewId: view.id,
-        config: sanitizedConfig,
-      },
-      {
-        onSuccess: () => {
-          setHasChanges(false);
-          clearDraft();
-          setIsEditing(false);
-        },
-        onError: (error) => {
-          console.error("Dashboard save failed:", error);
-          toast.error("Failed to save dashboard", {
-            description: error.message || "An unexpected error occurred",
-          });
-        },
-      }
-    );
-  }, [updateMutation, organizationId, view.id, config, clearDraft]);
-
   const handleCancel = useCallback(() => {
     if (hasChanges) {
       setShowCancelConfirm(true);
@@ -226,93 +188,41 @@ export function DashboardBuilder({
     setShowCancelConfirm(false);
   }, [view.config, clearDraft]);
 
+  // ─── Config mutation callbacks (delegate to pure functions) ──────────
+
   const toggleSectionCollapse = useCallback((sectionId: string) => {
-    setConfig((prev) => ({
-      ...prev,
-      sections: prev.sections.map((s) =>
-        s.id === sectionId ? { ...s, collapsed: !s.collapsed } : s
-      ),
-    }));
+    setConfig((prev) => configOps.toggleSectionCollapse(prev, sectionId));
   }, []);
 
   const updateSection = useCallback((sectionId: string, section: Section) => {
-    setConfig((prev) => ({
-      ...prev,
-      sections: prev.sections.map((s) =>
-        s.id === sectionId ? section : s
-      ),
-    }));
+    setConfig((prev) => configOps.updateSection(prev, sectionId, section));
     setHasChanges(true);
   }, []);
 
   const deleteSection = useCallback((sectionId: string) => {
-    setConfig((prev) => ({
-      ...prev,
-      sections: prev.sections.filter((s) => s.id !== sectionId),
-    }));
+    setConfig((prev) => configOps.deleteSection(prev, sectionId));
     setHasChanges(true);
   }, []);
 
   const addSection = useCallback((name: string, dynamicPattern?: string, dynamicPatternMode?: "search" | "regex") => {
-    const newSection: Section = {
-      id: `section-${generateId()}`,
-      name,
-      collapsed: false,
-      widgets: [],
-      dynamicPattern,
-      dynamicPatternMode,
-    };
-
-    setConfig((prev) => ({
-      ...prev,
-      sections: [...prev.sections, newSection],
-    }));
+    setConfig((prev) => configOps.addSection(prev, name, dynamicPattern, dynamicPatternMode));
     setHasChanges(true);
   }, []);
 
-  const addWidget = useCallback(
-    (sectionId: string, widget: Omit<Widget, "id">) => {
-      const newWidget: Widget = {
-        ...widget,
-        id: `widget-${generateId()}`,
-      };
+  const addWidget = useCallback((sectionId: string, widget: Omit<Widget, "id">) => {
+    setConfig((prev) => configOps.addWidget(prev, sectionId, widget));
+    setHasChanges(true);
+    setAddWidgetSectionId(null);
+  }, []);
 
-      setConfig((prev) => ({
-        ...prev,
-        sections: prev.sections.map((s) =>
-          s.id === sectionId
-            ? { ...s, widgets: [...s.widgets, newWidget] }
-            : s
-        ),
-      }));
-      setHasChanges(true);
-      setAddWidgetSectionId(null);
-    },
-    []
-  );
-
-  const updateWidgets = useCallback((sectionId: string, widgets: Widget[]) => {
-    // Skip layout updates while searching — the filtered widget list passed
-    // to WidgetGrid would permanently remove hidden widgets from config
+  const updateWidgetsInSection = useCallback((sectionId: string, widgets: Widget[]) => {
     if (isSearchingRef.current) return;
-    setConfig((prev) => ({
-      ...prev,
-      sections: prev.sections.map((s) =>
-        s.id === sectionId ? { ...s, widgets } : s
-      ),
-    }));
+    setConfig((prev) => configOps.updateWidgets(prev, sectionId, widgets));
     setHasChanges(true);
   }, []);
 
   const deleteWidget = useCallback((sectionId: string, widgetId: string) => {
-    setConfig((prev) => ({
-      ...prev,
-      sections: prev.sections.map((s) =>
-        s.id === sectionId
-          ? { ...s, widgets: s.widgets.filter((w) => w.id !== widgetId) }
-          : s
-      ),
-    }));
+    setConfig((prev) => configOps.deleteWidget(prev, sectionId, widgetId));
     setHasChanges(true);
   }, []);
 
@@ -321,95 +231,34 @@ export function DashboardBuilder({
     setEditingWidget(widget);
   }, []);
 
-  const copyWidget = useCallback((widget: Widget) => {
+  const handleCopyWidget = useCallback((widget: Widget) => {
     setCopiedWidget(widget);
     toast.success("Widget copied");
   }, []);
 
-  const pasteWidget = useCallback(
-    (sectionId: string) => {
-      if (!copiedWidget) return;
-      const newWidget: Widget = {
-        ...copiedWidget,
-        id: `widget-${generateId()}`,
-        config: structuredClone(copiedWidget.config),
-        layout: { ...copiedWidget.layout, y: 9999 }, // Place at bottom
-      };
-      setConfig((prev) => ({
-        ...prev,
-        sections: prev.sections.map((s) =>
-          s.id === sectionId
-            ? { ...s, widgets: [...s.widgets, newWidget] }
-            : s
-        ),
-      }));
-      setHasChanges(true);
-    },
-    [copiedWidget]
-  );
+  const pasteWidget = useCallback((sectionId: string) => {
+    if (!copiedWidget) return;
+    setConfig((prev) => configOps.pasteWidget(prev, sectionId, copiedWidget));
+    setHasChanges(true);
+  }, [copiedWidget]);
 
   const updateWidgetBounds = useCallback((widgetId: string, yMin?: number, yMax?: number) => {
-    setConfig((prev) => ({
-      ...prev,
-      sections: prev.sections.map((s) => ({
-        ...s,
-        widgets: s.widgets.map((w) =>
-          w.id === widgetId
-            ? { ...w, config: { ...w.config, yMin, yMax } }
-            : w
-        ),
-      })),
-    }));
+    setConfig((prev) => configOps.updateWidgetBounds(prev, widgetId, yMin, yMax));
   }, []);
 
   const updateWidgetScale = useCallback((widgetId: string, axis: "x" | "y", value: boolean) => {
-    setConfig((prev) => ({
-      ...prev,
-      sections: prev.sections.map((s) => ({
-        ...s,
-        widgets: s.widgets.map((w) => {
-          if (w.id !== widgetId || w.type !== "chart") return w;
-          const config = w.config as ChartWidgetConfig;
-          const scaleValue = value ? "log" : "linear";
-          return {
-            ...w,
-            config: {
-              ...config,
-              ...(axis === "x" ? { xAxisScale: scaleValue } : { yAxisScale: scaleValue }),
-            },
-          };
-        }),
-      })),
-    }));
+    setConfig((prev) => configOps.updateWidgetScale(prev, widgetId, axis, value));
     setHasChanges(true);
   }, []);
 
   const resetAllWidgetBounds = useCallback(() => {
-    setConfig((prev) => ({
-      ...prev,
-      sections: prev.sections.map((s) => ({
-        ...s,
-        widgets: s.widgets.map((w) => {
-          if (w.type === "chart") {
-            const { yMin, yMax, ...restConfig } = w.config as ChartWidgetConfig;
-            return { ...w, config: restConfig };
-          }
-          return w;
-        }),
-      })),
-    }));
+    setConfig((prev) => configOps.resetAllWidgetBounds(prev));
   }, []);
 
   const allCollapsed = config.sections.length > 0 && config.sections.every((s) => s.collapsed);
 
   const toggleAllSections = useCallback(() => {
-    setConfig((prev) => ({
-      ...prev,
-      sections: prev.sections.map((s) => ({
-        ...s,
-        collapsed: !prev.sections.every((sec) => sec.collapsed),
-      })),
-    }));
+    setConfig((prev) => configOps.toggleAllSections(prev));
   }, []);
 
   const handleDynamicWidgetCount = useCallback((sectionId: string, count: number) => {
@@ -422,25 +271,9 @@ export function DashboardBuilder({
   const handleEditWidgetSave = useCallback(
     (widgetData: Omit<Widget, "id">) => {
       if (!editingWidget || !addWidgetSectionId) return;
-
-      const updatedWidget: Widget = {
-        ...widgetData,
-        id: editingWidget.id,
-      };
-
-      setConfig((prev) => ({
-        ...prev,
-        sections: prev.sections.map((s) =>
-          s.id === addWidgetSectionId
-            ? {
-                ...s,
-                widgets: s.widgets.map((w) =>
-                  w.id === editingWidget.id ? updatedWidget : w
-                ),
-              }
-            : s
-        ),
-      }));
+      setConfig((prev) =>
+        configOps.handleEditWidgetSave(prev, addWidgetSectionId, editingWidget.id, widgetData)
+      );
       setHasChanges(true);
       setAddWidgetSectionId(null);
       setEditingWidget(null);
@@ -451,91 +284,21 @@ export function DashboardBuilder({
   return (
     <div ref={containerRef} className="flex-1 space-y-4">
       {/* Toolbar */}
-      <div className="flex items-center justify-between gap-4 pb-2">
-        <div className="flex items-center gap-2">
-          <h2 className="text-lg font-semibold">{view.name}</h2>
-          {hasChanges && (
-            <span className="text-xs text-muted-foreground">(unsaved changes)</span>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          {config.sections.length > 0 && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-8 text-xs text-muted-foreground"
-              onClick={resetAllWidgetBounds}
-              title="Reset all Y-axis bounds"
-            >
-              <RotateCcwIcon className="mr-1.5 size-3.5" />
-              Reset Bounds
-            </Button>
-          )}
-          {config.sections.length >= 2 && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-8 text-xs text-muted-foreground"
-              onClick={toggleAllSections}
-              title={allCollapsed ? "Expand all sections" : "Collapse all sections"}
-            >
-              {allCollapsed ? (
-                <>
-                  <ChevronsUpDownIcon className="mr-1.5 size-3.5" />
-                  Expand All
-                </>
-              ) : (
-                <>
-                  <ChevronsDownUpIcon className="mr-1.5 size-3.5" />
-                  Collapse All
-                </>
-              )}
-            </Button>
-          )}
-          {isEditing ? (
-            <>
-              {/* Coarse / Fine toggle */}
-              <div className="flex items-center rounded-md border">
-                <Button
-                  variant={coarseMode ? "secondary" : "ghost"}
-                  size="sm"
-                  className="rounded-r-none border-0"
-                  onClick={() => setCoarseMode(true)}
-                >
-                  <GridIcon className="mr-1.5 size-3.5" />
-                  Grid
-                </Button>
-                <Button
-                  variant={!coarseMode ? "secondary" : "ghost"}
-                  size="sm"
-                  className="rounded-l-none border-0"
-                  onClick={() => setCoarseMode(false)}
-                >
-                  <SlidersHorizontalIcon className="mr-1.5 size-3.5" />
-                  Free
-                </Button>
-              </div>
-              <Button variant="outline" size="sm" onClick={handleCancel}>
-                <XIcon className="mr-2 size-4" />
-                Cancel
-              </Button>
-              <Button
-                size="sm"
-                onClick={handleSave}
-                loading={updateMutation.isPending}
-                disabled={!hasChanges}
-              >
-                <SaveIcon className="mr-2 size-4" />
-                Save
-              </Button>
-            </>
-          ) : (
-            <Button variant="outline" size="sm" onClick={handleEnterEditMode} data-testid="edit-dashboard-btn">
-              Edit Dashboard
-            </Button>
-          )}
-        </div>
-      </div>
+      <DashboardToolbar
+        viewName={view.name}
+        hasChanges={hasChanges}
+        isEditing={isEditing}
+        isSaving={isSaving}
+        sectionCount={config.sections.length}
+        allCollapsed={allCollapsed}
+        coarseMode={coarseMode}
+        onResetAllBounds={resetAllWidgetBounds}
+        onToggleAllSections={toggleAllSections}
+        onSetCoarseMode={setCoarseMode}
+        onCancel={handleCancel}
+        onSave={handleSave}
+        onEnterEditMode={handleEnterEditMode}
+      />
 
       {/* Sections */}
       {filteredSections.length === 0 ? (
@@ -557,12 +320,10 @@ export function DashboardBuilder({
       ) : (
         <div className="space-y-4">
           {filteredSections.map((section) => {
-            // Filter out hidden widgets in view mode (non-dynamic sections only)
             const visibleWidgets = isEditing || section.dynamicPattern
               ? section.widgets
               : section.widgets.filter((w) => !hiddenWidgetIds.has(w.id));
 
-            // Skip entire section when all widgets are hidden (view mode only, non-dynamic)
             if (!isEditing && !section.dynamicPattern && visibleWidgets.length === 0 && section.widgets.length > 0) {
               return null;
             }
@@ -601,16 +362,16 @@ export function DashboardBuilder({
                 ) : (
                   <WidgetGrid
                     widgets={visibleWidgets}
-                    onLayoutChange={(widgets) => updateWidgets(section.id, widgets)}
+                    onLayoutChange={(widgets) => updateWidgetsInSection(section.id, widgets)}
                     onEditWidget={(widget) => editWidget(section.id, widget)}
                     onDeleteWidget={(widgetId) => deleteWidget(section.id, widgetId)}
-                    onCopyWidget={copyWidget}
+                    onCopyWidget={handleCopyWidget}
                     onFullscreenWidget={setFullscreenWidget}
                     onUpdateWidgetBounds={updateWidgetBounds}
                     onUpdateWidgetScale={updateWidgetScale}
                     isEditing={isEditing}
                     coarseMode={coarseMode}
-                    containerWidth={containerWidth - 48} // Account for padding
+                    containerWidth={containerWidth - SECTION_HORIZONTAL_PADDING}
                     renderWidget={(widget, onDataRange, onResetBounds) => (
                       <WidgetRenderer
                         widget={widget}
@@ -739,80 +500,25 @@ export function DashboardBuilder({
         </ChartFullscreenDialog>
       )}
 
-      {/* Cancel Confirmation Dialog */}
-      <Dialog open={showCancelConfirm} onOpenChange={setShowCancelConfirm}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <AlertTriangleIcon className="size-5 text-yellow-500" />
-              Discard unsaved changes?
-            </DialogTitle>
-            <DialogDescription>
-              You have unsaved changes to this dashboard. Are you sure you want to
-              discard them? This action cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowCancelConfirm(false)}>
-              Keep Editing
-            </Button>
-            <Button variant="destructive" onClick={confirmCancel}>
-              Discard Changes
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* Dialogs */}
+      <CancelConfirmDialog
+        open={showCancelConfirm}
+        onOpenChange={setShowCancelConfirm}
+        onConfirm={confirmCancel}
+      />
 
-      {/* Draft Restore Dialog */}
-      <Dialog open={showDraftRestore} onOpenChange={setShowDraftRestore}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <ArchiveRestoreIcon className="size-5 text-blue-500" />
-              Restore unsaved draft?
-            </DialogTitle>
-            <DialogDescription>
-              You have unsaved changes from a previous editing session. Would you
-              like to restore them, or start fresh from the last saved version?
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={handleDiscardDraft}>
-              Start Fresh
-            </Button>
-            <Button onClick={handleRestoreDraft}>
-              Restore Draft
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <DraftRestoreDialog
+        open={showDraftRestore}
+        onOpenChange={setShowDraftRestore}
+        onRestore={handleRestoreDraft}
+        onDiscard={handleDiscardDraft}
+      />
 
-      {/* Navigation Guard Dialog */}
-      <Dialog
+      <NavGuardDialog
         open={navGuard.isBlocked}
-        onOpenChange={(open) => { if (!open) { navGuard.reset(); } }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <AlertTriangleIcon className="size-5 text-yellow-500" />
-              Unsaved dashboard changes
-            </DialogTitle>
-            <DialogDescription>
-              Your dashboard has changes that haven&apos;t been saved yet. If you
-              leave now, these changes will be lost.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={navGuard.reset}>
-              Stay
-            </Button>
-            <Button variant="destructive" onClick={navGuard.proceed}>
-              Leave
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        onStay={navGuard.reset}
+        onLeave={navGuard.proceed}
+      />
     </div>
   );
 }

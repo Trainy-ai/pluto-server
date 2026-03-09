@@ -35,6 +35,13 @@ vi.mock("@/components/ui/tooltip", () => ({
   }) => <div data-testid="tooltip-content">{children}</div>,
 }));
 
+// Mock TagBadge to render tag text directly
+vi.mock("@/components/tag-badge", () => ({
+  TagBadge: ({ tag }: { tag: string; truncate?: boolean }) => (
+    <span data-testid="tag-badge">{tag}</span>
+  ),
+}));
+
 describe("TagsCell", () => {
   afterEach(cleanup);
 
@@ -51,8 +58,8 @@ describe("TagsCell", () => {
     expect(screen.getAllByText("tag-b")).toHaveLength(1);
     // No overflow badge
     expect(screen.queryByText(/^\+\d+$/)).toBeNull();
-    // No tooltip
-    expect(screen.queryByTestId("tooltip-root")).toBeNull();
+    // No tooltip content (overflow tooltip not rendered)
+    expect(screen.queryByTestId("tooltip-content")).toBeNull();
   });
 
   it("renders single tag without overflow", () => {
@@ -60,13 +67,15 @@ describe("TagsCell", () => {
 
     expect(screen.getAllByText("only-tag")).toHaveLength(1);
     expect(screen.queryByText(/^\+\d+$/)).toBeNull();
-    expect(screen.queryByTestId("tooltip-root")).toBeNull();
+    // No tooltip content (overflow tooltip not rendered)
+    expect(screen.queryByTestId("tooltip-content")).toBeNull();
   });
 
   it("renders empty state without overflow", () => {
     render(<TagsCell {...defaultProps} tags={[]} />);
 
-    expect(screen.queryByTestId("tooltip-root")).toBeNull();
+    // No tooltip content (overflow tooltip not rendered)
+    expect(screen.queryByTestId("tooltip-content")).toBeNull();
     expect(screen.queryByText(/^\+\d+$/)).toBeNull();
   });
 

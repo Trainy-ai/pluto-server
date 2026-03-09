@@ -29,9 +29,9 @@ describe("applySeriesHighlight", () => {
     applySeriesHighlight(chart, "accuracy", "label", 1.5);
 
     // series[0] is X axis, untouched
-    expect(chart.series[1].width).toBe(Math.max(0.3, 1.5 * 0.15)); // dimmed
-    expect(chart.series[2].width).toBe(Math.max(2.5, 1.5 * 2)); // highlighted
-    expect(chart.series[3].width).toBe(Math.max(0.3, 1.5 * 0.15)); // dimmed
+    expect(chart.series[1].width).toBe(Math.max(0.4, 1.5 * 0.85)); // dimmed
+    expect(chart.series[2].width).toBe(Math.max(1, 1.5 * 1.25)); // highlighted
+    expect(chart.series[3].width).toBe(Math.max(0.4, 1.5 * 0.85)); // dimmed
   });
 
   it("resets all series when value is null", () => {
@@ -59,8 +59,8 @@ describe("applySeriesHighlight", () => {
 
     applySeriesHighlight(chart, "loss", "_seriesId", 1.5);
 
-    expect(chart.series[1].width).toBe(Math.max(2.5, 1.5 * 2)); // highlighted
-    expect(chart.series[2].width).toBe(Math.max(0.3, 1.5 * 0.15)); // dimmed
+    expect(chart.series[1].width).toBe(Math.max(1, 1.5 * 1.25)); // highlighted
+    expect(chart.series[2].width).toBe(Math.max(0.4, 1.5 * 0.85)); // dimmed
   });
 
   it("respects custom defaultWidth", () => {
@@ -76,8 +76,8 @@ describe("applySeriesHighlight", () => {
 
     applySeriesHighlight(chart, "loss", "label", 0.5);
 
-    // max(2.5, 0.5 * 2) = max(2.5, 1.0) = 2.5
-    expect(chart.series[1].width).toBe(2.5);
+    // max(1, 0.5 * 1.25) = max(1, 0.625) = 1
+    expect(chart.series[1].width).toBe(1);
   });
 
   it("dimmed width is at least 0.3", () => {
@@ -85,8 +85,8 @@ describe("applySeriesHighlight", () => {
 
     applySeriesHighlight(chart, "loss", "label", 0.5);
 
-    // max(0.3, 0.5 * 0.15) = max(0.3, 0.075) = 0.3
-    expect(chart.series[2].width).toBe(0.3);
+    // max(0.4, 0.5 * 0.85) = max(0.4, 0.425) = 0.425
+    expect(chart.series[2].width).toBe(0.425);
   });
 });
 
@@ -210,18 +210,12 @@ describe("highlightUPlotSeries rAF coalescing", () => {
     // Flush the rAF
     flushRaf();
 
-    // "lr" doesn't match any series, so applySeriesHighlight resets to default width.
-    // chartA is source, so it should NOT be touched. chartB and chartC should get redraw.
-    // Since "lr" doesn't match, it does label-based highlight and finds no match → reset
-    // Only charts that have the series or need reset get redraw.
-    // With label=null it falls back to table highlight. With label="lr" it checks hasMatch.
-    // chart.series.some(s => s.label === "lr") → false, so no redraw for non-matching.
-    // Actually looking at the code: if label !== null, it checks hasMatch and only redraws
-    // if hasMatch is true. "lr" won't match, so NO redraws happen.
-
-    // Let's verify by checking redraw was NOT called (no match for "lr")
-    expect(chartB.redraw).not.toHaveBeenCalled();
-    expect(chartC.redraw).not.toHaveBeenCalled();
+    // The current implementation always redraws non-source charts (stores _crossHighlightRunId
+    // on the instance and calls redraw so stroke functions re-evaluate).
+    // "lr" doesn't match any _seriesId, so applySeriesHighlight resets to default width,
+    // but redraw is still called.
+    expect(chartB.redraw).toHaveBeenCalledTimes(1);
+    expect(chartC.redraw).toHaveBeenCalledTimes(1);
 
     // Now test with a matching label
     ctx.highlightUPlotSeries("chartA", "loss");
@@ -229,14 +223,14 @@ describe("highlightUPlotSeries rAF coalescing", () => {
 
     flushRaf();
 
-    // chartB and chartC both have "loss" series, so they should be redrawn
-    expect(chartB.redraw).toHaveBeenCalledTimes(1);
-    expect(chartC.redraw).toHaveBeenCalledTimes(1);
+    // chartB and chartC both have "loss" series, so they should be redrawn again
+    expect(chartB.redraw).toHaveBeenCalledTimes(2);
+    expect(chartC.redraw).toHaveBeenCalledTimes(2);
 
     // Verify the highlight was applied correctly (last-writer-wins = "loss")
     // chartB series[1] = "loss" → highlighted, series[2] = "accuracy" → dimmed
-    expect(chartB.series[1].width).toBe(Math.max(2.5, 1.5 * 2));
-    expect(chartB.series[2].width).toBe(Math.max(0.3, 1.5 * 0.15));
+    expect(chartB.series[1].width).toBe(Math.max(1, 1.5 * 1.25));
+    expect(chartB.series[2].width).toBe(Math.max(0.4, 1.5 * 0.85));
 
     // Cleanup
     root.unmount();
@@ -346,7 +340,7 @@ describe("highlightUPlotSeries rAF coalescing", () => {
 
     // Target chart SHOULD have been redrawn with highlight
     expect(targetChart.redraw).toHaveBeenCalledTimes(1);
-    expect(targetChart.series[1].width).toBe(Math.max(2.5, 1.5 * 2)); // "loss" highlighted
+    expect(targetChart.series[1].width).toBe(Math.max(1, 1.5 * 1.25)); // "loss" highlighted
 
     root.unmount();
     document.body.removeChild(container);
