@@ -1524,6 +1524,131 @@ describe('SDK API Endpoints (with API Key)', () => {
       expect(data.result?.data?.config?.sections[0]?.name).toBe('Test Section');
     });
 
+    it('Test 15.5b: Update dashboard view with stale expectedUpdatedAt returns CONFLICT', async () => {
+      if (!sessionCookie || !testViewId) {
+        console.log('   No session or view - skipping');
+        return;
+      }
+
+      // First, get the current view to know the updatedAt
+      const getResponse = await makeTrpcRequest('dashboardViews.get', {
+        viewId: testViewId,
+      }, { 'Cookie': sessionCookie }, 'GET');
+      expect(getResponse.status).toBe(200);
+      const getData = await getResponse.json();
+      const currentUpdatedAt = getData.result?.data?.updatedAt;
+      expect(currentUpdatedAt).toBeDefined();
+
+      // Now update with a stale expectedUpdatedAt (a timestamp far in the past)
+      const staleTimestamp = '2020-01-01T00:00:00.000Z';
+      const updatedConfig = {
+        version: 1,
+        sections: [
+          {
+            id: 'section-stale',
+            name: 'Stale Update Section',
+            collapsed: false,
+            widgets: [],
+          },
+        ],
+        settings: {
+          gridCols: 12,
+          rowHeight: 80,
+          compactType: 'vertical' as const,
+        },
+      };
+
+      const response = await makeTrpcRequest('dashboardViews.update', {
+        viewId: testViewId,
+        config: updatedConfig,
+        expectedUpdatedAt: staleTimestamp,
+      }, { 'Cookie': sessionCookie }, 'POST');
+
+      // Should return an error (CONFLICT maps to HTTP 409 in tRPC, but tRPC returns 200 with error in body)
+      const data = await response.json();
+      // tRPC wraps errors - check for CONFLICT error code
+      expect(data.error?.data?.code).toBe('CONFLICT');
+      expect(data.error?.message).toContain('modified');
+    });
+
+    it('Test 15.5c: Update dashboard view with correct expectedUpdatedAt succeeds', async () => {
+      if (!sessionCookie || !testViewId) {
+        console.log('   No session or view - skipping');
+        return;
+      }
+
+      // Get the current updatedAt
+      const getResponse = await makeTrpcRequest('dashboardViews.get', {
+        viewId: testViewId,
+      }, { 'Cookie': sessionCookie }, 'GET');
+      expect(getResponse.status).toBe(200);
+      const getData = await getResponse.json();
+      const currentUpdatedAt = getData.result?.data?.updatedAt;
+
+      // Update with the correct expectedUpdatedAt
+      const updatedConfig = {
+        version: 1,
+        sections: [
+          {
+            id: 'section-fresh',
+            name: 'Fresh Update Section',
+            collapsed: false,
+            widgets: [],
+          },
+        ],
+        settings: {
+          gridCols: 12,
+          rowHeight: 80,
+          compactType: 'vertical' as const,
+        },
+      };
+
+      const response = await makeTrpcRequest('dashboardViews.update', {
+        viewId: testViewId,
+        config: updatedConfig,
+        expectedUpdatedAt: currentUpdatedAt,
+      }, { 'Cookie': sessionCookie }, 'POST');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      expect(data.result?.data?.config?.sections).toHaveLength(1);
+      expect(data.result?.data?.config?.sections[0]?.name).toBe('Fresh Update Section');
+    });
+
+    it('Test 15.5d: Update without expectedUpdatedAt always succeeds (force override)', async () => {
+      if (!sessionCookie || !testViewId) {
+        console.log('   No session or view - skipping');
+        return;
+      }
+
+      const updatedConfig = {
+        version: 1,
+        sections: [
+          {
+            id: 'section-force',
+            name: 'Force Update Section',
+            collapsed: false,
+            widgets: [],
+          },
+        ],
+        settings: {
+          gridCols: 12,
+          rowHeight: 80,
+          compactType: 'vertical' as const,
+        },
+      };
+
+      const response = await makeTrpcRequest('dashboardViews.update', {
+        viewId: testViewId,
+        config: updatedConfig,
+      }, { 'Cookie': sessionCookie }, 'POST');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      expect(data.result?.data?.config?.sections).toHaveLength(1);
+      expect(data.result?.data?.config?.sections[0]?.name).toBe('Force Update Section');
+    });
+
     it('Test 15.6: Delete dashboard view', async () => {
       if (!sessionCookie || !testViewId) {
         console.log('   No session or view - skipping');

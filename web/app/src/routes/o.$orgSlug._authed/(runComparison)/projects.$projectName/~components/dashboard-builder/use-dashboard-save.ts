@@ -11,6 +11,10 @@ interface UseDashboardSaveOptions {
   projectName: string;
   clearDraft: () => void;
   onSaveSuccess: () => void;
+  /** When provided, enables optimistic concurrency control */
+  expectedUpdatedAt?: string;
+  /** Called when the server returns a CONFLICT error (stale dashboard) */
+  onConflict?: () => void;
 }
 
 export function useDashboardSave({
@@ -20,6 +24,8 @@ export function useDashboardSave({
   projectName,
   clearDraft,
   onSaveSuccess,
+  expectedUpdatedAt,
+  onConflict,
 }: UseDashboardSaveOptions) {
   const updateMutation = useUpdateDashboardView(organizationId, projectName);
 
@@ -29,6 +35,7 @@ export function useDashboardSave({
         organizationId,
         viewId: view.id,
         config: sanitizeConfig(config),
+        ...(expectedUpdatedAt && { expectedUpdatedAt }),
       },
       {
         onSuccess: () => {
@@ -36,7 +43,37 @@ export function useDashboardSave({
           onSaveSuccess();
         },
         onError: (error) => {
+          // If conflict detected, notify the caller instead of showing a generic error
+          if (onConflict && error.data?.code === "CONFLICT") {
+            onConflict();
+            return;
+          }
           console.error("Dashboard save failed:", error);
+          toast.error("Failed to save dashboard", {
+            description: error.message || "An unexpected error occurred",
+          });
+        },
+      }
+    );
+  }, [updateMutation, organizationId, view.id, config, clearDraft, onSaveSuccess, expectedUpdatedAt, onConflict]);
+
+  // Force save without concurrency check (override remote changes)
+  const handleOverride = useCallback(() => {
+    updateMutation.mutate(
+      {
+        organizationId,
+        viewId: view.id,
+        config: sanitizeConfig(config),
+        // No expectedUpdatedAt → force override
+      },
+      {
+        onSuccess: () => {
+          clearDraft();
+          onSaveSuccess();
+          toast.success("Dashboard saved (overriding remote changes)");
+        },
+        onError: (error) => {
+          console.error("Dashboard override save failed:", error);
           toast.error("Failed to save dashboard", {
             description: error.message || "An unexpected error occurred",
           });
@@ -48,5 +85,6 @@ export function useDashboardSave({
   return {
     isSaving: updateMutation.isPending,
     handleSave,
+    handleOverride,
   };
 }

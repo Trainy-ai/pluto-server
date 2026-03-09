@@ -11,12 +11,18 @@ import {
   CancelConfirmDialog,
   DraftRestoreDialog,
   NavGuardDialog,
+  SaveAsNewDialog,
 } from "./dashboard-dialogs";
 import { useDraftSave } from "./use-auto-save";
 import { useNavigationGuard } from "./use-navigation-guard";
 import { useHiddenPatternWidgets } from "./use-hidden-pattern-widgets";
 import { useDashboardSave } from "./use-dashboard-save";
-import type { DashboardView } from "../../~queries/dashboard-views";
+import { DashboardStaleWarning } from "./dashboard-stale-warning";
+import {
+  useCreateDashboardView,
+  useDashboardStalenessCheck,
+  type DashboardView,
+} from "../../~queries/dashboard-views";
 import {
   type DashboardViewConfig,
   type Section,
@@ -67,6 +73,12 @@ export function DashboardBuilder({
   const [dynamicWidgetCounts, setDynamicWidgetCounts] = useState<Record<string, number>>({});
   const [copiedWidget, setCopiedWidget] = useState<Widget | null>(null);
 
+  // Staleness / optimistic concurrency state
+  const [isStale, setIsStale] = useState(false);
+  const [showSaveAsNew, setShowSaveAsNew] = useState(false);
+  const [saveAsNewName, setSaveAsNewName] = useState("");
+  const editStartUpdatedAtRef = useRef<string | null>(null);
+
   const selectedRunIds = useMemo(() => Object.keys(selectedRuns), [selectedRuns]);
 
   const { hasDraft, restoreDraft, clearDraft } = useDraftSave({
@@ -78,16 +90,42 @@ export function DashboardBuilder({
 
   const navGuard = useNavigationGuard(isEditing && hasChanges);
 
-  const { isSaving, handleSave } = useDashboardSave({
+  // Staleness detection: poll for remote changes while editing
+  const { data: remoteView } = useDashboardStalenessCheck(
+    organizationId,
+    view.id,
+    isEditing && !isStale, // stop polling once stale detected
+  );
+
+  const createMutation = useCreateDashboardView(organizationId, projectName);
+
+  // Detect staleness: compare remote updatedAt with what we had when editing started
+  useEffect(() => {
+    if (!isEditing || !remoteView || !editStartUpdatedAtRef.current) return;
+    const remoteTime = new Date(remoteView.updatedAt).getTime();
+    const editStartTime = new Date(editStartUpdatedAtRef.current).getTime();
+    if (remoteTime > editStartTime) {
+      setIsStale(true);
+    }
+  }, [isEditing, remoteView]);
+
+  const resetEditState = useCallback(() => {
+    setHasChanges(false);
+    setIsStale(false);
+    editStartUpdatedAtRef.current = null;
+    clearDraft();
+    setIsEditing(false);
+  }, [clearDraft]);
+
+  const { isSaving, handleSave, handleOverride } = useDashboardSave({
     view,
     config,
     organizationId,
     projectName,
     clearDraft,
-    onSaveSuccess: useCallback(() => {
-      setHasChanges(false);
-      setIsEditing(false);
-    }, []),
+    expectedUpdatedAt: editStartUpdatedAtRef.current ?? undefined,
+    onSaveSuccess: resetEditState,
+    onConflict: useCallback(() => setIsStale(true), []),
   });
 
   const hiddenWidgetIds = useHiddenPatternWidgets({
@@ -110,8 +148,10 @@ export function DashboardBuilder({
     return () => observer.disconnect();
   }, []);
 
-  // Update config when view changes — preserve current collapse state
+  // Update config when view changes — preserve current collapse state, default new sections to open
+  // Skip overwriting when the user is editing and a stale state has been detected
   useEffect(() => {
+    if (isEditing && isStale) return;
     setConfig((prev) => {
       const collapseState = new Map(prev.sections.map((s) => [s.id, s.collapsed]));
       return {
@@ -123,7 +163,7 @@ export function DashboardBuilder({
       };
     });
     setHasChanges(false);
-  }, [view.config]);
+  }, [view.config, isEditing, isStale]);
 
   // Filter sections/widgets based on search state
   const filteredSections = useMemo(() => {
@@ -152,11 +192,13 @@ export function DashboardBuilder({
   // ─── Edit mode handlers ─────────────────────────────────────────────
 
   const handleEnterEditMode = useCallback(() => {
+    editStartUpdatedAtRef.current = new Date(view.updatedAt).toISOString();
+    setIsStale(false);
     setIsEditing(true);
     if (hasDraft) {
       setShowDraftRestore(true);
     }
-  }, [hasDraft]);
+  }, [hasDraft, view.updatedAt]);
 
   const handleRestoreDraft = useCallback(() => {
     const draft = restoreDraft();
@@ -183,10 +225,44 @@ export function DashboardBuilder({
   const confirmCancel = useCallback(() => {
     setConfig(view.config);
     setHasChanges(false);
+    setIsStale(false);
+    editStartUpdatedAtRef.current = null;
     clearDraft();
     setIsEditing(false);
     setShowCancelConfirm(false);
   }, [view.config, clearDraft]);
+
+  // ─── Stale warning handlers ─────────────────────────────────────────
+
+  const handleSaveAsNew = useCallback(() => {
+    setSaveAsNewName(`${view.name} (copy)`);
+    setShowSaveAsNew(true);
+  }, [view.name]);
+
+  const confirmSaveAsNew = useCallback(() => {
+    if (!saveAsNewName.trim()) return;
+    createMutation.mutate(
+      {
+        organizationId,
+        projectName,
+        name: saveAsNewName.trim(),
+        config,
+      },
+      {
+        onSuccess: () => {
+          setShowSaveAsNew(false);
+          setSaveAsNewName("");
+          resetEditState();
+          toast.success("Dashboard saved as new view");
+        },
+        onError: (error) => {
+          toast.error("Failed to save as new dashboard", {
+            description: error.message || "An unexpected error occurred",
+          });
+        },
+      }
+    );
+  }, [createMutation, organizationId, projectName, saveAsNewName, config, resetEditState]);
 
   // ─── Config mutation callbacks (delegate to pure functions) ──────────
 
@@ -299,6 +375,14 @@ export function DashboardBuilder({
         onSave={handleSave}
         onEnterEditMode={handleEnterEditMode}
       />
+
+      {/* Stale dashboard warning */}
+      {isStale && isEditing && (
+        <DashboardStaleWarning
+          onSaveAsNew={handleSaveAsNew}
+          onOverride={handleOverride}
+        />
+      )}
 
       {/* Sections */}
       {filteredSections.length === 0 ? (
@@ -518,6 +602,16 @@ export function DashboardBuilder({
         open={navGuard.isBlocked}
         onStay={navGuard.reset}
         onLeave={navGuard.proceed}
+      />
+
+      {/* Save as New Dashboard Dialog (from stale warning) */}
+      <SaveAsNewDialog
+        open={showSaveAsNew}
+        onOpenChange={setShowSaveAsNew}
+        name={saveAsNewName}
+        onNameChange={setSaveAsNewName}
+        onConfirm={confirmSaveAsNew}
+        isPending={createMutation.isPending}
       />
     </div>
   );

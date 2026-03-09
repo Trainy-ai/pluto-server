@@ -11,10 +11,11 @@ export const updateViewProcedure = protectedOrgProcedure
       name: z.string().min(1).max(255).optional(),
       config: DashboardViewConfigSchema.optional(),
       isDefault: z.boolean().optional(),
+      expectedUpdatedAt: z.string().datetime().optional(),
     })
   )
   .mutation(async ({ ctx, input }) => {
-    const { organizationId, viewId, name, config, isDefault } = input;
+    const { organizationId, viewId, name, config, isDefault, expectedUpdatedAt } = input;
 
     // Find the existing view
     const existingView = await ctx.prisma.dashboardView.findFirst({
@@ -48,6 +49,18 @@ export const updateViewProcedure = protectedOrgProcedure
         code: "FORBIDDEN",
         message: "Only administrators can set a view as the default",
       });
+    }
+
+    // Optimistic concurrency check: if expectedUpdatedAt is provided,
+    // verify the view hasn't been modified since the client loaded it
+    if (expectedUpdatedAt) {
+      const expectedDate = new Date(expectedUpdatedAt);
+      if (existingView.updatedAt.getTime() > expectedDate.getTime()) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "This dashboard has been modified by another user since you started editing. Please refresh to see the latest changes, or override to save anyway.",
+        });
+      }
     }
 
     // If renaming, check for name conflicts
@@ -106,17 +119,13 @@ export const updateViewProcedure = protectedOrgProcedure
       },
     });
 
-    const viewWithRelations = updatedView as typeof updatedView & {
-      createdBy: { id: string; name: string | null; image: string | null };
-    };
-
     return {
-      id: viewWithRelations.id.toString(),
-      name: viewWithRelations.name,
-      isDefault: viewWithRelations.isDefault,
-      config: DashboardViewConfigSchema.parse(viewWithRelations.config),
-      createdAt: viewWithRelations.createdAt,
-      updatedAt: viewWithRelations.updatedAt,
-      createdBy: viewWithRelations.createdBy,
+      id: updatedView.id.toString(),
+      name: updatedView.name,
+      isDefault: updatedView.isDefault,
+      config: DashboardViewConfigSchema.parse(updatedView.config),
+      createdAt: updatedView.createdAt,
+      updatedAt: updatedView.updatedAt,
+      createdBy: updatedView.createdBy,
     };
   });

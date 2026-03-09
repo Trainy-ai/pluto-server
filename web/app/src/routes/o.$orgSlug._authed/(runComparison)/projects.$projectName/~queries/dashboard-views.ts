@@ -82,6 +82,23 @@ export const useUpdateDashboardView = (organizationId: string, projectName: stri
   });
 };
 
+// Hook to poll for dashboard staleness while editing
+export const useDashboardStalenessCheck = (
+  organizationId: string,
+  viewId: string | null,
+  enabled: boolean,
+) => {
+  return useQuery({
+    ...trpc.dashboardViews.get.queryOptions({
+      organizationId,
+      viewId: viewId ?? "",
+    }),
+    enabled: !!viewId && enabled,
+    refetchInterval: 30_000, // Poll every 30 seconds
+    refetchIntervalInBackground: false,
+  });
+};
+
 // Hook to delete a dashboard view
 export const useDeleteDashboardView = (organizationId: string, projectName: string) => {
   const queryClient = useQueryClient();
