@@ -65,11 +65,18 @@ describe("formatAxisLabels with isLogScale", () => {
     expect(result).toEqual(["1e-3", "1e-2", "1e-1", "1e0"]);
   });
 
-  it("does NOT use scientific notation when all values are >= 0.01 on log scale", () => {
+  it("uses scientific notation when values span multiple orders of magnitude on log scale", () => {
     const vals = [1, 10, 100, 1000];
     const result = formatAxisLabels(vals, true);
-    // These values are in a range where regular formatting is clear
-    expect(result).toEqual(["1", "10", "100", "1k"]);
+    // Values span 3 orders of magnitude (1000/1 >= 100), so scientific notation is used
+    expect(result).toEqual(["1e0", "1e1", "1e2", "1e3"]);
+  });
+
+  it("does NOT use scientific notation when log scale values are close together", () => {
+    const vals = [10, 20, 50, 80];
+    const result = formatAxisLabels(vals, true);
+    // Values span less than 2 orders of magnitude (80/10 < 100), so regular formatting
+    expect(result).toEqual(["10", "20", "50", "80"]);
   });
 
   it("handles zero values in log scale formatting", () => {
@@ -88,10 +95,11 @@ describe("formatAxisLabels with isLogScale", () => {
     expect(result[3]).toBe("1e-2");
   });
 
-  it("falls back to regular formatting for log scale with large values", () => {
+  it("uses scientific notation for log scale with large values spanning orders of magnitude", () => {
     const vals = [100, 1000, 10000, 100000];
     const result = formatAxisLabels(vals, true);
-    expect(result).toEqual(["100", "1k", "10k", "100k"]);
+    // Values span 3 orders of magnitude (100000/100 >= 100)
+    expect(result).toEqual(["1e2", "1e3", "1e4", "1e5"]);
   });
 
   it("uses scientific notation when log scale has a wide range including small values", () => {

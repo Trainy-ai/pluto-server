@@ -55,17 +55,22 @@ export function formatAxisLabels(
 ): string[] {
   if (vals.length === 0) return [];
 
-  // For log scale: use scientific notation when values are small
+  // For log scale: use scientific notation for readability across orders of magnitude
   if (isLogScale) {
     const nonNull = vals.filter((v): v is number => v != null && v !== 0);
-    const minAbs = nonNull.length > 0 ? Math.min(...nonNull.map(Math.abs)) : 1;
-
-    if (minAbs < 0.01) {
-      const formatted = vals.map((v) => formatScientificLabel(v));
-      const uniqueCount = new Set(formatted).size;
-      if (uniqueCount === formatted.length) return formatted;
-      // If duplicates with 2-digit precision, increase to 3
-      return vals.map((v) => formatScientificLabel(v, 3));
+    if (nonNull.length > 0) {
+      const minAbs = Math.min(...nonNull.map(Math.abs));
+      const maxAbs = Math.max(...nonNull.map(Math.abs));
+      // Use scientific notation when values span multiple orders of magnitude
+      // or when values are very small
+      const spansManyOrders = maxAbs / minAbs >= 100;
+      if (spansManyOrders || minAbs < 0.01) {
+        const formatted = vals.map((v) => formatScientificLabel(v));
+        const uniqueCount = new Set(formatted).size;
+        if (uniqueCount === formatted.length) return formatted;
+        // If duplicates with 2-digit precision, increase to 3
+        return vals.map((v) => formatScientificLabel(v, 3));
+      }
     }
   }
 
