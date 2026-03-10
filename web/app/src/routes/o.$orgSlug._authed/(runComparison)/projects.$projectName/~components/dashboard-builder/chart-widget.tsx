@@ -39,7 +39,9 @@ export function ChartWidget({
     return Object.entries(selectedRuns).map(([runId, { run, color }]) => ({
       runId,
       runName: formatRunLabel(run.name, getDisplayIdForRun(run)),
+      rawRunName: run.name,
       color,
+      displayId: getDisplayIdForRun(run),
     }));
   }, [selectedRuns]);
 

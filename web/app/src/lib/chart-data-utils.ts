@@ -37,6 +37,12 @@ export interface BaseSeriesData {
   dash?: number[];
   /** Map from x-value to non-finite flag text ("NaN", "Inf", "-Inf") for tooltip display */
   valueFlags?: Map<number, string>;
+  /** Human-readable run name (for tooltip column customization) */
+  runName?: string;
+  /** Run ID / external ID (for tooltip column customization) */
+  runId?: string;
+  /** Metric name this series is plotting (for tooltip column customization) */
+  metricName?: string;
 }
 
 /** Chart series data with all optional fields for smoothing/envelope/display */
@@ -54,6 +60,12 @@ export interface ChartSeriesData {
   envelopeBound?: "min" | "max";
   /** Map from x-value to non-finite flag text ("NaN", "Inf", "-Inf") for tooltip display */
   valueFlags?: Map<number, string>;
+  /** Human-readable run name (for tooltip column customization) */
+  runName?: string;
+  /** Run ID / external ID (for tooltip column customization) */
+  runId?: string;
+  /** Metric name this series is plotting (for tooltip column customization) */
+  metricName?: string;
 }
 
 // ============================

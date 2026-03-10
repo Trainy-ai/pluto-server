@@ -107,6 +107,12 @@ export interface LineData {
   envelopeBound?: "min" | "max";
   /** Map from x-value to non-finite flag text ("NaN", "Inf", "-Inf") for tooltip display */
   valueFlags?: Map<number, string>;
+  /** Human-readable run name (for tooltip column customization) */
+  runName?: string;
+  /** Run ID / external ID (for tooltip column customization) */
+  runId?: string;
+  /** Metric name this series is plotting (for tooltip column customization) */
+  metricName?: string;
 }
 
 /** Raw (pre-downsampled) data for a single series, used for zoom-aware re-downsampling */
@@ -118,6 +124,12 @@ export interface RawLineData {
   seriesId?: string;
   /** uPlot dash pattern, e.g. [10, 5]. undefined = solid. */
   dash?: number[];
+  /** Human-readable run name (for tooltip column customization) */
+  runName?: string;
+  /** Run ID / external ID (for tooltip column customization) */
+  runId?: string;
+  /** Metric name this series is plotting (for tooltip column customization) */
+  metricName?: string;
 }
 
 interface LineChartProps extends React.HTMLAttributes<HTMLDivElement> {
@@ -655,6 +667,49 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       };
     }, [chartId]);
 
+    // Tooltip row hover emphasis: mirrors focus-detection logic from cursor-hooks.ts
+    const handleTooltipSeriesHover = useMemo(() => {
+      return (seriesLabel: string | null, runId: string | null) => {
+        const u = chartInstanceRef.current;
+        const ctx = chartSyncContextRef.current;
+        if (!u) return;
+
+        if (seriesLabel) {
+          // Find the series index by label
+          const seriesIdx = u.series.findIndex((s, i) => i > 0 && typeof s.label === "string" && s.label === seriesLabel);
+          if (seriesIdx > 0) {
+            lastFocusedSeriesRef.current = seriesIdx;
+            (u as any)._lastFocusedSeriesIdx = seriesIdx;
+            (u as any)._crossHighlightRunId = null;
+            // Apply width emphasis
+            const lw = chartLineWidthRef.current;
+            const highlightedWidth = Math.max(1, lw * 1.25);
+            const dimmedWidth = Math.max(0.4, lw * 0.85);
+            for (let si = 1; si < u.series.length; si++) {
+              u.series[si].width = si === seriesIdx ? highlightedWidth : dimmedWidth;
+            }
+            u.redraw();
+          }
+          // Cross-chart highlighting
+          highlightedSeriesRef.current = seriesLabel;
+          ctx?.setHighlightedSeriesName(seriesLabel);
+          if (runId) {
+            ctx?.highlightUPlotSeries(chartId, runId);
+            ctx?.setHighlightedRunId(runId);
+          }
+        } else {
+          // Clear emphasis
+          lastFocusedSeriesRef.current = null;
+          delete (u as any)._lastFocusedSeriesIdx;
+          (u as any)._crossHighlightRunId = null;
+          const lw = chartLineWidthRef.current;
+          applySeriesHighlight(u, tableHighlightRef.current, '_seriesId', lw);
+          u.redraw();
+          ctx?.highlightUPlotSeries(chartId, null);
+        }
+      };
+    }, [chartId]);
+
     // Strict check: is this chart the one the user is actively interacting with?
     // Unlike isActiveChart (which returns true when no chart is hovered), this returns
     // true ONLY when the user is hovering this specific chart. Used for zoom broadcast
@@ -933,6 +988,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             xlabel,
             title,
             subtitle,
+            onSeriesHover: handleTooltipSeriesHover, // Emphasis on tooltip row hover
           }),
         ],
         hooks: {

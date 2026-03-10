@@ -74,7 +74,9 @@ export const MultiGroup = ({
       return metric.data.map((line) => ({
         runId: line.runId,
         runName: formatRunLabel(line.runName, line.displayId),
+        rawRunName: line.runName,
         color: line.color,
+        displayId: line.displayId,
       }));
     });
   }, [metrics]);

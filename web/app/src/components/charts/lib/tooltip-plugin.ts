@@ -4,6 +4,119 @@ import { formatAxisLabel, formatStepValue, smartDateFormatter } from "./format";
 import { interpolateValue, isInsideDataGap, type TooltipInterpolation } from "@/lib/math/interpolation";
 
 // ============================
+// Tooltip Column Configuration
+// ============================
+
+/** Available columns for tooltip display */
+export type TooltipColumnId = "name" | "value" | "run-name" | "run-id" | "metric";
+
+export interface TooltipColumnConfig {
+  id: TooltipColumnId;
+  label: string;
+  enabled: boolean;
+}
+
+const TOOLTIP_COLUMNS_KEY = "uplot-tooltip-columns";
+const TOOLTIP_COL_WIDTHS_KEY = "uplot-tooltip-col-widths";
+
+/** All available tooltip columns with defaults */
+const ALL_COLUMNS: TooltipColumnConfig[] = [
+  { id: "run-id", label: "Display ID", enabled: true },
+  { id: "run-name", label: "Run Name", enabled: true },
+  { id: "metric", label: "Metric", enabled: true },
+  { id: "value", label: "Value", enabled: true },
+  { id: "name", label: "Series Name", enabled: false },
+];
+
+/** Module-level cache for column config */
+let cachedTooltipColumns: TooltipColumnConfig[] | null = (() => {
+  try {
+    const raw = localStorage.getItem(TOOLTIP_COLUMNS_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      // Restore saved order AND enabled state, then append any new columns not in saved data
+      const result: TooltipColumnConfig[] = [];
+      for (const saved of parsed) {
+        const def = ALL_COLUMNS.find((c) => c.id === saved.id);
+        if (def) result.push({ ...def, enabled: saved.enabled });
+      }
+      // Append any columns added since last save
+      for (const col of ALL_COLUMNS) {
+        if (!result.find((r) => r.id === col.id)) result.push(col);
+      }
+      return result;
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+})();
+
+function getTooltipColumns(): TooltipColumnConfig[] {
+  return cachedTooltipColumns ?? ALL_COLUMNS;
+}
+
+function saveTooltipColumns(columns: TooltipColumnConfig[]) {
+  cachedTooltipColumns = columns;
+  try {
+    localStorage.setItem(TOOLTIP_COLUMNS_KEY, JSON.stringify(columns));
+  } catch {
+    // ignore
+  }
+  // Notify all tooltip instances to rebuild their settings UI
+  document.dispatchEvent(new CustomEvent("tooltip-columns-changed"));
+}
+
+// ============================
+// Column Width Persistence
+// ============================
+
+/** Default column widths in pixels */
+const DEFAULT_COL_WIDTHS: Record<string, number> = {
+  "run-id": 70,
+  "run-name": 110,
+  "metric": 90,
+  "value": 100,
+  "name": 130,
+};
+
+/** Module-level cache for column widths */
+let cachedColWidths: Record<string, number> = (() => {
+  try {
+    const raw = localStorage.getItem(TOOLTIP_COL_WIDTHS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") {
+        return { ...DEFAULT_COL_WIDTHS, ...parsed };
+      }
+    }
+  } catch { /* ignore */ }
+  return { ...DEFAULT_COL_WIDTHS };
+})();
+
+function getColWidth(id: string): number {
+  return cachedColWidths[id] ?? DEFAULT_COL_WIDTHS[id] ?? 80;
+}
+
+function saveColWidth(id: string, width: number) {
+  cachedColWidths[id] = width;
+  try {
+    localStorage.setItem(TOOLTIP_COL_WIDTHS_KEY, JSON.stringify(cachedColWidths));
+  } catch { /* ignore */ }
+}
+
+/** Build CSS grid-template-columns for a set of enabled columns.
+ *  Format: "16px <col1>px <col2>px ..." (16px = color indicator) */
+function buildGridTemplate(enabledColumns: TooltipColumnConfig[]): string {
+  const parts = ["16px"]; // color indicator
+  for (const col of enabledColumns) {
+    parts.push(`${getColWidth(col.id)}px`);
+  }
+  return parts.join(" ");
+}
+
+// ============================
 // Tooltip Plugin
 // ============================
 
@@ -94,76 +207,130 @@ function scaleDash(dash: number[], scale: number): string {
   return dash.map((v) => Math.max(1, Math.round(v * scale))).join(",");
 }
 
+/** Metadata for a tooltip row, used for column-based rendering */
+interface TooltipRowData {
+  name: string;
+  value: number;
+  color: string;
+  isHighlighted: boolean;
+  rawValue?: number;
+  isInterpolated: boolean;
+  flagText?: string;
+  rawFlagText?: string;
+  dash?: number[];
+  runName?: string;
+  runId?: string;
+  metricName?: string;
+}
+
+/** Helper to format a value span with proper styling for flags/interpolation */
+function formatValueContent(
+  valueSpan: HTMLSpanElement,
+  data: TooltipRowData,
+  textColor: string,
+) {
+  if (data.flagText) {
+    valueSpan.style.cssText = `color: #e8a838; font-weight: 600; flex-shrink: 0; font-style: italic`;
+    valueSpan.textContent = data.flagText;
+  } else if (data.rawFlagText) {
+    valueSpan.style.cssText = `color: ${textColor}; font-weight: 500; flex-shrink: 0`;
+    const smoothedText = document.createTextNode(`${formatAxisLabel(data.value)} (`);
+    valueSpan.appendChild(smoothedText);
+    const flagSpan = document.createElement("span");
+    flagSpan.style.cssText = "color: #e8a838; font-style: italic";
+    flagSpan.textContent = data.rawFlagText;
+    valueSpan.appendChild(flagSpan);
+    valueSpan.appendChild(document.createTextNode(")"));
+  } else {
+    valueSpan.style.cssText = `color: ${textColor}; font-weight: 500; flex-shrink: 0${data.isInterpolated ? "; opacity: 0.6; font-style: italic" : ""}`;
+    if (data.rawValue != null && data.rawValue !== data.value) {
+      valueSpan.textContent = `${formatAxisLabel(data.value)} (${formatAxisLabel(data.rawValue)})`;
+    } else {
+      valueSpan.textContent = data.isInterpolated ? `~${formatAxisLabel(data.value)}` : formatAxisLabel(data.value);
+    }
+  }
+}
+
 /** Helper to safely create tooltip row using DOM APIs (prevents XSS) */
 function createTooltipRow(
-  name: string,
-  value: number,
-  color: string,
+  data: TooltipRowData,
   textColor: string,
-  isHighlighted: boolean = false,
-  rawValue?: number,
-  isInterpolated: boolean = false,
-  flagText?: string,
-  rawFlagText?: string,
-  dash?: number[],
+  columns: TooltipColumnConfig[],
+  theme: string = "dark",
 ): HTMLDivElement {
+  const enabledColumns = columns.filter((c) => c.enabled);
   const row = document.createElement("div");
-  row.style.cssText = `padding: 1px 4px; display: flex; align-items: center; gap: 6px; white-space: nowrap${isHighlighted ? "; background: rgba(255,255,255,0.05)" : ""}`;
+  row.style.cssText = `padding: 2px 4px; display: grid; grid-template-columns: ${buildGridTemplate(enabledColumns)}; align-items: center; gap: 6px; white-space: nowrap${data.isHighlighted ? "; background: rgba(255,255,255,0.05)" : ""}`;
 
   // Colored line indicator — SVG with dash pattern matching the chart line
-  if (dash && dash.length > 0) {
+  if (data.dash && data.dash.length > 0) {
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.setAttribute("width", "16");
     svg.setAttribute("height", "6");
-    svg.style.cssText = "flex-shrink: 0";
     const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
     line.setAttribute("x1", "0");
     line.setAttribute("y1", "3");
     line.setAttribute("x2", "16");
     line.setAttribute("y2", "3");
-    line.setAttribute("stroke", color);
+    line.setAttribute("stroke", data.color);
     line.setAttribute("stroke-width", "2");
-    line.setAttribute("stroke-dasharray", scaleDash(dash, 0.4));
+    line.setAttribute("stroke-dasharray", scaleDash(data.dash, 0.4));
     svg.appendChild(line);
     row.appendChild(svg);
   } else {
     const colorLine = document.createElement("span");
-    colorLine.style.cssText = `flex-shrink: 0; width: 12px; height: 3px; border-radius: 1px; background: ${color}`;
+    colorLine.style.cssText = `width: 12px; height: 3px; border-radius: 1px; background: ${data.color}`;
     row.appendChild(colorLine);
   }
 
-  const nameSpan = document.createElement("span");
-  nameSpan.style.cssText = `color: ${textColor}; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0${isHighlighted ? "; font-weight: 600" : ""}`;
-  nameSpan.textContent = name;
-  row.appendChild(nameSpan);
-
-  const valueSpan = document.createElement("span");
-  if (flagText) {
-    // Non-finite value: show flag text (NaN/Inf/-Inf) in warning color
-    valueSpan.style.cssText = `color: #e8a838; font-weight: 600; flex-shrink: 0; font-style: italic`;
-    valueSpan.textContent = flagText;
-  } else if (rawFlagText) {
-    // Smoothed value is finite but raw/original value was NaN/Inf/-Inf
-    valueSpan.style.cssText = `color: ${textColor}; font-weight: 500; flex-shrink: 0`;
-    const smoothedText = document.createTextNode(`${formatAxisLabel(value)} (`);
-    valueSpan.appendChild(smoothedText);
-    const flagSpan = document.createElement("span");
-    flagSpan.style.cssText = "color: #e8a838; font-style: italic";
-    flagSpan.textContent = rawFlagText;
-    valueSpan.appendChild(flagSpan);
-    valueSpan.appendChild(document.createTextNode(")"));
-  } else {
-    valueSpan.style.cssText = `color: ${textColor}; font-weight: 500; flex-shrink: 0${isInterpolated ? "; opacity: 0.6; font-style: italic" : ""}`;
-    if (rawValue != null && rawValue !== value) {
-      valueSpan.textContent = `${formatAxisLabel(value)} (${formatAxisLabel(rawValue)})`;
-    } else {
-      valueSpan.textContent = isInterpolated ? `~${formatAxisLabel(value)}` : formatAxisLabel(value);
+  const dividerColor = theme === "dark" ? "#333" : "#ddd";
+  for (let ci = 0; ci < enabledColumns.length; ci++) {
+    const col = enabledColumns[ci];
+    const isLast = ci === enabledColumns.length - 1;
+    const divider = isLast ? "" : `; border-right: 1px solid ${dividerColor}; padding-right: 4px`;
+    switch (col.id) {
+      case "name": {
+        const nameSpan = document.createElement("span");
+        nameSpan.style.cssText = `color: ${textColor}; overflow: hidden; text-overflow: ellipsis${data.isHighlighted ? "; font-weight: 600" : ""}${divider}`;
+        nameSpan.textContent = data.name;
+        row.appendChild(nameSpan);
+        break;
+      }
+      case "value": {
+        const valueSpan = document.createElement("span");
+        valueSpan.style.cssText = `overflow: hidden; text-overflow: ellipsis${divider}`;
+        formatValueContent(valueSpan, data, textColor);
+        row.appendChild(valueSpan);
+        break;
+      }
+      case "run-name": {
+        const span = document.createElement("span");
+        span.style.cssText = `color: ${textColor}; overflow: hidden; text-overflow: ellipsis; opacity: 0.8${divider}`;
+        span.textContent = data.runName ?? "";
+        row.appendChild(span);
+        break;
+      }
+      case "run-id": {
+        const span = document.createElement("span");
+        span.style.cssText = `color: ${textColor}; overflow: hidden; text-overflow: ellipsis; opacity: 0.8; font-size: 10px${divider}`;
+        span.textContent = data.runId ?? "";
+        row.appendChild(span);
+        break;
+      }
+      case "metric": {
+        const span = document.createElement("span");
+        span.style.cssText = `color: ${textColor}; overflow: hidden; text-overflow: ellipsis; opacity: 0.8; font-size: 10px${divider}`;
+        span.textContent = data.metricName ?? "";
+        row.appendChild(span);
+        break;
+      }
     }
   }
-  row.appendChild(valueSpan);
 
   return row;
 }
+
+/* Settings panel replaced by Neptune-style column headers with +Add dropdown */
 
 /** Type for hover state that persists across chart recreations */
 export interface HoverState {
@@ -197,10 +364,12 @@ export interface TooltipPluginOpts {
   title?: string;
   /** Additional subtitle (e.g. chip/pattern names) shown below title in tooltip header */
   subtitle?: string;
+  /** Callback when user hovers over a series row in the pinned tooltip */
+  onSeriesHover?: (seriesLabel: string | null, runId: string | null) => void;
 }
 
 export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
-  const { theme, isDateTime, timeRange, lines, hoverStateRef, onHoverChange, isActiveChart, highlightedSeriesRef, tooltipInterpolation = "none", spanGaps = true, xlabel, title, subtitle } = opts;
+  const { theme, isDateTime, timeRange, lines, hoverStateRef, onHoverChange, isActiveChart, highlightedSeriesRef, tooltipInterpolation = "none", spanGaps = true, xlabel, title, subtitle, onSeriesHover } = opts;
 
   // DEBUG: Temporary logging to diagnose tooltip persistence issue
   const DEBUG_TOOLTIP = false; // Set to true for debugging
@@ -228,12 +397,21 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
   let isRebuilding = false;
   /** Shared safety-net entry for the module-level mousemove listener */
   let safetyEntry: TooltipSafetyEntry | null = null;
+  /** Search state for pinned tooltip */
+  const searchInputRef: { value: string; focused: boolean; cursorPos: number } | null = { value: "", focused: false, cursorPos: 0 };
+  /** Whether +Add column dropdown is currently open */
+  let addColumnDropdownOpen = false;
+  /** Saved pinned position for re-renders */
+  let savedPinnedLeft = "0px";
+  let savedPinnedTop = "0px";
   /** Drag state for pinned tooltip */
   let isDragging = false;
   let dragStartX = 0;
   let dragStartY = 0;
   let dragStartLeft = 0;
   let dragStartTop = 0;
+  /** Stored uPlot instance for event-driven re-renders */
+  let chartInstance: uPlot | null = null;
 
   const handleDragMouseDown = (e: MouseEvent) => {
     if (!tooltipEl || !isPinned) return;
@@ -268,7 +446,22 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     }
   };
 
+  /** Close the +Add dropdown if open (remove from body since it's appended there) */
+  const closeAddDropdown = () => {
+    addColumnDropdownOpen = false;
+    const existing = document.querySelector("[data-tooltip-add-dropdown]");
+    if (existing) existing.remove();
+  };
+
+  /** Re-render pinned tooltip when column settings change in another instance */
+  const handleColumnsChanged = () => {
+    if (isPinned && chartInstance && lastIdx != null) {
+      updateTooltipContent(chartInstance, lastIdx);
+    }
+  };
+
   function init(u: uPlot) {
+    chartInstance = u;
     overEl = u.over;
     tooltipEl = document.createElement("div");
     tooltipEl.className = "uplot-tooltip";
@@ -279,12 +472,12 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       pointer-events: none;
       z-index: 9999;
       font-family: ui-monospace, monospace;
-      font-size: 10px;
+      font-size: 11px;
       background: ${theme === "dark" ? "#161619" : "#fff"};
       border: 1px solid ${theme === "dark" ? "#333" : "#e0e0e0"};
       border-radius: 4px;
       padding: 4px;
-      max-width: 300px;
+      max-width: 340px;
       box-shadow: 0 2px 8px rgba(0,0,0,0.15);
     `;
     applySavedSize(tooltipEl);
@@ -439,10 +632,18 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
 
     /** Pin the tooltip at its current position */
     const pinTooltip = () => {
-      if (!tooltipEl) return;
+      if (!tooltipEl || !chartInstance) return;
       isPinned = true;
       syncHoverState();
       applyPinnedStyle();
+      // Rebuild content with pinned UI (search input, settings button)
+      if (lastIdx != null) {
+        savedPinnedLeft = tooltipEl.style.left;
+        savedPinnedTop = tooltipEl.style.top;
+        updateTooltipContent(chartInstance, lastIdx);
+        tooltipEl.style.left = savedPinnedLeft;
+        tooltipEl.style.top = savedPinnedTop;
+      }
       log("tooltip pinned");
     };
 
@@ -451,6 +652,12 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       if (!tooltipEl) return;
       isPinned = false;
       lastUnpinTime = Date.now();
+      // Reset UI state but preserve search query (filter stays active when unpinned)
+      if (searchInputRef) {
+        searchInputRef.focused = false;
+        searchInputRef.cursorPos = 0;
+      }
+      closeAddDropdown();
       syncHoverState();
       // Stop observing resize
       if (resizeObserver) {
@@ -473,7 +680,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       } else {
         tooltipEl.style.width = "";
         tooltipEl.style.height = "";
-        tooltipEl.style.maxWidth = "300px";
+        tooltipEl.style.maxWidth = "340px";
         tooltipEl.style.overflow = "";
       }
       // Remove close button
@@ -540,6 +747,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     overEl!.addEventListener("dblclick", handleOverDblClick);
     document.addEventListener("keydown", handleKeyDown);
     document.addEventListener("mousedown", handleDocumentMouseDown);
+    document.addEventListener("tooltip-columns-changed", handleColumnsChanged);
 
     // Store cleanup function on the element for later removal
     (overEl as HTMLElement & { _tooltipCleanup?: () => void })._tooltipCleanup = () => {
@@ -549,6 +757,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       overEl?.removeEventListener("dblclick", handleOverDblClick);
       document.removeEventListener("keydown", handleKeyDown);
       document.removeEventListener("mousedown", handleDocumentMouseDown);
+      document.removeEventListener("tooltip-columns-changed", handleColumnsChanged);
       if (safetyEntry) {
         unregisterSafetyEntry(safetyEntry);
         safetyEntry = null;
@@ -598,7 +807,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
 
     // Gather series values
     const textColor = theme === "dark" ? "#fff" : "#000";
-    const seriesItems: { name: string; value: number; color: string; hidden: boolean; rawValue?: number; isInterpolated: boolean; flagText?: string; rawFlagText?: string; dash?: number[] }[] = [];
+    const seriesItems: { name: string; value: number; color: string; hidden: boolean; rawValue?: number; isInterpolated: boolean; flagText?: string; rawFlagText?: string; dash?: number[]; runName?: string; runId?: string; metricName?: string }[] = [];
 
     // First pass: collect raw (original) values and flags from hidden smoothing series
     const rawValues = new Map<string, number>();
@@ -651,6 +860,9 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
           isInterpolated: false,
           flagText: flag,
           dash: lineData?.dash,
+          runName: lineData?.runName,
+          runId: lineData?.runId,
+          metricName: lineData?.metricName,
         });
         continue;
       }
@@ -693,6 +905,9 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
           isInterpolated,
           rawFlagText: rawFlags.get(labelText),
           dash: lineData?.dash,
+          runName: lineData?.runName,
+          runId: lineData?.runId,
+          metricName: lineData?.metricName,
         });
       }
     }
@@ -714,7 +929,23 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     // Filter out hidden series - show ALL series with scrolling
     const visibleItems = seriesItems.filter((s) => !s.hidden);
 
+    // Get current column configuration
+    const columns = getTooltipColumns();
+
+    // Apply search filter if active
+    const searchQuery = searchInputRef?.value?.toLowerCase() ?? "";
+    const filteredItems = searchQuery
+      ? visibleItems.filter((s) =>
+          s.name.toLowerCase().includes(searchQuery) ||
+          (s.runName && s.runName.toLowerCase().includes(searchQuery)) ||
+          (s.runId && s.runId.toLowerCase().includes(searchQuery)) ||
+          (s.metricName && s.metricName.toLowerCase().includes(searchQuery))
+        )
+      : visibleItems;
+
     // Clear content container only — close button lives on tooltipEl outside this container
+    // Also remove any body-appended dropdown from previous render
+    closeAddDropdown();
     isRebuilding = true;
     contentContainer.textContent = "";
 
@@ -722,11 +953,11 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     // Header doubles as drag handle when pinned
     const header = document.createElement("div");
     header.setAttribute("data-tooltip-header", "true");
-    header.style.cssText = `font-weight: bold; color: ${textColor}; padding: 2px 4px; border-bottom: 1px solid ${theme === "dark" ? "#333" : "#eee"}; margin-bottom: 2px; font-size: 10px; cursor: ${isPinned ? "grab" : "default"}; user-select: none`;
+    header.style.cssText = `font-weight: bold; color: ${textColor}; padding: 3px 4px; border-bottom: 1px solid ${theme === "dark" ? "#333" : "#eee"}; margin-bottom: 2px; font-size: 12px; cursor: ${isPinned ? "grab" : "default"}; user-select: none`;
 
-    // First row: step/time label + series count
+    // First row: step/time label + series count + settings button
     const topRow = document.createElement("div");
-    topRow.style.cssText = "display: flex; align-items: center; gap: 8px";
+    topRow.style.cssText = `display: flex; align-items: center; gap: 8px${isPinned ? "; padding-right: 18px" : ""}`;
 
     const xLabel = document.createElement("span");
     const xAxisLabel = isDateTime
@@ -738,8 +969,10 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     topRow.appendChild(xLabel);
 
     const countLabel = document.createElement("span");
-    countLabel.style.cssText = "opacity: 0.6; font-weight: normal; font-size: 9px; flex-shrink: 0";
-    countLabel.textContent = `${visibleItems.length} series`;
+    countLabel.style.cssText = "opacity: 0.6; font-weight: normal; font-size: 10px; flex-shrink: 0";
+    countLabel.textContent = searchQuery
+      ? `${filteredItems.length}/${visibleItems.length} series`
+      : `${visibleItems.length} series`;
     topRow.appendChild(countLabel);
 
     header.appendChild(topRow);
@@ -748,12 +981,336 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     const infoText = [title, subtitle].filter(Boolean).join(" · ");
     if (infoText) {
       const infoRow = document.createElement("div");
-      infoRow.style.cssText = `font-weight: normal; font-size: 9px; opacity: 0.6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap`;
+      infoRow.style.cssText = `font-weight: normal; font-size: 10px; opacity: 0.6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap`;
       infoRow.textContent = infoText;
       header.appendChild(infoRow);
     }
 
     contentContainer.appendChild(header);
+
+    // Search input (pinned only, but filter persists when unpinned)
+    if (isPinned) {
+      const searchRow = document.createElement("div");
+      searchRow.style.cssText = `padding: 2px 4px; border-bottom: 1px solid ${theme === "dark" ? "#333" : "#eee"}; margin-bottom: 2px`;
+      const searchInput = document.createElement("input");
+      searchInput.setAttribute("data-tooltip-search", "true");
+      searchInput.type = "text";
+      searchInput.placeholder = "Search series...";
+      searchInput.value = searchInputRef?.value ?? "";
+      searchInput.style.cssText = `width: 100%; box-sizing: border-box; font-size: 10px; font-family: inherit; padding: 3px 6px; border: 1px solid ${theme === "dark" ? "#444" : "#ddd"}; border-radius: 3px; background: ${theme === "dark" ? "#222" : "#f5f5f5"}; color: ${textColor}; outline: none`;
+      searchInput.addEventListener("input", () => {
+        if (searchInputRef) {
+          searchInputRef.value = searchInput.value;
+          searchInputRef.focused = true;
+          searchInputRef.cursorPos = searchInput.selectionStart ?? searchInput.value.length;
+        }
+        if (tooltipEl) {
+          savedPinnedLeft = tooltipEl.style.left;
+          savedPinnedTop = tooltipEl.style.top;
+        }
+        if (lastIdx != null) {
+          updateTooltipContent(u, lastIdx);
+          if (tooltipEl) {
+            tooltipEl.style.left = savedPinnedLeft;
+            tooltipEl.style.top = savedPinnedTop;
+          }
+        }
+      });
+      searchInput.addEventListener("mousedown", (e) => e.stopPropagation());
+      searchInput.addEventListener("click", (e) => e.stopPropagation());
+      searchRow.appendChild(searchInput);
+      contentContainer.appendChild(searchRow);
+
+      if (searchInputRef?.focused) {
+        requestAnimationFrame(() => {
+          searchInput.focus();
+          const pos = searchInputRef?.cursorPos ?? searchInput.value.length;
+          searchInput.setSelectionRange(pos, pos);
+        });
+      }
+    } else if (searchQuery) {
+      // When unpinned but a search filter is active, show a compact indicator
+      const filterRow = document.createElement("div");
+      filterRow.style.cssText = `padding: 2px 4px; font-size: 9px; color: ${textColor}; opacity: 0.6; border-bottom: 1px solid ${theme === "dark" ? "#333" : "#eee"}; margin-bottom: 1px; display: flex; align-items: center; gap: 4px`;
+      filterRow.textContent = `\u{1F50D} "${searchInputRef?.value}" — ${filteredItems.length}/${visibleItems.length}`;
+      contentContainer.appendChild(filterRow);
+    }
+
+    // Neptune-style column header row with resize handles and +Add (when pinned)
+    const enabledColumns = columns.filter((c) => c.enabled);
+    const disabledColumns = columns.filter((c) => !c.enabled);
+    const gridTemplate = buildGridTemplate(enabledColumns);
+
+    // Wrapper holds the grid header + the +Add button in a flex row
+    const columnHeaderWrapper = document.createElement("div");
+    columnHeaderWrapper.setAttribute("data-tooltip-column-headers", "true");
+    columnHeaderWrapper.style.cssText = `display: flex; align-items: center; border-bottom: 1px solid ${theme === "dark" ? "#333" : "#eee"}; margin-bottom: 1px`;
+
+    // Grid row for column labels (matches data row grid)
+    const columnHeaderRow = document.createElement("div");
+    columnHeaderRow.style.cssText = `flex: 1; min-width: 0; padding: 2px 4px; display: grid; grid-template-columns: ${gridTemplate}; align-items: center; gap: 6px; white-space: nowrap`;
+
+    // Color indicator spacer (matches data row's 16px first column)
+    const indicatorSpacer = document.createElement("span");
+    columnHeaderRow.appendChild(indicatorSpacer);
+
+    for (let ci = 0; ci < enabledColumns.length; ci++) {
+      const col = enabledColumns[ci];
+      // Each header cell is a container with label, optional ×, and optional resize handle
+      const isLastCol = ci === enabledColumns.length - 1;
+      const dividerStyle = isLastCol ? "" : `; border-right: 1px solid ${theme === "dark" ? "#333" : "#ddd"}; padding-right: 4px`;
+      const cellWrapper = document.createElement("span");
+      cellWrapper.style.cssText = `display: inline-flex; align-items: center; gap: 2px; position: relative; overflow: hidden${dividerStyle}`;
+
+      // Drag grip icon (pinned only, when >1 enabled column)
+      if (isPinned && enabledColumns.length > 1) {
+        const grip = document.createElement("span");
+        grip.textContent = "\u2261"; // ≡ hamburger icon
+        grip.style.cssText = `color: ${textColor}; opacity: 0.25; font-size: 10px; cursor: grab; flex-shrink: 0; line-height: 1`;
+        grip.addEventListener("mouseenter", () => { grip.style.opacity = "0.7"; });
+        grip.addEventListener("mouseleave", () => { grip.style.opacity = "0.25"; });
+        cellWrapper.appendChild(grip);
+      }
+
+      const labelSpan = document.createElement("span");
+      labelSpan.textContent = col.label;
+      labelSpan.style.cssText = `color: ${textColor}; opacity: 0.6; font-size: 9px; font-weight: 600; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis`;
+      cellWrapper.appendChild(labelSpan);
+
+      // "x" remove button — only when pinned and more than 1 column enabled
+      if (isPinned && enabledColumns.length > 1) {
+        const removeBtn = document.createElement("button");
+        removeBtn.style.cssText = `border: none; background: transparent; color: ${theme === "dark" ? "#666" : "#999"}; cursor: pointer; font-size: 10px; padding: 0; line-height: 1; flex-shrink: 0; opacity: 0.5`;
+        removeBtn.textContent = "\u00d7";
+        removeBtn.title = `Remove ${col.label}`;
+        removeBtn.addEventListener("mouseenter", () => { removeBtn.style.opacity = "1"; });
+        removeBtn.addEventListener("mouseleave", () => { removeBtn.style.opacity = "0.5"; });
+        removeBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const updated = getTooltipColumns().map((c) =>
+            c.id === col.id ? { ...c, enabled: false } : c,
+          );
+          saveTooltipColumns(updated);
+          if (tooltipEl) {
+            savedPinnedLeft = tooltipEl.style.left;
+            savedPinnedTop = tooltipEl.style.top;
+          }
+          if (lastIdx != null) {
+            updateTooltipContent(u, lastIdx);
+            if (tooltipEl) {
+              tooltipEl.style.left = savedPinnedLeft;
+              tooltipEl.style.top = savedPinnedTop;
+            }
+          }
+        });
+        removeBtn.addEventListener("mousedown", (e) => e.stopPropagation());
+        cellWrapper.appendChild(removeBtn);
+      }
+
+      // Drag-to-reorder (pinned only, when >1 column)
+      if (isPinned && enabledColumns.length > 1) {
+        cellWrapper.draggable = true;
+        cellWrapper.dataset.colId = col.id;
+        cellWrapper.style.cursor = "grab";
+        cellWrapper.addEventListener("dragstart", (e) => {
+          e.dataTransfer!.effectAllowed = "move";
+          e.dataTransfer!.setData("text/plain", col.id);
+          cellWrapper.style.opacity = "0.4";
+        });
+        cellWrapper.addEventListener("dragend", () => {
+          cellWrapper.style.opacity = "1";
+          // Clear all drop indicators
+          for (const child of columnHeaderRow.children) {
+            (child as HTMLElement).style.borderLeft = "";
+            (child as HTMLElement).style.borderRight = "";
+          }
+        });
+        cellWrapper.addEventListener("dragover", (e) => {
+          e.preventDefault();
+          e.dataTransfer!.dropEffect = "move";
+          // Show drop indicator
+          const rect = cellWrapper.getBoundingClientRect();
+          const mid = rect.left + rect.width / 2;
+          cellWrapper.style.borderLeft = e.clientX < mid ? `2px solid ${theme === "dark" ? "#5b9bf0" : "#3b82f6"}` : "";
+          cellWrapper.style.borderRight = e.clientX >= mid ? `2px solid ${theme === "dark" ? "#5b9bf0" : "#3b82f6"}` : "";
+        });
+        cellWrapper.addEventListener("dragleave", () => {
+          cellWrapper.style.borderLeft = "";
+          cellWrapper.style.borderRight = "";
+        });
+        cellWrapper.addEventListener("drop", (e) => {
+          e.preventDefault();
+          cellWrapper.style.borderLeft = "";
+          cellWrapper.style.borderRight = "";
+          const draggedId = e.dataTransfer!.getData("text/plain") as TooltipColumnId;
+          if (draggedId === col.id) return;
+          // Determine drop position (before or after this cell)
+          const rect = cellWrapper.getBoundingClientRect();
+          const dropAfter = e.clientX >= rect.left + rect.width / 2;
+          // Reorder in full columns array
+          const allCols = [...getTooltipColumns()];
+          const dragIdx = allCols.findIndex((c) => c.id === draggedId);
+          const targetIdx = allCols.findIndex((c) => c.id === col.id);
+          if (dragIdx < 0 || targetIdx < 0) return;
+          const [dragged] = allCols.splice(dragIdx, 1);
+          const insertIdx = allCols.findIndex((c) => c.id === col.id);
+          allCols.splice(dropAfter ? insertIdx + 1 : insertIdx, 0, dragged);
+          saveTooltipColumns(allCols);
+          if (tooltipEl) {
+            savedPinnedLeft = tooltipEl.style.left;
+            savedPinnedTop = tooltipEl.style.top;
+          }
+          if (lastIdx != null) {
+            updateTooltipContent(u, lastIdx);
+            if (tooltipEl) {
+              tooltipEl.style.left = savedPinnedLeft;
+              tooltipEl.style.top = savedPinnedTop;
+            }
+          }
+        });
+      }
+
+      // Resize handle on the right edge of each column (pinned only)
+      if (isPinned) {
+        const resizeHandle = document.createElement("div");
+        resizeHandle.style.cssText = `position: absolute; right: -3px; top: 0; bottom: 0; width: 6px; cursor: col-resize; z-index: 1`;
+        // Visual indicator on hover
+        resizeHandle.addEventListener("mouseenter", () => {
+          resizeHandle.style.background = theme === "dark" ? "rgba(91,155,240,0.4)" : "rgba(59,130,246,0.3)";
+        });
+        resizeHandle.addEventListener("mouseleave", () => {
+          if (!resizeHandle.dataset.dragging) resizeHandle.style.background = "";
+        });
+
+        const colId = col.id;
+        resizeHandle.addEventListener("mousedown", (e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          resizeHandle.dataset.dragging = "true";
+          resizeHandle.style.background = theme === "dark" ? "rgba(91,155,240,0.6)" : "rgba(59,130,246,0.5)";
+          const startX = e.clientX;
+          const startWidth = getColWidth(colId);
+
+          const onMouseMove = (ev: MouseEvent) => {
+            const delta = ev.clientX - startX;
+            const newWidth = Math.max(30, startWidth + delta);
+            saveColWidth(colId, newWidth);
+            // Live-update all grid rows in this tooltip
+            const newTemplate = buildGridTemplate(enabledColumns);
+            columnHeaderRow.style.gridTemplateColumns = newTemplate;
+            const contentEl = contentContainer?.querySelector("[data-tooltip-content]");
+            if (contentEl) {
+              for (const child of contentEl.children) {
+                (child as HTMLElement).style.gridTemplateColumns = newTemplate;
+              }
+            }
+          };
+
+          const onMouseUp = () => {
+            delete resizeHandle.dataset.dragging;
+            resizeHandle.style.background = "";
+            document.removeEventListener("mousemove", onMouseMove);
+            document.removeEventListener("mouseup", onMouseUp);
+          };
+
+          document.addEventListener("mousemove", onMouseMove);
+          document.addEventListener("mouseup", onMouseUp);
+        });
+
+        cellWrapper.appendChild(resizeHandle);
+      }
+
+      columnHeaderRow.appendChild(cellWrapper);
+    }
+
+    columnHeaderWrapper.appendChild(columnHeaderRow);
+
+    // "+Add" button (pinned only, when there are disabled columns to add)
+    if (isPinned && disabledColumns.length > 0) {
+      const addBtn = document.createElement("button");
+      addBtn.setAttribute("data-tooltip-add-col", "true");
+      addBtn.style.cssText = `border: 1px solid ${theme === "dark" ? "#444" : "#ddd"}; background: transparent; color: ${theme === "dark" ? "#888" : "#666"}; cursor: pointer; font-size: 9px; padding: 2px 6px; line-height: 1; border-radius: 3px; flex-shrink: 0; white-space: nowrap`;
+      addBtn.textContent = "+ Add";
+      addBtn.addEventListener("mouseenter", () => {
+        addBtn.style.borderColor = theme === "dark" ? "#666" : "#bbb";
+        addBtn.style.color = theme === "dark" ? "#fff" : "#000";
+      });
+      addBtn.addEventListener("mouseleave", () => {
+        addBtn.style.borderColor = theme === "dark" ? "#444" : "#ddd";
+        addBtn.style.color = theme === "dark" ? "#888" : "#666";
+      });
+      addBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        // Toggle dropdown (lives on document.body)
+        const existingDropdown = document.querySelector("[data-tooltip-add-dropdown]");
+        if (existingDropdown) {
+          existingDropdown.remove();
+          addColumnDropdownOpen = false;
+          return;
+        }
+        addColumnDropdownOpen = true;
+        const dropdown = document.createElement("div");
+        dropdown.setAttribute("data-tooltip-add-dropdown", "true");
+        dropdown.setAttribute("data-tooltip-settings", "true");
+        dropdown.style.cssText = `position: absolute; z-index: 10000; background: ${theme === "dark" ? "#1e1e22" : "#fff"}; border: 1px solid ${theme === "dark" ? "#444" : "#ddd"}; border-radius: 4px; padding: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); min-width: 120px`;
+
+        for (const col of disabledColumns) {
+          const item = document.createElement("div");
+          item.style.cssText = `padding: 4px 8px; font-size: 10px; color: ${textColor}; cursor: pointer; border-radius: 2px; white-space: nowrap`;
+          item.textContent = `+ ${col.label}`;
+          item.addEventListener("mouseenter", () => {
+            item.style.background = theme === "dark" ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)";
+          });
+          item.addEventListener("mouseleave", () => {
+            item.style.background = "";
+          });
+          item.addEventListener("click", (ev) => {
+            ev.stopPropagation();
+            const updated = getTooltipColumns().map((c) =>
+              c.id === col.id ? { ...c, enabled: true } : c,
+            );
+            saveTooltipColumns(updated);
+            addColumnDropdownOpen = false;
+            if (tooltipEl) {
+              savedPinnedLeft = tooltipEl.style.left;
+              savedPinnedTop = tooltipEl.style.top;
+            }
+            if (lastIdx != null) {
+              updateTooltipContent(u, lastIdx);
+              if (tooltipEl) {
+                tooltipEl.style.left = savedPinnedLeft;
+                tooltipEl.style.top = savedPinnedTop;
+              }
+            }
+          });
+          item.addEventListener("mousedown", (ev) => ev.stopPropagation());
+          dropdown.appendChild(item);
+        }
+
+        // Position dropdown below the +Add button using fixed positioning on body
+        // (avoids clipping from tooltip overflow: auto)
+        const btnRect = addBtn.getBoundingClientRect();
+        dropdown.style.position = "fixed";
+        dropdown.style.left = `${btnRect.left}px`;
+        dropdown.style.top = `${btnRect.bottom + 2}px`;
+
+        // Close dropdown on click outside
+        const closeDropdown = (ev: MouseEvent) => {
+          if (!dropdown.contains(ev.target as Node) && ev.target !== addBtn) {
+            dropdown.remove();
+            addColumnDropdownOpen = false;
+            document.removeEventListener("mousedown", closeDropdown, true);
+          }
+        };
+        document.addEventListener("mousedown", closeDropdown, true);
+
+        document.body.appendChild(dropdown);
+      });
+      addBtn.addEventListener("mousedown", (e) => e.stopPropagation());
+      columnHeaderWrapper.appendChild(addBtn);
+    }
+
+    contentContainer.appendChild(columnHeaderWrapper);
 
     // Create scrollable content area for all series
     const content = document.createElement("div");
@@ -761,9 +1318,37 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     content.style.cssText = "overflow-y: auto; scrollbar-width: thin";
 
     // Add ALL rows using safe DOM APIs - scrolling handles overflow
-    for (const s of visibleItems) {
+    for (const s of filteredItems) {
       const isHighlighted = highlightedName !== null && s.name === highlightedName;
-      content.appendChild(createTooltipRow(s.name, s.value, s.color, textColor, isHighlighted, s.rawValue, s.isInterpolated, s.flagText, s.rawFlagText, s.dash));
+      const row = createTooltipRow({
+        name: s.name,
+        value: s.value,
+        color: s.color,
+        isHighlighted,
+        rawValue: s.rawValue,
+        isInterpolated: s.isInterpolated,
+        flagText: s.flagText,
+        rawFlagText: s.rawFlagText,
+        dash: s.dash,
+        runName: s.runName,
+        runId: s.runId,
+        metricName: s.metricName,
+      }, textColor, columns, theme);
+
+      // Hover emphasis on tooltip rows (pinned only — unpinned has pointer-events: none)
+      if (isPinned && onSeriesHover) {
+        row.style.cursor = "pointer";
+        row.addEventListener("mouseenter", () => {
+          onSeriesHover(s.name, s.runId ?? null);
+          row.style.background = theme === "dark" ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)";
+        });
+        row.addEventListener("mouseleave", () => {
+          onSeriesHover(null, null);
+          row.style.background = isHighlighted ? "rgba(255,255,255,0.05)" : "";
+        });
+      }
+
+      content.appendChild(row);
     }
 
     contentContainer.appendChild(content);
@@ -851,12 +1436,19 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     if (isPinned) {
       const syncIdx = u.cursor.idx ?? lastIdx;
       if (syncIdx != null && tooltipEl) {
-        const savedLeft = tooltipEl.style.left;
-        const savedTop = tooltipEl.style.top;
+        savedPinnedLeft = tooltipEl.style.left;
+        savedPinnedTop = tooltipEl.style.top;
+        // Capture search input state before DOM rebuild
+        const activeSearch = tooltipEl.querySelector<HTMLInputElement>("[data-tooltip-search]");
+        if (activeSearch && searchInputRef) {
+          searchInputRef.value = activeSearch.value;
+          searchInputRef.focused = document.activeElement === activeSearch;
+          searchInputRef.cursorPos = activeSearch.selectionStart ?? activeSearch.value.length;
+        }
         updateTooltipContent(u, syncIdx);
         // Restore pinned position (updateTooltipContent repositions based on cursor)
-        tooltipEl.style.left = savedLeft;
-        tooltipEl.style.top = savedTop;
+        tooltipEl.style.left = savedPinnedLeft;
+        tooltipEl.style.top = savedPinnedTop;
       }
       return;
     }
@@ -921,6 +1513,9 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
           tooltipEl.removeEventListener("mousedown", handleDragMouseDown);
         }
 
+        // Remove any body-appended dropdown
+        closeAddDropdown();
+
         // Remove tooltip element
         if (tooltipEl && tooltipEl.parentNode) {
           tooltipEl.parentNode.removeChild(tooltipEl);
@@ -930,6 +1525,8 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
           unregisterSafetyEntry(safetyEntry);
           safetyEntry = null;
         }
+
+        chartInstance = null;
       },
     },
   };

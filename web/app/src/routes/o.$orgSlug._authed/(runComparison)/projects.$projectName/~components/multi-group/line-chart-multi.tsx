@@ -6,7 +6,7 @@ import { useQueries, keepPreviousData } from "@tanstack/react-query";
 import { trpc, trpcClient } from "@/utils/trpc";
 import { useCheckDatabaseSize } from "@/lib/db/local-cache";
 import { bucketedMetricsCache, metricsCache, type MetricDataPoint } from "@/lib/db/index";
-import type { BucketedChartDataPoint } from "@/lib/chart-data-utils";
+import type { BucketedChartDataPoint, ChartSeriesData } from "@/lib/chart-data-utils";
 import { useLocalQueries } from "@/lib/hooks/use-local-query";
 import { useLineSettings, type DisplayLogName } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/use-line-settings";
 import { useZoomRefetch, zoomKey } from "@/lib/hooks/use-zoom-refetch";
@@ -58,7 +58,9 @@ interface MultiLineChartProps {
   lines: {
     runId: string;
     runName: string;
+    rawRunName?: string;
     color: string;
+    displayId?: string | null;
   }[];
   title: string;
   /** Subtitle shown in tooltip header (e.g. chip/pattern names) */
@@ -361,7 +363,19 @@ const MultiLineChartInner = memo(
         seriesId: `${pair.line.runId}:${pair.metric}`,
         color: pair.line.color,
         dash: getDashPattern(pair.metricIndex),
+        rawRunName: pair.line.rawRunName ?? pair.line.runName,
+        displayId: pair.line.displayId ?? null,
+        metricName: pair.metric,
       });
+
+      /** Inject tooltip metadata into series returned by bucketedAndSmooth */
+      const withMeta = (series: ChartSeriesData[], props: ReturnType<typeof seriesProps>): ChartSeriesData[] =>
+        series.map((s) => ({
+          ...s,
+          runName: props.rawRunName,
+          runId: props.displayId ?? undefined,
+          metricName: props.metricName,
+        }));
 
       // System metrics chart - always uses relative time like in line-chart.tsx
       const isSystemChart = metricNames.every(
@@ -399,10 +413,10 @@ const MultiLineChartInner = memo(
             const getX = (d: BucketedChartDataPoint) =>
               (new Date(d.time).getTime() - firstTime) / 1000 / divisor;
 
-            return bucketedAndSmooth(
+            return withMeta(bucketedAndSmooth(
               sortedData, props.label, props.color,
               settings.smoothing, isMultiMetric, props.seriesId, props.dash, getX,
-            );
+            ), props);
           });
 
         return {
@@ -422,10 +436,10 @@ const MultiLineChartInner = memo(
             .flatMap(({ data, pair }) => {
               const props = seriesProps(pair);
               const getX = (d: BucketedChartDataPoint) => new Date(d.time).getTime();
-              return bucketedAndSmooth(
+              return withMeta(bucketedAndSmooth(
                 data, props.label, props.color,
                 settings.smoothing, isMultiMetric, props.seriesId, props.dash, getX,
-              );
+              ), props);
             });
 
           return {
@@ -451,10 +465,10 @@ const MultiLineChartInner = memo(
               const getX = (d: BucketedChartDataPoint) =>
                 (new Date(d.time).getTime() - firstTime) / 1000 / divisor;
 
-              return bucketedAndSmooth(
+              return withMeta(bucketedAndSmooth(
                 data, props.label, props.color,
                 settings.smoothing, isMultiMetric, props.seriesId, props.dash, getX,
-              );
+              ), props);
             });
 
           // Determine time unit from the first dataset
@@ -490,10 +504,10 @@ const MultiLineChartInner = memo(
               const sourceData = zoomData ?? tierData;
               const props = seriesProps(pair);
 
-              return bucketedAndSmooth(
+              return withMeta(bucketedAndSmooth(
                 sourceData, props.label, props.color,
                 settings.smoothing, isMultiMetric, props.seriesId, props.dash,
-              );
+              ), props);
             });
 
           return {
