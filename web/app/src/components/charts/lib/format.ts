@@ -95,6 +95,46 @@ export function formatAxisLabels(
   return vals.map((v) => (v == null ? "" : v.toFixed(Math.min(decimals, 10))));
 }
 
+/**
+ * Format a duration in seconds as a compact human-readable string.
+ * Uses the format XdYhZmWs, omitting zero-valued leading components.
+ * Examples: 0 → "0s", 90 → "1m30s", 3661 → "1h1m1s", 86400 → "1d"
+ */
+export function formatDuration(seconds: number): string {
+  if (seconds === 0) return "0s";
+
+  const neg = seconds < 0;
+  // Round to 0.1s to avoid floating-point noise
+  let remaining = Math.round(Math.abs(seconds) * 10) / 10;
+
+  const d = Math.floor(remaining / 86400);
+  remaining -= d * 86400;
+  const h = Math.floor(remaining / 3600);
+  remaining -= h * 3600;
+  const m = Math.floor(remaining / 60);
+  remaining -= m * 60;
+  // Re-round to prevent FP noise from subtraction chain
+  const s = Math.round(remaining * 10) / 10;
+
+  const parts: string[] = [];
+  if (d > 0) parts.push(`${d}d`);
+  if (h > 0) parts.push(`${h}h`);
+  if (m > 0) parts.push(`${m}m`);
+  if (s > 0 || parts.length === 0) {
+    parts.push(`${s}s`);
+  }
+
+  return (neg ? "-" : "") + parts.join("");
+}
+
+/**
+ * Format a single relative time value (in seconds) for tooltip display.
+ * Uses the compact XdYhZmWs format matching the axis labels.
+ */
+export function formatRelativeTimeValue(seconds: number): string {
+  return formatDuration(seconds);
+}
+
 /** Format a step/x value for the tooltip header with full precision. */
 export function formatStepValue(value: number): string {
   if (Number.isInteger(value)) {
@@ -102,6 +142,14 @@ export function formatStepValue(value: number): string {
   }
   // For non-integer values, show enough precision to be useful
   return value.toPrecision(6).replace(/\.?0+$/, "");
+}
+
+/**
+ * Format relative time axis values (in seconds) with the compact XdYhZmWs format.
+ * Each value is independently decomposed into its natural time components.
+ */
+export function formatRelativeTimeValues(vals: (number | null | undefined)[]): string[] {
+  return vals.map((v) => (v == null ? "" : formatDuration(v)));
 }
 
 /** Smart date formatter based on range */

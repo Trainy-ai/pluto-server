@@ -71,6 +71,7 @@ export function useRunDashboardData(
         runName: runData.name,
         color,
         status: runData.status as RunStatus,
+        createdAt: runData.createdAt instanceof Date ? runData.createdAt.toISOString() : String(runData.createdAt),
       });
     }
 

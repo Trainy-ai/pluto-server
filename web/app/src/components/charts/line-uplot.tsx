@@ -17,7 +17,7 @@ import type { TooltipInterpolation } from "@/lib/math/interpolation";
 import { applyAlpha } from "@/lib/math/color-alpha";
 
 // Extracted modules
-import { formatAxisLabels, smartDateFormatter } from "./lib/format";
+import { formatAxisLabels, formatRelativeTimeValues, smartDateFormatter } from "./lib/format";
 import { arrayMin, arrayMax, filterDataForLogScale, alignDataForUPlot } from "./lib/data-processing";
 
 /** Check if a zoom range [min, max] overlaps with the data in an x-axis array. */
@@ -279,6 +279,14 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       chartSyncContextRef.current = chartSyncContext;
     }, [chartSyncContext]);
 
+    // Whether this chart uses relative time x-axis (values in seconds, formatted dynamically)
+    const isRelativeTime = xlabel === "relative time";
+
+    // Zoom group: charts with the same group sync zoom. Uses semantic type so that
+    // e.g. Step charts don't sync with Relative Time charts (different x-axis semantics).
+    // All relative time charts share one group regardless of display unit.
+    const zoomGroup = isRelativeTime ? "relative-time" : (xlabel || "default");
+
     // Track last focused series for emphasis persistence (don't reset on seriesIdx=null)
     const lastFocusedSeriesRef = useRef<number | null>(null);
 
@@ -338,43 +346,9 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
     // Keep ref in sync for callbacks
     processedLinesRef.current = processedLines;
 
-    // Subscribe to cross-chart highlight changes from context
-    // When another chart highlights a series, we need to redraw to show emphasis
-    useEffect(() => {
-      const highlightedName = chartSyncContext?.highlightedSeriesName ?? null;
-      const runId = chartSyncContext?.highlightedRunId ?? null;
-
-      // Always keep highlightedSeriesRef in sync for tooltip access
-      highlightedSeriesRef.current = highlightedName;
-
-      // Only process if this chart is NOT the actively hovered one
-      // (the hovered chart handles its own emphasis via setCursor)
-      const isActive = chartSyncContext?.hoveredChartIdRef?.current === chartId;
-
-      if (isActive) {
-        // We're the source - don't apply cross-chart highlight to ourselves
-        crossChartRunIdRef.current = null;
-        return;
-      }
-
-      // CRITICAL: Clear local focus when another chart is active
-      // Otherwise localFocusIdx takes priority over crossChartRunId in stroke function
-      if (runId !== null) {
-        lastFocusedSeriesRef.current = null;
-      }
-
-      // Update cross-chart run ID ref and trigger redraw if changed
-      // The stroke function reads from crossChartRunIdRef during redraw
-      if (crossChartRunIdRef.current !== runId) {
-        crossChartRunIdRef.current = runId;
-
-        const chart = chartInstanceRef.current;
-        if (chart) {
-          // Trigger redraw - stroke functions will re-evaluate with new ref value
-          chart.redraw();
-        }
-      }
-    }, [chartSyncContext?.highlightedRunId, chartSyncContext?.highlightedSeriesName, chartSyncContext?.hoveredChartIdRef, chartId]);
+    // Cross-chart highlight is handled fully by the imperative highlightUPlotSeries path
+    // in chart-sync-context.tsx which directly sets _crossHighlightRunId on chart instances
+    // and calls redraw(). No reactive useEffect needed — refs avoid re-render cascades.
 
     // Table highlight is now handled imperatively: the DOM event handler in
     // chart-sync-context updates tableHighlightedSeriesRef and calls
@@ -558,11 +532,12 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
     useEffect(() => {
       const chart = chartRef.current;
       const syncedZoom = chartSyncContext?.syncedZoomRange;
+      const syncedGroup = chartSyncContext?.syncedZoomGroupRef?.current ?? null;
       const globalRange = chartSyncContext?.globalXRange;
 
       // Debug: log when this effect runs
       if (process.env.NODE_ENV === 'development') {
-        console.log(`[uPlot ${chartId}] Zoom sync effect - chart:`, !!chart, 'syncedZoom:', syncedZoom, 'globalRange:', globalRange);
+        console.log(`[uPlot ${chartId}] Zoom sync effect - chart:`, !!chart, 'syncedZoom:', syncedZoom, 'syncedGroup:', syncedGroup, 'zoomGroup:', zoomGroup, 'globalRange:', globalRange);
       }
 
       // Skip if no chart or special axis types
@@ -570,19 +545,30 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
 
       // Get chart's data range for validation
       const xData = chart.data[0] as number[];
-      const dataMin = xData.length > 0 ? arrayMin(xData) : null;
-      const dataMax = xData.length > 0 ? arrayMax(xData) : null;
 
       // Determine which range to use
-      // Priority: syncedZoomRange (user zoom) > globalXRange (default)
-      let rangeToApply = syncedZoom ?? globalRange;
+      // Priority: syncedZoomRange (if group matches) > cross-group zoom > globalXRange
+      const groupMatches = syncedGroup === zoomGroup;
+      let rangeToApply = (syncedZoom && groupMatches) ? syncedZoom : null;
+
+      // Check cross-group zoom (step↔relative-time translation)
+      if (!rangeToApply) {
+        const crossZoom = chartSyncContextRef.current?.crossGroupZoomRef?.current;
+        if (crossZoom && crossZoom.group === zoomGroup) {
+          rangeToApply = crossZoom.range;
+        }
+      }
+
+      if (!rangeToApply) {
+        rangeToApply = globalRange ?? null;
+      }
 
       // Validate syncedZoom - if it doesn't overlap with THIS chart's data, fall back to globalRange
       // IMPORTANT: Do NOT clear syncedZoomRange in context here! Other charts may still have
       // overlapping data. Each chart should just locally fall back to globalRange.
-      if (syncedZoom && !zoomOverlapsData(syncedZoom, xData)) {
+      if (syncedZoom && groupMatches && !zoomOverlapsData(syncedZoom, xData)) {
         // Zoom is completely outside THIS chart's data range - fall back to global range locally
-        rangeToApply = globalRange;
+        rangeToApply = globalRange ?? null;
         // Don't clear syncedZoomRange - other charts may still use it
       }
 
@@ -596,8 +582,10 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
 
       // Apply the range
       lastAppliedGlobalRangeRef.current = [rangeMin, rangeMax];
-      // Update user zoom flag based on whether we're applying a synced zoom
-      userHasZoomedRef.current = !!syncedZoom;
+      // Update user zoom flag based on whether we're applying a synced zoom (same or cross-group)
+      const crossZoom = chartSyncContextRef.current?.crossGroupZoomRef?.current;
+      const isCrossGroupZoom = crossZoom && crossZoom.group === zoomGroup;
+      userHasZoomedRef.current = !!(syncedZoom && groupMatches) || !!isCrossGroupZoom;
       try {
         isProgrammaticScaleRef.current = true;
         // Use batch() to force synchronous commit - uPlot's commit() uses microtask,
@@ -610,7 +598,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       } finally {
         isProgrammaticScaleRef.current = false;
       }
-    }, [chartSyncContext?.syncedZoomRange, chartSyncContext?.globalXRange, logXAxis, isDateTime]);
+    }, [chartSyncContext?.syncedZoomRange, chartSyncContext?.globalXRange, logXAxis, isDateTime, zoomGroup]);
 
     // Callback for when hover state changes - notifies context to track active chart
     // Uses ref to avoid recreating chart on hover changes
@@ -805,7 +793,9 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           ticks: { stroke: gridColor, size: 3 },
           values: isDateTime
             ? (u, vals) => vals.map((v) => smartDateFormatter(v, timeRange))
-            : (u, vals) => formatAxisLabels(vals, logXAxis),
+            : isRelativeTime
+              ? (u, vals) => formatRelativeTimeValues(vals)
+              : (u, vals) => formatAxisLabels(vals, logXAxis),
           label: xlabel,
           labelSize: xlabel ? 14 : 0,
           labelFont: "10px ui-monospace, monospace",
@@ -1131,10 +1121,11 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
                   // Mark that user has manually zoomed (prevents global range from overwriting)
                   userHasZoomedRef.current = true;
                   // Store zoom in context so newly mounted charts use the same zoom
-                  chartSyncContextRef.current?.setSyncedZoomRange([xMin, xMax]);
+                  // Include zoomGroup so only charts with compatible x-axis types apply it
+                  chartSyncContextRef.current?.setSyncedZoomRange([xMin, xMax], zoomGroup);
                   // Debug: log when zoom is stored in context
                   if (process.env.NODE_ENV === 'development') {
-                    console.log(`[uPlot ${chartId}] Zoom applied, storing in context: [${xMin}, ${xMax}]`);
+                    console.log(`[uPlot ${chartId}] Zoom applied, storing in context: [${xMin}, ${xMax}] group=${zoomGroup}`);
                   }
                 }
 
@@ -1384,10 +1375,20 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             // Mirrors the pattern in the zoom re-downsample path (~line 1039-1041).
             if (!logXAxis && !isDateTime) {
               const syncedZoom = chartSyncContextRef.current?.syncedZoomRange;
-              if (syncedZoom && zoomOverlapsData(syncedZoom, uplotData[0] as number[])) {
+              const syncedGroup = chartSyncContextRef.current?.syncedZoomGroupRef?.current;
+              const xData = uplotData[0] as number[];
+              if (syncedZoom && syncedGroup === zoomGroup && zoomOverlapsData(syncedZoom, xData)) {
                 chartRef.current.batch(() => {
                   chartRef.current!.setScale("x", { min: syncedZoom[0], max: syncedZoom[1] });
                 });
+              } else {
+                // Check cross-group zoom (step↔relative-time translation)
+                const crossZoom = chartSyncContextRef.current?.crossGroupZoomRef?.current;
+                if (crossZoom && crossZoom.group === zoomGroup && zoomOverlapsData(crossZoom.range, xData)) {
+                  chartRef.current.batch(() => {
+                    chartRef.current!.setScale("x", { min: crossZoom.range[0], max: crossZoom.range[1] });
+                  });
+                }
               }
             }
           } finally {
@@ -1479,14 +1480,15 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       if (!rangeToApply && !logXAxis && !isDateTime) {
         // Check context for synced zoom or global range
         const syncedZoom = chartSyncContext?.syncedZoomRange ?? chartSyncContextRef.current?.syncedZoomRange;
+        const syncedGroup = chartSyncContext?.syncedZoomGroupRef?.current ?? chartSyncContextRef.current?.syncedZoomGroupRef?.current;
         const globalRange = chartSyncContext?.globalXRange ?? chartSyncContextRef.current?.globalXRange;
 
         // Debug: log what we're reading from context on chart creation
         if (process.env.NODE_ENV === 'development') {
-          console.log(`[uPlot ${chartId}] Chart creation - syncedZoom:`, syncedZoom, 'globalRange:', globalRange);
+          console.log(`[uPlot ${chartId}] Chart creation - syncedZoom:`, syncedZoom, 'syncedGroup:', syncedGroup, 'zoomGroup:', zoomGroup, 'globalRange:', globalRange);
         }
 
-        if (syncedZoom) {
+        if (syncedZoom && syncedGroup === zoomGroup) {
           // Validate synced zoom overlaps with data
           const xData = uplotData[0] as number[];
           const hasOverlap = zoomOverlapsData(syncedZoom, xData);
@@ -1500,6 +1502,18 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             isUserZoom = true;
           } else if (process.env.NODE_ENV === 'development' && xData.length === 0) {
             console.log(`[uPlot ${chartId}] No xData to validate zoom against`);
+          }
+        }
+
+        // Check cross-group zoom (step↔relative-time translation for single-run view)
+        if (!rangeToApply) {
+          const crossZoom = chartSyncContextRef.current?.crossGroupZoomRef?.current;
+          if (crossZoom && crossZoom.group === zoomGroup) {
+            const xData = uplotData[0] as number[];
+            if (zoomOverlapsData(crossZoom.range, xData)) {
+              rangeToApply = crossZoom.range;
+              isUserZoom = true;
+            }
           }
         }
 
@@ -1616,6 +1630,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       // The guard prevents the setScale hook from broadcasting back to context.
       // Skip for log X-axis and datetime charts — their X scale is incompatible
       // with linear zoom ranges, and applying linear values would corrupt the axis.
+      // The zoomGroup ensures only charts with the same x-axis type sync (e.g. Step ↔ Step).
       if (!logXAxis && !isDateTime) {
         chartSyncContextRef.current?.registerZoomCallback(chartId, (xMin: number, xMax: number) => {
           isProgrammaticScaleRef.current = true;
@@ -1628,7 +1643,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           } finally {
             isProgrammaticScaleRef.current = false;
           }
-        });
+        }, zoomGroup);
       }
 
       // Safety: Re-check synced zoom from context in next frame
@@ -1637,18 +1652,31 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         requestAnimationFrame(() => {
           const ctx = chartSyncContextRef.current;
           const lateSyncedZoom = ctx?.syncedZoomRange;
-          if (lateSyncedZoom && chart) {
+          const lateZoomGroup = ctx?.syncedZoomGroupRef?.current;
+          let lateRange: [number, number] | null = null;
+
+          if (lateSyncedZoom && lateZoomGroup === zoomGroup) {
+            lateRange = lateSyncedZoom;
+          } else {
+            // Check cross-group zoom
+            const crossZoom = ctx?.crossGroupZoomRef?.current;
+            if (crossZoom && crossZoom.group === zoomGroup) {
+              lateRange = crossZoom.range;
+            }
+          }
+
+          if (lateRange && chart) {
             const xData = chart.data[0] as number[];
-            if (xData && zoomOverlapsData(lateSyncedZoom, xData) && !lastAppliedGlobalRangeRef.current) {
+            if (xData && zoomOverlapsData(lateRange, xData) && !lastAppliedGlobalRangeRef.current) {
               if (process.env.NODE_ENV === 'development') {
-                console.log(`[uPlot ${chartId}] Late sync - applying zoom: [${lateSyncedZoom[0]}, ${lateSyncedZoom[1]}]`);
+                console.log(`[uPlot ${chartId}] Late sync - applying zoom: [${lateRange[0]}, ${lateRange[1]}]`);
               }
-              lastAppliedGlobalRangeRef.current = lateSyncedZoom;
+              lastAppliedGlobalRangeRef.current = lateRange;
               userHasZoomedRef.current = true;
               try {
                 isProgrammaticScaleRef.current = true;
                 chart.batch(() => {
-                  chart.setScale("x", { min: lateSyncedZoom[0], max: lateSyncedZoom[1] });
+                  chart.setScale("x", { min: lateRange![0], max: lateRange![1] });
                 });
               } catch {
                 // Chart may have been destroyed
@@ -1713,6 +1741,9 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         onZoomRangeChangeRef.current?.(null);
         // Clear synced zoom in context so all charts reset
         chartSyncContextRef.current?.setSyncedZoomRange(null);
+        // Clear cross-group zoom
+        const crossRef = chartSyncContextRef.current?.crossGroupZoomRef;
+        if (crossRef) crossRef.current = null;
         // Force-clear the sync guard before calling resetZoom.
         // Microtask commits from zoom re-downsampling can leave isSyncingZoomRef stuck
         // at true, which would cause resetZoom to bail out. Since dblclick is always a

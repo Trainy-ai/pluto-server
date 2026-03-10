@@ -6,6 +6,7 @@ interface MockRun {
   id: string;
   name: string;
   status: "RUNNING" | "COMPLETED" | "FAILED" | "TERMINATED" | "CANCELLED";
+  createdAt: Date | string;
 }
 
 // Mock log type
@@ -16,8 +17,8 @@ interface MockLog {
 }
 
 // Helper to create mock run
-function createMockRun(id: string, name: string, status: MockRun["status"] = "COMPLETED"): MockRun {
-  return { id, name, status };
+function createMockRun(id: string, name: string, status: MockRun["status"] = "COMPLETED", createdAt: Date | string = new Date("2024-01-15T10:00:00Z")): MockRun {
+  return { id, name, status, createdAt };
 }
 
 // Helper to create mock log
@@ -250,6 +251,74 @@ describe("groupMetrics", () => {
         color: "#00ff00",
         status: "COMPLETED",
       });
+    });
+  });
+
+  describe("createdAt propagation", () => {
+    it("includes createdAt as ISO string when run has Date createdAt", () => {
+      const createdDate = new Date("2024-06-15T14:30:00Z");
+      const run = createMockRun("run1", "Run 1", "COMPLETED", createdDate);
+      const selectedRuns = createSelectedRuns([run], ["#ff0000"]);
+      const logsByRunId = {
+        run1: [createMockLog("loss", "METRIC", "training")],
+      };
+
+      const result = groupMetrics(selectedRuns, logsByRunId as any, orgId, "createdAt-date-project-" + Date.now());
+      const metricData = result["training"].metrics[0].data[0];
+
+      expect(metricData.createdAt).toBe("2024-06-15T14:30:00.000Z");
+    });
+
+    it("includes createdAt as string when run has string createdAt", () => {
+      const run = createMockRun("run1", "Run 1", "COMPLETED", "2024-06-15T14:30:00Z");
+      const selectedRuns = createSelectedRuns([run], ["#ff0000"]);
+      const logsByRunId = {
+        run1: [createMockLog("loss", "METRIC", "training")],
+      };
+
+      const result = groupMetrics(selectedRuns, logsByRunId as any, orgId, "createdAt-string-project-" + Date.now());
+      const metricData = result["training"].metrics[0].data[0];
+
+      expect(metricData.createdAt).toBe("2024-06-15T14:30:00Z");
+    });
+
+    it("includes createdAt for each run in the same metric group", () => {
+      const run1 = createMockRun("run1", "Run 1", "COMPLETED", new Date("2024-01-01T00:00:00Z"));
+      const run2 = createMockRun("run2", "Run 2", "COMPLETED", new Date("2024-06-01T00:00:00Z"));
+      const selectedRuns = createSelectedRuns([run1, run2], ["#ff0000", "#00ff00"]);
+      const logsByRunId = {
+        run1: [createMockLog("loss", "METRIC", "training")],
+        run2: [createMockLog("loss", "METRIC", "training")],
+      };
+
+      const result = groupMetrics(selectedRuns, logsByRunId as any, orgId, "createdAt-multi-run-project-" + Date.now());
+      const metric = result["training"].metrics[0];
+
+      const run1Data = metric.data.find((d) => d.runId === "run1");
+      const run2Data = metric.data.find((d) => d.runId === "run2");
+
+      expect(run1Data?.createdAt).toBe("2024-01-01T00:00:00.000Z");
+      expect(run2Data?.createdAt).toBe("2024-06-01T00:00:00.000Z");
+    });
+
+    it("includes createdAt in media type second pass", () => {
+      const run1 = createMockRun("run1", "Run 1", "COMPLETED", new Date("2024-01-01T00:00:00Z"));
+      const run2 = createMockRun("run2", "Run 2", "COMPLETED", new Date("2024-06-01T00:00:00Z"));
+      const selectedRuns = createSelectedRuns([run1, run2], ["#ff0000", "#00ff00"]);
+
+      // Only run1 has the IMAGE log
+      const logsByRunId = {
+        run1: [createMockLog("media/samples", "IMAGE", "media")],
+        run2: [], // no IMAGE log for run2
+      };
+
+      const result = groupMetrics(selectedRuns, logsByRunId as any, orgId, "createdAt-media-project-" + Date.now());
+      const imageMetric = result["media"].metrics.find((m) => m.type === "IMAGE");
+
+      // run2 should have been added via the media second pass
+      const run2Data = imageMetric!.data.find((d) => d.runId === "run2");
+      expect(run2Data).toBeDefined();
+      expect(run2Data?.createdAt).toBe("2024-06-01T00:00:00.000Z");
     });
   });
 });

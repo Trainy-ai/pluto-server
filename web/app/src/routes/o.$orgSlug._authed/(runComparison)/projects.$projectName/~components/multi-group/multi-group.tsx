@@ -32,6 +32,7 @@ interface MultiGroupProps {
       color: string;
       status: RunStatus;
       displayId?: string | null;
+      createdAt?: string;
     }[];
   }[];
   className?: string;
@@ -76,6 +77,7 @@ export const MultiGroup = ({
         runName: formatRunLabel(line.runName, line.displayId),
         rawRunName: line.runName,
         color: line.color,
+        createdAt: line.createdAt,
         displayId: line.displayId,
       }));
     });

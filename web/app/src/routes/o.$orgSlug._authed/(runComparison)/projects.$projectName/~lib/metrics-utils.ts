@@ -157,6 +157,7 @@ export const groupMetrics = (
         color,
         status: run.status,
         displayId: getDisplayIdForRun(run),
+        createdAt: run.createdAt instanceof Date ? run.createdAt.toISOString() : String(run.createdAt),
       });
     });
   });
@@ -178,6 +179,7 @@ export const groupMetrics = (
               color,
               status: run.status,
               displayId: getDisplayIdForRun(run),
+              createdAt: run.createdAt instanceof Date ? run.createdAt.toISOString() : String(run.createdAt),
             });
           }
         });

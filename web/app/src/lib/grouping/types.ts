@@ -23,6 +23,7 @@ export interface GroupedMetrics {
         color: string;
         status: RunStatus;
         displayId?: string | null;
+        createdAt?: string;
       }>;
     }>;
     groupName: LogGroupName;

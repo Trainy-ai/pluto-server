@@ -12,6 +12,7 @@ function createMetric(
     color: string;
     status: RunStatus;
     displayId?: string | null;
+    createdAt?: string;
   }>
 ) {
   return { name, type, data };
@@ -261,6 +262,78 @@ describe("arePropsEqual", () => {
         metrics: [createMetric("loss", "METRIC", [])],
       });
       expect(arePropsEqual(props1, props2)).toBe(true);
+    });
+
+    it("returns false when createdAt changes", () => {
+      const props1 = createProps({
+        metrics: [
+          createMetric("loss", "METRIC", [
+            { runId: "run-1", runName: "Run 1", color: "#ff0000", status: "COMPLETED", createdAt: "2024-01-01T00:00:00Z" },
+          ]),
+        ],
+      });
+      const props2 = createProps({
+        metrics: [
+          createMetric("loss", "METRIC", [
+            { runId: "run-1", runName: "Run 1", color: "#ff0000", status: "COMPLETED", createdAt: "2024-06-01T00:00:00Z" },
+          ]),
+        ],
+      });
+      expect(arePropsEqual(props1, props2)).toBe(false);
+    });
+
+    it("returns true when createdAt is the same", () => {
+      const props1 = createProps({
+        metrics: [
+          createMetric("loss", "METRIC", [
+            { runId: "run-1", runName: "Run 1", color: "#ff0000", status: "COMPLETED", createdAt: "2024-01-01T00:00:00Z" },
+          ]),
+        ],
+      });
+      const props2 = createProps({
+        metrics: [
+          createMetric("loss", "METRIC", [
+            { runId: "run-1", runName: "Run 1", color: "#ff0000", status: "COMPLETED", createdAt: "2024-01-01T00:00:00Z" },
+          ]),
+        ],
+      });
+      expect(arePropsEqual(props1, props2)).toBe(true);
+    });
+
+    it("returns true when createdAt is undefined on both sides", () => {
+      const props1 = createProps({
+        metrics: [
+          createMetric("loss", "METRIC", [
+            { runId: "run-1", runName: "Run 1", color: "#ff0000", status: "COMPLETED" },
+          ]),
+        ],
+      });
+      const props2 = createProps({
+        metrics: [
+          createMetric("loss", "METRIC", [
+            { runId: "run-1", runName: "Run 1", color: "#ff0000", status: "COMPLETED" },
+          ]),
+        ],
+      });
+      expect(arePropsEqual(props1, props2)).toBe(true);
+    });
+
+    it("returns false when createdAt changes from undefined to defined", () => {
+      const props1 = createProps({
+        metrics: [
+          createMetric("loss", "METRIC", [
+            { runId: "run-1", runName: "Run 1", color: "#ff0000", status: "COMPLETED" },
+          ]),
+        ],
+      });
+      const props2 = createProps({
+        metrics: [
+          createMetric("loss", "METRIC", [
+            { runId: "run-1", runName: "Run 1", color: "#ff0000", status: "COMPLETED", createdAt: "2024-01-01T00:00:00Z" },
+          ]),
+        ],
+      });
+      expect(arePropsEqual(props1, props2)).toBe(false);
     });
   });
 

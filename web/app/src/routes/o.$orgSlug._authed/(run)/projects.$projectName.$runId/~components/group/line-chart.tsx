@@ -9,6 +9,7 @@ import { ensureGetGraph, useGetGraphProgressive } from "../../~queries/get-graph
 import { useCheckDatabaseSize } from "@/lib/db/local-cache";
 import { metricsCache, type MetricDataPoint } from "@/lib/db/index";
 import { useLineSettings, type LineChartSettings } from "../use-line-settings";
+import { useChartSyncContext } from "@/components/charts/context/chart-sync-context";
 import { useZoomRefetch, zoomKey } from "@/lib/hooks/use-zoom-refetch";
 import {
   getTimeUnitForDisplay,
@@ -25,6 +26,7 @@ interface LineChartWithFetchProps {
   projectName: string;
   runId: string;
   boundsResetKey?: number;
+  runCreatedAt?: string;
 }
 
 type ChartData = {
@@ -51,6 +53,7 @@ type ChartConfig = {
 function useSystemChartConfig(
   logName: string,
   data: BucketedChartDataPoint[],
+  runCreatedAt?: string,
 ): ChartConfig | null {
   if (!logName.startsWith("sys/") && !logName.startsWith("_sys/")) {
     return null;
@@ -60,17 +63,21 @@ function useSystemChartConfig(
     (a, b) => new Date(a.time).getTime() - new Date(b.time).getTime(),
   );
 
-  // Calculate relative times
-  const firstTime = new Date(sortedData[0].time).getTime();
+  // Use run.createdAt as the baseline when available, falling back to first data point
+  const baselineMs = runCreatedAt
+    ? new Date(runCreatedAt).getTime()
+    : new Date(sortedData[0].time).getTime();
+
+  // Calculate relative times in seconds
   const relativeTimes = sortedData.map(
-    (d) => (new Date(d.time).getTime() - firstTime) / 1000,
+    (d) => (new Date(d.time).getTime() - baselineMs) / 1000,
   );
 
   const maxSeconds = Math.max(...relativeTimes);
   const { divisor, unit } = getTimeUnitForDisplay(maxSeconds);
 
   const getX = (d: BucketedChartDataPoint) =>
-    (new Date(d.time).getTime() - firstTime) / 1000 / divisor;
+    (new Date(d.time).getTime() - baselineMs) / 1000 / divisor;
 
   return {
     lines: bucketedAndSmooth(
@@ -94,6 +101,7 @@ function buildChartStrategy(
   color: string,
   smoothingSettings: LineChartSettings["smoothing"],
   zoomData?: BucketedChartDataPoint[],
+  runCreatedAt?: string,
 ): ChartConfig {
   const strategies: Record<string, () => ChartConfig> = {
     Step: () => {
@@ -121,15 +129,19 @@ function buildChartStrategy(
       };
     },
     "Relative Time": () => {
-      const firstTime = new Date(data[0].time).getTime();
+      // Use run.createdAt as the baseline when available, falling back to first data point
+      const baselineMs = runCreatedAt
+        ? new Date(runCreatedAt).getTime()
+        : new Date(data[0].time).getTime();
+
       const relativeTimes = data.map(
-        (d) => (new Date(d.time).getTime() - firstTime) / 1000,
+        (d) => (new Date(d.time).getTime() - baselineMs) / 1000,
       );
       const maxSeconds = Math.max(...relativeTimes);
       const { divisor, unit } = getTimeUnitForDisplay(maxSeconds);
 
       const getX = (d: BucketedChartDataPoint) =>
-        (new Date(d.time).getTime() - firstTime) / 1000 / divisor;
+        (new Date(d.time).getTime() - baselineMs) / 1000 / divisor;
 
       return {
         lines: bucketedAndSmooth(
@@ -160,6 +172,7 @@ function useChartConfig(
   runId: string,
   settings: LineChartSettings,
   zoomData?: BucketedChartDataPoint[],
+  runCreatedAt?: string,
 ): [ChartConfig | null, boolean] {
   const [chartConfig, setChartConfig] = useState<ChartConfig | null>(null);
   const [isLoadingCustomChart, setIsLoadingCustomChart] = useState(false);
@@ -173,7 +186,7 @@ function useChartConfig(
 
     const generateChartConfig = async () => {
       // Check if this is a system chart
-      const systemConfig = useSystemChartConfig(logName, data);
+      const systemConfig = useSystemChartConfig(logName, data, runCreatedAt);
       if (systemConfig) {
         setChartConfig(systemConfig);
         return;
@@ -191,6 +204,7 @@ function useChartConfig(
             COLOR,
             settings.smoothing,
             zoomData,
+            runCreatedAt,
           ),
         );
         return;
@@ -251,7 +265,7 @@ function useChartConfig(
     };
 
     generateChartConfig();
-  }, [data, logName, settings, tenantId, projectName, runId, zoomData]);
+  }, [data, logName, settings, tenantId, projectName, runId, zoomData, runCreatedAt]);
 
   return [chartConfig, isLoadingCustomChart];
 }
@@ -264,6 +278,7 @@ export const LineChartWithFetch = memo(
     projectName,
     runId,
     boundsResetKey,
+    runCreatedAt,
   }: LineChartWithFetchProps) => {
     useCheckDatabaseSize(metricsCache);
 
@@ -275,6 +290,21 @@ export const LineChartWithFetch = memo(
     );
 
     const { settings } = useLineSettings(tenantId, projectName, runId);
+
+    // Register step<->time mapping for cross-axis zoom sync (single-run view)
+    const chartSync = useChartSyncContext();
+    useEffect(() => {
+      if (!data || data.length === 0 || !chartSync || !runCreatedAt) return;
+      // Only register if no mapping exists yet (first chart to load wins)
+      if (chartSync.stepTimeMappingRef.current) return;
+      const sorted = [...data].sort((a, b) => a.step - b.step);
+      const createdAtMs = new Date(runCreatedAt).getTime();
+      const steps = sorted.map((d) => d.step);
+      const relTimeSecs = sorted.map(
+        (d) => (new Date(d.time).getTime() - createdAtMs) / 1000,
+      );
+      chartSync.setStepTimeMapping(steps, relTimeSecs);
+    }, [data, runCreatedAt, chartSync]);
 
     // Zoom-triggered server re-fetch using bucketed downsampling
     const runIdsMemo = useMemo(() => [runId], [runId]);
@@ -296,6 +326,7 @@ export const LineChartWithFetch = memo(
       runId,
       settings,
       zoomData,
+      runCreatedAt,
     );
 
     // Render loading state

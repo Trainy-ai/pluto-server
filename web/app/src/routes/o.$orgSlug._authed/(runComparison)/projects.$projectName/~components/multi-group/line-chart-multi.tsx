@@ -1,7 +1,7 @@
 "use client";
 
 import { default as LineChart } from "@/components/charts/line-wrapper";
-import { memo, useMemo } from "react";
+import { memo, useEffect, useMemo } from "react";
 import { useQueries, keepPreviousData } from "@tanstack/react-query";
 import { trpc, trpcClient } from "@/utils/trpc";
 import { useCheckDatabaseSize } from "@/lib/db/local-cache";
@@ -60,6 +60,7 @@ interface MultiLineChartProps {
     runName: string;
     rawRunName?: string;
     color: string;
+    createdAt?: string;
     displayId?: string | null;
   }[];
   title: string;
@@ -357,6 +358,16 @@ const MultiLineChartInner = memo(
         return null;
       }
 
+      // Build a map of runId → createdAt timestamp for relative time baseline.
+      // Uses run.createdAt (from lines prop) instead of first data point so all
+      // metrics within the same run share the same time origin.
+      const runCreatedAtMap = new Map<string, number>();
+      for (const line of lines) {
+        if (line.createdAt) {
+          runCreatedAtMap.set(line.runId, new Date(line.createdAt).getTime());
+        }
+      }
+
       // Helper to build series props from a query pair
       const seriesProps = (pair: typeof queryPairs[0]) => ({
         label: getSeriesLabel(pair.line.runName, pair.metric),
@@ -408,10 +419,12 @@ const MultiLineChartInner = memo(
             const sortedData = [...data].sort(
               (a, b) => new Date(a.time).getTime() - new Date(b.time).getTime(),
             );
-            const firstTime = new Date(sortedData[0].time).getTime();
             const props = seriesProps(pair);
+            // Use run.createdAt as baseline when available, falling back to first data point
+            const baselineMs = runCreatedAtMap.get(pair.line.runId)
+              ?? new Date(sortedData[0].time).getTime();
             const getX = (d: BucketedChartDataPoint) =>
-              (new Date(d.time).getTime() - firstTime) / 1000 / divisor;
+              (new Date(d.time).getTime() - baselineMs) / 1000 / divisor;
 
             return withMeta(bucketedAndSmooth(
               sortedData, props.label, props.color,
@@ -452,18 +465,19 @@ const MultiLineChartInner = memo(
         }
 
         case "Relative Time": {
+          // Keep x-values in seconds — the axis formatter picks display units
+          // dynamically based on the visible range. This ensures all relative
+          // time charts (including system charts) share the same numeric scale
+          // and can sync zoom correctly.
           const data = allData
             .filter((item) => item.data.length > 0)
             .flatMap(({ data, pair }) => {
-              const firstTime = new Date(data[0].time).getTime();
-              const relativeTimes = data.map(
-                (d) => (new Date(d.time).getTime() - firstTime) / 1000,
-              );
-              const maxSeconds = Math.max(...relativeTimes);
-              const { divisor } = getTimeUnitForDisplay(maxSeconds);
+              // Use run.createdAt as the baseline when available, falling back to first data point
+              const baselineMs = runCreatedAtMap.get(pair.line.runId)
+                ?? new Date(data[0].time).getTime();
               const props = seriesProps(pair);
               const getX = (d: BucketedChartDataPoint) =>
-                (new Date(d.time).getTime() - firstTime) / 1000 / divisor;
+                (new Date(d.time).getTime() - baselineMs) / 1000;
 
               return withMeta(bucketedAndSmooth(
                 data, props.label, props.color,
@@ -471,23 +485,10 @@ const MultiLineChartInner = memo(
               ), props);
             });
 
-          // Determine time unit from the first dataset
-          const firstDataset = allData[0]?.data || [];
-          const firstTime =
-            firstDataset.length > 0
-              ? new Date(firstDataset[0].time).getTime()
-              : 0;
-          const lastTime =
-            firstDataset.length > 0
-              ? new Date(firstDataset[firstDataset.length - 1].time).getTime()
-              : 0;
-          const maxSeconds = (lastTime - firstTime) / 1000;
-          const { unit } = getTimeUnitForDisplay(maxSeconds);
-
           return {
             type: "data" as const,
             data,
-            xlabel: `relative time (${unit})`,
+            xlabel: "relative time",
             isDateTime: false,
             className: "h-full w-full",
           };
@@ -596,7 +597,36 @@ const MultiLineChartInner = memo(
           };
         }
       }
-    }, [allData, customLogData, settings, effectiveXAxis, title, xlabel, hasAnyData, queryPairs, getSeriesLabel, zoomDataMap, isMultiMetric, metricNames]);
+    }, [allData, customLogData, settings, effectiveXAxis, title, xlabel, hasAnyData, queryPairs, getSeriesLabel, zoomDataMap, isMultiMetric, metricNames, lines]);
+
+    // Register step↔time mapping for cross-axis zoom sync.
+    // Uses raw query data (which has both step and time) from the first run
+    // with data. Only registers once per ChartSyncProvider.
+    const chartSyncCtx = useChartSyncContext();
+    useEffect(() => {
+      if (!chartSyncCtx || !hasAnyData || allData.length === 0) return;
+      // Only register if no mapping exists yet
+      if (chartSyncCtx.stepTimeMappingRef.current) return;
+
+      // Find the first run with data
+      const first = allData.find((item) => item.data.length > 0);
+      if (!first) return;
+
+      const runId = first.pair.line.runId;
+      // Use the same baseline as the "Relative Time" chart case: createdAt with fallback to data[0].time.
+      // Must match the chartResult useMemo fallback exactly so the mapping aligns with chart x-values.
+      const createdAtStr = lines.find((l) => l.runId === runId)?.createdAt;
+      const baselineMs = createdAtStr
+        ? new Date(createdAtStr).getTime()
+        : new Date(first.data[0].time).getTime();
+
+      const sorted = [...first.data].sort((a, b) => a.step - b.step);
+      const steps = sorted.map((d) => d.step);
+      const relTimeSecs = sorted.map(
+        (d) => (new Date(d.time).getTime() - baselineMs) / 1000,
+      );
+      chartSyncCtx.setStepTimeMapping(steps, relTimeSecs);
+    }, [chartSyncCtx, hasAnyData, allData, lines]);
 
     // Too many series warning
     if (tooManySeries) {

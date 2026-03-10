@@ -168,6 +168,14 @@ function RouteComponent() {
     setBoundsResetKey((k) => k + 1);
   }, []);
 
+  // Compute run createdAt as ISO string for relative time baseline
+  const runCreatedAtStr = useMemo(() => {
+    if (!runData?.createdAt) return undefined;
+    return runData.createdAt instanceof Date
+      ? runData.createdAt.toISOString()
+      : String(runData.createdAt);
+  }, [runData?.createdAt]);
+
   // Memoize the rendered DataGroups for "All Metrics" view
   const dataGroups = useMemo(() => {
     return filteredLogGroups.map((group: LogGroup) => (
@@ -178,9 +186,10 @@ function RouteComponent() {
         projectName={projectName}
         runId={runId}
         boundsResetKey={boundsResetKey}
+        runCreatedAt={runCreatedAtStr}
       />
     ));
-  }, [filteredLogGroups, organizationId, projectName, runId, boundsResetKey]);
+  }, [filteredLogGroups, organizationId, projectName, runId, boundsResetKey, runCreatedAtStr]);
 
   if (isLoading || !runData) {
     return (

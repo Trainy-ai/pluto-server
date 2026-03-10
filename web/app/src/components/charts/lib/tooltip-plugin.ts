@@ -1,6 +1,6 @@
 import type uPlot from "uplot";
 import type { LineData } from "../line-uplot";
-import { formatAxisLabel, formatStepValue, smartDateFormatter } from "./format";
+import { formatAxisLabel, formatRelativeTimeValue, formatStepValue, smartDateFormatter } from "./format";
 import { interpolateValue, isInsideDataGap, type TooltipInterpolation } from "@/lib/math/interpolation";
 
 // ============================
@@ -800,10 +800,13 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     // If no valid x value, just return - don't hide (mouseleave handles that)
     if (xVal == null) return;
 
-    // Format x value — show exact step for non-datetime axes
+    // Format x value — show exact step for non-datetime axes, human-readable time for relative time
+    const isRelTime = xlabel === "relative time";
     const xFormatted = isDateTime
       ? smartDateFormatter(xVal, timeRange)
-      : formatStepValue(xVal);
+      : isRelTime
+        ? formatRelativeTimeValue(xVal)
+        : formatStepValue(xVal);
 
     // Gather series values
     const textColor = theme === "dark" ? "#fff" : "#000";
@@ -962,9 +965,11 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     const xLabel = document.createElement("span");
     const xAxisLabel = isDateTime
       ? xFormatted
-      : xlabel && xlabel !== "step"
-        ? `${xlabel} ${xFormatted}`
-        : `Step ${xFormatted}`;
+      : isRelTime
+        ? xFormatted
+        : xlabel && xlabel !== "step"
+          ? `${xlabel} ${xFormatted}`
+          : `Step ${xFormatted}`;
     xLabel.textContent = xAxisLabel;
     topRow.appendChild(xLabel);
 

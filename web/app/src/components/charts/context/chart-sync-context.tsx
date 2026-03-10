@@ -53,6 +53,26 @@ export function applySeriesHighlight(chart: uPlot, value: string | null, key: '_
 }
 
 // ============================
+// Helpers – cross-axis interpolation
+// ============================
+
+/** Binary-search interpolation between two parallel sorted arrays */
+export function interpolate(xs: number[], ys: number[], x: number): number {
+  if (xs.length === 0) return x;
+  if (x <= xs[0]) return ys[0];
+  if (x >= xs[xs.length - 1]) return ys[ys.length - 1];
+  let lo = 0;
+  let hi = xs.length - 1;
+  while (lo < hi - 1) {
+    const mid = (lo + hi) >> 1;
+    if (xs[mid] <= x) lo = mid;
+    else hi = mid;
+  }
+  const t = (x - xs[lo]) / (xs[hi] - xs[lo]);
+  return ys[lo] + t * (ys[hi] - ys[lo]);
+}
+
+// ============================
 // Types
 // ============================
 
@@ -67,7 +87,8 @@ interface ChartSyncContextValue {
   unregisterResetCallback: (id: string) => void;
 
   // Per-chart zoom callbacks (apply zoom with isProgrammaticScaleRef guard)
-  registerZoomCallback: (id: string, callback: (xMin: number, xMax: number) => void) => void;
+  // zoomGroup groups charts by x-axis type so only compatible charts sync zoom
+  registerZoomCallback: (id: string, callback: (xMin: number, xMax: number) => void, zoomGroup?: string) => void;
   unregisterZoomCallback: (id: string) => void;
 
   // Sync key for uPlot built-in cursor sync
@@ -82,12 +103,12 @@ interface ChartSyncContextValue {
   hoveredChartIdRef: React.RefObject<string | null>; // Synchronous access for immediate checks
   setHoveredChart: (id: string | null) => void;
 
-  // Cross-chart series highlighting for uPlot (tracked via state for subscriptions)
-  highlightedSeriesName: string | null;
+  // Cross-chart series highlighting for uPlot (refs to avoid re-renders on hover)
+  highlightedSeriesNameRef: React.RefObject<string | null>;
   setHighlightedSeriesName: (name: string | null) => void;
 
   // Cross-chart run ID — the run ID of the hovered series, used for prefix matching
-  highlightedRunId: string | null;
+  highlightedRunIdRef: React.RefObject<string | null>;
   setHighlightedRunId: (runId: string | null) => void;
 
   // Zoom sync for uPlot - syncs X-axis scale across all charts
@@ -99,8 +120,10 @@ interface ChartSyncContextValue {
 
   // Synced zoom range - when user zooms, this is set so newly mounted charts use same zoom
   // null means no active zoom (use globalXRange instead)
+  // zoomGroup indicates which x-axis type the zoom applies to (ref to avoid re-renders)
   syncedZoomRange: [number, number] | null;
-  setSyncedZoomRange: (range: [number, number] | null) => void;
+  syncedZoomGroupRef: React.RefObject<string | null>;
+  setSyncedZoomRange: (range: [number, number] | null, zoomGroup?: string) => void;
 
   // Table-driven series highlighting - when a run row is hovered in the runs table
   // Separate from chart-driven highlighting to avoid conflicts
@@ -110,6 +133,15 @@ interface ChartSyncContextValue {
 
   // Ref to check if syncXScale is currently propagating (prevents target charts from broadcasting)
   isSyncingZoomRef: React.RefObject<boolean>;
+
+  // Step↔time mapping for cross-axis zoom sync (single-run view only).
+  // When set, zooming a step chart translates the range to relative time and vice versa.
+  stepTimeMappingRef: React.RefObject<{ steps: number[]; relTimeSecs: number[] } | null>;
+  setStepTimeMapping: (steps: number[], relTimeSecs: number[]) => void;
+
+  // Cross-group zoom range — the translated range for the opposite zoom group.
+  // Used by newly mounted charts to apply zoom from the translated group.
+  crossGroupZoomRef: React.RefObject<{ group: string; range: [number, number] } | null>;
 }
 
 // ============================
@@ -152,7 +184,8 @@ export function ChartSyncProvider({
   // Per-chart reset callbacks — each chart registers a function that restores its original data
   const resetCallbacksRef = useRef(new Map<string, () => void>());
   // Per-chart zoom callbacks — each chart registers a function that applies zoom with its own isProgrammaticScaleRef guard
-  const zoomCallbacksRef = useRef(new Map<string, (xMin: number, xMax: number) => void>());
+  // zoomGroup tags callbacks by x-axis type so only compatible charts sync zoom
+  const zoomCallbacksRef = useRef(new Map<string, { callback: (xMin: number, xMax: number) => void; zoomGroup: string }>());
 
   // Track which chart is currently being hovered (for tooltip display)
   // Only the hovered chart should show its tooltip; synced charts show only cursor line
@@ -161,10 +194,12 @@ export function ChartSyncProvider({
   const [hoveredChartId, setHoveredChartId] = useState<string | null>(null);
 
   // Track which series is highlighted across all charts (for uPlot cross-chart highlighting)
-  const [highlightedSeriesName, setHighlightedSeriesName] = useState<string | null>(null);
+  // Refs instead of state — only read synchronously by tooltip/stroke code, never triggers re-renders.
+  // Using state here caused the entire chart tree to re-render on every hover.
+  const highlightedSeriesNameRef = useRef<string | null>(null);
 
   // Track which run ID is highlighted across charts (for prefix matching on multi-metric charts)
-  const [highlightedRunId, setHighlightedRunIdState] = useState<string | null>(null);
+  const highlightedRunIdRef = useRef<string | null>(null);
 
   // Global X-axis range from prop (computed from server before charts render)
   // Use ref for stable reference that doesn't cause re-renders when updated
@@ -209,12 +244,16 @@ export function ChartSyncProvider({
   // Synced zoom range - persists user zoom across virtualized chart unmount/remount
   // When user zooms on any chart, this is set so newly mounted charts use the same zoom
   const [syncedZoomRange, setSyncedZoomRangeInternal] = useState<[number, number] | null>(null);
+  // Zoom group stored as ref — only read synchronously by zoom logic, never triggers re-renders.
+  // Using state here would cause the entire chart tree to re-render on every zoom.
+  const syncedZoomGroupRef = useRef<string | null>(null);
 
-  // Stable callback for setting syncedZoomRange
+  // Stable callback for setting syncedZoomRange (with zoom group for x-axis type filtering)
   // CRITICAL: Update ref FIRST (synchronous) so newly mounting charts can read immediately
-  const setSyncedZoomRange = useCallback((range: [number, number] | null) => {
+  const setSyncedZoomRange = useCallback((range: [number, number] | null, zoomGroup?: string) => {
     syncedZoomRangeRef.current = range;  // Sync - immediate access for new charts
     setSyncedZoomRangeInternal(range);   // Async - for React re-renders
+    syncedZoomGroupRef.current = range ? (zoomGroup ?? "default") : null;
   }, []);
 
   // Table-highlighted series ref for synchronous access
@@ -268,9 +307,9 @@ export function ChartSyncProvider({
     resetCallbacksRef.current.delete(id);
   }, []);
 
-  // Per-chart zoom callback registration
-  const registerZoomCallback = useCallback((id: string, callback: (xMin: number, xMax: number) => void) => {
-    zoomCallbacksRef.current.set(id, callback);
+  // Per-chart zoom callback registration (with optional zoom group for x-axis type filtering)
+  const registerZoomCallback = useCallback((id: string, callback: (xMin: number, xMax: number) => void, zoomGroup = "default") => {
+    zoomCallbacksRef.current.set(id, { callback, zoomGroup });
   }, []);
 
   const unregisterZoomCallback = useCallback((id: string) => {
@@ -360,56 +399,95 @@ export function ChartSyncProvider({
     // Clear highlighted series when mouse leaves all charts
     // Table highlight (if active) will take over via the stroke function's 3rd priority tier
     if (id === null) {
-      setHighlightedSeriesName(null);
-      setHighlightedRunIdState(null);
+      highlightedSeriesNameRef.current = null;
+      highlightedRunIdRef.current = null;
     }
   }, []);
 
   // Callback for setting highlighted series name (stable reference)
   const setHighlightedSeries = useCallback((name: string | null) => {
-    setHighlightedSeriesName(name);
+    highlightedSeriesNameRef.current = name;
   }, []);
 
   // Callback for setting highlighted run ID (stable reference)
   const setHighlightedRunId = useCallback((runId: string | null) => {
-    setHighlightedRunIdState(runId);
+    highlightedRunIdRef.current = runId;
   }, []);
+
+  // Step↔time mapping for cross-axis zoom sync (single-run view only)
+  const stepTimeMappingRef = useRef<{ steps: number[]; relTimeSecs: number[] } | null>(null);
+
+  const setStepTimeMapping = useCallback((steps: number[], relTimeSecs: number[]) => {
+    stepTimeMappingRef.current = { steps, relTimeSecs };
+  }, []);
+
+  // Cross-group zoom range — stores translated range for the opposite zoom group
+  // Used so newly mounted charts in the translated group can pick up the zoom
+  const crossGroupZoomRef = useRef<{ group: string; range: [number, number] } | null>(null);
 
   // Flag to prevent zoom sync infinite loops
   const isSyncingZoomRef = useRef(false);
 
-  // Sync X-axis zoom across all uPlot charts
-  // Uses per-chart zoom callbacks so each chart wraps setScale in its own isProgrammaticScaleRef guard.
-  // Falls back to direct chart.setScale() for charts without a registered callback.
+  // Sync X-axis zoom across uPlot charts.
+  // Same-group charts get the range directly. Cross-group charts (step ↔ relative time)
+  // get a translated range via the step↔time mapping (single-run view only).
   const syncXScale = useCallback((sourceChartId: string, xMin: number, xMax: number) => {
     // Prevent infinite loops
     if (isSyncingZoomRef.current) return;
     isSyncingZoomRef.current = true;
 
     try {
-      // Prefer per-chart zoom callbacks (which wrap setScale in isProgrammaticScaleRef)
-      const calledIds = new Set<string>();
-      zoomCallbacksRef.current.forEach((callback, id) => {
+      const sourceEntry = zoomCallbacksRef.current.get(sourceChartId);
+      const sourceGroup = sourceEntry?.zoomGroup ?? "default";
+      const mapping = stepTimeMappingRef.current;
+
+      zoomCallbacksRef.current.forEach((entry, id) => {
         if (id === sourceChartId) return;
-        calledIds.add(id);
-        try {
-          callback(xMin, xMax);
-        } catch {
-          // Ignore errors from destroyed charts
+
+        if (entry.zoomGroup === sourceGroup) {
+          // Same group: apply range directly
+          try { entry.callback(xMin, xMax); } catch { /* destroyed chart */ }
+          return;
+        }
+
+        // Cross-group translation via step↔time mapping
+        if (!mapping) return;
+        let translatedMin: number | null = null;
+        let translatedMax: number | null = null;
+
+        if (sourceGroup === "step" && entry.zoomGroup === "relative-time") {
+          translatedMin = interpolate(mapping.steps, mapping.relTimeSecs, xMin);
+          translatedMax = interpolate(mapping.steps, mapping.relTimeSecs, xMax);
+        } else if (sourceGroup === "relative-time" && entry.zoomGroup === "step") {
+          translatedMin = interpolate(mapping.relTimeSecs, mapping.steps, xMin);
+          translatedMax = interpolate(mapping.relTimeSecs, mapping.steps, xMax);
+        }
+
+        if (translatedMin !== null && translatedMax !== null) {
+          try { entry.callback(translatedMin, translatedMax); } catch { /* destroyed chart */ }
         }
       });
 
-      // Note: charts without a zoom callback (log X-axis, datetime) are intentionally
-      // excluded from zoom sync since their X scale is incompatible with linear ranges.
-      // No fallback path needed — only charts with registered zoom callbacks participate.
+      // Also store translated range for the cross-group so newly mounted charts pick it up
+      if (mapping) {
+        if (sourceGroup === "step") {
+          const relMin = interpolate(mapping.steps, mapping.relTimeSecs, xMin);
+          const relMax = interpolate(mapping.steps, mapping.relTimeSecs, xMax);
+          setSyncedZoomRange([xMin, xMax], "step");
+          crossGroupZoomRef.current = { group: "relative-time", range: [relMin, relMax] };
+        } else if (sourceGroup === "relative-time") {
+          const stepMin = interpolate(mapping.relTimeSecs, mapping.steps, xMin);
+          const stepMax = interpolate(mapping.relTimeSecs, mapping.steps, xMax);
+          setSyncedZoomRange([xMin, xMax], "relative-time");
+          crossGroupZoomRef.current = { group: "step", range: [stepMin, stepMax] };
+        }
+      }
     } finally {
-      // Reset synchronously — each target chart's zoom callback guards its own scales
-      // via isProgrammaticScaleRef, so we don't need to defer the reset
       isSyncingZoomRef.current = false;
     }
-  }, []);
+  }, [setSyncedZoomRange]);
 
-  // Reset zoom on all uPlot charts
+  // Reset zoom on all uPlot charts (all groups when cross-axis sync is active).
   // Each chart's reset callback is self-contained: it restores data, resets X scale,
   // and clears zoom state. No additional scale manipulation is needed here.
   const resetZoom = useCallback((sourceChartId: string) => {
@@ -418,8 +496,8 @@ export function ChartSyncProvider({
     isSyncingZoomRef.current = true;
 
     try {
-      // Use registered reset callbacks (which restore original full-range data
-      // AND explicitly reset the X scale to the full data range)
+      // Reset ALL charts (all groups) — when step↔time mapping exists, zoom
+      // crosses axis types, so reset must also cross axis types.
       resetCallbacksRef.current.forEach((callback, id) => {
         if (id === sourceChartId) return; // Skip source chart
         try {
@@ -428,9 +506,10 @@ export function ChartSyncProvider({
           // Ignore errors from destroyed charts
         }
       });
+
+      // Clear cross-group zoom state
+      crossGroupZoomRef.current = null;
     } finally {
-      // Reset synchronously — each chart's reset callback guards its own scales
-      // via isProgrammaticScaleRef, so we don't need to defer the reset
       isSyncingZoomRef.current = false;
     }
   }, []);
@@ -467,20 +546,24 @@ export function ChartSyncProvider({
       hoveredChartId,
       hoveredChartIdRef,
       setHoveredChart,
-      highlightedSeriesName,
+      highlightedSeriesNameRef,
       setHighlightedSeriesName: setHighlightedSeries,
-      highlightedRunId,
+      highlightedRunIdRef,
       setHighlightedRunId,
       syncXScale,
       resetZoom,
       globalXRange,
       syncedZoomRange,
+      syncedZoomGroupRef,
       setSyncedZoomRange,
       // tableHighlightedSeries is now handled imperatively via DOM events
       // to avoid re-rendering the entire component tree on hover
       tableHighlightedSeries: null,
       tableHighlightedSeriesRef,
       isSyncingZoomRef,
+      stepTimeMappingRef,
+      setStepTimeMapping,
+      crossGroupZoomRef,
     }),
     [
       registerUPlot,
@@ -494,14 +577,13 @@ export function ChartSyncProvider({
       highlightUPlotSeries,
       // hoveredChartId intentionally omitted - use hoveredChartIdRef instead
       setHoveredChart,
-      highlightedSeriesName,
-      setHighlightedSeries,
-      highlightedRunId,
-      setHighlightedRunId,
+      // highlightedSeriesNameRef intentionally omitted - stable ref, never changes
+      // highlightedRunIdRef intentionally omitted - stable ref, never changes
       syncXScale,
       resetZoom,
       globalXRange,
       syncedZoomRange,
+      // syncedZoomGroupRef intentionally omitted - stable ref, never changes
       // isSyncingZoomRef intentionally omitted - stable ref, never changes
     ]
   );
