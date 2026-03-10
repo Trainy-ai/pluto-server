@@ -19,11 +19,15 @@ export const useListRuns = (
   fieldFilters?: FieldFilterParam[],
   metricFilters?: MetricFilterParam[],
   systemFilters?: SystemFilterParam[],
+  pageSize?: number,
 ) => {
+  // Fetch at least 2x the display page size so clicking "next" always has data
+  const fetchLimit = Math.max(pageSize ? pageSize * 2 : RUNS_FETCH_LIMIT, RUNS_FETCH_LIMIT);
+
   const queryOptions = trpc.runs.list.infiniteQueryOptions({
     organizationId: orgId,
     projectName: projectName,
-    limit: RUNS_FETCH_LIMIT,
+    limit: fetchLimit,
     tags: tags && tags.length > 0 ? tags : undefined,
     status: status && status.length > 0 ? status as ("RUNNING" | "COMPLETED" | "FAILED" | "TERMINATED" | "CANCELLED")[] : undefined,
     search: search && search.trim() ? search.trim() : undefined,
@@ -42,7 +46,7 @@ export const useListRuns = (
       const result = await trpcClient.runs.list.query({
         organizationId: orgId,
         projectName: projectName,
-        limit: RUNS_FETCH_LIMIT,
+        limit: fetchLimit,
         // Pagination param depends on mode
         ...(paginationMode === "cursor"
           ? { cursor: pageParam ? Number(pageParam) : undefined }

@@ -62,3 +62,65 @@ export function filterToSelected(
 ): Run[] {
   return runs.filter((run) => selectedRunsWithColors[run.id]);
 }
+
+/**
+ * Ensure all selected runs are present in the displayed runs array.
+ * Unlike `mergeSelectedRuns` (which returns ONLY selected runs for "Display
+ * only selected" mode), this preserves ALL paginated runs and just appends
+ * any selected runs missing from the current page.
+ *
+ * Returns the same array reference when no runs are missing (memoization-friendly).
+ */
+export function ensureSelectedRunsIncluded(
+  runs: Run[],
+  selectedRunsWithColors: Record<string, { run: Run; color: string }>,
+): Run[] {
+  const selectedIds = Object.keys(selectedRunsWithColors);
+  if (selectedIds.length === 0) return runs;
+
+  const existingIds = new Set(runs.map((r) => r.id));
+  const missing: Run[] = [];
+  for (const id of selectedIds) {
+    if (!existingIds.has(id)) {
+      missing.push(selectedRunsWithColors[id].run);
+    }
+  }
+  return missing.length > 0 ? [...runs, ...missing] : runs;
+}
+
+/**
+ * Merge paginated runs with selected runs that may not be in the current page.
+ * When "Display only selected" is active, selected runs stored in
+ * selectedRunsWithColors may include runs from IndexedDB cache or previous
+ * pages that aren't in the current paginated `runs` array.
+ *
+ * Returns only selected runs: those found in `runs` (preserving page order)
+ * plus any remaining selected runs not in the page (appended at the end).
+ */
+export function mergeSelectedRuns(
+  runs: Run[],
+  selectedRunsWithColors: Record<string, { run: Run; color: string }>,
+): Run[] {
+  const selectedIds = new Set(Object.keys(selectedRunsWithColors));
+  if (selectedIds.size === 0) return [];
+
+  // First: selected runs that ARE in the paginated array (preserves page order)
+  const inPage: Run[] = [];
+  const seenIds = new Set<string>();
+  for (const run of runs) {
+    if (selectedIds.has(run.id)) {
+      inPage.push(run);
+      seenIds.add(run.id);
+    }
+  }
+
+  // Second: selected runs NOT in the paginated array (from cache / other pages)
+  const outOfPage: Run[] = [];
+  for (const [id, entry] of Object.entries(selectedRunsWithColors)) {
+    if (!seenIds.has(id)) {
+      outOfPage.push(entry.run);
+    }
+  }
+
+  return [...inPage, ...outOfPage];
+}

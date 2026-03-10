@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import {
   getCoreRowModel,
   useReactTable,
@@ -9,7 +9,7 @@ import {
 import type { Run } from "../../../~queries/list-runs";
 import type { ColumnConfig } from "../../../~hooks/use-column-config";
 import type { RunFilter } from "@/lib/run-filters";
-import { computeRowSelection, filterToSelected } from "../selection-utils";
+import { computeRowSelection, mergeSelectedRuns, ensureSelectedRunsIncluded } from "../selection-utils";
 import { computeColumnOrder } from "../lib/pinned-columns";
 import { useColumnDrag } from "./use-column-drag";
 import { useColumnResize } from "./use-column-resize";
@@ -26,6 +26,34 @@ interface UseDataTableStateParams {
   onPageSizeChange: (pageSize: number) => void;
   memoizedColumns: ColumnDef<Run, any>[];
   pinnedColumnIds: Set<string>;
+  orgSlug: string;
+  projectName: string;
+}
+
+/**
+ * Read a boolean from localStorage, defaulting to false on error or missing key.
+ */
+function readBoolFromStorage(key: string): boolean {
+  try {
+    return localStorage.getItem(key) === "true";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Persist a boolean to localStorage (remove key when false to keep storage clean).
+ */
+function writeBoolToStorage(key: string, value: boolean): void {
+  try {
+    if (value) {
+      localStorage.setItem(key, "true");
+    } else {
+      localStorage.removeItem(key);
+    }
+  } catch {
+    // localStorage unavailable
+  }
 }
 
 export function useDataTableState({
@@ -40,6 +68,8 @@ export function useDataTableState({
   onPageSizeChange,
   memoizedColumns,
   pinnedColumnIds,
+  orgSlug,
+  projectName,
 }: UseDataTableStateParams) {
   // Internal pagination state (pageIndex only — pageSize is controlled by parent)
   const [pageIndex, setPageIndex] = useState(0);
@@ -51,9 +81,22 @@ export function useDataTableState({
   const { draggedId, dragOverId, handleDragStart, handleDragOver, handleDrop, handleDragEnd } =
     useColumnDrag(customColumns, onReorderColumns);
 
-  // Visibility options state
-  const [showOnlySelected, setShowOnlySelected] = useState(false);
-  const [pinSelectedToTop, setPinSelectedToTop] = useState(false);
+  // Visibility options state — persisted to localStorage per org/project
+  const showOnlySelectedKey = `run-table-showOnlySelected:${orgSlug}:${projectName}`;
+  const pinSelectedToTopKey = `run-table-pinSelectedToTop:${orgSlug}:${projectName}`;
+
+  const [showOnlySelected, setShowOnlySelectedRaw] = useState(() => readBoolFromStorage(showOnlySelectedKey));
+  const [pinSelectedToTop, setPinSelectedToTopRaw] = useState(() => readBoolFromStorage(pinSelectedToTopKey));
+
+  const setShowOnlySelected = useCallback((value: boolean) => {
+    setShowOnlySelectedRaw(value);
+    writeBoolToStorage(showOnlySelectedKey, value);
+  }, [showOnlySelectedKey]);
+
+  const setPinSelectedToTop = useCallback((value: boolean) => {
+    setPinSelectedToTopRaw(value);
+    writeBoolToStorage(pinSelectedToTopKey, value);
+  }, [pinSelectedToTopKey]);
 
   // When pinning is active, split into pinned (sticky, always-visible) and unpinned (paginated).
   const isPinningActive = pinSelectedToTop && Object.keys(selectedRunsWithColors).length > 0;
@@ -63,19 +106,22 @@ export function useDataTableState({
     return Object.values(selectedRunsWithColors).map((v) => v.run);
   }, [isPinningActive, selectedRunsWithColors]);
 
-  // The main table data: either filtered-to-selected minus pinned, unpinned only, or all runs
+  // The main table data: either filtered-to-selected minus pinned, unpinned only, or all runs.
+  // When "Display only selected" is active, use mergeSelectedRuns to include
+  // selected runs that may not be in the current paginated page (e.g., from
+  // IndexedDB cache or previous browsing sessions).
   const displayedRuns = useMemo(() => {
     if (isPinningActive) {
       const pinnedIds = new Set(Object.keys(selectedRunsWithColors));
       const base = showOnlySelected
-        ? filterToSelected(runs, selectedRunsWithColors)
-        : runs;
+        ? mergeSelectedRuns(runs, selectedRunsWithColors)
+        : ensureSelectedRunsIncluded(runs, selectedRunsWithColors);
       return base.filter((r) => !pinnedIds.has(r.id));
     }
     if (showOnlySelected) {
-      return filterToSelected(runs, selectedRunsWithColors);
+      return mergeSelectedRuns(runs, selectedRunsWithColors);
     }
-    return runs;
+    return ensureSelectedRunsIncluded(runs, selectedRunsWithColors);
   }, [runs, showOnlySelected, isPinningActive, selectedRunsWithColors]);
 
   // Keep track of previous data length to maintain pagination position
@@ -107,15 +153,20 @@ export function useDataTableState({
     return displayedRuns.slice(startIndex, endIndex).map((run) => run.id);
   }, [displayedRuns, pageIndex, pageSize]);
 
-  // Maintain pagination position when new data is loaded
+  // Maintain pagination position when new data is loaded.
+  // Clamp target page to the valid range so we never land on an empty page
+  // (can happen when pageSize > RUNS_FETCH_LIMIT, e.g. pageSize=100 but
+  // fetch only brings 40 new rows that still fit on page 0).
   useEffect(() => {
     if (runs.length > prevDataLengthRef.current) {
-      if (lastPageIndexRef.current !== pageIndex) {
-        setPageIndex(lastPageIndexRef.current);
+      const maxPage = Math.max(0, Math.ceil(displayedRuns.length / pageSize) - 1);
+      const targetPage = Math.min(lastPageIndexRef.current, maxPage);
+      if (targetPage !== pageIndex) {
+        setPageIndex(targetPage);
       }
       prevDataLengthRef.current = runs.length;
     }
-  }, [runs.length, pageIndex]);
+  }, [runs.length, pageIndex, displayedRuns.length, pageSize]);
 
   // Reset prevDataLengthRef when pageSize changes
   useEffect(() => {

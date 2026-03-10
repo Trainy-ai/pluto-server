@@ -245,6 +245,8 @@ export function DataTable({
     onPageSizeChange,
     memoizedColumns,
     pinnedColumnIds,
+    orgSlug,
+    projectName,
   });
 
   // Handle fetching more data without resetting pagination

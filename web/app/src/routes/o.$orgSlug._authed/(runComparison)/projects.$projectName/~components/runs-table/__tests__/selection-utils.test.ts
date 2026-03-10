@@ -3,6 +3,8 @@ import {
   computeRowSelection,
   filterToSelected,
   sortPinnedToTop,
+  mergeSelectedRuns,
+  ensureSelectedRunsIncluded,
 } from "../selection-utils";
 import type { Run } from "../../../~queries/list-runs";
 
@@ -195,6 +197,128 @@ describe("computeRowSelection", () => {
         // If this assertion failed, hovering run.id would NOT highlight
         // its chart line — the exact bug the user reported.
       });
+    });
+  });
+});
+
+// ── mergeSelectedRuns ────────────────────────────────────────────────────
+
+describe("mergeSelectedRuns", () => {
+  it("returns only selected runs when all selected runs are on the current page", () => {
+    const runs = [makeRun("A"), makeRun("B"), makeRun("C")];
+    const selected = makeSelected([runs[0], runs[2]]); // A, C — both in runs
+
+    const result = mergeSelectedRuns(runs, selected);
+
+    expect(result.map((r) => r.id)).toEqual(["A", "C"]);
+  });
+
+  it("includes selected runs not present in paginated runs array", () => {
+    const paginatedRuns = [makeRun("A"), makeRun("B")];
+    const outsideRun = makeRun("X");
+    const selected = makeSelected([paginatedRuns[0], outsideRun]); // A in page, X outside
+
+    const result = mergeSelectedRuns(paginatedRuns, selected);
+
+    // Should include both A (from page) and X (from selection)
+    const ids = result.map((r) => r.id);
+    expect(ids).toContain("A");
+    expect(ids).toContain("X");
+    expect(ids).toHaveLength(2);
+  });
+
+  it("returns all selected runs even when paginated runs is empty", () => {
+    const outsideRuns = [makeRun("X"), makeRun("Y")];
+    const selected = makeSelected(outsideRuns);
+
+    const result = mergeSelectedRuns([], selected);
+
+    expect(result.map((r) => r.id)).toEqual(["X", "Y"]);
+  });
+
+  it("returns empty array when nothing is selected", () => {
+    const runs = [makeRun("A"), makeRun("B")];
+    const result = mergeSelectedRuns(runs, {});
+    expect(result).toEqual([]);
+  });
+
+  it("preserves paginated order for runs in page, appends others", () => {
+    const paginatedRuns = [makeRun("C"), makeRun("A"), makeRun("B")];
+    const outsideRun = makeRun("Z");
+    const selected = makeSelected([paginatedRuns[0], paginatedRuns[2], outsideRun]); // C, B in page; Z outside
+
+    const result = mergeSelectedRuns(paginatedRuns, selected);
+
+    // C and B should maintain their relative order from paginated array
+    // Z should be appended
+    const ids = result.map((r) => r.id);
+    expect(ids.indexOf("C")).toBeLessThan(ids.indexOf("B"));
+    expect(ids).toContain("Z");
+    expect(ids).toHaveLength(3);
+  });
+});
+
+// ── ensureSelectedRunsIncluded ────────────────────────────────────────────
+
+describe("ensureSelectedRunsIncluded", () => {
+  it("returns same array reference when all selected runs already present", () => {
+    const runs = [makeRun("A"), makeRun("B"), makeRun("C")];
+    const selected = makeSelected([runs[0], runs[2]]); // A, C — both in runs
+
+    const result = ensureSelectedRunsIncluded(runs, selected);
+
+    expect(result).toBe(runs); // same reference
+  });
+
+  it("appends selected runs not in paginated array (cross-page selection bug)", () => {
+    const paginatedRuns = [makeRun("A"), makeRun("B")];
+    const outsideRun = makeRun("X");
+    const selected = makeSelected([paginatedRuns[0], outsideRun]); // A in page, X outside
+
+    const result = ensureSelectedRunsIncluded(paginatedRuns, selected);
+
+    expect(result.map((r) => r.id)).toEqual(["A", "B", "X"]);
+  });
+
+  it("returns runs unchanged when nothing is selected", () => {
+    const runs = [makeRun("A"), makeRun("B")];
+    const result = ensureSelectedRunsIncluded(runs, {});
+
+    expect(result).toBe(runs); // same reference
+  });
+
+  it("preserves original run order, appends missing at end", () => {
+    const paginatedRuns = [makeRun("C"), makeRun("A"), makeRun("B")];
+    const outsideRuns = [makeRun("Z"), makeRun("Y")];
+    const selected = makeSelected([paginatedRuns[0], ...outsideRuns]); // C in page; Z, Y outside
+
+    const result = ensureSelectedRunsIncluded(paginatedRuns, selected);
+
+    // Original order preserved, missing appended
+    expect(result.map((r) => r.id)).toEqual(["C", "A", "B", "Z", "Y"]);
+  });
+
+  it("regression: computeRowSelection produces valid index for every selected run", () => {
+    // Simulates: user searches for run "X", selects it, clears search.
+    // Page now shows [A, B, C] but "X" is selected from a different page.
+    const paginatedRuns = [makeRun("A"), makeRun("B"), makeRun("C")];
+    const outsideRun = makeRun("X");
+    const selected = makeSelected([outsideRun]);
+
+    const displayed = ensureSelectedRunsIncluded(paginatedRuns, selected);
+    const rowSelection = computeRowSelection(displayed, selected);
+
+    // X should be appended at index 3 and marked selected
+    expect(displayed.map((r) => r.id)).toEqual(["A", "B", "C", "X"]);
+    expect(rowSelection[3]).toBe(true);
+
+    // Every selected run must have a valid row index — this is the precondition
+    // for row.getIsSelected() to return true, which enables hover emphasis
+    const selectedIds = new Set(Object.keys(selected));
+    displayed.forEach((run, index) => {
+      if (selectedIds.has(run.id)) {
+        expect(rowSelection[index]).toBe(true);
+      }
     });
   });
 });

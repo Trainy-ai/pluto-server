@@ -7,6 +7,7 @@ import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import type { SortingState } from "@tanstack/react-table";
 import { useQuery } from "@tanstack/react-query";
 import { useSelectedRuns } from "./~hooks/use-selected-runs";
+import { useCachedSelectedRunIds } from "./~hooks/use-cached-selected-run-ids";
 import { prefetchListRuns, useListRuns, type Run } from "./~queries/list-runs";
 import { useSelectedRunLogs } from "./~queries/selected-run-logs";
 import { useUpdateTags } from "./~queries/update-tags";
@@ -132,9 +133,40 @@ function RouteComponent() {
     return resolved.length > 0 ? resolved : undefined;
   }, [rawUrlRunIds, prefetchedUrlRuns]);
 
-  // Handler for changing the selected dashboard view (syncs with URL)
+  // Persist last selected dashboard view to localStorage per org/project
+  const dashboardStorageKey = `run-table-dashboard:${organizationSlug}:${projectName}`;
+
+  // On initial load, restore last dashboard if no ?chart= param in URL
+  useEffect(() => {
+    if (chart) return; // URL already specifies a dashboard
+    try {
+      const saved = localStorage.getItem(dashboardStorageKey);
+      if (saved) {
+        void navigate({
+          to: ".",
+          search: (prev) => ({ ...prev, chart: saved }),
+          replace: true,
+        });
+      }
+    } catch {
+      // localStorage unavailable
+    }
+    // Only run on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Handler for changing the selected dashboard view (syncs with URL + localStorage)
   const handleViewChange = useCallback(
     (viewId: string | null) => {
+      try {
+        if (viewId) {
+          localStorage.setItem(dashboardStorageKey, viewId);
+        } else {
+          localStorage.removeItem(dashboardStorageKey);
+        }
+      } catch {
+        // localStorage unavailable
+      }
       void navigate({
         to: ".",
         search: (prev) => ({
@@ -144,7 +176,7 @@ function RouteComponent() {
         replace: true,
       });
     },
-    [navigate],
+    [navigate, dashboardStorageKey],
   );
 
   // Handler for syncing run selection to URL (debounced to avoid excessive updates)
@@ -358,10 +390,17 @@ function RouteComponent() {
     setAll: setAllFilters,
     serverFilters,
   } = useRunFilters(organizationSlug, projectName);
-  // Search state - immediate value for input display
-  const [searchInput, setSearchInput] = useState<string>("");
+  // Search state — persisted to localStorage per org/project
+  const searchStorageKey = `run-table-search:${organizationSlug}:${projectName}`;
+  const [searchInput, setSearchInput] = useState<string>(() => {
+    try {
+      return localStorage.getItem(searchStorageKey) ?? "";
+    } catch {
+      return "";
+    }
+  });
   // Debounced search value for server queries
-  const [debouncedSearch, setDebouncedSearch] = useState<string>("");
+  const [debouncedSearch, setDebouncedSearch] = useState<string>(searchInput);
 
   // Debounce search updates to avoid excessive API calls
   const updateDebouncedSearch = useDebouncedCallback(
@@ -373,8 +412,17 @@ function RouteComponent() {
     (value: string) => {
       setSearchInput(value);
       updateDebouncedSearch(value);
+      try {
+        if (value) {
+          localStorage.setItem(searchStorageKey, value);
+        } else {
+          localStorage.removeItem(searchStorageKey);
+        }
+      } catch {
+        // localStorage unavailable
+      }
     },
-    [updateDebouncedSearch],
+    [updateDebouncedSearch, searchStorageKey],
   );
 
   const { refresh, lastRefreshed } = useRefresh({
@@ -416,7 +464,7 @@ function RouteComponent() {
     isFetching,
     isError,
     error,
-  } = useListRuns(organizationId, projectName, serverFilters.tags, serverFilters.status, debouncedSearch, serverFilters.dateFilters, sortParam, serverFilters.fieldFilters as FieldFilterParam[] | undefined, serverFilters.metricFilters as MetricFilterParam[] | undefined, serverFilters.systemFilters as SystemFilterParam[] | undefined);
+  } = useListRuns(organizationId, projectName, serverFilters.tags, serverFilters.status, debouncedSearch, serverFilters.dateFilters, sortParam, serverFilters.fieldFilters as FieldFilterParam[] | undefined, serverFilters.metricFilters as MetricFilterParam[] | undefined, serverFilters.systemFilters as SystemFilterParam[] | undefined, pageSize);
 
   // Mutation for updating tags
   const updateTagsMutation = useUpdateTags(organizationId, projectName);
@@ -584,6 +632,36 @@ function RouteComponent() {
     return Array.from(uniqueRuns.values());
   }, [data, prefetchedUrlRuns]);
 
+  // Pre-fetch selected runs that aren't in the paginated data.
+  // Reads cached selection IDs from IndexedDB (independent of useSelectedRuns)
+  // so old/distant runs appear in the table when "Display only selected" is on.
+  const cachedSelectedRunIds = useCachedSelectedRunIds(organizationId, projectName);
+
+  const missingSelectedRunIds = useMemo(() => {
+    if (cachedSelectedRunIds.length === 0) return [];
+    const loadedIds = new Set(allLoadedRuns.map((r) => r.id));
+    return cachedSelectedRunIds.filter((id) => !loadedIds.has(id));
+  }, [cachedSelectedRunIds, allLoadedRuns]);
+
+  const { data: prefetchedSelectedRuns } = useQuery(
+    trpc.runs.getByIds.queryOptions(
+      {
+        organizationId,
+        projectName,
+        runIds: missingSelectedRunIds,
+      },
+      { enabled: missingSelectedRunIds.length > 0 },
+    ),
+  );
+
+  // Merge pre-fetched selected runs into the loaded runs array
+  const allVisibleRuns = useMemo(() => {
+    if (!prefetchedSelectedRuns?.runs?.length) return allLoadedRuns;
+    const loadedIds = new Set(allLoadedRuns.map((r) => r.id));
+    const extra = prefetchedSelectedRuns.runs.filter((r: { id: string }) => !loadedIds.has(r.id));
+    return extra.length > 0 ? [...allLoadedRuns, ...extra] : allLoadedRuns;
+  }, [allLoadedRuns, prefetchedSelectedRuns]);
+
   // Extract metric column specs for the summaries query
   const metricColumnSpecs = useMemo(() => {
     return customColumns
@@ -592,7 +670,7 @@ function RouteComponent() {
   }, [customColumns]);
 
   // Get all visible run IDs for batch fetches (field values, metric summaries)
-  const visibleRunIds = useMemo(() => allLoadedRuns.map((r) => r.id), [allLoadedRuns]);
+  const visibleRunIds = useMemo(() => allVisibleRuns.map((r) => r.id), [allVisibleRuns]);
 
   // Fetch pre-flattened field values (config + systemMetadata) from run_field_values table.
   // This replaces the old pattern of sending full JSON blobs in runs.list.
@@ -614,7 +692,7 @@ function RouteComponent() {
   // Field values provide _flatConfig and _flatSystemMetadata from the
   // pre-flattened run_field_values table (replaces client-side flattenObject).
   const runs = useMemo(() => {
-    let result = allLoadedRuns;
+    let result = allVisibleRuns;
 
     // Merge field values (config + systemMetadata)
     if (fieldValuesData) {
@@ -649,7 +727,7 @@ function RouteComponent() {
     }
 
     return result;
-  }, [allLoadedRuns, fieldValuesData, metricSummariesData, metricColumnSpecs.length]);
+  }, [allVisibleRuns, fieldValuesData, metricSummariesData, metricColumnSpecs.length]);
 
   // Build filterable fields from system fields + config/systemMetadata keys.
   // When the user is searching, merge results from the cache table so keys
