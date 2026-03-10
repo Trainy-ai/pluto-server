@@ -37,7 +37,7 @@ export function SidebarLinks({ className }: SidebarLinksProps) {
         <SidebarMenuItem>
           <SidebarMenuButton asChild tooltip="Slack Community">
             <a
-              href="https://discord.gg/ybfVZgyFCX"
+              href="https://discord.gg/d67CMuKY5V"
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-2"
