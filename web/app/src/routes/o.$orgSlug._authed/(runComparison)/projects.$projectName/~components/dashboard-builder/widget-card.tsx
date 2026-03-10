@@ -67,9 +67,8 @@ export function WidgetCard({
 
   return (
     <div
-      data-testid="dashboard-widget"
       className={cn(
-        "group relative rounded-lg border bg-card shadow-sm",
+        "group relative h-full rounded-lg border bg-card shadow-sm",
         isEditing && "ring-1 ring-transparent hover:ring-primary/50"
       )}
     >
@@ -187,6 +186,7 @@ export function WidgetCard({
       {/* Widget Content */}
       <div
         ref={contentRef}
+        data-testid="widget-content"
         className={`h-[calc(100%-${WIDGET_HEADER_HEIGHT}px)] overflow-auto p-2`}
         onDoubleClick={
           widget.type === "chart"

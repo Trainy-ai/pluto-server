@@ -114,13 +114,14 @@ export function DashboardToolbar({
               onClick={onSave}
               loading={isSaving}
               disabled={!hasChanges}
+              data-testid="dashboard-save-btn"
             >
               <SaveIcon className="mr-2 size-4" />
               Save
             </Button>
           </>
         ) : (
-          <Button variant="outline" size="sm" onClick={onEnterEditMode} data-testid="edit-dashboard-btn">
+          <Button variant="outline" size="sm" onClick={onEnterEditMode} data-testid="dashboard-edit-btn">
             Edit Dashboard
           </Button>
         )}

@@ -114,7 +114,7 @@ export function SectionContainer({
 
   return (
     <>
-      <div className="rounded-lg border bg-card" data-testid="dashboard-section" data-section-name={section.name}>
+      <div className="rounded-lg border bg-card" data-testid="section-container" data-section-name={section.name}>
         <Collapsible open={!section.collapsed} onOpenChange={handleToggleCollapse}>
           <div className="flex items-center justify-between border-b px-4 py-2">
             <CollapsibleTrigger asChild>
@@ -170,7 +170,7 @@ export function SectionContainer({
 
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="icon" className="size-8">
+                    <Button variant="ghost" size="icon" className="size-8" data-testid="section-menu-btn">
                       <MoreHorizontalIcon className="size-4" />
                     </Button>
                   </DropdownMenuTrigger>

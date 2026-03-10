@@ -237,7 +237,7 @@ export function WidgetGrid({
         const clippingInfo = computeClippingInfo(chartConfig, range);
 
         return (
-          <div key={widget.id}>
+          <div key={widget.id} className="h-full" data-testid="dashboard-widget">
             <WidgetCard
               widget={widget}
               isEditing={isEditing}
