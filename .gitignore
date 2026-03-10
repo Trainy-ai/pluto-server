@@ -62,3 +62,7 @@ tests/e2e/__pycache__/
 
 # Auto-generated TanStack Router route tree
 web/app/src/routeTree.gen.ts
+
+# Screenshots and other junk images
+*.png
+Screenshot*
