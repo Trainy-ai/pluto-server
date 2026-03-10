@@ -1,7 +1,7 @@
 "use client";
 
 import { default as LineChart } from "@/components/charts/line-wrapper";
-import { memo, useEffect, useMemo } from "react";
+import { memo, useMemo } from "react";
 import { useQueries, keepPreviousData } from "@tanstack/react-query";
 import { trpc, trpcClient } from "@/utils/trpc";
 import { useCheckDatabaseSize } from "@/lib/db/local-cache";
@@ -598,35 +598,6 @@ const MultiLineChartInner = memo(
         }
       }
     }, [allData, customLogData, settings, effectiveXAxis, title, xlabel, hasAnyData, queryPairs, getSeriesLabel, zoomDataMap, isMultiMetric, metricNames, lines]);
-
-    // Register step↔time mapping for cross-axis zoom sync.
-    // Uses raw query data (which has both step and time) from the first run
-    // with data. Only registers once per ChartSyncProvider.
-    const chartSyncCtx = useChartSyncContext();
-    useEffect(() => {
-      if (!chartSyncCtx || !hasAnyData || allData.length === 0) return;
-      // Only register if no mapping exists yet
-      if (chartSyncCtx.stepTimeMappingRef.current) return;
-
-      // Find the first run with data
-      const first = allData.find((item) => item.data.length > 0);
-      if (!first) return;
-
-      const runId = first.pair.line.runId;
-      // Use the same baseline as the "Relative Time" chart case: createdAt with fallback to data[0].time.
-      // Must match the chartResult useMemo fallback exactly so the mapping aligns with chart x-values.
-      const createdAtStr = lines.find((l) => l.runId === runId)?.createdAt;
-      const baselineMs = createdAtStr
-        ? new Date(createdAtStr).getTime()
-        : new Date(first.data[0].time).getTime();
-
-      const sorted = [...first.data].sort((a, b) => a.step - b.step);
-      const steps = sorted.map((d) => d.step);
-      const relTimeSecs = sorted.map(
-        (d) => (new Date(d.time).getTime() - baselineMs) / 1000,
-      );
-      chartSyncCtx.setStepTimeMapping(steps, relTimeSecs);
-    }, [chartSyncCtx, hasAnyData, allData, lines]);
 
     // Too many series warning
     if (tooManySeries) {
