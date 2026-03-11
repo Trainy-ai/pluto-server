@@ -303,8 +303,8 @@ impl TestFixture {
         // Setup ClickHouse client
         let clickhouse_client = clickhouse::Client::default()
             .with_url(&containers.clickhouse_url)
-            .with_user("test")
-            .with_password("test");
+            .with_user("default")
+            .with_password("");
 
         // Create test config
         let config = server_rs::config::Config {

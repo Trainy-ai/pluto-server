@@ -120,6 +120,360 @@ async fn test_ingest_data_endpoint() {
     );
 }
 
+// --- All edge cases: auth, headers, payloads, multiline, health (single shared fixture) ---
+
+#[tokio::test]
+async fn test_ingest_edge_cases() {
+    let fixture = common::TestFixture::new().await;
+
+    // --- Health endpoints (run first while ClickHouse is fresh) ---
+
+    // Liveness
+    {
+        let app = axum::Router::new()
+            .merge(server_rs::routes::health::router())
+            .with_state(fixture.app_state());
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/health")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(String::from_utf8(body.to_vec()).unwrap(), "OK");
+    }
+
+    // Readiness
+    {
+        let app = axum::Router::new()
+            .merge(server_rs::routes::health::router())
+            .with_state(fixture.app_state());
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/health/ready")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+
+        assert_eq!(status, StatusCode::OK, "Expected healthy readiness. Got {}: {}", status, body_str);
+        assert!(body_str.contains("healthy"), "Expected 'healthy' in response: {}", body_str);
+    }
+
+    // Version
+    {
+        let app = axum::Router::new()
+            .merge(server_rs::routes::health::router())
+            .with_state(fixture.app_state());
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/version")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body_str.contains("ingest"), "Expected 'ingest' in version response: {}", body_str);
+    }
+
+    // --- Auth edge cases ---
+
+    // Invalid bearer format
+    {
+        let app = fixture.router();
+        let request = Request::builder()
+            .method("POST")
+            .uri("/ingest/metrics")
+            .header("content-type", "application/json")
+            .header("authorization", "Basic not-bearer")
+            .header("x-project-name", "test-project")
+            .header("x-run-id", "123")
+            .body(Body::from(r#"{"time":1704067200,"step":1,"data":{"m":1.0}}"#))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert!(
+            response.status().is_client_error(),
+            "Expected a client error for non-Bearer auth, got {}",
+            response.status()
+        );
+    }
+
+    // Wrong API key
+    {
+        let app = fixture.router();
+        let request = Request::builder()
+            .method("POST")
+            .uri("/ingest/metrics")
+            .header("content-type", "application/json")
+            .header("authorization", "Bearer wrong-key-does-not-exist")
+            .header("x-project-name", "test-project")
+            .header("x-run-id", "123")
+            .body(Body::from(r#"{"time":1704067200,"step":1,"data":{"m":1.0}}"#))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert!(
+            response.status().is_client_error(),
+            "Expected a client error for wrong API key, got {}",
+            response.status()
+        );
+    }
+
+    // --- Missing enrichment headers ---
+
+    // Missing X-Project-Name
+    {
+        let app = fixture.router();
+        let request = Request::builder()
+            .method("POST")
+            .uri("/ingest/metrics")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", fixture.api_key))
+            .header("x-run-id", "123")
+            .body(Body::from(r#"{"time":1704067200,"step":1,"data":{"m":1.0}}"#))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+
+        assert!(
+            status.is_client_error(),
+            "Expected a client error for missing X-Project-Name, got {}: {}",
+            status, body_str
+        );
+        assert!(
+            body_str.contains("X-Project-Name") || body_str.contains("header"),
+            "Expected error about missing header, got: {}", body_str
+        );
+    }
+
+    // Missing X-Run-Id
+    {
+        let app = fixture.router();
+        let request = Request::builder()
+            .method("POST")
+            .uri("/ingest/metrics")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", fixture.api_key))
+            .header("x-project-name", "test-project")
+            .body(Body::from(r#"{"time":1704067200,"step":1,"data":{"m":1.0}}"#))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert!(
+            response.status().is_client_error(),
+            "Expected a client error for missing X-Run-Id, got {}",
+            response.status()
+        );
+    }
+
+    // --- Multi-line payloads ---
+
+    // Multi-line metrics (3 lines, 1 metric each)
+    {
+        let app = fixture.router();
+        let payload = "{\
+\"time\":1000,\"step\":1,\"data\":{\"loss\":0.5}}\n\
+{\"time\":1001,\"step\":2,\"data\":{\"loss\":0.4}}\n\
+{\"time\":1002,\"step\":3,\"data\":{\"loss\":0.3}}";
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/ingest/metrics")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", fixture.api_key))
+            .header("x-project-name", "test-project")
+            .header("x-run-id", "123")
+            .body(Body::from(payload))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+
+        assert_eq!(status, StatusCode::OK, "Got {}: {}", status, body_str);
+        assert!(body_str.contains("3 records"), "Expected '3 records', got: {}", body_str);
+    }
+
+    // Multi-line metrics (2 lines, 2 metrics each = 4 records)
+    {
+        let app = fixture.router();
+        let payload = "{\
+\"time\":1000,\"step\":1,\"data\":{\"loss\":0.5,\"acc\":0.9}}\n\
+{\"time\":1001,\"step\":2,\"data\":{\"loss\":0.4,\"acc\":0.92}}";
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/ingest/metrics")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", fixture.api_key))
+            .header("x-project-name", "test-project")
+            .header("x-run-id", "456")
+            .body(Body::from(payload))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+
+        assert_eq!(status, StatusCode::OK, "Got {}: {}", status, body_str);
+        assert!(body_str.contains("4 records"), "Expected '4 records', got: {}", body_str);
+    }
+
+    // Multi-line logs
+    {
+        let app = fixture.router();
+        let payload = "{\
+\"time\":1000,\"message\":\"line 1\",\"lineNumber\":1,\"logType\":\"INFO\"}\n\
+{\"time\":1001,\"message\":\"line 2\",\"lineNumber\":2,\"logType\":\"ERROR\"}";
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/ingest/logs")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", fixture.api_key))
+            .header("x-project-name", "test-project")
+            .header("x-run-id", "123")
+            .body(Body::from(payload))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+
+        assert_eq!(status, StatusCode::OK, "Got {}: {}", status, body_str);
+        assert!(body_str.contains("2 records"), "Expected '2 records', got: {}", body_str);
+    }
+
+    // --- Invalid payloads ---
+
+    // Invalid JSON
+    {
+        let app = fixture.router();
+        let request = Request::builder()
+            .method("POST")
+            .uri("/ingest/metrics")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", fixture.api_key))
+            .header("x-project-name", "test-project")
+            .header("x-run-id", "123")
+            .body(Body::from("this is not valid json at all"))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert!(
+            response.status().is_client_error(),
+            "Expected a client error for invalid JSON, got {}",
+            response.status()
+        );
+    }
+
+    // Empty data field
+    {
+        let app = fixture.router();
+        let request = Request::builder()
+            .method("POST")
+            .uri("/ingest/metrics")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", fixture.api_key))
+            .header("x-project-name", "test-project")
+            .header("x-run-id", "123")
+            .body(Body::from(r#"{"time":1000,"step":1,"data":{}}"#))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert!(
+            response.status().is_client_error(),
+            "Expected a client error for empty data field, got {}",
+            response.status()
+        );
+    }
+
+    // NaN / Infinity handling
+    {
+        let app = fixture.router();
+        let request = Request::builder()
+            .method("POST")
+            .uri("/ingest/metrics")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", fixture.api_key))
+            .header("x-project-name", "test-project")
+            .header("x-run-id", "123")
+            .body(Body::from(r#"{"time":1000,"step":1,"data":{"loss":NaN,"grad":Infinity,"min":-Infinity,"acc":0.95}}"#))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+
+        assert_eq!(status, StatusCode::OK, "Expected 200 OK for NaN/Infinity. Got {}: {}", status, body_str);
+        assert!(body_str.contains("4 records"), "Expected '4 records', got: {}", body_str);
+    }
+
+    // Empty body
+    {
+        let app = fixture.router();
+        let request = Request::builder()
+            .method("POST")
+            .uri("/ingest/metrics")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", fixture.api_key))
+            .header("x-project-name", "test-project")
+            .header("x-run-id", "123")
+            .body(Body::from(""))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+
+        assert_eq!(status, StatusCode::OK, "Expected 200 OK for empty body. Got {}: {}", status, body_str);
+        assert!(body_str.contains("0 records"), "Expected '0 records', got: {}", body_str);
+    }
+
+    // --- Data endpoint edge cases ---
+
+    // Empty dataType
+    {
+        let app = fixture.router();
+        let request = Request::builder()
+            .method("POST")
+            .uri("/ingest/data")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", fixture.api_key))
+            .header("x-project-name", "test-project")
+            .header("x-run-id", "123")
+            .body(Body::from(r#"{"time":1000,"data":"payload","step":1,"dataType":"","logName":"test"}"#))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert!(
+            response.status().is_client_error(),
+            "Expected a client error for empty dataType, got {}",
+            response.status()
+        );
+    }
+
+}
+
 #[tokio::test]
 async fn test_ingest_metrics_without_auth_headers() {
     // Setup test fixture
@@ -219,7 +573,7 @@ async fn test_dlq_persists_and_replays_on_clickhouse_failure() {
         storage_endpoint: "http://localhost:9000".to_string(),
         database_url: containers.postgres_url.clone(),
     });
-    let (metrics_sender, mut metrics_receiver) = tokio::sync::mpsc::channel(100);
+    let (metrics_sender, metrics_receiver) = tokio::sync::mpsc::channel(100);
     let (log_sender, _log_receiver) = tokio::sync::mpsc::channel(100);
     let (data_sender, _data_receiver) = tokio::sync::mpsc::channel(100);
     let (files_sender, _files_receiver) = tokio::sync::mpsc::channel(100);
@@ -236,7 +590,7 @@ async fn test_dlq_persists_and_replays_on_clickhouse_failure() {
     });
 
     // Start background processor for metrics (with DLQ)
-    let processor_client = clickhouse_client.clone();
+    let _processor_client = clickhouse_client.clone();
     let processor_dlq = dlq_config.clone();
     let processor_config = server_rs::config::Config {
         clickhouse_url: containers.clickhouse_url.clone(),

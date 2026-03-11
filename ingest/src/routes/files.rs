@@ -438,3 +438,180 @@ pub async fn generate_presigned_urls(
 pub fn router() -> axum::Router<Arc<AppState>> {
     axum::Router::new().route("/files", post(generate_presigned_urls))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- FileType::from_str ---
+
+    #[test]
+    fn test_file_type_from_str_known_types() {
+        assert!(matches!(FileType::from_str("png"), Some(FileType::Png)));
+        assert!(matches!(FileType::from_str("jpg"), Some(FileType::Jpg)));
+        assert!(matches!(FileType::from_str("jpeg"), Some(FileType::Jpeg)));
+        assert!(matches!(FileType::from_str("mp4"), Some(FileType::Mp4)));
+        assert!(matches!(FileType::from_str("csv"), Some(FileType::Csv)));
+        assert!(matches!(FileType::from_str("json"), Some(FileType::Json)));
+        assert!(matches!(FileType::from_str("pt"), Some(FileType::Pt)));
+        assert!(matches!(FileType::from_str("onnx"), Some(FileType::Onnx)));
+        assert!(matches!(FileType::from_str("h5"), Some(FileType::H5)));
+        assert!(matches!(FileType::from_str("pkl"), Some(FileType::Pkl)));
+    }
+
+    #[test]
+    fn test_file_type_from_str_case_insensitive() {
+        assert!(matches!(FileType::from_str("PNG"), Some(FileType::Png)));
+        assert!(matches!(FileType::from_str("Jpg"), Some(FileType::Jpg)));
+        assert!(matches!(FileType::from_str("CSV"), Some(FileType::Csv)));
+    }
+
+    #[test]
+    fn test_file_type_from_str_yaml_aliases() {
+        assert!(matches!(FileType::from_str("yaml"), Some(FileType::Yaml)));
+        assert!(matches!(FileType::from_str("yml"), Some(FileType::Yaml)));
+    }
+
+    #[test]
+    fn test_file_type_from_str_unknown_returns_custom() {
+        match FileType::from_str("xyz123") {
+            Some(FileType::Custom(s)) => assert_eq!(s, "xyz123"),
+            other => panic!("Expected Custom, got {:?}", other),
+        }
+    }
+
+    // --- FileType::mime_type ---
+
+    #[test]
+    fn test_mime_types() {
+        assert_eq!(FileType::Png.mime_type(), "image/png");
+        assert_eq!(FileType::Jpeg.mime_type(), "image/jpeg");
+        assert_eq!(FileType::Jpg.mime_type(), "image/jpeg");
+        assert_eq!(FileType::Mp4.mime_type(), "video/mp4");
+        assert_eq!(FileType::Mp3.mime_type(), "audio/mpeg");
+        assert_eq!(FileType::Pdf.mime_type(), "application/pdf");
+        assert_eq!(FileType::Json.mime_type(), "application/json");
+        assert_eq!(FileType::Csv.mime_type(), "text/csv");
+        assert_eq!(FileType::Txt.mime_type(), "text/plain");
+        assert_eq!(FileType::Log.mime_type(), "text/plain");
+        assert_eq!(FileType::Onnx.mime_type(), "application/octet-stream");
+        assert_eq!(FileType::Pt.mime_type(), "application/octet-stream");
+        assert_eq!(
+            FileType::Custom("video/x-custom".to_string()).mime_type(),
+            "video/x-custom"
+        );
+    }
+
+    // --- FileType::extension ---
+
+    #[test]
+    fn test_extensions() {
+        assert_eq!(FileType::Png.extension(), "png");
+        assert_eq!(FileType::Jpeg.extension(), "jpeg");
+        assert_eq!(FileType::Jpg.extension(), "jpg");
+        assert_eq!(FileType::Ckpt.extension(), "ckpt");
+        assert_eq!(FileType::SavedModel.extension(), "savedmodel");
+        assert_eq!(FileType::Custom("bin".to_string()).extension(), "bin");
+    }
+
+    // --- FileType deserialization ---
+
+    #[test]
+    fn test_deserialize_file_type_from_string() {
+        let json = r#""png""#;
+        let ft: FileType = serde_json::from_str(json).unwrap();
+        assert!(matches!(ft, FileType::Png));
+    }
+
+    #[test]
+    fn test_deserialize_file_type_from_unknown_string() {
+        let json = r#""unknown_ext""#;
+        let ft: FileType = serde_json::from_str(json).unwrap();
+        match ft {
+            FileType::Custom(s) => assert_eq!(s, "unknown_ext"),
+            other => panic!("Expected Custom, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_deserialize_file_type_from_object() {
+        let json = r#"{"custom": "application/octet-stream"}"#;
+        let ft: FileType = serde_json::from_str(json).unwrap();
+        match ft {
+            FileType::Custom(s) => assert_eq!(s, "application/octet-stream"),
+            other => panic!("Expected Custom, got {:?}", other),
+        }
+    }
+
+    // --- FileUploadRequest deserialization ---
+
+    #[test]
+    fn test_deserialize_file_upload_request() {
+        let json = r#"{
+            "files": [
+                {
+                    "fileName": "model.pt",
+                    "logName": "checkpoints/epoch_1",
+                    "fileSize": 1024,
+                    "fileType": "pt",
+                    "step": 100,
+                    "time": 1704067200
+                }
+            ]
+        }"#;
+        let req: FileUploadRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.files.len(), 1);
+        assert_eq!(req.files[0].file_name, "model.pt");
+        assert_eq!(req.files[0].log_name, "checkpoints/epoch_1");
+        assert_eq!(req.files[0].file_size, 1024);
+        assert_eq!(req.files[0].step, 100);
+        assert!(matches!(req.files[0].file_type, FileType::Pt));
+    }
+
+    #[test]
+    fn test_deserialize_file_upload_request_multiple_files() {
+        let json = r#"{
+            "files": [
+                {"fileName": "a.png", "logName": "images", "fileSize": 100, "fileType": "png", "step": 1, "time": 1000},
+                {"fileName": "b.csv", "logName": "data", "fileSize": 200, "fileType": "csv", "step": 2, "time": 2000}
+            ]
+        }"#;
+        let req: FileUploadRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.files.len(), 2);
+        assert!(matches!(req.files[0].file_type, FileType::Png));
+        assert!(matches!(req.files[1].file_type, FileType::Csv));
+    }
+
+    #[test]
+    fn test_deserialize_file_upload_request_custom_type() {
+        let json = r#"{
+            "files": [
+                {"fileName": "data.bin", "logName": "artifacts", "fileSize": 500, "fileType": {"custom": "application/x-binary"}, "step": 1, "time": 1000}
+            ]
+        }"#;
+        let req: FileUploadRequest = serde_json::from_str(json).unwrap();
+        match &req.files[0].file_type {
+            FileType::Custom(s) => assert_eq!(s, "application/x-binary"),
+            other => panic!("Expected Custom, got {:?}", other),
+        }
+    }
+
+    // --- PresignedUrlResponse serialization ---
+
+    #[test]
+    fn test_presigned_url_response_serialization() {
+        let mut log_files = HashMap::new();
+        log_files.insert(
+            "val/epoch".to_string(),
+            vec![HashMap::from([(
+                "file.txt".to_string(),
+                "https://example.com/url".to_string(),
+            )])],
+        );
+        let resp = PresignedUrlResponse { log_files };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("val/epoch"));
+        assert!(json.contains("file.txt"));
+        assert!(json.contains("https://example.com/url"));
+    }
+}

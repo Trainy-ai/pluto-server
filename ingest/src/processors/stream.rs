@@ -317,3 +317,145 @@ where
         }.instrument(span).await // Instrument the main async block
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{
+        log::LogInput,
+        metrics::MetricInput,
+        data::DataInput,
+    };
+
+    // --- try_parse_with_sanitize for MetricInput ---
+
+    #[test]
+    fn test_parse_valid_metric_json() {
+        let original = br#"{"time":100,"step":1,"data":{"loss":0.5}}"#;
+        let mut buf = original.to_vec();
+        let result = try_parse_with_sanitize::<MetricInput>(&mut buf, original, false);
+        assert!(result.is_ok());
+        let metric = result.unwrap();
+        assert_eq!(metric.time, 100);
+        assert_eq!(metric.step, 1);
+        assert_eq!(metric.data["loss"], 0.5);
+    }
+
+    #[test]
+    fn test_parse_metric_with_nan_sanitization() {
+        let original = br#"{"time":100,"step":1,"data":{"loss":NaN}}"#;
+        let mut buf = original.to_vec();
+        let result = try_parse_with_sanitize::<MetricInput>(&mut buf, original, false);
+        assert!(result.is_ok());
+        let metric = result.unwrap();
+        assert!(metric.data["loss"].is_nan());
+    }
+
+    #[test]
+    fn test_parse_metric_with_infinity() {
+        let original = br#"{"time":100,"step":1,"data":{"grad":Infinity}}"#;
+        let mut buf = original.to_vec();
+        let result = try_parse_with_sanitize::<MetricInput>(&mut buf, original, false);
+        assert!(result.is_ok());
+        let metric = result.unwrap();
+        assert_eq!(metric.data["grad"], f64::INFINITY);
+    }
+
+    #[test]
+    fn test_parse_metric_with_neg_infinity() {
+        let original = br#"{"time":100,"step":1,"data":{"min":-Infinity}}"#;
+        let mut buf = original.to_vec();
+        let result = try_parse_with_sanitize::<MetricInput>(&mut buf, original, false);
+        assert!(result.is_ok());
+        let metric = result.unwrap();
+        assert_eq!(metric.data["min"], f64::NEG_INFINITY);
+    }
+
+    #[test]
+    fn test_parse_invalid_json() {
+        let original = br#"this is not json"#;
+        let mut buf = original.to_vec();
+        let result = try_parse_with_sanitize::<MetricInput>(&mut buf, original, false);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err.code, ErrorCode::StreamDecodingError));
+    }
+
+    #[test]
+    fn test_parse_invalid_json_final_line_label() {
+        let original = br#"{invalid"#;
+        let mut buf = original.to_vec();
+        let result = try_parse_with_sanitize::<MetricInput>(&mut buf, original, true);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.message.contains("final"));
+    }
+
+    // --- try_parse_with_sanitize for LogInput ---
+
+    #[test]
+    fn test_parse_valid_log_json() {
+        let original = br#"{"time":1000,"message":"hello","lineNumber":1,"logType":"INFO"}"#;
+        let mut buf = original.to_vec();
+        let result = try_parse_with_sanitize::<LogInput>(&mut buf, original, false);
+        assert!(result.is_ok());
+        let log = result.unwrap();
+        assert_eq!(log.message, "hello");
+        assert_eq!(log.log_type, "INFO");
+    }
+
+    // --- try_parse_with_sanitize for DataInput ---
+
+    #[test]
+    fn test_parse_valid_data_json() {
+        let original = br#"{"time":1000,"data":"payload","step":1,"dataType":"table","logName":"eval"}"#;
+        let mut buf = original.to_vec();
+        let result = try_parse_with_sanitize::<DataInput>(&mut buf, original, false);
+        assert!(result.is_ok());
+        let data = result.unwrap();
+        assert_eq!(data.data, "payload");
+        assert_eq!(data.data_type, "table");
+    }
+
+    // --- IntoRows / SingleRowInput ---
+
+    #[test]
+    fn test_log_into_rows_single_row() {
+        use crate::models::log::{LogEnrichment, LogRow};
+        let input = LogInput {
+            time: 1000,
+            message: "test".to_string(),
+            line_number: 1,
+            log_type: "INFO".to_string(),
+        };
+        let enrichment = LogEnrichment {
+            tenant_id: "t1".to_string(),
+            run_id: 1,
+            project_name: "p1".to_string(),
+        };
+        let rows: Vec<LogRow> = input.into_rows(enrichment).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].message, "test");
+    }
+
+    #[test]
+    fn test_metric_into_rows_multiple_rows() {
+        use crate::models::metrics::{MetricEnrichment, MetricRow};
+        use std::collections::HashMap;
+        let mut data = HashMap::new();
+        data.insert("loss".to_string(), 0.5);
+        data.insert("acc".to_string(), 0.95);
+        let input = MetricInput {
+            time: 100,
+            step: 1,
+            data,
+        };
+        let enrichment = MetricEnrichment {
+            tenant_id: "t1".to_string(),
+            run_id: 1,
+            project_name: "p1".to_string(),
+        };
+        let rows: Vec<MetricRow> = input.into_rows(enrichment).unwrap();
+        assert_eq!(rows.len(), 2);
+    }
+}

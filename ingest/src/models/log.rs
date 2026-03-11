@@ -127,3 +127,146 @@ impl DatabaseRow<LogInput, LogEnrichment> for LogRow {
         LOGS_TABLE_NAME
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::traits::DatabaseRow;
+
+    fn make_enrichment() -> LogEnrichment {
+        LogEnrichment {
+            tenant_id: "tenant-1".to_string(),
+            run_id: 42,
+            project_name: "my-project".to_string(),
+        }
+    }
+
+    // --- LogInput validation ---
+
+    #[test]
+    fn test_valid_log_input() {
+        let input = LogInput {
+            time: 1000,
+            message: "hello".to_string(),
+            line_number: 1,
+            log_type: "INFO".to_string(),
+        };
+        assert!(input.validate().is_ok());
+    }
+
+    #[test]
+    fn test_empty_log_type_rejected() {
+        let input = LogInput {
+            time: 1000,
+            message: "hello".to_string(),
+            line_number: 1,
+            log_type: "   ".to_string(),
+        };
+        assert!(input.validate().is_err());
+    }
+
+    #[test]
+    fn test_empty_message_allowed() {
+        let input = LogInput {
+            time: 1000,
+            message: "".to_string(),
+            line_number: 1,
+            log_type: "INFO".to_string(),
+        };
+        assert!(input.validate().is_ok());
+    }
+
+    // --- LogInput deserialization ---
+
+    #[test]
+    fn test_log_input_deserialization() {
+        let json = r#"{"time":1704067200,"message":"Training started","lineNumber":42,"logType":"INFO"}"#;
+        let input: LogInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.time, 1704067200);
+        assert_eq!(input.message, "Training started");
+        assert_eq!(input.line_number, 42);
+        assert_eq!(input.log_type, "INFO");
+    }
+
+    #[test]
+    fn test_log_input_rejects_unknown_fields() {
+        let json = r#"{"time":1000,"message":"hi","lineNumber":1,"logType":"INFO","extra":"bad"}"#;
+        let result: Result<LogInput, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+    }
+
+    // --- LogEnrichment from_headers ---
+
+    #[test]
+    fn test_enrichment_from_valid_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Run-Id", "123".parse().unwrap());
+        headers.insert("X-Project-Name", "test-project".parse().unwrap());
+        let enrichment = LogEnrichment::from_headers("tenant-1".to_string(), &headers).unwrap();
+        assert_eq!(enrichment.tenant_id, "tenant-1");
+        assert_eq!(enrichment.run_id, 123);
+        assert_eq!(enrichment.project_name, "test-project");
+    }
+
+    #[test]
+    fn test_enrichment_missing_run_id() {
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Project-Name", "test-project".parse().unwrap());
+        let result = LogEnrichment::from_headers("tenant-1".to_string(), &headers);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_enrichment_missing_project_name() {
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Run-Id", "123".parse().unwrap());
+        let result = LogEnrichment::from_headers("tenant-1".to_string(), &headers);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_enrichment_non_numeric_run_id_defaults_to_zero() {
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Run-Id", "not-a-number".parse().unwrap());
+        headers.insert("X-Project-Name", "test-project".parse().unwrap());
+        let enrichment = LogEnrichment::from_headers("tenant-1".to_string(), &headers).unwrap();
+        assert_eq!(enrichment.run_id, 0);
+    }
+
+    // --- LogRow::from ---
+
+    #[test]
+    fn test_log_row_from_valid() {
+        let input = LogInput {
+            time: 1000,
+            message: "test message".to_string(),
+            line_number: 5,
+            log_type: "ERROR".to_string(),
+        };
+        let row = <LogRow as DatabaseRow<LogInput, LogEnrichment>>::from(input, make_enrichment()).unwrap();
+        assert_eq!(row.time, 1000);
+        assert_eq!(row.message, "test message");
+        assert_eq!(row.line_number, 5);
+        assert_eq!(row.log_type, "ERROR");
+        assert_eq!(row.tenant_id, "tenant-1");
+        assert_eq!(row.run_id, 42);
+        assert_eq!(row.project_name, "my-project");
+    }
+
+    #[test]
+    fn test_log_row_from_invalid_input() {
+        let input = LogInput {
+            time: 1000,
+            message: "test".to_string(),
+            line_number: 1,
+            log_type: "".to_string(),
+        };
+        let result = <LogRow as DatabaseRow<LogInput, LogEnrichment>>::from(input, make_enrichment());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_log_table_name() {
+        assert_eq!(LogRow::table_name(), "mlop_logs");
+    }
+}
