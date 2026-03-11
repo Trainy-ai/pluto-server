@@ -268,7 +268,9 @@ router.openapi(createRunRoute, async (c) => {
         parsedCfg,
         parsedSm,
         run.id
-      ).catch(() => {});
+      ).catch((err) => {
+        console.error("Failed to extract/upsert column keys on run creation:", err);
+      });
     }
   }
 
@@ -784,7 +786,9 @@ router.openapi(updateConfigRoute, async (c) => {
     updatedConfig,
     run.systemMetadata,
     run.id
-  ).catch(() => {});
+  ).catch((err) => {
+    console.error("Failed to extract/upsert column keys on config update:", err);
+  });
 
   return c.json({ success: true }, 200);
 });

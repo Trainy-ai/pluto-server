@@ -280,4 +280,35 @@ describe('extractAndUpsertColumnKeys', () => {
     expect(nullRecord.textValue).toBeNull();
     expect(nullRecord.numericValue).toBeNull();
   });
+
+  it('should propagate errors (not swallow them silently)', async () => {
+    const dbError = new Error('unique constraint violation');
+    mockPrisma.projectColumnKey.createMany.mockRejectedValueOnce(dbError);
+
+    await expect(
+      extractAndUpsertColumnKeys(
+        mockPrisma as any,
+        'org-1',
+        BigInt(1),
+        { batch_size: 32 },
+        null,
+      ),
+    ).rejects.toThrow('unique constraint violation');
+  });
+
+  it('should propagate errors from the transaction when runId is provided', async () => {
+    const dbError = new Error('transaction failed');
+    mockPrisma.$transaction.mockRejectedValueOnce(dbError);
+
+    await expect(
+      extractAndUpsertColumnKeys(
+        mockPrisma as any,
+        'org-1',
+        BigInt(1),
+        { batch_size: 32 },
+        null,
+        BigInt(100),
+      ),
+    ).rejects.toThrow('transaction failed');
+  });
 });
