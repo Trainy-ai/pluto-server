@@ -36,7 +36,8 @@ export default defineConfig({
     baseURL: process.env.BASE_URL || "http://localhost:3000",
 
     /* Collect trace when retrying the failed test. See https://playwright.dev/docs/trace-viewer */
-    trace: "on-first-retry",
+/* Collect trace for failed tests. See https://playwright.dev/docs/trace-viewer */
+trace: "retain-on-failure",
 
     /* Capture screenshot only when test fails */
     screenshot: "only-on-failure",
