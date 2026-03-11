@@ -840,6 +840,20 @@ function RouteComponent() {
     onSelectionChange: debouncedSelectionChange,
   });
 
+  // Filter out stale prefetched runs that are no longer selected.
+  // useCachedSelectedRunIds reads from IndexedDB once on mount and doesn't
+  // update within the session, so prefetchedSelectedRuns may contain phantom
+  // runs that the user has since deselected. Remove them here to avoid ghost
+  // rows appearing in the table during pagination.
+  const tableRuns = useMemo(() => {
+    if (!prefetchedSelectedRuns?.runs?.length) return runs;
+    const prefetchedIds = new Set(prefetchedSelectedRuns.runs.map((r: Run) => r.id));
+    const actualSelectedIds = new Set(Object.keys(selectedRunsWithColors));
+    // Keep all runs that are not from the (potentially stale) prefetched set,
+    // and for those that are, keep them only if they are still actually selected.
+    return runs.filter((r) => !prefetchedIds.has(r.id) || actualSelectedIds.has(r.id));
+  }, [runs, prefetchedSelectedRuns, selectedRunsWithColors]);
+
   // Fetch logs only for selected runs (lazy loading)
   const selectedRunIds = useMemo(
     () => Object.keys(selectedRunsWithColors),
@@ -899,7 +913,7 @@ function RouteComponent() {
           >
             <div className="flex h-full min-h-0 flex-col overflow-hidden pr-2">
               <DataTable
-                runs={runs}
+                runs={tableRuns}
                 orgSlug={organizationSlug}
                 projectName={projectName}
                 organizationId={organizationId}

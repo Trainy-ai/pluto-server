@@ -228,6 +228,7 @@ export function DataTable({
     setPinSelectedToTop,
     isPinningActive,
     pinnedRuns,
+    displayedRuns,
     pageRunIds,
     pinnedColumnMap,
     tableWidth,
@@ -259,7 +260,7 @@ export function DataTable({
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
-      const isLastPage = pageIndex >= Math.ceil(runs.length / pageSize) - 1;
+      const isLastPage = pageIndex >= Math.ceil(displayedRuns.length / pageSize) - 1;
       if (isLastPage && hasNextPage) {
         handleFetchNextPage();
       } else if (!isLastPage) {
@@ -466,7 +467,7 @@ export function DataTable({
         isPinningActive={isPinningActive}
         pageIndex={pageIndex}
         pageSize={pageSize}
-        runsLength={runs.length}
+        runsLength={displayedRuns.length}
         hasNextPage={hasNextPage}
         isFetchingNextPage={isFetchingNextPage}
         onFetchNextPage={handleFetchNextPage}

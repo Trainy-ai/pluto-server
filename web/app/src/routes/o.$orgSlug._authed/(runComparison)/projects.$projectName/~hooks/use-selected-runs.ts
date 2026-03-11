@@ -245,14 +245,14 @@ export function useSelectedRuns(
     500, // 500ms debounce
   );
 
-  // Save to cache whenever state changes (debounced)
+  // Save to cache whenever state changes (debounced).
+  // Must also save empty state to clear stale entries from IndexedDB —
+  // otherwise deselecting all runs leaves phantom IDs in the cache that
+  // cause prefetchSelectedRuns to inject ghost rows on subsequent loads.
+  // Guard on initializedRef to avoid overwriting the cache before it's restored.
   useEffect(() => {
-    if (
-      Object.keys(runColors).length > 0 ||
-      Object.keys(selectedRunsWithColors).length > 0
-    ) {
-      debouncedSaveToCache(runColors, selectedRunsWithColors, storageKey);
-    }
+    if (!initializedRef.current) return;
+    debouncedSaveToCache(runColors, selectedRunsWithColors, storageKey);
   }, [runColors, selectedRunsWithColors, debouncedSaveToCache, storageKey]);
 
   // Build a selection map from URL run IDs, matching against available runs.

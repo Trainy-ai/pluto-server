@@ -91,6 +91,8 @@ export function useDataTableState({
   const setShowOnlySelected = useCallback((value: boolean) => {
     setShowOnlySelectedRaw(value);
     writeBoolToStorage(showOnlySelectedKey, value);
+    // Reset to page 0 when toggling to avoid landing on an empty page
+    setPageIndex(0);
   }, [showOnlySelectedKey]);
 
   const setPinSelectedToTop = useCallback((value: boolean) => {
