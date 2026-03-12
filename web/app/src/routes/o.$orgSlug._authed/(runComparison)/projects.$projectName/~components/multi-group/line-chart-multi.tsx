@@ -10,6 +10,7 @@ import type { BucketedChartDataPoint, ChartSeriesData } from "@/lib/chart-data-u
 import { useLocalQueries } from "@/lib/hooks/use-local-query";
 import { useLineSettings, type DisplayLogName } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/use-line-settings";
 import { useZoomRefetch, zoomKey } from "@/lib/hooks/use-zoom-refetch";
+import { useChartColors } from "@/components/ui/color-picker";
 import { useChartSyncContext } from "@/components/charts/context/chart-sync-context";
 import {
   getTimeUnitForDisplay,
@@ -132,6 +133,7 @@ const MultiLineChartInner = memo(
     settingsRunId,
   }: MultiLineChartInnerProps) => {
     useCheckDatabaseSize(bucketedMetricsCache);
+    const chartColors = useChartColors();
 
     // Compute once on mount — changing bucket count changes query key, so avoid recomputing
     const standardBuckets = useMemo(() => estimateStandardBuckets(), []);
@@ -368,16 +370,33 @@ const MultiLineChartInner = memo(
         }
       }
 
-      // Helper to build series props from a query pair
-      const seriesProps = (pair: typeof queryPairs[0]) => ({
-        label: getSeriesLabel(pair.line.runName, pair.metric),
-        seriesId: `${pair.line.runId}:${pair.metric}`,
-        color: pair.line.color,
-        dash: getDashPattern(pair.metricIndex),
-        rawRunName: pair.line.rawRunName ?? pair.line.runName,
-        displayId: pair.line.displayId ?? null,
-        metricName: pair.metric,
-      });
+      // Helper to build series props from a query pair.
+      // Single-run multi-metric: prefer color variation (more visually distinct)
+      // over dash patterns. Multi-run: keep run color with dash per metric.
+      const seriesProps = (pair: typeof queryPairs[0]) => {
+        const useSingleRunColors = !isMultiRun && isMultiMetric;
+
+        // Color-major ordering for single-run multi-metric: cycle through all
+        // palette colors (solid) first, then repeat colors with dash pattern 1,
+        // then dash pattern 2, etc.
+        const paletteSize = chartColors.length;
+        const colorIndex = pair.metricIndex % paletteSize;
+        const dashCycle = Math.floor(pair.metricIndex / paletteSize);
+
+        return {
+          label: getSeriesLabel(pair.line.runName, pair.metric),
+          seriesId: `${pair.line.runId}:${pair.metric}`,
+          color: useSingleRunColors
+            ? chartColors[colorIndex]
+            : pair.line.color,
+          dash: useSingleRunColors
+            ? (dashCycle === 0 ? undefined : METRIC_DASH_PATTERNS[((dashCycle - 1) % 9) + 1])
+            : getDashPattern(pair.metricIndex),
+          rawRunName: pair.line.rawRunName ?? pair.line.runName,
+          displayId: pair.line.displayId ?? null,
+          metricName: pair.metric,
+        };
+      };
 
       /** Inject tooltip metadata into series returned by bucketedAndSmooth */
       const withMeta = (series: ChartSeriesData[], props: ReturnType<typeof seriesProps>): ChartSeriesData[] =>
@@ -597,7 +616,7 @@ const MultiLineChartInner = memo(
           };
         }
       }
-    }, [allData, customLogData, settings, effectiveXAxis, title, xlabel, hasAnyData, queryPairs, getSeriesLabel, zoomDataMap, isMultiMetric, metricNames, lines]);
+    }, [allData, customLogData, settings, effectiveXAxis, title, xlabel, hasAnyData, queryPairs, getSeriesLabel, zoomDataMap, isMultiMetric, isMultiRun, chartColors, metricNames, lines]);
 
     // Too many series warning
     if (tooManySeries) {
