@@ -806,7 +806,10 @@ async function main() {
     });
 
     for (let i = 0; i < allRuns.length; i++) {
-      const createdAt = new Date(baseDate.getTime() + i * 60 * 60 * 1000);
+      // Reverse order: high-fidelity runs (low index) get the newest timestamps
+      // so they appear first in the UI's "latest runs" view
+      const reversedIndex = allRuns.length - 1 - i;
+      const createdAt = new Date(baseDate.getTime() + reversedIndex * 60 * 60 * 1000);
       await prisma.$executeRaw`UPDATE "runs" SET "createdAt" = ${createdAt}, "updatedAt" = ${createdAt} WHERE id = ${allRuns[i].id}`;
 
       if ((i + 1) % 1000 === 0) {
