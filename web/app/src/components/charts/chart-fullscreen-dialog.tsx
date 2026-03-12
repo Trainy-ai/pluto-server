@@ -45,7 +45,31 @@ export function ChartFullscreenDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-w-[95vw] h-[90vh] flex-col p-6">
+      <DialogContent
+        className="flex max-w-[95vw] h-[90vh] flex-col p-6"
+        onPointerDownOutside={(e) => {
+          // Prevent closing when clicking on tooltip elements portaled to document.body
+          const target = e.target as HTMLElement | null;
+          if (target?.closest?.("[data-tooltip]") || target?.closest?.("[data-tooltip-add-dropdown]")) {
+            e.preventDefault();
+          }
+        }}
+        onInteractOutside={(e) => {
+          // Prevent closing when interacting with tooltip elements outside the dialog
+          const target = e.target as HTMLElement | null;
+          if (target?.closest?.("[data-tooltip]") || target?.closest?.("[data-tooltip-add-dropdown]")) {
+            e.preventDefault();
+          }
+        }}
+        onEscapeKeyDown={(e) => {
+          // Prevent closing when a pinned tooltip is active — let the tooltip
+          // handle Escape first (unpin). The dialog closes on the next Escape.
+          const pinnedTooltip = document.querySelector<HTMLElement>("[data-tooltip][data-pinned]");
+          if (pinnedTooltip) {
+            e.preventDefault();
+          }
+        }}
+      >
         <DialogHeader>
           <div className="flex items-center justify-between pr-8 min-w-0">
             <DialogTitle className="truncate" title={title}>{title}</DialogTitle>

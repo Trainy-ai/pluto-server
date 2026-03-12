@@ -466,6 +466,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     tooltipEl = document.createElement("div");
     tooltipEl.className = "uplot-tooltip";
     tooltipEl.dataset.testid = "uplot-tooltip";
+    tooltipEl.setAttribute("data-tooltip", "true");
     tooltipEl.style.cssText = `
       position: fixed;
       display: none;
@@ -569,6 +570,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     /** Apply pinned visual state to tooltip */
     const applyPinnedStyle = () => {
       if (!tooltipEl) return;
+      tooltipEl.setAttribute("data-pinned", "true");
       tooltipEl.style.pointerEvents = "auto";
       tooltipEl.style.border = borderPinned;
       tooltipEl.style.resize = "both";
@@ -650,6 +652,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     /** Unpin the tooltip and restore normal following behavior */
     const unpinTooltip = () => {
       if (!tooltipEl) return;
+      tooltipEl.removeAttribute("data-pinned");
       isPinned = false;
       lastUnpinTime = Date.now();
       // Reset UI state but preserve search query (filter stays active when unpinned)
@@ -1023,6 +1026,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       });
       searchInput.addEventListener("mousedown", (e) => e.stopPropagation());
       searchInput.addEventListener("click", (e) => e.stopPropagation());
+      searchInput.addEventListener("keydown", (e) => e.stopPropagation());
       searchRow.appendChild(searchInput);
       contentContainer.appendChild(searchRow);
 
