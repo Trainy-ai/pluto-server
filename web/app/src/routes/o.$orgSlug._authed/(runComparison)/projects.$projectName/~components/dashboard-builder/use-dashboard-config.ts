@@ -65,6 +65,17 @@ export function toggleSectionCollapse(
   };
 }
 
+export function reorderSections(
+  config: DashboardViewConfig,
+  fromIndex: number,
+  toIndex: number
+): DashboardViewConfig {
+  const sections = [...config.sections];
+  const [moved] = sections.splice(fromIndex, 1);
+  sections.splice(toIndex, 0, moved);
+  return { ...config, sections };
+}
+
 export function toggleAllSections(
   config: DashboardViewConfig
 ): DashboardViewConfig {

@@ -5,6 +5,7 @@ import {
   updateSection,
   toggleSectionCollapse,
   toggleAllSections,
+  reorderSections,
   addWidget,
   deleteWidget,
   updateWidgets,
@@ -149,6 +150,59 @@ describe("toggleAllSections", () => {
     ]);
     const result = toggleAllSections(config);
     expect(result.sections.every((s) => !s.collapsed)).toBe(true);
+  });
+});
+
+describe("reorderSections", () => {
+  it("moves a section forward (0 → 2)", () => {
+    const config = createTestConfig([
+      createTestSection({ id: "s1", name: "A" }),
+      createTestSection({ id: "s2", name: "B" }),
+      createTestSection({ id: "s3", name: "C" }),
+    ]);
+    const result = reorderSections(config, 0, 2);
+    expect(result.sections.map((s) => s.id)).toEqual(["s2", "s3", "s1"]);
+  });
+
+  it("moves a section backward (2 → 0)", () => {
+    const config = createTestConfig([
+      createTestSection({ id: "s1", name: "A" }),
+      createTestSection({ id: "s2", name: "B" }),
+      createTestSection({ id: "s3", name: "C" }),
+    ]);
+    const result = reorderSections(config, 2, 0);
+    expect(result.sections.map((s) => s.id)).toEqual(["s3", "s1", "s2"]);
+  });
+
+  it("no-op when fromIndex equals toIndex", () => {
+    const config = createTestConfig([
+      createTestSection({ id: "s1", name: "A" }),
+      createTestSection({ id: "s2", name: "B" }),
+    ]);
+    const result = reorderSections(config, 1, 1);
+    expect(result.sections.map((s) => s.id)).toEqual(["s1", "s2"]);
+  });
+
+  it("preserves section data after reorder", () => {
+    const widget = createTestWidget({ id: "w1" });
+    const config = createTestConfig([
+      createTestSection({ id: "s1", name: "A", widgets: [widget] }),
+      createTestSection({ id: "s2", name: "B" }),
+    ]);
+    const result = reorderSections(config, 0, 1);
+    expect(result.sections[1].id).toBe("s1");
+    expect(result.sections[1].widgets).toHaveLength(1);
+    expect(result.sections[1].widgets[0].id).toBe("w1");
+  });
+
+  it("does not mutate the original config", () => {
+    const config = createTestConfig([
+      createTestSection({ id: "s1", name: "A" }),
+      createTestSection({ id: "s2", name: "B" }),
+    ]);
+    const originalIds = config.sections.map((s) => s.id);
+    reorderSections(config, 0, 1);
+    expect(config.sections.map((s) => s.id)).toEqual(originalIds);
   });
 });
 

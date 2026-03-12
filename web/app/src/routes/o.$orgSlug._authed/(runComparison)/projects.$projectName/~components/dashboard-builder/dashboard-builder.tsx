@@ -17,6 +17,7 @@ import { useDraftSave } from "./use-auto-save";
 import { useNavigationGuard } from "./use-navigation-guard";
 import { useHiddenPatternWidgets } from "./use-hidden-pattern-widgets";
 import { useDashboardSave } from "./use-dashboard-save";
+import { useSectionDrag } from "./use-section-drag";
 import { DashboardStaleWarning } from "./dashboard-stale-warning";
 import {
   useCreateDashboardView,
@@ -346,6 +347,19 @@ export function DashboardBuilder({
     });
   }, []);
 
+  const reorderSections = useCallback((fromIndex: number, toIndex: number) => {
+    setConfig((prev) => configOps.reorderSections(prev, fromIndex, toIndex));
+    setHasChanges(true);
+  }, []);
+
+  const sectionIds = useMemo(
+    () => filteredSections.map((s) => s.id),
+    [filteredSections]
+  );
+
+  const { dragState, handleDragStart, handleDragOver, handleDrop, handleDragEnd, handleDragLeave } =
+    useSectionDrag({ onReorder: reorderSections, sectionIds });
+
   const handleEditWidgetSave = useCallback(
     (widgetData: Omit<Widget, "id">) => {
       if (!editingWidget || !addWidgetSectionId) return;
@@ -430,6 +444,16 @@ export function DashboardBuilder({
                 organizationId={organizationId}
                 projectName={projectName}
                 selectedRunIds={selectedRunIds}
+                drag={isEditing && !isSearching ? {
+                  onDragStart: (e) => handleDragStart(section.id, e),
+                  onDragOver: (e) => handleDragOver(section.id, e),
+                  onDrop: (e) => handleDrop(section.id, e),
+                  onDragEnd: handleDragEnd,
+                  onDragLeave: handleDragLeave,
+                  isDragging: dragState.draggedId === section.id,
+                  isDropTarget: dragState.dragOverId === section.id && dragState.draggedId !== section.id,
+                  dropPosition: dragState.dragOverId === section.id ? dragState.dropPosition : null,
+                } : undefined}
               >
                 {section.dynamicPattern ? (
                   <DynamicSectionGrid

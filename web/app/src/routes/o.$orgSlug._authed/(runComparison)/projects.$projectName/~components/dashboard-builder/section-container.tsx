@@ -8,6 +8,7 @@ import {
   Trash2Icon,
   ZapIcon,
   ClipboardPasteIcon,
+  GripVerticalIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -38,6 +39,17 @@ import { Badge } from "@/components/ui/badge";
 import { DynamicPatternPreview } from "./dynamic-pattern-preview";
 import type { Section } from "../../~types/dashboard-types";
 
+interface SectionDragProps {
+  onDragStart?: (e: React.DragEvent) => void;
+  onDragOver?: (e: React.DragEvent) => void;
+  onDrop?: (e: React.DragEvent) => void;
+  onDragEnd?: () => void;
+  onDragLeave?: (e: React.DragEvent) => void;
+  isDragging?: boolean;
+  isDropTarget?: boolean;
+  dropPosition?: "above" | "below" | null;
+}
+
 interface SectionContainerProps {
   section: Section;
   /** Number of visible widgets (after hiding empty pattern widgets). Defaults to section.widgets.length. */
@@ -54,6 +66,7 @@ interface SectionContainerProps {
   organizationId: string;
   projectName: string;
   selectedRunIds: string[];
+  drag?: SectionDragProps;
 }
 
 export function SectionContainer({
@@ -71,6 +84,7 @@ export function SectionContainer({
   organizationId,
   projectName,
   selectedRunIds,
+  drag,
 }: SectionContainerProps) {
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
@@ -114,9 +128,35 @@ export function SectionContainer({
 
   return (
     <>
-      <div className="rounded-lg border bg-card" data-testid="section-container" data-section-name={section.name}>
+      <div
+        className={`relative rounded-lg border bg-card ${drag?.isDragging ? "opacity-50" : ""}`}
+        data-testid="section-container"
+        data-section-name={section.name}
+        onDragOver={drag?.onDragOver}
+        onDrop={drag?.onDrop}
+        onDragLeave={drag?.onDragLeave}
+      >
+        {/* Drop indicator line */}
+        {drag?.isDropTarget && drag.dropPosition === "above" && (
+          <div className="absolute -top-[2px] left-0 right-0 z-10 h-[3px] rounded-full bg-primary" />
+        )}
+        {drag?.isDropTarget && drag.dropPosition === "below" && (
+          <div className="absolute -bottom-[2px] left-0 right-0 z-10 h-[3px] rounded-full bg-primary" />
+        )}
+
         <Collapsible open={!section.collapsed} onOpenChange={handleToggleCollapse}>
           <div className="flex items-center justify-between border-b px-4 py-2">
+            {isEditing && drag?.onDragStart && (
+              <button
+                draggable
+                onDragStart={drag.onDragStart}
+                onDragEnd={drag.onDragEnd}
+                className="mr-1 cursor-grab text-muted-foreground hover:text-foreground active:cursor-grabbing"
+                aria-label="Drag to reorder section"
+              >
+                <GripVerticalIcon className="size-4" />
+              </button>
+            )}
             <CollapsibleTrigger asChild>
               <button className="flex items-center gap-2 text-sm font-medium hover:text-accent-foreground">
                 {section.collapsed ? (
