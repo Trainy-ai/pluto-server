@@ -134,6 +134,9 @@ interface ChartSyncContextValue {
   // Ref to check if syncXScale is currently propagating (prevents target charts from broadcasting)
   isSyncingZoomRef: React.RefObject<boolean>;
 
+  // Hidden run IDs — set imperatively via DOM event, read by charts on creation
+  hiddenRunIdsRef: React.RefObject<Set<string>>;
+
   // Step↔time mapping for cross-axis zoom sync (single-run view only).
   // When set, zooming a step chart translates the range to relative time and vice versa.
   stepTimeMappingRef: React.RefObject<{ steps: number[]; relTimeSecs: number[] } | null>;
@@ -263,6 +266,34 @@ export function ChartSyncProvider({
   useEffect(() => {
     tableHighlightedSeriesRef.current = tableHighlightedSeriesProp;
   }, [tableHighlightedSeriesProp]);
+
+  // Hidden run IDs — stored imperatively, read by charts on creation to apply show/hide
+  const hiddenRunIdsRef = useRef<Set<string>>(new Set());
+
+  // Listen for run visibility changes (dispatched from index.tsx when hiddenRunIds changes).
+  // Imperatively toggles uPlot series visibility via setSeries() — no chart recreation.
+  useEffect(() => {
+    function handleVisibilityChange(e: Event) {
+      const hiddenIds = (e as CustomEvent).detail as Set<string>;
+      hiddenRunIdsRef.current = hiddenIds;
+
+      uplotInstancesRef.current.forEach((chart) => {
+        chart.batch(() => {
+          for (let i = 1; i < chart.series.length; i++) {
+            const seriesId = (chart.series[i] as any)?._seriesId as string | undefined;
+            if (!seriesId) continue;
+            const runId = seriesId.includes(':') ? seriesId.split(':')[0] : seriesId;
+            const shouldShow = !hiddenIds.has(runId);
+            if (chart.series[i].show !== shouldShow) {
+              chart.setSeries(i, { show: shouldShow });
+            }
+          }
+        });
+      });
+    }
+    document.addEventListener('run-visibility-change', handleVisibilityChange);
+    return () => document.removeEventListener('run-visibility-change', handleVisibilityChange);
+  }, []);
 
   // Listen for DOM-based hover events from the runs table.
   // The runs table dispatches "run-table-hover" CustomEvents to avoid React state
@@ -561,6 +592,7 @@ export function ChartSyncProvider({
       tableHighlightedSeries: null,
       tableHighlightedSeriesRef,
       isSyncingZoomRef,
+      hiddenRunIdsRef,
       stepTimeMappingRef,
       setStepTimeMapping,
       crossGroupZoomRef,

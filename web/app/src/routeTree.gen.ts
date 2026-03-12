@@ -8,725 +8,559 @@
 // You should NOT make any changes in this file as it will be overwritten.
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
-import { Route as rootRouteImport } from './routes/__root'
-import { Route as SplatRouteImport } from './routes/$'
-import { Route as IndexRouteImport } from './routes/index'
-import { Route as OnboardIndexRouteImport } from './routes/onboard/index'
-import { Route as OIndexRouteImport } from './routes/o/index'
-import { Route as OnboardInvitesRouteImport } from './routes/onboard/invites'
-import { Route as AuthVerifyEmailRouteImport } from './routes/auth/verify-email'
-import { Route as AuthSignUpRouteImport } from './routes/auth/sign-up'
-import { Route as AuthSignInRouteImport } from './routes/auth/sign-in'
-import { Route as AuthForgotPasswordRouteImport } from './routes/auth/forgot-password'
-import { Route as indexApiKeysRouteImport } from './routes/(index)/api-keys'
-import { Route as indexAuthedRouteImport } from './routes/(index)/_authed'
-import { Route as OnboardUserIndexRouteImport } from './routes/onboard/user/index'
-import { Route as OnboardOrgIndexRouteImport } from './routes/onboard/org/index'
-import { Route as OOrgSlugAuthedRouteImport } from './routes/o.$orgSlug._authed'
-import { Route as indexAuthedSettingsIndexRouteImport } from './routes/(index)/_authed.settings/index'
-import { Route as OOrgSlugAuthedSettingsIndexRouteImport } from './routes/o.$orgSlug._authed/settings/index'
-import { Route as OOrgSlugAuthedProjectsIndexRouteImport } from './routes/o.$orgSlug._authed/projects/index'
-import { Route as OOrgSlugAuthedindexIndexRouteImport } from './routes/o.$orgSlug._authed/(index)/index'
-import { Route as indexAuthedSettingsAccountIndexRouteImport } from './routes/(index)/_authed.settings/account/index'
-import { Route as indexAuthedSettingsAccountPreferencesRouteImport } from './routes/(index)/_authed.settings/account/preferences'
-import { Route as OOrgSlugAuthedSettingsOrgIndexRouteImport } from './routes/o.$orgSlug._authed/settings/org/index'
-import { Route as OOrgSlugAuthedSettingsAccountIndexRouteImport } from './routes/o.$orgSlug._authed/settings/account/index'
-import { Route as OOrgSlugAuthedSettingsOrgMembersRouteImport } from './routes/o.$orgSlug._authed/settings/org/members'
-import { Route as OOrgSlugAuthedSettingsOrgIntegrationsRouteImport } from './routes/o.$orgSlug._authed/settings/org/integrations'
-import { Route as OOrgSlugAuthedSettingsOrgDevelopersRouteImport } from './routes/o.$orgSlug._authed/settings/org/developers'
-import { Route as OOrgSlugAuthedSettingsOrgBillingRouteImport } from './routes/o.$orgSlug._authed/settings/org/billing'
-import { Route as OOrgSlugAuthedSettingsAccountPreferencesRouteImport } from './routes/o.$orgSlug._authed/settings/account/preferences'
-import { Route as OOrgSlugAuthedrunComparisonProjectsProjectNameIndexRouteImport } from './routes/o.$orgSlug._authed/(runComparison)/projects.$projectName/index'
-import { Route as OOrgSlugAuthedrunComparisonProjectsProjectNameTableRouteImport } from './routes/o.$orgSlug._authed/(runComparison)/projects.$projectName/table'
-import { Route as OOrgSlugAuthedrunProjectsProjectNameRunIdIndexRouteImport } from './routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/index'
-import { Route as OOrgSlugAuthedrunProjectsProjectNameRunIdSystemRouteImport } from './routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/system'
-import { Route as OOrgSlugAuthedrunProjectsProjectNameRunIdLogsRouteImport } from './routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/logs'
-import { Route as OOrgSlugAuthedrunProjectsProjectNameRunIdGraphRouteImport } from './routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/graph'
-import { Route as OOrgSlugAuthedrunProjectsProjectNameRunIdFilesRouteImport } from './routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/files'
-import { Route as OOrgSlugAuthedrunProjectsProjectNameRunIdSummaryIndexRouteImport } from './routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/summary/index'
+import { createFileRoute } from '@tanstack/react-router'
 
-const SplatRoute = SplatRouteImport.update({
+// Import Routes
+
+import { Route as rootRoute } from './routes/__root'
+import { Route as SplatImport } from './routes/$'
+import { Route as IndexImport } from './routes/index'
+import { Route as OnboardIndexImport } from './routes/onboard/index'
+import { Route as OIndexImport } from './routes/o/index'
+import { Route as OnboardInvitesImport } from './routes/onboard/invites'
+import { Route as AuthVerifyEmailImport } from './routes/auth/verify-email'
+import { Route as AuthSignUpImport } from './routes/auth/sign-up'
+import { Route as AuthSignInImport } from './routes/auth/sign-in'
+import { Route as AuthForgotPasswordImport } from './routes/auth/forgot-password'
+import { Route as indexApiKeysImport } from './routes/(index)/api-keys'
+import { Route as indexAuthedImport } from './routes/(index)/_authed'
+import { Route as OnboardUserIndexImport } from './routes/onboard/user/index'
+import { Route as OnboardOrgIndexImport } from './routes/onboard/org/index'
+import { Route as OOrgSlugAuthedImport } from './routes/o.$orgSlug._authed'
+import { Route as indexAuthedSettingsIndexImport } from './routes/(index)/_authed.settings/index'
+import { Route as OOrgSlugAuthedSettingsIndexImport } from './routes/o.$orgSlug._authed/settings/index'
+import { Route as OOrgSlugAuthedProjectsIndexImport } from './routes/o.$orgSlug._authed/projects/index'
+import { Route as OOrgSlugAuthedindexIndexImport } from './routes/o.$orgSlug._authed/(index)/index'
+import { Route as indexAuthedSettingsAccountIndexImport } from './routes/(index)/_authed.settings/account/index'
+import { Route as indexAuthedSettingsAccountPreferencesImport } from './routes/(index)/_authed.settings/account/preferences'
+import { Route as OOrgSlugAuthedSettingsOrgIndexImport } from './routes/o.$orgSlug._authed/settings/org/index'
+import { Route as OOrgSlugAuthedSettingsAccountIndexImport } from './routes/o.$orgSlug._authed/settings/account/index'
+import { Route as OOrgSlugAuthedSettingsOrgMembersImport } from './routes/o.$orgSlug._authed/settings/org/members'
+import { Route as OOrgSlugAuthedSettingsOrgIntegrationsImport } from './routes/o.$orgSlug._authed/settings/org/integrations'
+import { Route as OOrgSlugAuthedSettingsOrgDevelopersImport } from './routes/o.$orgSlug._authed/settings/org/developers'
+import { Route as OOrgSlugAuthedSettingsOrgBillingImport } from './routes/o.$orgSlug._authed/settings/org/billing'
+import { Route as OOrgSlugAuthedSettingsAccountPreferencesImport } from './routes/o.$orgSlug._authed/settings/account/preferences'
+import { Route as OOrgSlugAuthedrunComparisonProjectsProjectNameIndexImport } from './routes/o.$orgSlug._authed/(runComparison)/projects.$projectName/index'
+import { Route as OOrgSlugAuthedrunComparisonProjectsProjectNameTableImport } from './routes/o.$orgSlug._authed/(runComparison)/projects.$projectName/table'
+import { Route as OOrgSlugAuthedrunProjectsProjectNameRunIdIndexImport } from './routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/index'
+import { Route as OOrgSlugAuthedrunProjectsProjectNameRunIdSystemImport } from './routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/system'
+import { Route as OOrgSlugAuthedrunProjectsProjectNameRunIdLogsImport } from './routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/logs'
+import { Route as OOrgSlugAuthedrunProjectsProjectNameRunIdGraphImport } from './routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/graph'
+import { Route as OOrgSlugAuthedrunProjectsProjectNameRunIdFilesImport } from './routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/files'
+import { Route as OOrgSlugAuthedrunProjectsProjectNameRunIdSummaryIndexImport } from './routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/summary/index'
+
+// Create Virtual Routes
+
+const indexImport = createFileRoute('/(index)')()
+const OOrgSlugImport = createFileRoute('/o/$orgSlug')()
+
+// Create/Update Routes
+
+const indexRoute = indexImport.update({
+  id: '/(index)',
+  getParentRoute: () => rootRoute,
+} as any)
+
+const SplatRoute = SplatImport.update({
   id: '/$',
   path: '/$',
-  getParentRoute: () => rootRouteImport,
+  getParentRoute: () => rootRoute,
 } as any)
-const IndexRoute = IndexRouteImport.update({
+
+const IndexRoute = IndexImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => rootRouteImport,
+  getParentRoute: () => rootRoute,
 } as any)
-const OnboardIndexRoute = OnboardIndexRouteImport.update({
+
+const OOrgSlugRoute = OOrgSlugImport.update({
+  id: '/o/$orgSlug',
+  path: '/o/$orgSlug',
+  getParentRoute: () => rootRoute,
+} as any)
+
+const OnboardIndexRoute = OnboardIndexImport.update({
   id: '/onboard/',
   path: '/onboard/',
-  getParentRoute: () => rootRouteImport,
+  getParentRoute: () => rootRoute,
 } as any)
-const OIndexRoute = OIndexRouteImport.update({
+
+const OIndexRoute = OIndexImport.update({
   id: '/o/',
   path: '/o/',
-  getParentRoute: () => rootRouteImport,
+  getParentRoute: () => rootRoute,
 } as any)
-const OnboardInvitesRoute = OnboardInvitesRouteImport.update({
+
+const OnboardInvitesRoute = OnboardInvitesImport.update({
   id: '/onboard/invites',
   path: '/onboard/invites',
-  getParentRoute: () => rootRouteImport,
+  getParentRoute: () => rootRoute,
 } as any)
-const AuthVerifyEmailRoute = AuthVerifyEmailRouteImport.update({
+
+const AuthVerifyEmailRoute = AuthVerifyEmailImport.update({
   id: '/auth/verify-email',
   path: '/auth/verify-email',
-  getParentRoute: () => rootRouteImport,
+  getParentRoute: () => rootRoute,
 } as any)
-const AuthSignUpRoute = AuthSignUpRouteImport.update({
+
+const AuthSignUpRoute = AuthSignUpImport.update({
   id: '/auth/sign-up',
   path: '/auth/sign-up',
-  getParentRoute: () => rootRouteImport,
+  getParentRoute: () => rootRoute,
 } as any)
-const AuthSignInRoute = AuthSignInRouteImport.update({
+
+const AuthSignInRoute = AuthSignInImport.update({
   id: '/auth/sign-in',
   path: '/auth/sign-in',
-  getParentRoute: () => rootRouteImport,
+  getParentRoute: () => rootRoute,
 } as any)
-const AuthForgotPasswordRoute = AuthForgotPasswordRouteImport.update({
+
+const AuthForgotPasswordRoute = AuthForgotPasswordImport.update({
   id: '/auth/forgot-password',
   path: '/auth/forgot-password',
-  getParentRoute: () => rootRouteImport,
+  getParentRoute: () => rootRoute,
 } as any)
-const indexApiKeysRoute = indexApiKeysRouteImport.update({
-  id: '/(index)/api-keys',
+
+const indexApiKeysRoute = indexApiKeysImport.update({
+  id: '/api-keys',
   path: '/api-keys',
-  getParentRoute: () => rootRouteImport,
+  getParentRoute: () => indexRoute,
 } as any)
-const indexAuthedRoute = indexAuthedRouteImport.update({
-  id: '/(index)/_authed',
-  getParentRoute: () => rootRouteImport,
+
+const indexAuthedRoute = indexAuthedImport.update({
+  id: '/_authed',
+  getParentRoute: () => indexRoute,
 } as any)
-const OnboardUserIndexRoute = OnboardUserIndexRouteImport.update({
+
+const OnboardUserIndexRoute = OnboardUserIndexImport.update({
   id: '/onboard/user/',
   path: '/onboard/user/',
-  getParentRoute: () => rootRouteImport,
+  getParentRoute: () => rootRoute,
 } as any)
-const OnboardOrgIndexRoute = OnboardOrgIndexRouteImport.update({
+
+const OnboardOrgIndexRoute = OnboardOrgIndexImport.update({
   id: '/onboard/org/',
   path: '/onboard/org/',
-  getParentRoute: () => rootRouteImport,
+  getParentRoute: () => rootRoute,
 } as any)
-const OOrgSlugAuthedRoute = OOrgSlugAuthedRouteImport.update({
-  id: '/o/$orgSlug/_authed',
-  path: '/o/$orgSlug',
-  getParentRoute: () => rootRouteImport,
+
+const OOrgSlugAuthedRoute = OOrgSlugAuthedImport.update({
+  id: '/_authed',
+  getParentRoute: () => OOrgSlugRoute,
 } as any)
-const indexAuthedSettingsIndexRoute =
-  indexAuthedSettingsIndexRouteImport.update({
-    id: '/settings/',
-    path: '/settings/',
-    getParentRoute: () => indexAuthedRoute,
-  } as any)
+
+const indexAuthedSettingsIndexRoute = indexAuthedSettingsIndexImport.update({
+  id: '/settings/',
+  path: '/settings/',
+  getParentRoute: () => indexAuthedRoute,
+} as any)
+
 const OOrgSlugAuthedSettingsIndexRoute =
-  OOrgSlugAuthedSettingsIndexRouteImport.update({
+  OOrgSlugAuthedSettingsIndexImport.update({
     id: '/settings/',
     path: '/settings/',
     getParentRoute: () => OOrgSlugAuthedRoute,
   } as any)
+
 const OOrgSlugAuthedProjectsIndexRoute =
-  OOrgSlugAuthedProjectsIndexRouteImport.update({
+  OOrgSlugAuthedProjectsIndexImport.update({
     id: '/projects/',
     path: '/projects/',
     getParentRoute: () => OOrgSlugAuthedRoute,
   } as any)
-const OOrgSlugAuthedindexIndexRoute =
-  OOrgSlugAuthedindexIndexRouteImport.update({
-    id: '/(index)/',
-    path: '/',
-    getParentRoute: () => OOrgSlugAuthedRoute,
-  } as any)
+
+const OOrgSlugAuthedindexIndexRoute = OOrgSlugAuthedindexIndexImport.update({
+  id: '/(index)/',
+  path: '/',
+  getParentRoute: () => OOrgSlugAuthedRoute,
+} as any)
+
 const indexAuthedSettingsAccountIndexRoute =
-  indexAuthedSettingsAccountIndexRouteImport.update({
+  indexAuthedSettingsAccountIndexImport.update({
     id: '/settings/account/',
     path: '/settings/account/',
     getParentRoute: () => indexAuthedRoute,
   } as any)
+
 const indexAuthedSettingsAccountPreferencesRoute =
-  indexAuthedSettingsAccountPreferencesRouteImport.update({
+  indexAuthedSettingsAccountPreferencesImport.update({
     id: '/settings/account/preferences',
     path: '/settings/account/preferences',
     getParentRoute: () => indexAuthedRoute,
   } as any)
+
 const OOrgSlugAuthedSettingsOrgIndexRoute =
-  OOrgSlugAuthedSettingsOrgIndexRouteImport.update({
+  OOrgSlugAuthedSettingsOrgIndexImport.update({
     id: '/settings/org/',
     path: '/settings/org/',
     getParentRoute: () => OOrgSlugAuthedRoute,
   } as any)
+
 const OOrgSlugAuthedSettingsAccountIndexRoute =
-  OOrgSlugAuthedSettingsAccountIndexRouteImport.update({
+  OOrgSlugAuthedSettingsAccountIndexImport.update({
     id: '/settings/account/',
     path: '/settings/account/',
     getParentRoute: () => OOrgSlugAuthedRoute,
   } as any)
+
 const OOrgSlugAuthedSettingsOrgMembersRoute =
-  OOrgSlugAuthedSettingsOrgMembersRouteImport.update({
+  OOrgSlugAuthedSettingsOrgMembersImport.update({
     id: '/settings/org/members',
     path: '/settings/org/members',
     getParentRoute: () => OOrgSlugAuthedRoute,
   } as any)
+
 const OOrgSlugAuthedSettingsOrgIntegrationsRoute =
-  OOrgSlugAuthedSettingsOrgIntegrationsRouteImport.update({
+  OOrgSlugAuthedSettingsOrgIntegrationsImport.update({
     id: '/settings/org/integrations',
     path: '/settings/org/integrations',
     getParentRoute: () => OOrgSlugAuthedRoute,
   } as any)
+
 const OOrgSlugAuthedSettingsOrgDevelopersRoute =
-  OOrgSlugAuthedSettingsOrgDevelopersRouteImport.update({
+  OOrgSlugAuthedSettingsOrgDevelopersImport.update({
     id: '/settings/org/developers',
     path: '/settings/org/developers',
     getParentRoute: () => OOrgSlugAuthedRoute,
   } as any)
+
 const OOrgSlugAuthedSettingsOrgBillingRoute =
-  OOrgSlugAuthedSettingsOrgBillingRouteImport.update({
+  OOrgSlugAuthedSettingsOrgBillingImport.update({
     id: '/settings/org/billing',
     path: '/settings/org/billing',
     getParentRoute: () => OOrgSlugAuthedRoute,
   } as any)
+
 const OOrgSlugAuthedSettingsAccountPreferencesRoute =
-  OOrgSlugAuthedSettingsAccountPreferencesRouteImport.update({
+  OOrgSlugAuthedSettingsAccountPreferencesImport.update({
     id: '/settings/account/preferences',
     path: '/settings/account/preferences',
     getParentRoute: () => OOrgSlugAuthedRoute,
   } as any)
+
 const OOrgSlugAuthedrunComparisonProjectsProjectNameIndexRoute =
-  OOrgSlugAuthedrunComparisonProjectsProjectNameIndexRouteImport.update({
+  OOrgSlugAuthedrunComparisonProjectsProjectNameIndexImport.update({
     id: '/(runComparison)/projects/$projectName/',
     path: '/projects/$projectName/',
     getParentRoute: () => OOrgSlugAuthedRoute,
   } as any)
+
 const OOrgSlugAuthedrunComparisonProjectsProjectNameTableRoute =
-  OOrgSlugAuthedrunComparisonProjectsProjectNameTableRouteImport.update({
+  OOrgSlugAuthedrunComparisonProjectsProjectNameTableImport.update({
     id: '/(runComparison)/projects/$projectName/table',
     path: '/projects/$projectName/table',
     getParentRoute: () => OOrgSlugAuthedRoute,
   } as any)
+
 const OOrgSlugAuthedrunProjectsProjectNameRunIdIndexRoute =
-  OOrgSlugAuthedrunProjectsProjectNameRunIdIndexRouteImport.update({
+  OOrgSlugAuthedrunProjectsProjectNameRunIdIndexImport.update({
     id: '/(run)/projects/$projectName/$runId/',
     path: '/projects/$projectName/$runId/',
     getParentRoute: () => OOrgSlugAuthedRoute,
   } as any)
+
 const OOrgSlugAuthedrunProjectsProjectNameRunIdSystemRoute =
-  OOrgSlugAuthedrunProjectsProjectNameRunIdSystemRouteImport.update({
+  OOrgSlugAuthedrunProjectsProjectNameRunIdSystemImport.update({
     id: '/(run)/projects/$projectName/$runId/system',
     path: '/projects/$projectName/$runId/system',
     getParentRoute: () => OOrgSlugAuthedRoute,
   } as any)
+
 const OOrgSlugAuthedrunProjectsProjectNameRunIdLogsRoute =
-  OOrgSlugAuthedrunProjectsProjectNameRunIdLogsRouteImport.update({
+  OOrgSlugAuthedrunProjectsProjectNameRunIdLogsImport.update({
     id: '/(run)/projects/$projectName/$runId/logs',
     path: '/projects/$projectName/$runId/logs',
     getParentRoute: () => OOrgSlugAuthedRoute,
   } as any)
+
 const OOrgSlugAuthedrunProjectsProjectNameRunIdGraphRoute =
-  OOrgSlugAuthedrunProjectsProjectNameRunIdGraphRouteImport.update({
+  OOrgSlugAuthedrunProjectsProjectNameRunIdGraphImport.update({
     id: '/(run)/projects/$projectName/$runId/graph',
     path: '/projects/$projectName/$runId/graph',
     getParentRoute: () => OOrgSlugAuthedRoute,
   } as any)
+
 const OOrgSlugAuthedrunProjectsProjectNameRunIdFilesRoute =
-  OOrgSlugAuthedrunProjectsProjectNameRunIdFilesRouteImport.update({
+  OOrgSlugAuthedrunProjectsProjectNameRunIdFilesImport.update({
     id: '/(run)/projects/$projectName/$runId/files',
     path: '/projects/$projectName/$runId/files',
     getParentRoute: () => OOrgSlugAuthedRoute,
   } as any)
+
 const OOrgSlugAuthedrunProjectsProjectNameRunIdSummaryIndexRoute =
-  OOrgSlugAuthedrunProjectsProjectNameRunIdSummaryIndexRouteImport.update({
+  OOrgSlugAuthedrunProjectsProjectNameRunIdSummaryIndexImport.update({
     id: '/(run)/projects/$projectName/$runId/summary/',
     path: '/projects/$projectName/$runId/summary/',
     getParentRoute: () => OOrgSlugAuthedRoute,
   } as any)
 
-export interface FileRoutesByFullPath {
-  '/': typeof IndexRoute
-  '/$': typeof SplatRoute
-  '/api-keys': typeof indexApiKeysRoute
-  '/auth/forgot-password': typeof AuthForgotPasswordRoute
-  '/auth/sign-in': typeof AuthSignInRoute
-  '/auth/sign-up': typeof AuthSignUpRoute
-  '/auth/verify-email': typeof AuthVerifyEmailRoute
-  '/onboard/invites': typeof OnboardInvitesRoute
-  '/o/': typeof OIndexRoute
-  '/onboard/': typeof OnboardIndexRoute
-  '/o/$orgSlug': typeof OOrgSlugAuthedRouteWithChildren
-  '/onboard/org/': typeof OnboardOrgIndexRoute
-  '/onboard/user/': typeof OnboardUserIndexRoute
-  '/settings/': typeof indexAuthedSettingsIndexRoute
-  '/settings/account/preferences': typeof indexAuthedSettingsAccountPreferencesRoute
-  '/settings/account/': typeof indexAuthedSettingsAccountIndexRoute
-  '/o/$orgSlug/': typeof OOrgSlugAuthedindexIndexRoute
-  '/o/$orgSlug/projects/': typeof OOrgSlugAuthedProjectsIndexRoute
-  '/o/$orgSlug/settings/': typeof OOrgSlugAuthedSettingsIndexRoute
-  '/o/$orgSlug/settings/account/preferences': typeof OOrgSlugAuthedSettingsAccountPreferencesRoute
-  '/o/$orgSlug/settings/org/billing': typeof OOrgSlugAuthedSettingsOrgBillingRoute
-  '/o/$orgSlug/settings/org/developers': typeof OOrgSlugAuthedSettingsOrgDevelopersRoute
-  '/o/$orgSlug/settings/org/integrations': typeof OOrgSlugAuthedSettingsOrgIntegrationsRoute
-  '/o/$orgSlug/settings/org/members': typeof OOrgSlugAuthedSettingsOrgMembersRoute
-  '/o/$orgSlug/settings/account/': typeof OOrgSlugAuthedSettingsAccountIndexRoute
-  '/o/$orgSlug/settings/org/': typeof OOrgSlugAuthedSettingsOrgIndexRoute
-  '/o/$orgSlug/projects/$projectName/table': typeof OOrgSlugAuthedrunComparisonProjectsProjectNameTableRoute
-  '/o/$orgSlug/projects/$projectName/': typeof OOrgSlugAuthedrunComparisonProjectsProjectNameIndexRoute
-  '/o/$orgSlug/projects/$projectName/$runId/files': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdFilesRoute
-  '/o/$orgSlug/projects/$projectName/$runId/graph': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdGraphRoute
-  '/o/$orgSlug/projects/$projectName/$runId/logs': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdLogsRoute
-  '/o/$orgSlug/projects/$projectName/$runId/system': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdSystemRoute
-  '/o/$orgSlug/projects/$projectName/$runId/': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdIndexRoute
-  '/o/$orgSlug/projects/$projectName/$runId/summary/': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdSummaryIndexRoute
-}
-export interface FileRoutesByTo {
-  '/': typeof IndexRoute
-  '/$': typeof SplatRoute
-  '/api-keys': typeof indexApiKeysRoute
-  '/auth/forgot-password': typeof AuthForgotPasswordRoute
-  '/auth/sign-in': typeof AuthSignInRoute
-  '/auth/sign-up': typeof AuthSignUpRoute
-  '/auth/verify-email': typeof AuthVerifyEmailRoute
-  '/onboard/invites': typeof OnboardInvitesRoute
-  '/o': typeof OIndexRoute
-  '/onboard': typeof OnboardIndexRoute
-  '/onboard/org': typeof OnboardOrgIndexRoute
-  '/onboard/user': typeof OnboardUserIndexRoute
-  '/settings': typeof indexAuthedSettingsIndexRoute
-  '/settings/account/preferences': typeof indexAuthedSettingsAccountPreferencesRoute
-  '/settings/account': typeof indexAuthedSettingsAccountIndexRoute
-  '/o/$orgSlug': typeof OOrgSlugAuthedindexIndexRoute
-  '/o/$orgSlug/projects': typeof OOrgSlugAuthedProjectsIndexRoute
-  '/o/$orgSlug/settings': typeof OOrgSlugAuthedSettingsIndexRoute
-  '/o/$orgSlug/settings/account/preferences': typeof OOrgSlugAuthedSettingsAccountPreferencesRoute
-  '/o/$orgSlug/settings/org/billing': typeof OOrgSlugAuthedSettingsOrgBillingRoute
-  '/o/$orgSlug/settings/org/developers': typeof OOrgSlugAuthedSettingsOrgDevelopersRoute
-  '/o/$orgSlug/settings/org/integrations': typeof OOrgSlugAuthedSettingsOrgIntegrationsRoute
-  '/o/$orgSlug/settings/org/members': typeof OOrgSlugAuthedSettingsOrgMembersRoute
-  '/o/$orgSlug/settings/account': typeof OOrgSlugAuthedSettingsAccountIndexRoute
-  '/o/$orgSlug/settings/org': typeof OOrgSlugAuthedSettingsOrgIndexRoute
-  '/o/$orgSlug/projects/$projectName/table': typeof OOrgSlugAuthedrunComparisonProjectsProjectNameTableRoute
-  '/o/$orgSlug/projects/$projectName': typeof OOrgSlugAuthedrunComparisonProjectsProjectNameIndexRoute
-  '/o/$orgSlug/projects/$projectName/$runId/files': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdFilesRoute
-  '/o/$orgSlug/projects/$projectName/$runId/graph': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdGraphRoute
-  '/o/$orgSlug/projects/$projectName/$runId/logs': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdLogsRoute
-  '/o/$orgSlug/projects/$projectName/$runId/system': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdSystemRoute
-  '/o/$orgSlug/projects/$projectName/$runId': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdIndexRoute
-  '/o/$orgSlug/projects/$projectName/$runId/summary': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdSummaryIndexRoute
-}
-export interface FileRoutesById {
-  __root__: typeof rootRouteImport
-  '/': typeof IndexRoute
-  '/$': typeof SplatRoute
-  '/(index)/_authed': typeof indexAuthedRouteWithChildren
-  '/(index)/api-keys': typeof indexApiKeysRoute
-  '/auth/forgot-password': typeof AuthForgotPasswordRoute
-  '/auth/sign-in': typeof AuthSignInRoute
-  '/auth/sign-up': typeof AuthSignUpRoute
-  '/auth/verify-email': typeof AuthVerifyEmailRoute
-  '/onboard/invites': typeof OnboardInvitesRoute
-  '/o/': typeof OIndexRoute
-  '/onboard/': typeof OnboardIndexRoute
-  '/o/$orgSlug/_authed': typeof OOrgSlugAuthedRouteWithChildren
-  '/onboard/org/': typeof OnboardOrgIndexRoute
-  '/onboard/user/': typeof OnboardUserIndexRoute
-  '/(index)/_authed/settings/': typeof indexAuthedSettingsIndexRoute
-  '/(index)/_authed/settings/account/preferences': typeof indexAuthedSettingsAccountPreferencesRoute
-  '/(index)/_authed/settings/account/': typeof indexAuthedSettingsAccountIndexRoute
-  '/o/$orgSlug/_authed/(index)/': typeof OOrgSlugAuthedindexIndexRoute
-  '/o/$orgSlug/_authed/projects/': typeof OOrgSlugAuthedProjectsIndexRoute
-  '/o/$orgSlug/_authed/settings/': typeof OOrgSlugAuthedSettingsIndexRoute
-  '/o/$orgSlug/_authed/settings/account/preferences': typeof OOrgSlugAuthedSettingsAccountPreferencesRoute
-  '/o/$orgSlug/_authed/settings/org/billing': typeof OOrgSlugAuthedSettingsOrgBillingRoute
-  '/o/$orgSlug/_authed/settings/org/developers': typeof OOrgSlugAuthedSettingsOrgDevelopersRoute
-  '/o/$orgSlug/_authed/settings/org/integrations': typeof OOrgSlugAuthedSettingsOrgIntegrationsRoute
-  '/o/$orgSlug/_authed/settings/org/members': typeof OOrgSlugAuthedSettingsOrgMembersRoute
-  '/o/$orgSlug/_authed/settings/account/': typeof OOrgSlugAuthedSettingsAccountIndexRoute
-  '/o/$orgSlug/_authed/settings/org/': typeof OOrgSlugAuthedSettingsOrgIndexRoute
-  '/o/$orgSlug/_authed/(runComparison)/projects/$projectName/table': typeof OOrgSlugAuthedrunComparisonProjectsProjectNameTableRoute
-  '/o/$orgSlug/_authed/(runComparison)/projects/$projectName/': typeof OOrgSlugAuthedrunComparisonProjectsProjectNameIndexRoute
-  '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/files': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdFilesRoute
-  '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/graph': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdGraphRoute
-  '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/logs': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdLogsRoute
-  '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/system': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdSystemRoute
-  '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdIndexRoute
-  '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/summary/': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdSummaryIndexRoute
-}
-export interface FileRouteTypes {
-  fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths:
-    | '/'
-    | '/$'
-    | '/api-keys'
-    | '/auth/forgot-password'
-    | '/auth/sign-in'
-    | '/auth/sign-up'
-    | '/auth/verify-email'
-    | '/onboard/invites'
-    | '/o/'
-    | '/onboard/'
-    | '/o/$orgSlug'
-    | '/onboard/org/'
-    | '/onboard/user/'
-    | '/settings/'
-    | '/settings/account/preferences'
-    | '/settings/account/'
-    | '/o/$orgSlug/'
-    | '/o/$orgSlug/projects/'
-    | '/o/$orgSlug/settings/'
-    | '/o/$orgSlug/settings/account/preferences'
-    | '/o/$orgSlug/settings/org/billing'
-    | '/o/$orgSlug/settings/org/developers'
-    | '/o/$orgSlug/settings/org/integrations'
-    | '/o/$orgSlug/settings/org/members'
-    | '/o/$orgSlug/settings/account/'
-    | '/o/$orgSlug/settings/org/'
-    | '/o/$orgSlug/projects/$projectName/table'
-    | '/o/$orgSlug/projects/$projectName/'
-    | '/o/$orgSlug/projects/$projectName/$runId/files'
-    | '/o/$orgSlug/projects/$projectName/$runId/graph'
-    | '/o/$orgSlug/projects/$projectName/$runId/logs'
-    | '/o/$orgSlug/projects/$projectName/$runId/system'
-    | '/o/$orgSlug/projects/$projectName/$runId/'
-    | '/o/$orgSlug/projects/$projectName/$runId/summary/'
-  fileRoutesByTo: FileRoutesByTo
-  to:
-    | '/'
-    | '/$'
-    | '/api-keys'
-    | '/auth/forgot-password'
-    | '/auth/sign-in'
-    | '/auth/sign-up'
-    | '/auth/verify-email'
-    | '/onboard/invites'
-    | '/o'
-    | '/onboard'
-    | '/onboard/org'
-    | '/onboard/user'
-    | '/settings'
-    | '/settings/account/preferences'
-    | '/settings/account'
-    | '/o/$orgSlug'
-    | '/o/$orgSlug/projects'
-    | '/o/$orgSlug/settings'
-    | '/o/$orgSlug/settings/account/preferences'
-    | '/o/$orgSlug/settings/org/billing'
-    | '/o/$orgSlug/settings/org/developers'
-    | '/o/$orgSlug/settings/org/integrations'
-    | '/o/$orgSlug/settings/org/members'
-    | '/o/$orgSlug/settings/account'
-    | '/o/$orgSlug/settings/org'
-    | '/o/$orgSlug/projects/$projectName/table'
-    | '/o/$orgSlug/projects/$projectName'
-    | '/o/$orgSlug/projects/$projectName/$runId/files'
-    | '/o/$orgSlug/projects/$projectName/$runId/graph'
-    | '/o/$orgSlug/projects/$projectName/$runId/logs'
-    | '/o/$orgSlug/projects/$projectName/$runId/system'
-    | '/o/$orgSlug/projects/$projectName/$runId'
-    | '/o/$orgSlug/projects/$projectName/$runId/summary'
-  id:
-    | '__root__'
-    | '/'
-    | '/$'
-    | '/(index)/_authed'
-    | '/(index)/api-keys'
-    | '/auth/forgot-password'
-    | '/auth/sign-in'
-    | '/auth/sign-up'
-    | '/auth/verify-email'
-    | '/onboard/invites'
-    | '/o/'
-    | '/onboard/'
-    | '/o/$orgSlug/_authed'
-    | '/onboard/org/'
-    | '/onboard/user/'
-    | '/(index)/_authed/settings/'
-    | '/(index)/_authed/settings/account/preferences'
-    | '/(index)/_authed/settings/account/'
-    | '/o/$orgSlug/_authed/(index)/'
-    | '/o/$orgSlug/_authed/projects/'
-    | '/o/$orgSlug/_authed/settings/'
-    | '/o/$orgSlug/_authed/settings/account/preferences'
-    | '/o/$orgSlug/_authed/settings/org/billing'
-    | '/o/$orgSlug/_authed/settings/org/developers'
-    | '/o/$orgSlug/_authed/settings/org/integrations'
-    | '/o/$orgSlug/_authed/settings/org/members'
-    | '/o/$orgSlug/_authed/settings/account/'
-    | '/o/$orgSlug/_authed/settings/org/'
-    | '/o/$orgSlug/_authed/(runComparison)/projects/$projectName/table'
-    | '/o/$orgSlug/_authed/(runComparison)/projects/$projectName/'
-    | '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/files'
-    | '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/graph'
-    | '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/logs'
-    | '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/system'
-    | '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/'
-    | '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/summary/'
-  fileRoutesById: FileRoutesById
-}
-export interface RootRouteChildren {
-  IndexRoute: typeof IndexRoute
-  SplatRoute: typeof SplatRoute
-  indexAuthedRoute: typeof indexAuthedRouteWithChildren
-  indexApiKeysRoute: typeof indexApiKeysRoute
-  AuthForgotPasswordRoute: typeof AuthForgotPasswordRoute
-  AuthSignInRoute: typeof AuthSignInRoute
-  AuthSignUpRoute: typeof AuthSignUpRoute
-  AuthVerifyEmailRoute: typeof AuthVerifyEmailRoute
-  OnboardInvitesRoute: typeof OnboardInvitesRoute
-  OIndexRoute: typeof OIndexRoute
-  OnboardIndexRoute: typeof OnboardIndexRoute
-  OOrgSlugAuthedRoute: typeof OOrgSlugAuthedRouteWithChildren
-  OnboardOrgIndexRoute: typeof OnboardOrgIndexRoute
-  OnboardUserIndexRoute: typeof OnboardUserIndexRoute
-}
+// Populate the FileRoutesByPath interface
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/$': {
-      id: '/$'
-      path: '/$'
-      fullPath: '/$'
-      preLoaderRoute: typeof SplatRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/': {
       id: '/'
       path: '/'
       fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
-      parentRoute: typeof rootRouteImport
+      preLoaderRoute: typeof IndexImport
+      parentRoute: typeof rootRoute
     }
-    '/onboard/': {
-      id: '/onboard/'
-      path: '/onboard'
-      fullPath: '/onboard/'
-      preLoaderRoute: typeof OnboardIndexRouteImport
-      parentRoute: typeof rootRouteImport
+    '/$': {
+      id: '/$'
+      path: '/$'
+      fullPath: '/$'
+      preLoaderRoute: typeof SplatImport
+      parentRoute: typeof rootRoute
     }
-    '/o/': {
-      id: '/o/'
-      path: '/o'
-      fullPath: '/o/'
-      preLoaderRoute: typeof OIndexRouteImport
-      parentRoute: typeof rootRouteImport
+    '/(index)': {
+      id: '/(index)'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof indexImport
+      parentRoute: typeof rootRoute
     }
-    '/onboard/invites': {
-      id: '/onboard/invites'
-      path: '/onboard/invites'
-      fullPath: '/onboard/invites'
-      preLoaderRoute: typeof OnboardInvitesRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/auth/verify-email': {
-      id: '/auth/verify-email'
-      path: '/auth/verify-email'
-      fullPath: '/auth/verify-email'
-      preLoaderRoute: typeof AuthVerifyEmailRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/auth/sign-up': {
-      id: '/auth/sign-up'
-      path: '/auth/sign-up'
-      fullPath: '/auth/sign-up'
-      preLoaderRoute: typeof AuthSignUpRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/auth/sign-in': {
-      id: '/auth/sign-in'
-      path: '/auth/sign-in'
-      fullPath: '/auth/sign-in'
-      preLoaderRoute: typeof AuthSignInRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/auth/forgot-password': {
-      id: '/auth/forgot-password'
-      path: '/auth/forgot-password'
-      fullPath: '/auth/forgot-password'
-      preLoaderRoute: typeof AuthForgotPasswordRouteImport
-      parentRoute: typeof rootRouteImport
+    '/(index)/_authed': {
+      id: '/(index)/_authed'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof indexAuthedImport
+      parentRoute: typeof indexRoute
     }
     '/(index)/api-keys': {
       id: '/(index)/api-keys'
       path: '/api-keys'
       fullPath: '/api-keys'
-      preLoaderRoute: typeof indexApiKeysRouteImport
-      parentRoute: typeof rootRouteImport
+      preLoaderRoute: typeof indexApiKeysImport
+      parentRoute: typeof indexImport
     }
-    '/(index)/_authed': {
-      id: '/(index)/_authed'
-      path: ''
-      fullPath: ''
-      preLoaderRoute: typeof indexAuthedRouteImport
-      parentRoute: typeof rootRouteImport
+    '/auth/forgot-password': {
+      id: '/auth/forgot-password'
+      path: '/auth/forgot-password'
+      fullPath: '/auth/forgot-password'
+      preLoaderRoute: typeof AuthForgotPasswordImport
+      parentRoute: typeof rootRoute
     }
-    '/onboard/user/': {
-      id: '/onboard/user/'
-      path: '/onboard/user'
-      fullPath: '/onboard/user/'
-      preLoaderRoute: typeof OnboardUserIndexRouteImport
-      parentRoute: typeof rootRouteImport
+    '/auth/sign-in': {
+      id: '/auth/sign-in'
+      path: '/auth/sign-in'
+      fullPath: '/auth/sign-in'
+      preLoaderRoute: typeof AuthSignInImport
+      parentRoute: typeof rootRoute
     }
-    '/onboard/org/': {
-      id: '/onboard/org/'
-      path: '/onboard/org'
-      fullPath: '/onboard/org/'
-      preLoaderRoute: typeof OnboardOrgIndexRouteImport
-      parentRoute: typeof rootRouteImport
+    '/auth/sign-up': {
+      id: '/auth/sign-up'
+      path: '/auth/sign-up'
+      fullPath: '/auth/sign-up'
+      preLoaderRoute: typeof AuthSignUpImport
+      parentRoute: typeof rootRoute
+    }
+    '/auth/verify-email': {
+      id: '/auth/verify-email'
+      path: '/auth/verify-email'
+      fullPath: '/auth/verify-email'
+      preLoaderRoute: typeof AuthVerifyEmailImport
+      parentRoute: typeof rootRoute
+    }
+    '/onboard/invites': {
+      id: '/onboard/invites'
+      path: '/onboard/invites'
+      fullPath: '/onboard/invites'
+      preLoaderRoute: typeof OnboardInvitesImport
+      parentRoute: typeof rootRoute
+    }
+    '/o/': {
+      id: '/o/'
+      path: '/o'
+      fullPath: '/o'
+      preLoaderRoute: typeof OIndexImport
+      parentRoute: typeof rootRoute
+    }
+    '/onboard/': {
+      id: '/onboard/'
+      path: '/onboard'
+      fullPath: '/onboard'
+      preLoaderRoute: typeof OnboardIndexImport
+      parentRoute: typeof rootRoute
+    }
+    '/o/$orgSlug': {
+      id: '/o/$orgSlug'
+      path: '/o/$orgSlug'
+      fullPath: '/o/$orgSlug'
+      preLoaderRoute: typeof OOrgSlugImport
+      parentRoute: typeof rootRoute
     }
     '/o/$orgSlug/_authed': {
       id: '/o/$orgSlug/_authed'
       path: '/o/$orgSlug'
       fullPath: '/o/$orgSlug'
-      preLoaderRoute: typeof OOrgSlugAuthedRouteImport
-      parentRoute: typeof rootRouteImport
+      preLoaderRoute: typeof OOrgSlugAuthedImport
+      parentRoute: typeof OOrgSlugRoute
+    }
+    '/onboard/org/': {
+      id: '/onboard/org/'
+      path: '/onboard/org'
+      fullPath: '/onboard/org'
+      preLoaderRoute: typeof OnboardOrgIndexImport
+      parentRoute: typeof rootRoute
+    }
+    '/onboard/user/': {
+      id: '/onboard/user/'
+      path: '/onboard/user'
+      fullPath: '/onboard/user'
+      preLoaderRoute: typeof OnboardUserIndexImport
+      parentRoute: typeof rootRoute
     }
     '/(index)/_authed/settings/': {
       id: '/(index)/_authed/settings/'
       path: '/settings'
-      fullPath: '/settings/'
-      preLoaderRoute: typeof indexAuthedSettingsIndexRouteImport
-      parentRoute: typeof indexAuthedRoute
-    }
-    '/o/$orgSlug/_authed/settings/': {
-      id: '/o/$orgSlug/_authed/settings/'
-      path: '/settings'
-      fullPath: '/o/$orgSlug/settings/'
-      preLoaderRoute: typeof OOrgSlugAuthedSettingsIndexRouteImport
-      parentRoute: typeof OOrgSlugAuthedRoute
-    }
-    '/o/$orgSlug/_authed/projects/': {
-      id: '/o/$orgSlug/_authed/projects/'
-      path: '/projects'
-      fullPath: '/o/$orgSlug/projects/'
-      preLoaderRoute: typeof OOrgSlugAuthedProjectsIndexRouteImport
-      parentRoute: typeof OOrgSlugAuthedRoute
-    }
-    '/o/$orgSlug/_authed/(index)/': {
-      id: '/o/$orgSlug/_authed/(index)/'
-      path: '/'
-      fullPath: '/o/$orgSlug/'
-      preLoaderRoute: typeof OOrgSlugAuthedindexIndexRouteImport
-      parentRoute: typeof OOrgSlugAuthedRoute
-    }
-    '/(index)/_authed/settings/account/': {
-      id: '/(index)/_authed/settings/account/'
-      path: '/settings/account'
-      fullPath: '/settings/account/'
-      preLoaderRoute: typeof indexAuthedSettingsAccountIndexRouteImport
-      parentRoute: typeof indexAuthedRoute
+      fullPath: '/settings'
+      preLoaderRoute: typeof indexAuthedSettingsIndexImport
+      parentRoute: typeof indexAuthedImport
     }
     '/(index)/_authed/settings/account/preferences': {
       id: '/(index)/_authed/settings/account/preferences'
       path: '/settings/account/preferences'
       fullPath: '/settings/account/preferences'
-      preLoaderRoute: typeof indexAuthedSettingsAccountPreferencesRouteImport
-      parentRoute: typeof indexAuthedRoute
+      preLoaderRoute: typeof indexAuthedSettingsAccountPreferencesImport
+      parentRoute: typeof indexAuthedImport
     }
-    '/o/$orgSlug/_authed/settings/org/': {
-      id: '/o/$orgSlug/_authed/settings/org/'
-      path: '/settings/org'
-      fullPath: '/o/$orgSlug/settings/org/'
-      preLoaderRoute: typeof OOrgSlugAuthedSettingsOrgIndexRouteImport
-      parentRoute: typeof OOrgSlugAuthedRoute
-    }
-    '/o/$orgSlug/_authed/settings/account/': {
-      id: '/o/$orgSlug/_authed/settings/account/'
+    '/(index)/_authed/settings/account/': {
+      id: '/(index)/_authed/settings/account/'
       path: '/settings/account'
-      fullPath: '/o/$orgSlug/settings/account/'
-      preLoaderRoute: typeof OOrgSlugAuthedSettingsAccountIndexRouteImport
-      parentRoute: typeof OOrgSlugAuthedRoute
+      fullPath: '/settings/account'
+      preLoaderRoute: typeof indexAuthedSettingsAccountIndexImport
+      parentRoute: typeof indexAuthedImport
     }
-    '/o/$orgSlug/_authed/settings/org/members': {
-      id: '/o/$orgSlug/_authed/settings/org/members'
-      path: '/settings/org/members'
-      fullPath: '/o/$orgSlug/settings/org/members'
-      preLoaderRoute: typeof OOrgSlugAuthedSettingsOrgMembersRouteImport
-      parentRoute: typeof OOrgSlugAuthedRoute
+    '/o/$orgSlug/_authed/(index)/': {
+      id: '/o/$orgSlug/_authed/(index)/'
+      path: '/'
+      fullPath: '/o/$orgSlug/'
+      preLoaderRoute: typeof OOrgSlugAuthedindexIndexImport
+      parentRoute: typeof OOrgSlugAuthedImport
     }
-    '/o/$orgSlug/_authed/settings/org/integrations': {
-      id: '/o/$orgSlug/_authed/settings/org/integrations'
-      path: '/settings/org/integrations'
-      fullPath: '/o/$orgSlug/settings/org/integrations'
-      preLoaderRoute: typeof OOrgSlugAuthedSettingsOrgIntegrationsRouteImport
-      parentRoute: typeof OOrgSlugAuthedRoute
+    '/o/$orgSlug/_authed/projects/': {
+      id: '/o/$orgSlug/_authed/projects/'
+      path: '/projects'
+      fullPath: '/o/$orgSlug/projects'
+      preLoaderRoute: typeof OOrgSlugAuthedProjectsIndexImport
+      parentRoute: typeof OOrgSlugAuthedImport
     }
-    '/o/$orgSlug/_authed/settings/org/developers': {
-      id: '/o/$orgSlug/_authed/settings/org/developers'
-      path: '/settings/org/developers'
-      fullPath: '/o/$orgSlug/settings/org/developers'
-      preLoaderRoute: typeof OOrgSlugAuthedSettingsOrgDevelopersRouteImport
-      parentRoute: typeof OOrgSlugAuthedRoute
-    }
-    '/o/$orgSlug/_authed/settings/org/billing': {
-      id: '/o/$orgSlug/_authed/settings/org/billing'
-      path: '/settings/org/billing'
-      fullPath: '/o/$orgSlug/settings/org/billing'
-      preLoaderRoute: typeof OOrgSlugAuthedSettingsOrgBillingRouteImport
-      parentRoute: typeof OOrgSlugAuthedRoute
+    '/o/$orgSlug/_authed/settings/': {
+      id: '/o/$orgSlug/_authed/settings/'
+      path: '/settings'
+      fullPath: '/o/$orgSlug/settings'
+      preLoaderRoute: typeof OOrgSlugAuthedSettingsIndexImport
+      parentRoute: typeof OOrgSlugAuthedImport
     }
     '/o/$orgSlug/_authed/settings/account/preferences': {
       id: '/o/$orgSlug/_authed/settings/account/preferences'
       path: '/settings/account/preferences'
       fullPath: '/o/$orgSlug/settings/account/preferences'
-      preLoaderRoute: typeof OOrgSlugAuthedSettingsAccountPreferencesRouteImport
-      parentRoute: typeof OOrgSlugAuthedRoute
+      preLoaderRoute: typeof OOrgSlugAuthedSettingsAccountPreferencesImport
+      parentRoute: typeof OOrgSlugAuthedImport
     }
-    '/o/$orgSlug/_authed/(runComparison)/projects/$projectName/': {
-      id: '/o/$orgSlug/_authed/(runComparison)/projects/$projectName/'
-      path: '/projects/$projectName'
-      fullPath: '/o/$orgSlug/projects/$projectName/'
-      preLoaderRoute: typeof OOrgSlugAuthedrunComparisonProjectsProjectNameIndexRouteImport
-      parentRoute: typeof OOrgSlugAuthedRoute
+    '/o/$orgSlug/_authed/settings/org/billing': {
+      id: '/o/$orgSlug/_authed/settings/org/billing'
+      path: '/settings/org/billing'
+      fullPath: '/o/$orgSlug/settings/org/billing'
+      preLoaderRoute: typeof OOrgSlugAuthedSettingsOrgBillingImport
+      parentRoute: typeof OOrgSlugAuthedImport
+    }
+    '/o/$orgSlug/_authed/settings/org/developers': {
+      id: '/o/$orgSlug/_authed/settings/org/developers'
+      path: '/settings/org/developers'
+      fullPath: '/o/$orgSlug/settings/org/developers'
+      preLoaderRoute: typeof OOrgSlugAuthedSettingsOrgDevelopersImport
+      parentRoute: typeof OOrgSlugAuthedImport
+    }
+    '/o/$orgSlug/_authed/settings/org/integrations': {
+      id: '/o/$orgSlug/_authed/settings/org/integrations'
+      path: '/settings/org/integrations'
+      fullPath: '/o/$orgSlug/settings/org/integrations'
+      preLoaderRoute: typeof OOrgSlugAuthedSettingsOrgIntegrationsImport
+      parentRoute: typeof OOrgSlugAuthedImport
+    }
+    '/o/$orgSlug/_authed/settings/org/members': {
+      id: '/o/$orgSlug/_authed/settings/org/members'
+      path: '/settings/org/members'
+      fullPath: '/o/$orgSlug/settings/org/members'
+      preLoaderRoute: typeof OOrgSlugAuthedSettingsOrgMembersImport
+      parentRoute: typeof OOrgSlugAuthedImport
+    }
+    '/o/$orgSlug/_authed/settings/account/': {
+      id: '/o/$orgSlug/_authed/settings/account/'
+      path: '/settings/account'
+      fullPath: '/o/$orgSlug/settings/account'
+      preLoaderRoute: typeof OOrgSlugAuthedSettingsAccountIndexImport
+      parentRoute: typeof OOrgSlugAuthedImport
+    }
+    '/o/$orgSlug/_authed/settings/org/': {
+      id: '/o/$orgSlug/_authed/settings/org/'
+      path: '/settings/org'
+      fullPath: '/o/$orgSlug/settings/org'
+      preLoaderRoute: typeof OOrgSlugAuthedSettingsOrgIndexImport
+      parentRoute: typeof OOrgSlugAuthedImport
     }
     '/o/$orgSlug/_authed/(runComparison)/projects/$projectName/table': {
       id: '/o/$orgSlug/_authed/(runComparison)/projects/$projectName/table'
       path: '/projects/$projectName/table'
       fullPath: '/o/$orgSlug/projects/$projectName/table'
-      preLoaderRoute: typeof OOrgSlugAuthedrunComparisonProjectsProjectNameTableRouteImport
-      parentRoute: typeof OOrgSlugAuthedRoute
+      preLoaderRoute: typeof OOrgSlugAuthedrunComparisonProjectsProjectNameTableImport
+      parentRoute: typeof OOrgSlugAuthedImport
     }
-    '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/': {
-      id: '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/'
-      path: '/projects/$projectName/$runId'
-      fullPath: '/o/$orgSlug/projects/$projectName/$runId/'
-      preLoaderRoute: typeof OOrgSlugAuthedrunProjectsProjectNameRunIdIndexRouteImport
-      parentRoute: typeof OOrgSlugAuthedRoute
-    }
-    '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/system': {
-      id: '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/system'
-      path: '/projects/$projectName/$runId/system'
-      fullPath: '/o/$orgSlug/projects/$projectName/$runId/system'
-      preLoaderRoute: typeof OOrgSlugAuthedrunProjectsProjectNameRunIdSystemRouteImport
-      parentRoute: typeof OOrgSlugAuthedRoute
-    }
-    '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/logs': {
-      id: '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/logs'
-      path: '/projects/$projectName/$runId/logs'
-      fullPath: '/o/$orgSlug/projects/$projectName/$runId/logs'
-      preLoaderRoute: typeof OOrgSlugAuthedrunProjectsProjectNameRunIdLogsRouteImport
-      parentRoute: typeof OOrgSlugAuthedRoute
+    '/o/$orgSlug/_authed/(runComparison)/projects/$projectName/': {
+      id: '/o/$orgSlug/_authed/(runComparison)/projects/$projectName/'
+      path: '/projects/$projectName'
+      fullPath: '/o/$orgSlug/projects/$projectName'
+      preLoaderRoute: typeof OOrgSlugAuthedrunComparisonProjectsProjectNameIndexImport
+      parentRoute: typeof OOrgSlugAuthedImport
     }
     '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/files': {
       id: '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/files'
       path: '/projects/$projectName/$runId/files'
       fullPath: '/o/$orgSlug/projects/$projectName/$runId/files'
-      preLoaderRoute: typeof OOrgSlugAuthedrunProjectsProjectNameRunIdFilesRouteImport
-      parentRoute: typeof OOrgSlugAuthedRoute
+      preLoaderRoute: typeof OOrgSlugAuthedrunProjectsProjectNameRunIdFilesImport
+      parentRoute: typeof OOrgSlugAuthedImport
     }
     '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/graph': {
       id: '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/graph'
       path: '/projects/$projectName/$runId/graph'
       fullPath: '/o/$orgSlug/projects/$projectName/$runId/graph'
-      preLoaderRoute: typeof OOrgSlugAuthedrunProjectsProjectNameRunIdGraphRouteImport
-      parentRoute: typeof OOrgSlugAuthedRoute
+      preLoaderRoute: typeof OOrgSlugAuthedrunProjectsProjectNameRunIdGraphImport
+      parentRoute: typeof OOrgSlugAuthedImport
+    }
+    '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/logs': {
+      id: '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/logs'
+      path: '/projects/$projectName/$runId/logs'
+      fullPath: '/o/$orgSlug/projects/$projectName/$runId/logs'
+      preLoaderRoute: typeof OOrgSlugAuthedrunProjectsProjectNameRunIdLogsImport
+      parentRoute: typeof OOrgSlugAuthedImport
+    }
+    '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/system': {
+      id: '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/system'
+      path: '/projects/$projectName/$runId/system'
+      fullPath: '/o/$orgSlug/projects/$projectName/$runId/system'
+      preLoaderRoute: typeof OOrgSlugAuthedrunProjectsProjectNameRunIdSystemImport
+      parentRoute: typeof OOrgSlugAuthedImport
+    }
+    '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/': {
+      id: '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/'
+      path: '/projects/$projectName/$runId'
+      fullPath: '/o/$orgSlug/projects/$projectName/$runId'
+      preLoaderRoute: typeof OOrgSlugAuthedrunProjectsProjectNameRunIdIndexImport
+      parentRoute: typeof OOrgSlugAuthedImport
     }
     '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/summary/': {
       id: '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/summary/'
       path: '/projects/$projectName/$runId/summary'
-      fullPath: '/o/$orgSlug/projects/$projectName/$runId/summary/'
-      preLoaderRoute: typeof OOrgSlugAuthedrunProjectsProjectNameRunIdSummaryIndexRouteImport
-      parentRoute: typeof OOrgSlugAuthedRoute
+      fullPath: '/o/$orgSlug/projects/$projectName/$runId/summary'
+      preLoaderRoute: typeof OOrgSlugAuthedrunProjectsProjectNameRunIdSummaryIndexImport
+      parentRoute: typeof OOrgSlugAuthedImport
     }
   }
 }
+
+// Create and export the route tree
 
 interface indexAuthedRouteChildren {
   indexAuthedSettingsIndexRoute: typeof indexAuthedSettingsIndexRoute
@@ -744,6 +578,18 @@ const indexAuthedRouteChildren: indexAuthedRouteChildren = {
 const indexAuthedRouteWithChildren = indexAuthedRoute._addFileChildren(
   indexAuthedRouteChildren,
 )
+
+interface indexRouteChildren {
+  indexAuthedRoute: typeof indexAuthedRouteWithChildren
+  indexApiKeysRoute: typeof indexApiKeysRoute
+}
+
+const indexRouteChildren: indexRouteChildren = {
+  indexAuthedRoute: indexAuthedRouteWithChildren,
+  indexApiKeysRoute: indexApiKeysRoute,
+}
+
+const indexRouteWithChildren = indexRoute._addFileChildren(indexRouteChildren)
 
 interface OOrgSlugAuthedRouteChildren {
   OOrgSlugAuthedindexIndexRoute: typeof OOrgSlugAuthedindexIndexRoute
@@ -803,11 +649,266 @@ const OOrgSlugAuthedRouteWithChildren = OOrgSlugAuthedRoute._addFileChildren(
   OOrgSlugAuthedRouteChildren,
 )
 
+interface OOrgSlugRouteChildren {
+  OOrgSlugAuthedRoute: typeof OOrgSlugAuthedRouteWithChildren
+}
+
+const OOrgSlugRouteChildren: OOrgSlugRouteChildren = {
+  OOrgSlugAuthedRoute: OOrgSlugAuthedRouteWithChildren,
+}
+
+const OOrgSlugRouteWithChildren = OOrgSlugRoute._addFileChildren(
+  OOrgSlugRouteChildren,
+)
+
+export interface FileRoutesByFullPath {
+  '/': typeof indexAuthedRouteWithChildren
+  '/$': typeof SplatRoute
+  '/api-keys': typeof indexApiKeysRoute
+  '/auth/forgot-password': typeof AuthForgotPasswordRoute
+  '/auth/sign-in': typeof AuthSignInRoute
+  '/auth/sign-up': typeof AuthSignUpRoute
+  '/auth/verify-email': typeof AuthVerifyEmailRoute
+  '/onboard/invites': typeof OnboardInvitesRoute
+  '/o': typeof OIndexRoute
+  '/onboard': typeof OnboardIndexRoute
+  '/o/$orgSlug': typeof OOrgSlugAuthedRouteWithChildren
+  '/onboard/org': typeof OnboardOrgIndexRoute
+  '/onboard/user': typeof OnboardUserIndexRoute
+  '/settings': typeof indexAuthedSettingsIndexRoute
+  '/settings/account/preferences': typeof indexAuthedSettingsAccountPreferencesRoute
+  '/settings/account': typeof indexAuthedSettingsAccountIndexRoute
+  '/o/$orgSlug/': typeof OOrgSlugAuthedindexIndexRoute
+  '/o/$orgSlug/projects': typeof OOrgSlugAuthedProjectsIndexRoute
+  '/o/$orgSlug/settings': typeof OOrgSlugAuthedSettingsIndexRoute
+  '/o/$orgSlug/settings/account/preferences': typeof OOrgSlugAuthedSettingsAccountPreferencesRoute
+  '/o/$orgSlug/settings/org/billing': typeof OOrgSlugAuthedSettingsOrgBillingRoute
+  '/o/$orgSlug/settings/org/developers': typeof OOrgSlugAuthedSettingsOrgDevelopersRoute
+  '/o/$orgSlug/settings/org/integrations': typeof OOrgSlugAuthedSettingsOrgIntegrationsRoute
+  '/o/$orgSlug/settings/org/members': typeof OOrgSlugAuthedSettingsOrgMembersRoute
+  '/o/$orgSlug/settings/account': typeof OOrgSlugAuthedSettingsAccountIndexRoute
+  '/o/$orgSlug/settings/org': typeof OOrgSlugAuthedSettingsOrgIndexRoute
+  '/o/$orgSlug/projects/$projectName/table': typeof OOrgSlugAuthedrunComparisonProjectsProjectNameTableRoute
+  '/o/$orgSlug/projects/$projectName': typeof OOrgSlugAuthedrunComparisonProjectsProjectNameIndexRoute
+  '/o/$orgSlug/projects/$projectName/$runId/files': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdFilesRoute
+  '/o/$orgSlug/projects/$projectName/$runId/graph': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdGraphRoute
+  '/o/$orgSlug/projects/$projectName/$runId/logs': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdLogsRoute
+  '/o/$orgSlug/projects/$projectName/$runId/system': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdSystemRoute
+  '/o/$orgSlug/projects/$projectName/$runId': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdIndexRoute
+  '/o/$orgSlug/projects/$projectName/$runId/summary': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdSummaryIndexRoute
+}
+
+export interface FileRoutesByTo {
+  '/': typeof indexAuthedRouteWithChildren
+  '/$': typeof SplatRoute
+  '/api-keys': typeof indexApiKeysRoute
+  '/auth/forgot-password': typeof AuthForgotPasswordRoute
+  '/auth/sign-in': typeof AuthSignInRoute
+  '/auth/sign-up': typeof AuthSignUpRoute
+  '/auth/verify-email': typeof AuthVerifyEmailRoute
+  '/onboard/invites': typeof OnboardInvitesRoute
+  '/o': typeof OIndexRoute
+  '/onboard': typeof OnboardIndexRoute
+  '/o/$orgSlug': typeof OOrgSlugAuthedindexIndexRoute
+  '/onboard/org': typeof OnboardOrgIndexRoute
+  '/onboard/user': typeof OnboardUserIndexRoute
+  '/settings': typeof indexAuthedSettingsIndexRoute
+  '/settings/account/preferences': typeof indexAuthedSettingsAccountPreferencesRoute
+  '/settings/account': typeof indexAuthedSettingsAccountIndexRoute
+  '/o/$orgSlug/projects': typeof OOrgSlugAuthedProjectsIndexRoute
+  '/o/$orgSlug/settings': typeof OOrgSlugAuthedSettingsIndexRoute
+  '/o/$orgSlug/settings/account/preferences': typeof OOrgSlugAuthedSettingsAccountPreferencesRoute
+  '/o/$orgSlug/settings/org/billing': typeof OOrgSlugAuthedSettingsOrgBillingRoute
+  '/o/$orgSlug/settings/org/developers': typeof OOrgSlugAuthedSettingsOrgDevelopersRoute
+  '/o/$orgSlug/settings/org/integrations': typeof OOrgSlugAuthedSettingsOrgIntegrationsRoute
+  '/o/$orgSlug/settings/org/members': typeof OOrgSlugAuthedSettingsOrgMembersRoute
+  '/o/$orgSlug/settings/account': typeof OOrgSlugAuthedSettingsAccountIndexRoute
+  '/o/$orgSlug/settings/org': typeof OOrgSlugAuthedSettingsOrgIndexRoute
+  '/o/$orgSlug/projects/$projectName/table': typeof OOrgSlugAuthedrunComparisonProjectsProjectNameTableRoute
+  '/o/$orgSlug/projects/$projectName': typeof OOrgSlugAuthedrunComparisonProjectsProjectNameIndexRoute
+  '/o/$orgSlug/projects/$projectName/$runId/files': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdFilesRoute
+  '/o/$orgSlug/projects/$projectName/$runId/graph': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdGraphRoute
+  '/o/$orgSlug/projects/$projectName/$runId/logs': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdLogsRoute
+  '/o/$orgSlug/projects/$projectName/$runId/system': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdSystemRoute
+  '/o/$orgSlug/projects/$projectName/$runId': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdIndexRoute
+  '/o/$orgSlug/projects/$projectName/$runId/summary': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdSummaryIndexRoute
+}
+
+export interface FileRoutesById {
+  __root__: typeof rootRoute
+  '/': typeof IndexRoute
+  '/$': typeof SplatRoute
+  '/(index)': typeof indexRouteWithChildren
+  '/(index)/_authed': typeof indexAuthedRouteWithChildren
+  '/(index)/api-keys': typeof indexApiKeysRoute
+  '/auth/forgot-password': typeof AuthForgotPasswordRoute
+  '/auth/sign-in': typeof AuthSignInRoute
+  '/auth/sign-up': typeof AuthSignUpRoute
+  '/auth/verify-email': typeof AuthVerifyEmailRoute
+  '/onboard/invites': typeof OnboardInvitesRoute
+  '/o/': typeof OIndexRoute
+  '/onboard/': typeof OnboardIndexRoute
+  '/o/$orgSlug': typeof OOrgSlugRouteWithChildren
+  '/o/$orgSlug/_authed': typeof OOrgSlugAuthedRouteWithChildren
+  '/onboard/org/': typeof OnboardOrgIndexRoute
+  '/onboard/user/': typeof OnboardUserIndexRoute
+  '/(index)/_authed/settings/': typeof indexAuthedSettingsIndexRoute
+  '/(index)/_authed/settings/account/preferences': typeof indexAuthedSettingsAccountPreferencesRoute
+  '/(index)/_authed/settings/account/': typeof indexAuthedSettingsAccountIndexRoute
+  '/o/$orgSlug/_authed/(index)/': typeof OOrgSlugAuthedindexIndexRoute
+  '/o/$orgSlug/_authed/projects/': typeof OOrgSlugAuthedProjectsIndexRoute
+  '/o/$orgSlug/_authed/settings/': typeof OOrgSlugAuthedSettingsIndexRoute
+  '/o/$orgSlug/_authed/settings/account/preferences': typeof OOrgSlugAuthedSettingsAccountPreferencesRoute
+  '/o/$orgSlug/_authed/settings/org/billing': typeof OOrgSlugAuthedSettingsOrgBillingRoute
+  '/o/$orgSlug/_authed/settings/org/developers': typeof OOrgSlugAuthedSettingsOrgDevelopersRoute
+  '/o/$orgSlug/_authed/settings/org/integrations': typeof OOrgSlugAuthedSettingsOrgIntegrationsRoute
+  '/o/$orgSlug/_authed/settings/org/members': typeof OOrgSlugAuthedSettingsOrgMembersRoute
+  '/o/$orgSlug/_authed/settings/account/': typeof OOrgSlugAuthedSettingsAccountIndexRoute
+  '/o/$orgSlug/_authed/settings/org/': typeof OOrgSlugAuthedSettingsOrgIndexRoute
+  '/o/$orgSlug/_authed/(runComparison)/projects/$projectName/table': typeof OOrgSlugAuthedrunComparisonProjectsProjectNameTableRoute
+  '/o/$orgSlug/_authed/(runComparison)/projects/$projectName/': typeof OOrgSlugAuthedrunComparisonProjectsProjectNameIndexRoute
+  '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/files': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdFilesRoute
+  '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/graph': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdGraphRoute
+  '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/logs': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdLogsRoute
+  '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/system': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdSystemRoute
+  '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdIndexRoute
+  '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/summary/': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdSummaryIndexRoute
+}
+
+export interface FileRouteTypes {
+  fileRoutesByFullPath: FileRoutesByFullPath
+  fullPaths:
+    | '/'
+    | '/$'
+    | '/api-keys'
+    | '/auth/forgot-password'
+    | '/auth/sign-in'
+    | '/auth/sign-up'
+    | '/auth/verify-email'
+    | '/onboard/invites'
+    | '/o'
+    | '/onboard'
+    | '/o/$orgSlug'
+    | '/onboard/org'
+    | '/onboard/user'
+    | '/settings'
+    | '/settings/account/preferences'
+    | '/settings/account'
+    | '/o/$orgSlug/'
+    | '/o/$orgSlug/projects'
+    | '/o/$orgSlug/settings'
+    | '/o/$orgSlug/settings/account/preferences'
+    | '/o/$orgSlug/settings/org/billing'
+    | '/o/$orgSlug/settings/org/developers'
+    | '/o/$orgSlug/settings/org/integrations'
+    | '/o/$orgSlug/settings/org/members'
+    | '/o/$orgSlug/settings/account'
+    | '/o/$orgSlug/settings/org'
+    | '/o/$orgSlug/projects/$projectName/table'
+    | '/o/$orgSlug/projects/$projectName'
+    | '/o/$orgSlug/projects/$projectName/$runId/files'
+    | '/o/$orgSlug/projects/$projectName/$runId/graph'
+    | '/o/$orgSlug/projects/$projectName/$runId/logs'
+    | '/o/$orgSlug/projects/$projectName/$runId/system'
+    | '/o/$orgSlug/projects/$projectName/$runId'
+    | '/o/$orgSlug/projects/$projectName/$runId/summary'
+  fileRoutesByTo: FileRoutesByTo
+  to:
+    | '/'
+    | '/$'
+    | '/api-keys'
+    | '/auth/forgot-password'
+    | '/auth/sign-in'
+    | '/auth/sign-up'
+    | '/auth/verify-email'
+    | '/onboard/invites'
+    | '/o'
+    | '/onboard'
+    | '/o/$orgSlug'
+    | '/onboard/org'
+    | '/onboard/user'
+    | '/settings'
+    | '/settings/account/preferences'
+    | '/settings/account'
+    | '/o/$orgSlug/projects'
+    | '/o/$orgSlug/settings'
+    | '/o/$orgSlug/settings/account/preferences'
+    | '/o/$orgSlug/settings/org/billing'
+    | '/o/$orgSlug/settings/org/developers'
+    | '/o/$orgSlug/settings/org/integrations'
+    | '/o/$orgSlug/settings/org/members'
+    | '/o/$orgSlug/settings/account'
+    | '/o/$orgSlug/settings/org'
+    | '/o/$orgSlug/projects/$projectName/table'
+    | '/o/$orgSlug/projects/$projectName'
+    | '/o/$orgSlug/projects/$projectName/$runId/files'
+    | '/o/$orgSlug/projects/$projectName/$runId/graph'
+    | '/o/$orgSlug/projects/$projectName/$runId/logs'
+    | '/o/$orgSlug/projects/$projectName/$runId/system'
+    | '/o/$orgSlug/projects/$projectName/$runId'
+    | '/o/$orgSlug/projects/$projectName/$runId/summary'
+  id:
+    | '__root__'
+    | '/'
+    | '/$'
+    | '/(index)'
+    | '/(index)/_authed'
+    | '/(index)/api-keys'
+    | '/auth/forgot-password'
+    | '/auth/sign-in'
+    | '/auth/sign-up'
+    | '/auth/verify-email'
+    | '/onboard/invites'
+    | '/o/'
+    | '/onboard/'
+    | '/o/$orgSlug'
+    | '/o/$orgSlug/_authed'
+    | '/onboard/org/'
+    | '/onboard/user/'
+    | '/(index)/_authed/settings/'
+    | '/(index)/_authed/settings/account/preferences'
+    | '/(index)/_authed/settings/account/'
+    | '/o/$orgSlug/_authed/(index)/'
+    | '/o/$orgSlug/_authed/projects/'
+    | '/o/$orgSlug/_authed/settings/'
+    | '/o/$orgSlug/_authed/settings/account/preferences'
+    | '/o/$orgSlug/_authed/settings/org/billing'
+    | '/o/$orgSlug/_authed/settings/org/developers'
+    | '/o/$orgSlug/_authed/settings/org/integrations'
+    | '/o/$orgSlug/_authed/settings/org/members'
+    | '/o/$orgSlug/_authed/settings/account/'
+    | '/o/$orgSlug/_authed/settings/org/'
+    | '/o/$orgSlug/_authed/(runComparison)/projects/$projectName/table'
+    | '/o/$orgSlug/_authed/(runComparison)/projects/$projectName/'
+    | '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/files'
+    | '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/graph'
+    | '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/logs'
+    | '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/system'
+    | '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/'
+    | '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/summary/'
+  fileRoutesById: FileRoutesById
+}
+
+export interface RootRouteChildren {
+  IndexRoute: typeof IndexRoute
+  SplatRoute: typeof SplatRoute
+  indexRoute: typeof indexRouteWithChildren
+  AuthForgotPasswordRoute: typeof AuthForgotPasswordRoute
+  AuthSignInRoute: typeof AuthSignInRoute
+  AuthSignUpRoute: typeof AuthSignUpRoute
+  AuthVerifyEmailRoute: typeof AuthVerifyEmailRoute
+  OnboardInvitesRoute: typeof OnboardInvitesRoute
+  OIndexRoute: typeof OIndexRoute
+  OnboardIndexRoute: typeof OnboardIndexRoute
+  OOrgSlugRoute: typeof OOrgSlugRouteWithChildren
+  OnboardOrgIndexRoute: typeof OnboardOrgIndexRoute
+  OnboardUserIndexRoute: typeof OnboardUserIndexRoute
+}
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   SplatRoute: SplatRoute,
-  indexAuthedRoute: indexAuthedRouteWithChildren,
-  indexApiKeysRoute: indexApiKeysRoute,
+  indexRoute: indexRouteWithChildren,
   AuthForgotPasswordRoute: AuthForgotPasswordRoute,
   AuthSignInRoute: AuthSignInRoute,
   AuthSignUpRoute: AuthSignUpRoute,
@@ -815,10 +916,203 @@ const rootRouteChildren: RootRouteChildren = {
   OnboardInvitesRoute: OnboardInvitesRoute,
   OIndexRoute: OIndexRoute,
   OnboardIndexRoute: OnboardIndexRoute,
-  OOrgSlugAuthedRoute: OOrgSlugAuthedRouteWithChildren,
+  OOrgSlugRoute: OOrgSlugRouteWithChildren,
   OnboardOrgIndexRoute: OnboardOrgIndexRoute,
   OnboardUserIndexRoute: OnboardUserIndexRoute,
 }
-export const routeTree = rootRouteImport
+
+export const routeTree = rootRoute
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
+
+/* ROUTE_MANIFEST_START
+{
+  "routes": {
+    "__root__": {
+      "filePath": "__root.tsx",
+      "children": [
+        "/",
+        "/$",
+        "/(index)",
+        "/auth/forgot-password",
+        "/auth/sign-in",
+        "/auth/sign-up",
+        "/auth/verify-email",
+        "/onboard/invites",
+        "/o/",
+        "/onboard/",
+        "/o/$orgSlug",
+        "/onboard/org/",
+        "/onboard/user/"
+      ]
+    },
+    "/": {
+      "filePath": "index.tsx"
+    },
+    "/$": {
+      "filePath": "$.tsx"
+    },
+    "/(index)": {
+      "filePath": "(index)",
+      "children": [
+        "/(index)/_authed",
+        "/(index)/api-keys"
+      ]
+    },
+    "/(index)/_authed": {
+      "filePath": "(index)/_authed.tsx",
+      "parent": "/(index)",
+      "children": [
+        "/(index)/_authed/settings/",
+        "/(index)/_authed/settings/account/preferences",
+        "/(index)/_authed/settings/account/"
+      ]
+    },
+    "/(index)/api-keys": {
+      "filePath": "(index)/api-keys.tsx",
+      "parent": "/(index)"
+    },
+    "/auth/forgot-password": {
+      "filePath": "auth/forgot-password.tsx"
+    },
+    "/auth/sign-in": {
+      "filePath": "auth/sign-in.tsx"
+    },
+    "/auth/sign-up": {
+      "filePath": "auth/sign-up.tsx"
+    },
+    "/auth/verify-email": {
+      "filePath": "auth/verify-email.tsx"
+    },
+    "/onboard/invites": {
+      "filePath": "onboard/invites.tsx"
+    },
+    "/o/": {
+      "filePath": "o/index.tsx"
+    },
+    "/onboard/": {
+      "filePath": "onboard/index.tsx"
+    },
+    "/o/$orgSlug": {
+      "filePath": "/",
+      "children": [
+        "/o/$orgSlug/_authed"
+      ]
+    },
+    "/o/$orgSlug/_authed": {
+      "filePath": "o.$orgSlug._authed.tsx",
+      "parent": "/o/$orgSlug",
+      "children": [
+        "/o/$orgSlug/_authed/(index)/",
+        "/o/$orgSlug/_authed/projects/",
+        "/o/$orgSlug/_authed/settings/",
+        "/o/$orgSlug/_authed/settings/account/preferences",
+        "/o/$orgSlug/_authed/settings/org/billing",
+        "/o/$orgSlug/_authed/settings/org/developers",
+        "/o/$orgSlug/_authed/settings/org/integrations",
+        "/o/$orgSlug/_authed/settings/org/members",
+        "/o/$orgSlug/_authed/settings/account/",
+        "/o/$orgSlug/_authed/settings/org/",
+        "/o/$orgSlug/_authed/(runComparison)/projects/$projectName/table",
+        "/o/$orgSlug/_authed/(runComparison)/projects/$projectName/",
+        "/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/files",
+        "/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/graph",
+        "/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/logs",
+        "/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/system",
+        "/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/",
+        "/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/summary/"
+      ]
+    },
+    "/onboard/org/": {
+      "filePath": "onboard/org/index.tsx"
+    },
+    "/onboard/user/": {
+      "filePath": "onboard/user/index.tsx"
+    },
+    "/(index)/_authed/settings/": {
+      "filePath": "(index)/_authed.settings/index.tsx",
+      "parent": "/(index)/_authed"
+    },
+    "/(index)/_authed/settings/account/preferences": {
+      "filePath": "(index)/_authed.settings/account/preferences.tsx",
+      "parent": "/(index)/_authed"
+    },
+    "/(index)/_authed/settings/account/": {
+      "filePath": "(index)/_authed.settings/account/index.tsx",
+      "parent": "/(index)/_authed"
+    },
+    "/o/$orgSlug/_authed/(index)/": {
+      "filePath": "o.$orgSlug._authed/(index)/index.tsx",
+      "parent": "/o/$orgSlug/_authed"
+    },
+    "/o/$orgSlug/_authed/projects/": {
+      "filePath": "o.$orgSlug._authed/projects/index.tsx",
+      "parent": "/o/$orgSlug/_authed"
+    },
+    "/o/$orgSlug/_authed/settings/": {
+      "filePath": "o.$orgSlug._authed/settings/index.tsx",
+      "parent": "/o/$orgSlug/_authed"
+    },
+    "/o/$orgSlug/_authed/settings/account/preferences": {
+      "filePath": "o.$orgSlug._authed/settings/account/preferences.tsx",
+      "parent": "/o/$orgSlug/_authed"
+    },
+    "/o/$orgSlug/_authed/settings/org/billing": {
+      "filePath": "o.$orgSlug._authed/settings/org/billing.tsx",
+      "parent": "/o/$orgSlug/_authed"
+    },
+    "/o/$orgSlug/_authed/settings/org/developers": {
+      "filePath": "o.$orgSlug._authed/settings/org/developers.tsx",
+      "parent": "/o/$orgSlug/_authed"
+    },
+    "/o/$orgSlug/_authed/settings/org/integrations": {
+      "filePath": "o.$orgSlug._authed/settings/org/integrations.tsx",
+      "parent": "/o/$orgSlug/_authed"
+    },
+    "/o/$orgSlug/_authed/settings/org/members": {
+      "filePath": "o.$orgSlug._authed/settings/org/members.tsx",
+      "parent": "/o/$orgSlug/_authed"
+    },
+    "/o/$orgSlug/_authed/settings/account/": {
+      "filePath": "o.$orgSlug._authed/settings/account/index.tsx",
+      "parent": "/o/$orgSlug/_authed"
+    },
+    "/o/$orgSlug/_authed/settings/org/": {
+      "filePath": "o.$orgSlug._authed/settings/org/index.tsx",
+      "parent": "/o/$orgSlug/_authed"
+    },
+    "/o/$orgSlug/_authed/(runComparison)/projects/$projectName/table": {
+      "filePath": "o.$orgSlug._authed/(runComparison)/projects.$projectName/table.tsx",
+      "parent": "/o/$orgSlug/_authed"
+    },
+    "/o/$orgSlug/_authed/(runComparison)/projects/$projectName/": {
+      "filePath": "o.$orgSlug._authed/(runComparison)/projects.$projectName/index.tsx",
+      "parent": "/o/$orgSlug/_authed"
+    },
+    "/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/files": {
+      "filePath": "o.$orgSlug._authed/(run)/projects.$projectName.$runId/files.tsx",
+      "parent": "/o/$orgSlug/_authed"
+    },
+    "/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/graph": {
+      "filePath": "o.$orgSlug._authed/(run)/projects.$projectName.$runId/graph.tsx",
+      "parent": "/o/$orgSlug/_authed"
+    },
+    "/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/logs": {
+      "filePath": "o.$orgSlug._authed/(run)/projects.$projectName.$runId/logs.tsx",
+      "parent": "/o/$orgSlug/_authed"
+    },
+    "/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/system": {
+      "filePath": "o.$orgSlug._authed/(run)/projects.$projectName.$runId/system.tsx",
+      "parent": "/o/$orgSlug/_authed"
+    },
+    "/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/": {
+      "filePath": "o.$orgSlug._authed/(run)/projects.$projectName.$runId/index.tsx",
+      "parent": "/o/$orgSlug/_authed"
+    },
+    "/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/summary/": {
+      "filePath": "o.$orgSlug._authed/(run)/projects.$projectName.$runId/summary/index.tsx",
+      "parent": "/o/$orgSlug/_authed"
+    }
+  }
+}
+ROUTE_MANIFEST_END */

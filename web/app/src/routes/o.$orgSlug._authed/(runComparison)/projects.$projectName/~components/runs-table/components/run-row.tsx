@@ -9,17 +9,20 @@ interface RunRowProps {
   row: Row<Run>;
   pinnedColumnMap: Record<string, { left: number; isLast: boolean }>;
   tableBodyRef: React.RefObject<HTMLTableSectionElement | null>;
+  isHidden?: boolean;
 }
 
-export function RunRow({ row, pinnedColumnMap, tableBodyRef }: RunRowProps) {
+export function RunRow({ row, pinnedColumnMap, tableBodyRef, isHidden }: RunRowProps) {
   return (
     <TableRow
-      className="group/row"
+      className={cn("group/row", isHidden && "opacity-60")}
       data-run-id={row.original.id}
       data-run-name={row.original.name}
       data-state={row.getIsSelected() ? "selected" : ""}
+      data-hidden={isHidden ? "true" : undefined}
       onMouseEnter={() => {
-        if (row.getIsSelected()) {
+        // Don't dispatch chart hover for hidden runs (chart can't highlight them)
+        if (row.getIsSelected() && !isHidden) {
           const container = tableBodyRef.current?.closest("[data-table-container]");
           if (container) {
             // Clear previous highlight
@@ -77,7 +80,7 @@ export function RunRow({ row, pinnedColumnMap, tableBodyRef }: RunRowProps) {
               }),
             }}
           >
-            <div className="truncate">
+            <div className={cell.column.id === "select" ? "overflow-visible" : "truncate"}>
               {flexRender(
                 cell.column.columnDef.cell,
                 cell.getContext(),

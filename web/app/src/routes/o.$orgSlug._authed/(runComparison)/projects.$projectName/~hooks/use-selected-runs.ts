@@ -18,6 +18,7 @@ export interface SelectedRunWithColor {
 const runCacheDb = new LocalCache<{
   colors: Record<RunId, Color>;
   selectedRuns: Record<RunId, { run: Run; color: Color }>;
+  hiddenRunIds?: RunId[];
 }>(
   "run-selection-db",
   "run-selections",
@@ -35,8 +36,12 @@ function getStorageKey(organizationId: string, projectName: string): string {
 interface UseSelectedRunsOptions {
   /** Run IDs from URL params to pre-select (overrides cache) */
   urlRunIds?: string[];
+  /** Hidden run IDs from URL params */
+  urlHiddenIds?: string[];
   /** Callback when selection changes (for URL sync) */
   onSelectionChange?: (selectedRunIds: string[]) => void;
+  /** Callback when hidden runs change (for URL sync) */
+  onHiddenChange?: (hiddenRunIds: string[]) => void;
 }
 
 interface UseSelectedRunsReturn {
@@ -44,10 +49,20 @@ interface UseSelectedRunsReturn {
   runColors: Record<RunId, Color>;
   /** Map of selected run IDs to their run data and color */
   selectedRunsWithColors: Record<RunId, { run: Run; color: Color }>;
+  /** Map of visible (selected and not hidden) run IDs to their run data and color */
+  visibleRunsWithColors: Record<RunId, { run: Run; color: Color }>;
+  /** Set of run IDs that are selected but hidden from charts */
+  hiddenRunIds: Set<RunId>;
   /** Handler for selecting/deselecting runs */
   handleRunSelection: (runId: RunId, isSelected: boolean) => void;
   /** Handler for changing a run's color */
   handleColorChange: (runId: RunId, color: Color) => void;
+  /** Toggle a run's chart visibility (hidden/shown) */
+  toggleRunVisibility: (runId: RunId) => void;
+  /** Show all hidden runs on charts */
+  showAllRuns: () => void;
+  /** Hide all selected runs from charts */
+  hideAllRuns: () => void;
   /** Select the first N runs from the runs array */
   selectFirstN: (n: number) => void;
   /** Select all runs with the given IDs */
@@ -125,7 +140,7 @@ export function useSelectedRuns(
   projectName: string,
   options?: UseSelectedRunsOptions,
 ): UseSelectedRunsReturn {
-  const { urlRunIds, onSelectionChange } = options ?? {};
+  const { urlRunIds, urlHiddenIds, onSelectionChange, onHiddenChange } = options ?? {};
 
   // Get theme-aware color palette
   const chartColors = useChartColors();
@@ -135,6 +150,25 @@ export function useSelectedRuns(
   const [selectedRunsWithColors, setSelectedRunsWithColors] = useState<
     Record<RunId, { run: Run; color: Color }>
   >({});
+
+  // Hidden runs: selected but not shown on charts
+  const [hiddenRunIds, setHiddenRunIds] = useState<Set<RunId>>(new Set());
+  const hiddenRunIdsRef = useRef(hiddenRunIds);
+  useEffect(() => {
+    hiddenRunIdsRef.current = hiddenRunIds;
+  }, [hiddenRunIds]);
+
+  // Derive visible runs (selected minus hidden)
+  const visibleRunsWithColors = useMemo(() => {
+    if (hiddenRunIds.size === 0) return selectedRunsWithColors;
+    const visible: Record<RunId, { run: Run; color: Color }> = {};
+    for (const [id, entry] of Object.entries(selectedRunsWithColors)) {
+      if (!hiddenRunIds.has(id)) {
+        visible[id] = entry;
+      }
+    }
+    return visible;
+  }, [selectedRunsWithColors, hiddenRunIds]);
 
   // Use transition for selection updates to keep UI responsive
   // This allows React to interrupt expensive downstream renders
@@ -206,6 +240,7 @@ export function useSelectedRuns(
     // Reset state and refs to clear stale data from previous project
     setRunColors({});
     setSelectedRunsWithColors({});
+    setHiddenRunIds(new Set());
     urlParamsAppliedRef.current = false;
     initializedRef.current = false;
     prevUrlRunIdsRef.current = undefined;
@@ -221,6 +256,10 @@ export function useSelectedRuns(
           if (Object.keys(cachedData.data.selectedRuns).length > 0) {
             setSelectedRunsWithColors(cachedData.data.selectedRuns);
           }
+          // Restore hidden run IDs (backward-compatible: field may not exist)
+          if (cachedData.data.hiddenRunIds?.length) {
+            setHiddenRunIds(new Set(cachedData.data.hiddenRunIds));
+          }
         }
       } catch (error) {
         console.error("Error loading run selections from cache:", error);
@@ -232,11 +271,12 @@ export function useSelectedRuns(
 
   // Debounced save to cache - prevents main thread blocking on rapid changes
   const debouncedSaveToCache = useDebouncedCallback(
-    async (colors: Record<RunId, Color>, selected: Record<RunId, { run: Run; color: Color }>, key: string) => {
+    async (colors: Record<RunId, Color>, selected: Record<RunId, { run: Run; color: Color }>, hidden: Set<RunId>, key: string) => {
       try {
         await runCacheDb.setData(key, {
           colors,
           selectedRuns: selected,
+          hiddenRunIds: Array.from(hidden),
         });
       } catch (error) {
         console.error("Error saving run selections to cache:", error);
@@ -252,8 +292,8 @@ export function useSelectedRuns(
   // Guard on initializedRef to avoid overwriting the cache before it's restored.
   useEffect(() => {
     if (!initializedRef.current) return;
-    debouncedSaveToCache(runColors, selectedRunsWithColors, storageKey);
-  }, [runColors, selectedRunsWithColors, debouncedSaveToCache, storageKey]);
+    debouncedSaveToCache(runColors, selectedRunsWithColors, hiddenRunIds, storageKey);
+  }, [runColors, selectedRunsWithColors, hiddenRunIds, debouncedSaveToCache, storageKey]);
 
   // Build a selection map from URL run IDs, matching against available runs.
   // Returns null if urlRunIds is empty or no matching runs are found.
@@ -318,9 +358,16 @@ export function useSelectedRuns(
       }
       setRunColors(newColors);
       setSelectedRunsWithColors(newSelection);
+      // Apply hidden IDs from URL (must be subset of selected)
+      if (urlHiddenIds?.length) {
+        const selectedSet = new Set(Object.keys(newSelection));
+        setHiddenRunIds(new Set(urlHiddenIds.filter((id) => selectedSet.has(id))));
+      } else {
+        setHiddenRunIds(new Set());
+      }
       urlParamsAppliedRef.current = true;
     }
-  }, [urlRunIds, runs, buildSelectionFromUrlParams]);
+  }, [urlRunIds, urlHiddenIds, runs, buildSelectionFromUrlParams]);
 
   // Initialize or update selections when runs change.
   // Colors are only assigned to SELECTED runs (sequential from palette)
@@ -468,11 +515,18 @@ export function useSelectedRuns(
           };
         }
 
-        // Deselection - remove from selected runs and runColors
+        // Deselection - remove from selected runs, runColors, and hiddenRunIds
         const { [runId]: _, ...rest } = prev;
         setRunColors((prevColors) => {
           const { [runId]: _, ...restColors } = prevColors;
           return restColors;
+        });
+        // Clean up hidden state
+        setHiddenRunIds((prevHidden) => {
+          if (!prevHidden.has(runId)) return prevHidden;
+          const next = new Set(prevHidden);
+          next.delete(runId);
+          return next;
         });
         return rest;
       });
@@ -521,6 +575,7 @@ export function useSelectedRuns(
 
       setRunColors(colorMap);
       setSelectedRunsWithColors(newSelectedRuns);
+      setHiddenRunIds(new Set());
     },
     [runs],
   );
@@ -561,6 +616,7 @@ export function useSelectedRuns(
   const deselectAll = useCallback(() => {
     setSelectedRunsWithColors({});
     setRunColors({});
+    setHiddenRunIds(new Set());
   }, []);
 
   // Shuffle colors for all selected runs
@@ -620,11 +676,50 @@ export function useSelectedRuns(
     setSelectedRunsWithColors(newSelectedRuns);
   }, [selectedRunsWithColors]);
 
+  // Toggle a run's chart visibility (hidden/shown)
+  const toggleRunVisibility = useCallback((runId: RunId) => {
+    setHiddenRunIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(runId)) {
+        next.delete(runId);
+      } else {
+        next.add(runId);
+      }
+      return next;
+    });
+  }, []);
+
+  // Show all hidden runs on charts
+  const showAllRuns = useCallback(() => {
+    setHiddenRunIds(new Set());
+  }, []);
+
+  // Hide all selected runs from charts
+  const hideAllRuns = useCallback(() => {
+    setHiddenRunIds(new Set(Object.keys(selectedRunsWithColors)));
+  }, [selectedRunsWithColors]);
+
+  // Notify parent when hidden runs change (for URL sync)
+  useEffect(() => {
+    if (onHiddenChange) {
+      if (urlRunIds && urlRunIds.length > 0 && !urlParamsAppliedRef.current) {
+        return;
+      }
+      isLocalSelectionUpdateRef.current = true;
+      onHiddenChange(Array.from(hiddenRunIds));
+    }
+  }, [hiddenRunIds, onHiddenChange]);
+
   return {
     runColors,
     selectedRunsWithColors,
+    visibleRunsWithColors,
+    hiddenRunIds,
     handleRunSelection,
     handleColorChange,
+    toggleRunVisibility,
+    showAllRuns,
+    hideAllRuns,
     selectFirstN,
     selectAllByIds,
     deselectAll,

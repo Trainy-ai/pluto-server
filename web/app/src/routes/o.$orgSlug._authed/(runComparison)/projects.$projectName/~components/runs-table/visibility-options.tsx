@@ -1,6 +1,6 @@
 import { useState, memo, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { Eye, Minus, Plus, Shuffle } from "lucide-react";
+import { Eye, EyeOff, Minus, Plus, Shuffle } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
@@ -21,6 +21,9 @@ interface VisibilityOptionsProps {
   onPinSelectedToTopChange: (value: boolean) => void;
   pageRunIds: string[];
   totalRunCount: number;
+  hiddenCount: number;
+  onShowAllRuns: () => void;
+  onHideAllRuns: () => void;
 }
 
 export const VisibilityOptions = memo(function VisibilityOptions({
@@ -36,6 +39,9 @@ export const VisibilityOptions = memo(function VisibilityOptions({
   onPinSelectedToTopChange,
   pageRunIds,
   totalRunCount,
+  hiddenCount,
+  onShowAllRuns,
+  onHideAllRuns,
 }: VisibilityOptionsProps) {
   const [open, setOpen] = useState(false);
   const [autoSelectCount, setAutoSelectCount] = useState(5);
@@ -167,6 +173,40 @@ export const VisibilityOptions = memo(function VisibilityOptions({
                 checked={pinSelectedToTop}
                 onCheckedChange={onPinSelectedToTopChange}
               />
+            </div>
+
+            <Separator />
+
+            {/* Chart visibility controls */}
+            <div className="space-y-1">
+              {hiddenCount > 0 && (
+                <div className="flex items-center justify-between text-xs text-muted-foreground px-1 mb-1">
+                  <span className="flex items-center gap-1">
+                    <EyeOff className="h-3 w-3" />
+                    {hiddenCount} hidden from charts
+                  </span>
+                </div>
+              )}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="w-full h-7 text-xs justify-start gap-2"
+                onClick={onShowAllRuns}
+                disabled={hiddenCount === 0}
+              >
+                <Eye className="h-3 w-3" />
+                Show all selected on charts
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="w-full h-7 text-xs justify-start gap-2"
+                onClick={onHideAllRuns}
+                disabled={selectedCount === 0 || hiddenCount === selectedCount}
+              >
+                <EyeOff className="h-3 w-3" />
+                Hide all selected from charts
+              </Button>
             </div>
 
             <Separator />

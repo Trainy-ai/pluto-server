@@ -11,6 +11,7 @@ import type { ColumnConfig } from "../../../~hooks/use-column-config";
 import type { RunFilter } from "@/lib/run-filters";
 import { computeRowSelection, mergeSelectedRuns, ensureSelectedRunsIncluded } from "../selection-utils";
 import { computeColumnOrder } from "../lib/pinned-columns";
+import { getCustomColumnValue } from "../columns-utils";
 import { useColumnDrag } from "./use-column-drag";
 import { useColumnResize } from "./use-column-resize";
 
@@ -28,6 +29,56 @@ interface UseDataTableStateParams {
   pinnedColumnIds: Set<string>;
   orgSlug: string;
   projectName: string;
+}
+
+/**
+ * Sort pinned runs client-side to match the active column sort.
+ * Exported for unit testing.
+ */
+export function sortPinnedRuns(
+  isPinningActive: boolean,
+  selectedRunsWithColors: Record<string, { run: Run; color: string }>,
+  sorting: SortingState,
+  customColumns: ColumnConfig[],
+): Run[] {
+  if (!isPinningActive) return [];
+  const result = Object.values(selectedRunsWithColors).map((v) => v.run);
+  if (sorting.length === 0) return result;
+
+  const { id: colId, desc } = sorting[0];
+  const dir = desc ? -1 : 1;
+
+  // Resolve sort column: "name" is a base column, everything else is a custom column
+  let sortCol: ColumnConfig | null = null;
+  if (colId !== "name") {
+    sortCol = customColumns.find((c) => {
+      const tableId = c.source === "system"
+        ? `custom-systemMetadata-${c.id}`
+        : c.source === "metric" && c.aggregation
+          ? `custom-metric-${c.id}-${c.aggregation}`
+          : `custom-${c.source}-${c.id}`;
+      return tableId === colId;
+    }) ?? null;
+  }
+
+  result.sort((a, b) => {
+    const va = colId === "name"
+      ? a.name
+      : sortCol ? getCustomColumnValue(a, sortCol) : undefined;
+    const vb = colId === "name"
+      ? b.name
+      : sortCol ? getCustomColumnValue(b, sortCol) : undefined;
+    if (va == null && vb == null) return 0;
+    if (va == null) return dir;
+    if (vb == null) return -dir;
+    if (typeof va === "number" && typeof vb === "number") {
+      return (va - vb) * dir;
+    }
+    const sa = String(va);
+    const sb = String(vb);
+    return sa < sb ? -dir : sa > sb ? dir : 0;
+  });
+  return result;
 }
 
 /**
@@ -103,10 +154,11 @@ export function useDataTableState({
   // When pinning is active, split into pinned (sticky, always-visible) and unpinned (paginated).
   const isPinningActive = pinSelectedToTop && Object.keys(selectedRunsWithColors).length > 0;
 
-  const pinnedRuns = useMemo(() => {
-    if (!isPinningActive) return [] as Run[];
-    return Object.values(selectedRunsWithColors).map((v) => v.run);
-  }, [isPinningActive, selectedRunsWithColors]);
+  // Derive pinned runs from selected runs and sort client-side to match column sort.
+  const pinnedRuns = useMemo(
+    () => sortPinnedRuns(isPinningActive, selectedRunsWithColors, sorting, customColumns),
+    [isPinningActive, selectedRunsWithColors, sorting, customColumns],
+  );
 
   // The main table data: either filtered-to-selected minus pinned, unpinned only, or all runs.
   // When "Display only selected" is active, use mergeSelectedRuns to include

@@ -1445,6 +1445,21 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         }
       });
 
+      // Apply hidden run state from context (series that should be invisible)
+      const hiddenIds = chartSyncContextRef.current?.hiddenRunIdsRef?.current;
+      if (hiddenIds && hiddenIds.size > 0) {
+        chart.batch(() => {
+          for (let i = 1; i < chart.series.length; i++) {
+            const seriesId = (chart.series[i] as any)?._seriesId as string | undefined;
+            if (!seriesId) continue;
+            const runId = seriesId.includes(':') ? seriesId.split(':')[0] : seriesId;
+            if (hiddenIds.has(runId)) {
+              chart.setSeries(i, { show: false });
+            }
+          }
+        });
+      }
+
       // Track data structure, data reference, and options for future optimization
       prevDataStructureRef.current = { seriesCount: currentSeriesCount };
       prevDataRef.current = uplotData;

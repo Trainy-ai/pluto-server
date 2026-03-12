@@ -41,6 +41,7 @@ import { DEFAULT_PAGE_SIZE } from "./~components/runs-table/config";
 interface RunComparisonSearchParams {
   chart?: string;
   runs?: string;  // Comma-separated run IDs (e.g., "id1,id2,id3")
+  hidden?: string; // Comma-separated IDs of hidden-but-selected runs
 }
 
 export const Route = createFileRoute(
@@ -58,6 +59,11 @@ export const Route = createFileRoute(
     // Support ?runs=id1,id2,id3 to pre-select specific runs (stored as comma-separated string)
     if (typeof search.runs === "string" && search.runs.trim()) {
       result.runs = search.runs.trim();
+    }
+
+    // Support ?hidden=id1,id2 to hide specific selected runs from charts
+    if (typeof search.hidden === "string" && search.hidden.trim()) {
+      result.hidden = search.hidden.trim();
     }
 
     return result;
@@ -89,7 +95,7 @@ type ViewMode = "charts" | "side-by-side";
 function RouteComponent() {
   const { organizationId, projectName, organizationSlug } =
     Route.useRouteContext();
-  const { chart, runs: urlRunsParam } = Route.useSearch();
+  const { chart, runs: urlRunsParam, hidden: urlHiddenParam } = Route.useSearch();
   const navigate = useNavigate();
 
   // Parse comma-separated run IDs from URL into array (may be display IDs like "MMP-1" or SQIDs)
@@ -98,6 +104,13 @@ function RouteComponent() {
     const ids = urlRunsParam.split(",").map((id) => id.trim()).filter(Boolean);
     return ids.length > 0 ? ids : undefined;
   }, [urlRunsParam]);
+
+  // Parse hidden run IDs from URL
+  const urlHiddenIds = useMemo(() => {
+    if (!urlHiddenParam) return undefined;
+    const ids = urlHiddenParam.split(",").map((id) => id.trim()).filter(Boolean);
+    return ids.length > 0 ? ids : undefined;
+  }, [urlHiddenParam]);
 
   // Pre-fetch runs specified in URL params (they may not be in the paginated results)
   // The getByIds endpoint resolves both display IDs (MMP-1) and SQIDs to actual runs
@@ -194,8 +207,24 @@ function RouteComponent() {
     [navigate],
   );
 
+  // Handler for syncing hidden run IDs to URL
+  const handleHiddenChange = useCallback(
+    (hiddenIds: string[]) => {
+      void navigate({
+        to: ".",
+        search: (prev) => ({
+          ...prev,
+          hidden: hiddenIds.length > 0 ? hiddenIds.join(",") : undefined,
+        }),
+        replace: true,
+      });
+    },
+    [navigate],
+  );
+
   // Debounced version of selection change to avoid rapid URL updates
   const debouncedSelectionChange = useDebouncedCallback(handleSelectionChange, 300);
+  const debouncedHiddenChange = useDebouncedCallback(handleHiddenChange, 300);
 
   // View mode state - "charts" (default) or "side-by-side"
   const [viewMode, setViewMode] = useState<ViewMode>("charts");
@@ -828,8 +857,13 @@ function RouteComponent() {
   const {
     runColors,
     selectedRunsWithColors,
+    visibleRunsWithColors,
+    hiddenRunIds,
     handleRunSelection,
     handleColorChange,
+    toggleRunVisibility,
+    showAllRuns,
+    hideAllRuns,
     selectFirstN,
     selectAllByIds,
     deselectAll,
@@ -837,7 +871,9 @@ function RouteComponent() {
     reassignAllColors,
   } = useSelectedRuns(runs, organizationId, projectName, {
     urlRunIds,
+    urlHiddenIds,
     onSelectionChange: debouncedSelectionChange,
+    onHiddenChange: debouncedHiddenChange,
   });
 
   // Filter out stale prefetched runs that are no longer selected.
@@ -865,12 +901,22 @@ function RouteComponent() {
     organizationId
   );
 
-  // Process metrics data from selected runs
-  // Note: Removed useDeferredValue as it was preventing chart updates on deselection
+  // Process metrics data from ALL selected runs (including hidden)
+  // Hidden runs are toggled via imperative uPlot setSeries() in chart-sync-context,
+  // keeping series count stable to avoid chart destroy/recreate flash
   const groupedMetrics = useMemo(() => {
     const metrics = groupMetrics(selectedRunsWithColors, logsByRunId, organizationId, projectName);
     return metrics;
   }, [selectedRunsWithColors, logsByRunId, organizationId, projectName]);
+
+  // Dispatch DOM event when hidden runs change — chart-sync-context listens
+  // and imperatively toggles uPlot series visibility (no React re-render)
+  useEffect(() => {
+    const event = new CustomEvent('run-visibility-change', {
+      detail: hiddenRunIds,
+    });
+    document.dispatchEvent(event);
+  }, [hiddenRunIds]);
 
   return (
     <RunComparisonLayout>
@@ -919,9 +965,11 @@ function RouteComponent() {
                 organizationId={organizationId}
                 onColorChange={handleColorChange}
                 onSelectionChange={handleRunSelection}
+                onToggleVisibility={toggleRunVisibility}
                 onTagsUpdate={handleTagsUpdate}
                 onNotesUpdate={handleNotesUpdate}
                 selectedRunsWithColors={selectedRunsWithColors}
+                hiddenRunIds={hiddenRunIds}
                 runColors={runColors}
                 isLoading={(isLoading && !data) || (runCountLoading && runCount === undefined)}
                 isFetching={isFetching}
@@ -950,6 +998,8 @@ function RouteComponent() {
                 onDeselectAll={deselectAll}
                 onShuffleColors={shuffleColors}
                 onReassignAllColors={reassignAllColors}
+                onShowAllRuns={showAllRuns}
+                onHideAllRuns={hideAllRuns}
                 customColumns={customColumns}
                 availableConfigKeys={[
                   ...(columnKeysData?.configKeys?.map((k) => k.key) ?? []),
@@ -1018,7 +1068,7 @@ function RouteComponent() {
                 <>
                   {viewMode === "side-by-side" && (
                     <SideBySideView
-                      selectedRunsWithColors={selectedRunsWithColors}
+                      selectedRunsWithColors={visibleRunsWithColors}
                       onRemoveRun={(runId) => handleRunSelection(runId, false)}
                       organizationId={organizationId}
                       projectName={projectName}

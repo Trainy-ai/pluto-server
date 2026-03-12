@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import type { ColumnDef, Row, SortingState } from "@tanstack/react-table";
-import { Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff, X } from "lucide-react";
 import { ColorPicker } from "@/components/ui/color-picker";
 import { SELECTED_RUNS_LIMIT } from "./config";
 import { StatusIndicator } from "@/components/layout/dashboard/sidebar";
@@ -25,12 +25,20 @@ type RunColor = string;
 /**
  * Selection cell component with optimistic UI updates
  * Uses local state for immediate visual feedback while global state updates
+ *
+ * Behavior:
+ * - Unselected: EyeOff (gray). Click → select (visible by default)
+ * - Selected + visible: Eye. Click → hide from charts (stays selected). Hover shows X to deselect.
+ * - Selected + hidden: EyeOff with colored dot. Click → show on charts. Hover shows X to deselect.
  */
 interface SelectionCellProps {
   row: Row<Run>;
   table: any;
   totalSelected: number;
   onSelectionChange: (runId: RunId, isSelected: boolean) => void;
+  onToggleVisibility: (runId: RunId) => void;
+  isHidden: boolean;
+  runColor?: string;
   lastSelectedIdRef: MutableRefObject<string>;
 }
 
@@ -39,6 +47,9 @@ const SelectionCell = memo(function SelectionCell({
   table,
   totalSelected,
   onSelectionChange,
+  onToggleVisibility,
+  isHidden,
+  runColor,
   lastSelectedIdRef,
 }: SelectionCellProps) {
   const isSelected = row.getIsSelected();
@@ -57,22 +68,19 @@ const SelectionCell = memo(function SelectionCell({
     if (isDisabled) return;
 
     if (!e.shiftKey) {
-      // Regular click: update optimistically then sync global state
-      const newValue = !optimisticSelected;
-
-      // Use flushSync to immediately commit the visual update before React batches
-      // This ensures the checkbox icon changes instantly
-      flushSync(() => {
-        setOptimisticSelected(newValue);
-      });
-
-      row.toggleSelected(newValue);
-
-      // Call onSelectionChange directly - useDeferredValue in parent handles deferral
-      // Double-deferral (requestIdleCallback + useDeferredValue) was causing chart updates to be lost
-      onSelectionChange(runId, newValue);
+      if (optimisticSelected) {
+        // Already selected → toggle chart visibility
+        onToggleVisibility(runId);
+      } else {
+        // Not selected → select (visible by default)
+        flushSync(() => {
+          setOptimisticSelected(true);
+        });
+        row.toggleSelected(true);
+        onSelectionChange(runId, true);
+      }
     } else {
-      // Shift-click: range selection
+      // Shift-click: range selection (unchanged behavior)
       try {
         const { rows, rowsById } = table.getRowModel();
         const rowsToToggle = getRowRange<Run>(rows, row.id, lastSelectedIdRef.current);
@@ -88,21 +96,73 @@ const SelectionCell = memo(function SelectionCell({
       }
     }
     lastSelectedIdRef.current = row.id;
-  }, [optimisticSelected, isDisabled, runId, row, table, onSelectionChange, lastSelectedIdRef]);
+  }, [optimisticSelected, isDisabled, isHidden, runId, row, table, onSelectionChange, onToggleVisibility, lastSelectedIdRef]);
+
+  const handleDeselect = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    flushSync(() => {
+      setOptimisticSelected(false);
+    });
+    row.toggleSelected(false);
+    onSelectionChange(runId, false);
+  }, [runId, row, onSelectionChange]);
+
+  const eyeTooltip = !optimisticSelected
+    ? "Select run"
+    : isHidden
+      ? "Show on charts"
+      : "Hide from charts";
 
   return (
-    <button
-      onClick={handleClick}
-      disabled={isDisabled}
-      aria-label="Toggle select row"
-      className="p-1"
-    >
-      {optimisticSelected ? (
-        <Eye className="h-4 w-4" />
-      ) : (
-        <EyeOff className="h-4 w-4 text-muted-foreground transition-colors hover:text-primary/80" />
+    <div className="relative flex items-center justify-center">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            onClick={handleClick}
+            disabled={isDisabled}
+            aria-label={eyeTooltip}
+            className="relative p-1"
+          >
+            {optimisticSelected ? (
+              isHidden ? (
+                <span className="relative inline-flex">
+                  <EyeOff className="h-4 w-4 text-muted-foreground" />
+                  {runColor && (
+                    <span
+                      className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full border border-background"
+                      style={{ backgroundColor: runColor }}
+                    />
+                  )}
+                </span>
+              ) : (
+                <Eye className="h-4 w-4" />
+              )
+            ) : (
+              <EyeOff className="h-4 w-4 text-muted-foreground transition-colors hover:text-primary/80" />
+            )}
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="top" className="text-xs">
+          {eyeTooltip}
+        </TooltipContent>
+      </Tooltip>
+      {optimisticSelected && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              onClick={handleDeselect}
+              aria-label="Deselect run"
+              className="absolute -right-3 -top-1 z-20 flex h-4 w-4 items-center justify-center rounded-full border border-border bg-background opacity-0 shadow-sm transition-opacity group-hover/row:opacity-100 hover:border-destructive/50 hover:bg-destructive/10"
+            >
+              <X className="h-2.5 w-2.5 text-muted-foreground group-hover/row:text-foreground hover:!text-destructive" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="text-xs">
+            Deselect run
+          </TooltipContent>
+        </Tooltip>
       )}
-    </button>
+    </div>
   );
 });
 
@@ -111,11 +171,14 @@ interface ColumnsProps {
   projectName: string;
   organizationId?: string;
   onSelectionChange: (runId: RunId, isSelected: boolean) => void;
+  onToggleVisibility: (runId: RunId) => void;
   onColorChange: (runId: RunId, color: RunColor) => void;
   onTagsUpdate: (runId: RunId, tags: string[]) => void;
   onNotesUpdate: (runId: RunId, notes: string | null) => void;
   /** Getter function for run colors - avoids column recreation on color changes */
   getRunColor: (runId: RunId) => RunColor | undefined;
+  /** Getter function to check if a run is hidden from charts */
+  getIsHidden: (runId: RunId) => boolean;
   /** Getter function for all tags - avoids column recreation on tag changes */
   getAllTags: () => string[];
   allTags?: never;
@@ -148,10 +211,12 @@ export const columns = ({
   projectName,
   organizationId,
   onSelectionChange,
+  onToggleVisibility,
   onColorChange,
   onTagsUpdate,
   onNotesUpdate,
   getRunColor,
+  getIsHidden,
   getAllTags,
   customColumns = [],
   onColumnRename,
@@ -194,12 +259,16 @@ export const columns = ({
       header: () => null,
       cell: ({ row, table }) => {
         const totalSelected = table.getSelectedRowModel().rows.length;
+        const runId = row.original.id;
         return (
           <SelectionCell
             row={row}
             table={table}
             totalSelected={totalSelected}
             onSelectionChange={onSelectionChange}
+            onToggleVisibility={onToggleVisibility}
+            isHidden={getIsHidden(runId)}
+            runColor={getRunColor(runId)}
             lastSelectedIdRef={lastSelectedIdRef}
           />
         );

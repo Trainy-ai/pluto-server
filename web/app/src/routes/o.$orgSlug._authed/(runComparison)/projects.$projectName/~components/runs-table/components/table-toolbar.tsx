@@ -31,6 +31,9 @@ interface TableToolbarProps {
   onDeselectAll: () => void;
   onShuffleColors: () => void;
   onReassignAllColors: () => void;
+  hiddenCount: number;
+  onShowAllRuns: () => void;
+  onHideAllRuns: () => void;
   showOnlySelected: boolean;
   onShowOnlySelectedChange: (v: boolean) => void;
   pinSelectedToTop: boolean;
@@ -75,6 +78,9 @@ export function TableToolbar({
   onDeselectAll,
   onShuffleColors,
   onReassignAllColors,
+  hiddenCount,
+  onShowAllRuns,
+  onHideAllRuns,
   showOnlySelected,
   onShowOnlySelectedChange,
   pinSelectedToTop,
@@ -196,6 +202,9 @@ export function TableToolbar({
           onPinSelectedToTopChange={onPinSelectedToTopChange}
           pageRunIds={pageRunIds}
           totalRunCount={runCount}
+          hiddenCount={hiddenCount}
+          onShowAllRuns={onShowAllRuns}
+          onHideAllRuns={onHideAllRuns}
         />
       </div>
       <div className="flex items-center justify-between gap-2">

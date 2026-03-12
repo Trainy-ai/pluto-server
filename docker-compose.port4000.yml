@@ -1,0 +1,15 @@
+version: '3'
+
+services:
+  frontend:
+    ports:
+      - "4000:3000"
+  backend:
+    ports:
+      - "4001:3001"
+  ingest:
+    ports:
+      - "4003:3003"
+  py:
+    ports:
+      - "4004:3004"

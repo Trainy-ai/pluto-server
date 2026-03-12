@@ -36,9 +36,11 @@ interface DataTableProps {
   organizationId?: string;
   onColorChange: (runId: string, color: string) => void;
   onSelectionChange: (runId: string, isSelected: boolean) => void;
+  onToggleVisibility: (runId: string) => void;
   onTagsUpdate: (runId: string, tags: string[]) => void;
   onNotesUpdate: (runId: string, notes: string | null) => void;
   selectedRunsWithColors: Record<string, { run: Run; color: string }>;
+  hiddenRunIds: Set<string>;
   runColors: Record<string, string>;
   runCount: number;
   totalRunCount: number;
@@ -67,6 +69,8 @@ interface DataTableProps {
   onDeselectAll: () => void;
   onShuffleColors: () => void;
   onReassignAllColors: () => void;
+  onShowAllRuns: () => void;
+  onHideAllRuns: () => void;
   customColumns?: ColumnConfig[];
   availableConfigKeys?: string[];
   availableSystemMetadataKeys?: string[];
@@ -99,9 +103,11 @@ export function DataTable({
   organizationId,
   onColorChange,
   onSelectionChange,
+  onToggleVisibility,
   onTagsUpdate,
   onNotesUpdate,
   selectedRunsWithColors,
+  hiddenRunIds,
   runColors,
   runCount,
   totalRunCount,
@@ -130,6 +136,8 @@ export function DataTable({
   onDeselectAll,
   onShuffleColors,
   onReassignAllColors,
+  onShowAllRuns,
+  onHideAllRuns,
   customColumns = [],
   availableConfigKeys = [],
   availableSystemMetadataKeys = [],
@@ -167,6 +175,10 @@ export function DataTable({
   useEffect(() => { allTagsRef.current = allTags; }, [allTags]);
   const getAllTags = useCallback(() => allTagsRef.current, []);
 
+  const hiddenRunIdsRef = useRef(hiddenRunIds);
+  useEffect(() => { hiddenRunIdsRef.current = hiddenRunIds; }, [hiddenRunIds]);
+  const getIsHidden = useCallback((runId: string) => hiddenRunIdsRef.current.has(runId), []);
+
   const pinnedColumnIds = useMemo(
     () => computePinnedColumnIds(customColumns),
     [customColumns],
@@ -181,9 +193,11 @@ export function DataTable({
         organizationId,
         onColorChange,
         onSelectionChange,
+        onToggleVisibility,
         onTagsUpdate,
         onNotesUpdate,
         getRunColor,
+        getIsHidden,
         getAllTags,
         customColumns,
         onColumnRename,
@@ -200,8 +214,8 @@ export function DataTable({
       }),
     [
       orgSlug, projectName, organizationId,
-      onColorChange, onSelectionChange, onTagsUpdate, onNotesUpdate,
-      getRunColor, getAllTags, customColumns,
+      onColorChange, onSelectionChange, onToggleVisibility, onTagsUpdate, onNotesUpdate,
+      getRunColor, getIsHidden, getAllTags, customColumns,
       onColumnRename, onColumnSetColor, onColumnRemove,
       nameOverrides, onNameRename, onNameSetColor,
       sorting, onSortingChange, activeChartViewId,
@@ -368,6 +382,9 @@ export function DataTable({
         onDeselectAll={onDeselectAll}
         onShuffleColors={onShuffleColors}
         onReassignAllColors={onReassignAllColors}
+        hiddenCount={hiddenRunIds.size}
+        onShowAllRuns={onShowAllRuns}
+        onHideAllRuns={onHideAllRuns}
         showOnlySelected={showOnlySelected}
         onShowOnlySelectedChange={setShowOnlySelected}
         pinSelectedToTop={pinSelectedToTop}
@@ -408,7 +425,7 @@ export function DataTable({
                 </TableHeader>
                 <TableBody>
                   {pinnedTable.getRowModel().rows.map((row) => (
-                    <RunRow key={row.id} row={row} pinnedColumnMap={pinnedColumnMap} tableBodyRef={tableBodyRef} />
+                    <RunRow key={row.id} row={row} pinnedColumnMap={pinnedColumnMap} tableBodyRef={tableBodyRef} isHidden={hiddenRunIds.has(row.original.id)} />
                   ))}
                 </TableBody>
               </Table>
@@ -421,7 +438,7 @@ export function DataTable({
               <TableBody ref={tableBodyRef}>
                 {table.getRowModel().rows.length ? (
                   table.getRowModel().rows.map((row) => (
-                    <RunRow key={row.id} row={row} pinnedColumnMap={pinnedColumnMap} tableBodyRef={tableBodyRef} />
+                    <RunRow key={row.id} row={row} pinnedColumnMap={pinnedColumnMap} tableBodyRef={tableBodyRef} isHidden={hiddenRunIds.has(row.original.id)} />
                   ))
                 ) : (
                   <TableRow>
@@ -445,7 +462,7 @@ export function DataTable({
               <TableBody ref={tableBodyRef}>
                 {table.getRowModel().rows.length ? (
                   table.getRowModel().rows.map((row) => (
-                    <RunRow key={row.id} row={row} pinnedColumnMap={pinnedColumnMap} tableBodyRef={tableBodyRef} />
+                    <RunRow key={row.id} row={row} pinnedColumnMap={pinnedColumnMap} tableBodyRef={tableBodyRef} isHidden={hiddenRunIds.has(row.original.id)} />
                   ))
                 ) : (
                   <TableRow>
