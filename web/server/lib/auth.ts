@@ -81,22 +81,30 @@ export const auth = betterAuth({
   },
   secret: env.BETTER_AUTH_SECRET,
   socialProviders: {
-    github: {
-      clientId: env.GITHUB_CLIENT_ID,
-      clientSecret: env.GITHUB_CLIENT_SECRET,
-      redirectURI:
-        env.NODE_ENV === "production" && env.PUBLIC_URL
-          ? `${env.PUBLIC_URL}/api/auth/callback/github`
-          : "http://localhost:3001/api/auth/callback/github",
-    },
-    google: {
-      clientId: env.GOOGLE_CLIENT_ID,
-      clientSecret: env.GOOGLE_CLIENT_SECRET,
-      redirectURI:
-        env.NODE_ENV === "production" && env.PUBLIC_URL
-          ? `${env.PUBLIC_URL}/api/auth/callback/google`
-          : "http://localhost:3001/api/auth/callback/google",
-    },
+    ...(env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET
+      ? {
+          github: {
+            clientId: env.GITHUB_CLIENT_ID,
+            clientSecret: env.GITHUB_CLIENT_SECRET,
+            redirectURI:
+              env.NODE_ENV === "production" && env.PUBLIC_URL
+                ? `${env.PUBLIC_URL}/api/auth/callback/github`
+                : "http://localhost:3001/api/auth/callback/github",
+          },
+        }
+      : {}),
+    ...(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET
+      ? {
+          google: {
+            clientId: env.GOOGLE_CLIENT_ID,
+            clientSecret: env.GOOGLE_CLIENT_SECRET,
+            redirectURI:
+              env.NODE_ENV === "production" && env.PUBLIC_URL
+                ? `${env.PUBLIC_URL}/api/auth/callback/google`
+                : "http://localhost:3001/api/auth/callback/google",
+          },
+        }
+      : {}),
   },
   trustedOrigins: allowedOrigins,
   user: {

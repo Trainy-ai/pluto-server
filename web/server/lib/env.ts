@@ -17,11 +17,11 @@ const envSchema = z.object({
   DATABASE_URL: z.string().url(),
   DATABASE_DIRECT_URL: z.string().url(),
 
-  // Auth
-  GITHUB_CLIENT_ID: z.string().min(1),
-  GITHUB_CLIENT_SECRET: z.string().min(1),
-  GOOGLE_CLIENT_ID: z.string().min(1),
-  GOOGLE_CLIENT_SECRET: z.string().min(1),
+  // Auth (optional — not required for self-hosted deployments)
+  GITHUB_CLIENT_ID: z.string().min(1).optional(),
+  GITHUB_CLIENT_SECRET: z.string().min(1).optional(),
+  GOOGLE_CLIENT_ID: z.string().min(1).optional(),
+  GOOGLE_CLIENT_SECRET: z.string().min(1).optional(),
 
   // URLs & CORS
   PUBLIC_URL: z.string().url(), // URL of server

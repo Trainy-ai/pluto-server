@@ -1,0 +1,67 @@
+# =============================================================================
+# mlop Self-Hosted — Terraform Configuration
+# =============================================================================
+# Copy this file to terraform.tfvars and fill in your values.
+# Sensitive values (passwords, keys) should NOT be committed to version control.
+# =============================================================================
+
+# AWS
+aws_region   = "us-east-1"
+cluster_name = "mlop"
+
+# -----------------------------------------------------------------------------
+# Domain (Cloudflare-managed)
+# -----------------------------------------------------------------------------
+domain           = "example.com"
+app_subdomain    = "app"        # app.example.com
+api_subdomain    = "api"        # api.example.com
+ingest_subdomain = "ingest"     # ingest.example.com
+py_subdomain     = "py"         # py.example.com
+
+# -----------------------------------------------------------------------------
+# PostgreSQL (RDS — created automatically in the VPC)
+# -----------------------------------------------------------------------------
+db_password = "strong-random-password-here"
+# db_instance_class = "db.t4g.medium"  # default
+
+# -----------------------------------------------------------------------------
+# ClickHouse Cloud
+# After apply, add the NAT gateway IP (from terraform output) to your
+# ClickHouse Cloud service's IP Access List.
+# -----------------------------------------------------------------------------
+clickhouse_url      = "https://your-instance.clickhouse.cloud:8443"
+clickhouse_user     = "default"
+clickhouse_password = "your-clickhouse-password"
+
+# S3 bucket + IAM user are created automatically by the S3 module.
+# No storage configuration needed.
+
+# -----------------------------------------------------------------------------
+# Authentication
+# -----------------------------------------------------------------------------
+better_auth_secret = "at-least-32-characters-random-string-here"
+
+# GitHub OAuth (create at https://github.com/settings/applications/new)
+github_client_id     = ""
+github_client_secret = ""
+
+# Google OAuth (create at https://console.cloud.google.com/apis/credentials)
+google_client_id     = ""
+google_client_secret = ""
+
+# -----------------------------------------------------------------------------
+# Redis (in-cluster, just set a password)
+# -----------------------------------------------------------------------------
+redis_password = "strong-random-password"
+
+# -----------------------------------------------------------------------------
+# Optional
+# -----------------------------------------------------------------------------
+# image_tag         = "latest"
+# resend_api_key    = "re_..."
+# resend_from_email = "noreply@example.com"
+
+# Bring your own VPC (omit to create a new one)
+# vpc_id             = "vpc-xxx"
+# private_subnet_ids = ["subnet-a", "subnet-b", "subnet-c"]
+# public_subnet_ids  = ["subnet-d", "subnet-e", "subnet-f"]
