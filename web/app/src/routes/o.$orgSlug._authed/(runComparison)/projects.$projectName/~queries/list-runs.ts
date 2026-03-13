@@ -73,13 +73,20 @@ export const useListRuns = (
     getNextPageParam: (lastPage: ListRunResponse) => {
       if (!lastPage) return undefined;
       const extended = lastPage as any;
-      if (paginationMode === "keyset") {
-        return extended.sortCursor ?? undefined;
+      // Response-driven pagination: check actual response fields rather than
+      // the closure's paginationMode. This prevents stale placeholder data
+      // (from keepPreviousData) being evaluated with the wrong mode during
+      // sort transitions (e.g., cursor → offset).
+      if (extended.sortCursor != null) {
+        return String(extended.sortCursor);
       }
-      if (paginationMode === "offset") {
-        return extended.nextOffset != null ? Number(extended.nextOffset) : undefined;
+      if (extended.nextOffset != null) {
+        return Number(extended.nextOffset);
       }
-      return lastPage.nextCursor ? Number(lastPage.nextCursor) : undefined;
+      if (lastPage.nextCursor) {
+        return Number(lastPage.nextCursor);
+      }
+      return undefined;
     },
     staleTime: 5 * 1000 * 60,
     initialPageParam: undefined,

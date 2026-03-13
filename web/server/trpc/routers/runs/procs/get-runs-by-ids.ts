@@ -53,7 +53,31 @@ export const getByIdsProcedure = protectedOrgProcedure
       },
     });
 
+    // Enrich with field values so custom columns render immediately
+    const fieldRows = await ctx.prisma.runFieldValue.findMany({
+      where: { runId: { in: runs.map((r) => r.id) } },
+      select: { runId: true, source: true, key: true, textValue: true, numericValue: true },
+    });
+    const byRun = new Map<number, { config: Record<string, unknown>; systemMetadata: Record<string, unknown> }>();
+    for (const row of fieldRows) {
+      let entry = byRun.get(Number(row.runId));
+      if (!entry) {
+        entry = { config: {}, systemMetadata: {} };
+        byRun.set(Number(row.runId), entry);
+      }
+      const value = row.numericValue ?? row.textValue ?? null;
+      if (row.source === "config") entry.config[row.key] = value;
+      else if (row.source === "systemMetadata") entry.systemMetadata[row.key] = value;
+    }
+
     return {
-      runs: runs.map((r) => ({ ...r, id: sqidEncode(r.id) })),
+      runs: runs.map((r) => {
+        const fv = byRun.get(Number(r.id));
+        return {
+          ...r,
+          id: sqidEncode(r.id),
+          ...(fv ? { _flatConfig: fv.config, _flatSystemMetadata: fv.systemMetadata } : {}),
+        };
+      }),
     };
   });

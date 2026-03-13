@@ -32,7 +32,6 @@ import {
 } from "@/components/ui/resizable";
 import type { PanelImperativeHandle } from "react-resizable-panels";
 import { useDebouncedCallback } from "@/lib/hooks/use-debounced-callback";
-import { useFieldValues } from "./~queries/field-values";
 import { RunTableViewSelector } from "./~components/runs-table/run-table-view-selector";
 import { DEFAULT_PAGE_SIZE } from "./~components/runs-table/config";
 
@@ -698,65 +697,40 @@ function RouteComponent() {
       .map((c) => ({ logName: c.id, aggregation: c.aggregation }));
   }, [customColumns]);
 
-  // Get all visible run IDs for batch fetches (field values, metric summaries)
-  const visibleRunIds = useMemo(() => allVisibleRuns.map((r) => r.id), [allVisibleRuns]);
+  // Build run IDs for metric summaries: visible runs + cached selected runs.
+  // Selected runs must always be included so their metric values persist when
+  // sort changes push them out of the current page (e.g., NULLS LAST).
+  const metricRunIds = useMemo(() => {
+    const ids = new Set(allVisibleRuns.map((r) => r.id));
+    for (const id of cachedSelectedRunIds) {
+      ids.add(id);
+    }
+    return [...ids];
+  }, [allVisibleRuns, cachedSelectedRunIds]);
 
-  // Fetch pre-flattened field values (config + systemMetadata) from run_field_values table.
-  // This replaces the old pattern of sending full JSON blobs in runs.list.
-  const { data: fieldValuesData } = useFieldValues(
-    organizationId,
-    projectName,
-    visibleRunIds,
-  );
-
-  // Fetch metric summaries for visible runs (only when metric columns are active)
+  // Fetch metric summaries for visible + selected runs
   const { data: metricSummariesData } = useMetricSummaries(
     organizationId,
     projectName,
-    visibleRunIds,
+    metricRunIds,
     metricColumnSpecs,
   );
 
-  // Merge field values and metric summaries into runs.
-  // Field values provide _flatConfig and _flatSystemMetadata from the
-  // pre-flattened run_field_values table (replaces client-side flattenObject).
+  // Merge metric summaries into runs.
+  // Field values (_flatConfig, _flatSystemMetadata) already arrive inline
+  // from runs.list and getByIds — no separate fetch needed.
   const runs = useMemo(() => {
-    let result = allVisibleRuns;
-
-    // Merge field values (config + systemMetadata)
-    if (fieldValuesData) {
-      result = result.map((run) => {
-        const fv = fieldValuesData[run.id];
-        if (!fv) return run;
-        const flatConfig: Record<string, unknown> = {};
-        const flatSystemMetadata: Record<string, unknown> = {};
-        for (const [compositeKey, value] of Object.entries(fv)) {
-          const sepIdx = compositeKey.indexOf("::");
-          if (sepIdx === -1) continue;
-          const source = compositeKey.slice(0, sepIdx);
-          const key = compositeKey.slice(sepIdx + 2);
-          if (source === "config") {
-            flatConfig[key] = value;
-          } else if (source === "systemMetadata") {
-            flatSystemMetadata[key] = value;
-          }
-        }
-        return { ...run, _flatConfig: flatConfig, _flatSystemMetadata: flatSystemMetadata };
-      });
+    if (!metricSummariesData?.summaries || metricColumnSpecs.length === 0) {
+      return allVisibleRuns;
     }
 
-    // Merge metric summaries
-    if (metricSummariesData?.summaries && metricColumnSpecs.length > 0) {
-      const summaries = metricSummariesData.summaries;
-      result = result.map((run) => {
-        const runSummaries = summaries[run.id];
-        if (!runSummaries) return run;
-        return { ...run, metricSummaries: runSummaries };
-      });
-    }
-
-    return result;
-  }, [allVisibleRuns, fieldValuesData, metricSummariesData, metricColumnSpecs.length]);
+    const summaries = metricSummariesData.summaries;
+    return allVisibleRuns.map((run) => {
+      const runSummaries = summaries[run.id];
+      if (!runSummaries) return run;
+      return { ...run, metricSummaries: runSummaries };
+    });
+  }, [allVisibleRuns, metricSummariesData, metricColumnSpecs.length]);
 
   // Build filterable fields from system fields + config/systemMetadata keys.
   // When the user is searching, merge results from the cache table so keys
@@ -876,6 +850,29 @@ function RouteComponent() {
     onHiddenChange: debouncedHiddenChange,
   });
 
+  // Enrich selectedRunsWithColors with metric summaries so that runs served
+  // from the IndexedDB cache (outOfPage path in mergeSelectedRuns) also carry
+  // metric values.  Without this, sorting can push selected runs out of the
+  // current page and their metric columns show "-".
+  const enrichedSelectedRunsWithColors = useMemo(() => {
+    const summaries = metricSummariesData?.summaries;
+    if (!summaries || metricColumnSpecs.length === 0) {
+      return selectedRunsWithColors;
+    }
+    let changed = false;
+    const result: typeof selectedRunsWithColors = {};
+    for (const [id, entry] of Object.entries(selectedRunsWithColors)) {
+      const runSummaries = summaries[id];
+      if (runSummaries && !(entry.run as any).metricSummaries) {
+        changed = true;
+        result[id] = { ...entry, run: { ...entry.run, metricSummaries: runSummaries } as any };
+      } else {
+        result[id] = entry;
+      }
+    }
+    return changed ? result : selectedRunsWithColors;
+  }, [selectedRunsWithColors, metricSummariesData, metricColumnSpecs.length]);
+
   // Filter out stale prefetched runs that are no longer selected.
   // useCachedSelectedRunIds reads from IndexedDB once on mount and doesn't
   // update within the session, so prefetchedSelectedRuns may contain phantom
@@ -968,7 +965,7 @@ function RouteComponent() {
                 onToggleVisibility={toggleRunVisibility}
                 onTagsUpdate={handleTagsUpdate}
                 onNotesUpdate={handleNotesUpdate}
-                selectedRunsWithColors={selectedRunsWithColors}
+                selectedRunsWithColors={enrichedSelectedRunsWithColors}
                 hiddenRunIds={hiddenRunIds}
                 runColors={runColors}
                 isLoading={(isLoading && !data) || (runCountLoading && runCount === undefined)}

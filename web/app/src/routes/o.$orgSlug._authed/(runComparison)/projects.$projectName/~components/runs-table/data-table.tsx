@@ -274,10 +274,11 @@ export function DataTable({
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
-      const isLastPage = pageIndex >= Math.ceil(displayedRuns.length / pageSize) - 1;
-      if (isLastPage && hasNextPage) {
+      const nextPageEnd = (pageIndex + 2) * pageSize;
+      const nextPageHasEnoughData = displayedRuns.length >= nextPageEnd;
+      if (!nextPageHasEnoughData && hasNextPage) {
         handleFetchNextPage();
-      } else if (!isLastPage) {
+      } else if (table.getCanNextPage()) {
         table.nextPage();
       }
     }

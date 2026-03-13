@@ -2592,6 +2592,83 @@ describe('SDK API Endpoints (with API Key)', () => {
       // We can't directly check NULL ordering from the response since config
       // values aren't returned in the sort value, but the query shouldn't error
     });
+
+    it('Test 20.9: NULLS LAST — nulls must not appear between non-null values when sorting DESC', async () => {
+      if (!sessionCookie || !hasApiKey) {
+        console.log('   No session or API key - skipping');
+        return;
+      }
+
+      // Create 3 runs with distinct batch_size values and 1 without
+      const sortTestProject = `sort-null-test-${Date.now()}`;
+      const runNames = ['sort-high', 'sort-low', 'sort-none', 'sort-mid'];
+      const configs = [
+        JSON.stringify({ batch_size: 100 }),
+        JSON.stringify({ batch_size: 10 }),
+        JSON.stringify({ framework: 'pytorch' }), // no batch_size
+        JSON.stringify({ batch_size: 50 }),
+      ];
+
+      for (let i = 0; i < runNames.length; i++) {
+        const createResp = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+          body: JSON.stringify({
+            projectName: sortTestProject,
+            runName: runNames[i],
+            config: configs[i],
+          }),
+        });
+        expect(createResp.status).toBe(200);
+      }
+
+      // Wait briefly for field values to be indexed
+      await new Promise((r) => setTimeout(r, 500));
+
+      // Sort by batch_size DESC — expected order: 100, 50, 10, null
+      const response = await makeTrpcRequest('runs.list', {
+        projectName: sortTestProject,
+        limit: 10,
+        sortField: 'batch_size',
+        sortSource: 'config',
+        sortDirection: 'desc',
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      const runs = data.result?.data?.runs;
+      expect(runs).toBeDefined();
+      expect(runs.length).toBe(4);
+
+      // Verify order: sort-high (100), sort-mid (50), sort-low (10), sort-none (null)
+      const names = runs.map((r: any) => r.name);
+      expect(names[0]).toBe('sort-high');
+      expect(names[1]).toBe('sort-mid');
+      expect(names[2]).toBe('sort-low');
+      expect(names[3]).toBe('sort-none'); // NULL must be last, not between values
+
+      // Also verify ASC direction: null should still be last
+      const ascResponse = await makeTrpcRequest('runs.list', {
+        projectName: sortTestProject,
+        limit: 10,
+        sortField: 'batch_size',
+        sortSource: 'config',
+        sortDirection: 'asc',
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(ascResponse.status).toBe(200);
+      const ascData = await ascResponse.json();
+      const ascRuns = ascData.result?.data?.runs;
+      expect(ascRuns).toBeDefined();
+      expect(ascRuns.length).toBe(4);
+
+      const ascNames = ascRuns.map((r: any) => r.name);
+      // ASC: 10, 50, 100, null
+      expect(ascNames[0]).toBe('sort-low');
+      expect(ascNames[1]).toBe('sort-mid');
+      expect(ascNames[2]).toBe('sort-high');
+      expect(ascNames[3]).toBe('sort-none'); // NULL must be last in ASC too
+    });
   });
 
   describe('Test Suite 21: Server-Side Field Filtering (Authenticated)', () => {
@@ -4554,6 +4631,343 @@ describe('SDK API Endpoints (with API Key)', () => {
         const data = await updateResponse.json();
         expect(data.error).toBe('Run not found');
       });
+    });
+  });
+
+  // Test Suite 28: Pagination Response Shape (guards against mode-driven getNextPageParam bug)
+  // The frontend's getNextPageParam must be response-driven (check which fields are non-null)
+  // rather than mode-driven (check closure variable). These tests verify that each pagination
+  // mode returns the correct field shape so the frontend can distinguish them.
+  describe('Test Suite 28: Pagination Response Shape Across Sort Modes', () => {
+    const TEST_EMAIL = process.env.TEST_USER_EMAIL || 'test-smoke@mlop.local';
+    const TEST_PASSWORD = 'TestPassword123!';
+    let sessionCookie: string | null = null;
+    let serverAvailable = false;
+
+    beforeAll(async () => {
+      try {
+        const healthCheck = await makeRequest('/api/health');
+        serverAvailable = healthCheck.status === 200;
+      } catch {
+        serverAvailable = false;
+      }
+
+      if (!serverAvailable) return;
+
+      try {
+        const signInResponse = await makeRequest('/api/auth/sign-in/email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: TEST_EMAIL, password: TEST_PASSWORD }),
+        });
+
+        const setCookie = signInResponse.headers.get('set-cookie');
+        if (setCookie) {
+          const match = setCookie.match(/better_auth\.session_token=([^;]+)/);
+          if (match) {
+            sessionCookie = `better_auth.session_token=${match[1]}`;
+          }
+        }
+      } catch (e) {
+        console.log('   Sign in failed:', e);
+      }
+    });
+
+    it('Test 28.1: Cursor mode (no sort) — nextCursor set, others null', async () => {
+      if (!sessionCookie) { console.log('   No session - skipping'); return; }
+
+      const response = await makeTrpcRequest('runs.list', {
+        projectName: TEST_PROJECT_NAME,
+        limit: 5,
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      const result = data.result?.data;
+      expect(result.runs.length).toBe(5);
+      // Cursor mode: nextCursor should be set, others null
+      expect(result.nextCursor).toBeDefined();
+      expect(result.nextCursor).not.toBeNull();
+      expect(result.nextOffset).toBeNull();
+    });
+
+    it('Test 28.2: Keyset mode (system sort) — sortCursor set, nextCursor & nextOffset null', async () => {
+      if (!sessionCookie) { console.log('   No session - skipping'); return; }
+
+      const response = await makeTrpcRequest('runs.list', {
+        projectName: TEST_PROJECT_NAME,
+        limit: 5,
+        sortField: 'name',
+        sortSource: 'system',
+        sortDirection: 'asc',
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      const result = data.result?.data;
+      expect(result.runs.length).toBe(5);
+      // Keyset mode: sortCursor set, others null
+      expect(result.sortCursor).toBeDefined();
+      expect(result.sortCursor).not.toBeNull();
+      expect(result.nextCursor).toBeNull();
+      expect(result.nextOffset).toBeNull();
+    });
+
+    it('Test 28.3: Offset mode (config sort) — nextOffset set, nextCursor & sortCursor null', async () => {
+      if (!sessionCookie) { console.log('   No session - skipping'); return; }
+
+      const response = await makeTrpcRequest('runs.list', {
+        projectName: TEST_PROJECT_NAME,
+        limit: 5,
+        sortField: 'epochs',
+        sortSource: 'config',
+        sortDirection: 'asc',
+        offset: 0,
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      const result = data.result?.data;
+      expect(result.runs.length).toBe(5);
+      // Offset mode: nextOffset set, others null
+      expect(result.nextOffset).toBeDefined();
+      expect(result.nextOffset).not.toBeNull();
+      expect(result.nextCursor).toBeNull();
+      expect(result.sortCursor).toBeNull();
+    });
+
+    it('Test 28.4: Offset mode (metric sort) — nextOffset set, nextCursor & sortCursor null', async () => {
+      if (!sessionCookie) { console.log('   No session - skipping'); return; }
+
+      const response = await makeTrpcRequest('runs.list', {
+        projectName: TEST_PROJECT_NAME,
+        limit: 5,
+        sortField: 'train/metric_00',
+        sortSource: 'metric',
+        sortDirection: 'desc',
+        sortAggregation: 'LAST',
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      const result = data.result?.data;
+      expect(result.runs.length).toBe(5);
+      // Metric sort uses offset mode: same shape as config sort
+      expect(result.nextOffset).toBeDefined();
+      expect(result.nextOffset).not.toBeNull();
+      expect(result.nextCursor).toBeNull();
+    });
+
+    it('Test 28.5: Offset mode (config sort) pagination — page 2 works with nextOffset', async () => {
+      if (!sessionCookie) { console.log('   No session - skipping'); return; }
+
+      // Page 1
+      const page1Response = await makeTrpcRequest('runs.list', {
+        projectName: TEST_PROJECT_NAME,
+        limit: 5,
+        sortField: 'epochs',
+        sortSource: 'config',
+        sortDirection: 'asc',
+        offset: 0,
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(page1Response.status).toBe(200);
+      const page1 = await page1Response.json();
+      const nextOffset = page1.result?.data?.nextOffset;
+      expect(nextOffset).toBe(5);
+
+      // Page 2 using nextOffset
+      const page2Response = await makeTrpcRequest('runs.list', {
+        projectName: TEST_PROJECT_NAME,
+        limit: 5,
+        sortField: 'epochs',
+        sortSource: 'config',
+        sortDirection: 'asc',
+        offset: nextOffset,
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(page2Response.status).toBe(200);
+      const page2 = await page2Response.json();
+      const page2Runs = page2.result?.data?.runs;
+      expect(page2Runs.length).toBeGreaterThan(0);
+
+      // No overlap between pages
+      const page1Ids = new Set(page1.result?.data?.runs.map((r: any) => r.id));
+      for (const run of page2Runs) {
+        expect(page1Ids.has(run.id)).toBe(false);
+      }
+    });
+
+    it('Test 28.6: Offset mode (metric sort) pagination — page 2 works with nextOffset', async () => {
+      if (!sessionCookie) { console.log('   No session - skipping'); return; }
+
+      // Page 1
+      const page1Response = await makeTrpcRequest('runs.list', {
+        projectName: TEST_PROJECT_NAME,
+        limit: 5,
+        sortField: 'train/metric_00',
+        sortSource: 'metric',
+        sortDirection: 'desc',
+        sortAggregation: 'LAST',
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(page1Response.status).toBe(200);
+      const page1 = await page1Response.json();
+      const nextOffset = page1.result?.data?.nextOffset;
+      expect(nextOffset).toBe(5);
+
+      // Page 2 using nextOffset
+      const page2Response = await makeTrpcRequest('runs.list', {
+        projectName: TEST_PROJECT_NAME,
+        limit: 5,
+        sortField: 'train/metric_00',
+        sortSource: 'metric',
+        sortDirection: 'desc',
+        sortAggregation: 'LAST',
+        offset: nextOffset,
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(page2Response.status).toBe(200);
+      const page2 = await page2Response.json();
+      const page2Runs = page2.result?.data?.runs;
+      expect(page2Runs.length).toBeGreaterThan(0);
+
+      // No overlap between pages
+      const page1Ids = new Set(page1.result?.data?.runs.map((r: any) => r.id));
+      for (const run of page2Runs) {
+        expect(page1Ids.has(run.id)).toBe(false);
+      }
+    });
+
+    it('Test 28.7: Config sort — all pages in correct order with no overlap or gaps', async () => {
+      if (!sessionCookie) { console.log('   No session - skipping'); return; }
+
+      const allRunIds: string[] = [];
+      const allBatchSizes: number[] = [];
+      let offset = 0;
+      const limit = 20;
+
+      // Paginate through ALL runs sorted by batch_size ascending
+      for (let page = 0; page < 20; page++) {
+        const response = await makeTrpcRequest('runs.list', {
+          projectName: TEST_PROJECT_NAME,
+          limit,
+          sortField: 'batch_size',
+          sortSource: 'config',
+          sortDirection: 'asc',
+          offset,
+        }, { 'Cookie': sessionCookie }, 'GET');
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        const result = data.result?.data;
+
+        if (!result.runs || result.runs.length === 0) break;
+
+        for (const run of result.runs) {
+          allRunIds.push(run.id);
+          const bs = run.config?.batch_size;
+          if (typeof bs === 'number') allBatchSizes.push(bs);
+        }
+
+        // Non-last pages must be full
+        if (result.nextOffset !== null) {
+          expect(result.runs.length).toBe(limit);
+        }
+
+        if (result.nextOffset === null) break;
+        offset = result.nextOffset;
+      }
+
+      // No duplicate run IDs across pages
+      expect(new Set(allRunIds).size).toBe(allRunIds.length);
+
+      // Values must be in ascending order
+      for (let i = 1; i < allBatchSizes.length; i++) {
+        expect(allBatchSizes[i]).toBeGreaterThanOrEqual(allBatchSizes[i - 1]);
+      }
+
+      // Should have fetched all bulk runs (160+)
+      expect(allRunIds.length).toBeGreaterThanOrEqual(160);
+    });
+
+    it('Test 28.8: Config sort descending — values decrease across pages', async () => {
+      if (!sessionCookie) { console.log('   No session - skipping'); return; }
+
+      const allBatchSizes: number[] = [];
+      let offset = 0;
+      const limit = 20;
+
+      for (let page = 0; page < 20; page++) {
+        const response = await makeTrpcRequest('runs.list', {
+          projectName: TEST_PROJECT_NAME,
+          limit,
+          sortField: 'batch_size',
+          sortSource: 'config',
+          sortDirection: 'desc',
+          offset,
+        }, { 'Cookie': sessionCookie }, 'GET');
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        const result = data.result?.data;
+
+        if (!result.runs || result.runs.length === 0) break;
+
+        for (const run of result.runs) {
+          const bs = run.config?.batch_size;
+          if (typeof bs === 'number') allBatchSizes.push(bs);
+        }
+
+        if (result.nextOffset === null) break;
+        offset = result.nextOffset;
+      }
+
+      // Values must be in descending order
+      for (let i = 1; i < allBatchSizes.length; i++) {
+        expect(allBatchSizes[i]).toBeLessThanOrEqual(allBatchSizes[i - 1]);
+      }
+    });
+
+    it('Test 28.9: Metric sort — stable ordering with tiebreaker across pages', async () => {
+      if (!sessionCookie) { console.log('   No session - skipping'); return; }
+
+      const allRunIds: string[] = [];
+      let offset = 0;
+      const limit = 20;
+
+      for (let page = 0; page < 20; page++) {
+        const response = await makeTrpcRequest('runs.list', {
+          projectName: TEST_PROJECT_NAME,
+          limit,
+          sortField: 'train/metric_00',
+          sortSource: 'metric',
+          sortDirection: 'desc',
+          sortAggregation: 'LAST',
+          offset,
+        }, { 'Cookie': sessionCookie }, 'GET');
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        const result = data.result?.data;
+
+        if (!result.runs || result.runs.length === 0) break;
+
+        for (const run of result.runs) {
+          allRunIds.push(run.id);
+        }
+
+        // Non-last pages must be full
+        if (result.nextOffset !== null) {
+          expect(result.runs.length).toBe(limit);
+        }
+
+        if (result.nextOffset === null) break;
+        offset = result.nextOffset;
+      }
+
+      // No duplicate run IDs (tiebreaker ensures stable ordering)
+      expect(new Set(allRunIds).size).toBe(allRunIds.length);
     });
   });
 });

@@ -2,12 +2,12 @@ import { trpc } from "@/utils/trpc";
 import { useQuery } from "@tanstack/react-query";
 
 /**
- * Batch fetch pre-flattened field values (config + systemMetadata) for visible runs.
+ * Batch fetch pre-flattened field values (config + systemMetadata) for specific runs.
  * Returns Record<runId, Record<"source::key", value>>.
  *
- * This replaces the old pattern of sending full JSON blobs in runs.list and
- * flattening them client-side.  The run_field_values table already stores
- * the data pre-flattened and indexed.
+ * Note: For the main runs table, field values now arrive inline with
+ * runs.list responses. This hook is kept for ad-hoc use cases that need
+ * field values outside the paginated list flow.
  */
 export function useFieldValues(
   orgId: string,

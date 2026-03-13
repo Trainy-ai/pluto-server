@@ -1,6 +1,6 @@
 import { trpc } from "@/utils/trpc";
 import { useQueries, useQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useCallback, useMemo, useRef } from "react";
 
 const METRIC_AGGS = ["MIN", "MAX", "AVG", "LAST", "VARIANCE"] as const;
 
@@ -79,6 +79,10 @@ export function useRegexSearchMetricNames(orgId: string, projectName: string, re
 /**
  * Batch fetch metric summaries for visible runs.
  * Used by the run table for metric columns (small, known set of specs).
+ *
+ * runIds are sorted for a stable query key — when runs reorder (e.g., sort
+ * change), the set of IDs stays the same so TanStack Query returns the
+ * cached result instead of triggering an unnecessary refetch.
  */
 export function useMetricSummaries(
   orgId: string,
@@ -86,21 +90,67 @@ export function useMetricSummaries(
   runIds: string[],
   metrics: { logName: string; aggregation: "MIN" | "MAX" | "AVG" | "LAST" | "VARIANCE" }[],
 ) {
-  return useQuery(
+  // Accumulator: keeps summaries from all previous fetches so pagination
+  // never loses metric values for already-loaded runs.
+  const accRef = useRef<Record<string, Record<string, number>>>({});
+
+  // Track which metric specs the accumulator was built for.  When the user
+  // adds/removes a metric column the accumulated data is stale and must be
+  // discarded so we re-fetch everything with the new spec set.
+  const metricsKeyRef = useRef<string>("");
+  const metricsKey = useMemo(
+    () => metrics.map((m) => `${m.logName}|${m.aggregation}`).sort().join(","),
+    [metrics],
+  );
+  if (metricsKey !== metricsKeyRef.current) {
+    accRef.current = {};
+    metricsKeyRef.current = metricsKey;
+  }
+
+  // Only fetch IDs we haven't seen yet (incremental pagination).
+  const newIds = useMemo(() => {
+    const acc = accRef.current;
+    return runIds.filter((id) => !acc[id]);
+  }, [runIds]);
+
+  // Sort for a stable query key.
+  const sortedNewIds = useMemo(() => [...newIds].sort(), [newIds]);
+
+  const query = useQuery(
     trpc.runs.metricSummaries.queryOptions(
       {
         organizationId: orgId,
         projectName,
-        runIds,
+        runIds: sortedNewIds,
         metrics,
       },
       {
-        enabled: runIds.length > 0 && metrics.length > 0,
+        enabled: sortedNewIds.length > 0 && metrics.length > 0,
         staleTime: 30 * 1000,
-        placeholderData: (prev) => prev,
       },
     )
   );
+
+  // Merge new results into the accumulator.
+  if (query.data?.summaries) {
+    const fresh = query.data.summaries;
+    const acc = accRef.current;
+    for (const [id, vals] of Object.entries(fresh)) {
+      acc[id] = vals;
+    }
+  }
+
+  // Return the accumulated map in the same shape callers expect.
+  // Wrap in a stable reference that only changes when the accumulator content
+  // changes (new data arrived or metrics key changed).
+  const summaries = accRef.current;
+  const summariesSnapshot = useMemo(
+    () => ({ summaries: { ...summaries } }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [query.data, metricsKey],
+  );
+
+  return { data: summariesSnapshot, isLoading: query.isLoading, isFetching: query.isFetching };
 }
 
 /**

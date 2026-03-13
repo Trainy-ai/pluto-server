@@ -14,6 +14,7 @@ import { PrismaClient } from '@prisma/client';
 import crypto from 'crypto';
 import { nanoid } from 'nanoid';
 import { createClient } from '@clickhouse/client-web';
+import { extractAndUpsertColumnKeys } from '../lib/extract-column-keys';
 
 // Bulk run seeding configuration for server-side search testing
 // Frontend loads 150 runs at a time, so we need >150 to expose pagination issues
@@ -752,6 +753,24 @@ async function setupTestData(): Promise<TestData> {
       skipDuplicates: true,
     });
     console.log(`   ✓ Registered ${runLogData.length} metric names in run_logs`);
+
+    // Backfill ProjectColumnKey and RunFieldValue for config/systemMetadata columns
+    console.log(`   📝 Backfilling column keys and field values...`);
+    const allBulkRuns = await prisma.runs.findMany({
+      where: { projectId: project.id, organizationId: org.id },
+      select: { id: true, config: true, systemMetadata: true },
+    });
+    for (const run of allBulkRuns) {
+      await extractAndUpsertColumnKeys(
+        prisma,
+        org.id,
+        project.id,
+        run.config,
+        run.systemMetadata,
+        run.id,
+      );
+    }
+    console.log(`   ✓ Backfilled column keys for ${allBulkRuns.length} runs`);
 
     // Seed ClickHouse with metric datapoints
     await seedClickHouseMetrics(

@@ -51,6 +51,46 @@ const SYSTEM_SORT_FIELDS: Record<string, string> = {
  *  At 100k rows, OFFSET > 10k + full JSON extract is too slow. */
 const MAX_JSON_SORT_OFFSET = 100_000;
 
+/**
+ * Enrich run objects with pre-flattened field values from run_field_values.
+ * Returns runs with `_flatConfig` and `_flatSystemMetadata` attached.
+ * This is co-located with runs.list so field values travel with the paginated
+ * response — no separate query needed on the client.
+ */
+async function attachFieldValues(
+  prisma: any,
+  runs: { id: bigint; [k: string]: any }[],
+): Promise<typeof runs> {
+  if (runs.length === 0) return runs;
+
+  const rows = await prisma.runFieldValue.findMany({
+    where: { runId: { in: runs.map((r) => r.id) } },
+    select: { runId: true, source: true, key: true, textValue: true, numericValue: true },
+  });
+
+  // Group by runId
+  const byRun = new Map<bigint, { config: Record<string, unknown>; systemMetadata: Record<string, unknown> }>();
+  for (const row of rows) {
+    let entry = byRun.get(row.runId);
+    if (!entry) {
+      entry = { config: {}, systemMetadata: {} };
+      byRun.set(row.runId, entry);
+    }
+    const value = row.numericValue ?? row.textValue ?? null;
+    if (row.source === "config") {
+      entry.config[row.key] = value;
+    } else if (row.source === "systemMetadata") {
+      entry.systemMetadata[row.key] = value;
+    }
+  }
+
+  return runs.map((run) => {
+    const fv = byRun.get(run.id);
+    if (!fv) return run;
+    return { ...run, _flatConfig: fv.config, _flatSystemMetadata: fv.systemMetadata };
+  });
+}
+
 export const listRunsProcedure = protectedOrgProcedure
   .input(
     z.object({
@@ -174,8 +214,9 @@ async function defaultCursorQuery(
   });
 
   const nextCursor = runs.length === input.limit ? runs[runs.length - 1].id : null;
+  const enriched = await attachFieldValues(ctx.prisma, runs);
   return {
-    runs: runs.map((r: any) => ({ ...r, id: sqidEncode(r.id) })),
+    runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id) })),
     nextCursor,
     nextOffset: null,
   };
@@ -305,8 +346,9 @@ async function defaultCursorQueryWithFieldFilters(
   runs.sort((a: any, b: any) => (idOrder.get(a.id) ?? 0) - (idOrder.get(b.id) ?? 0));
 
   const nextCursor = runs.length === input.limit ? runs[runs.length - 1].id : null;
+  const enriched = await attachFieldValues(ctx.prisma, runs);
   return {
-    runs: runs.map((r: any) => ({ ...r, id: sqidEncode(r.id) })),
+    runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id) })),
     nextCursor,
     nextOffset: null,
   };
@@ -464,8 +506,9 @@ async function systemColumnSortQuery(
     ? `${lastRow.sort_val instanceof Date ? lastRow.sort_val.toISOString() : String(lastRow.sort_val)}::${lastRow.id}`
     : null;
 
+  const enriched = await attachFieldValues(ctx.prisma, runs);
   return {
-    runs: runs.map((r: any) => ({ ...r, id: sqidEncode(r.id) })),
+    runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id) })),
     nextCursor: null,
     nextOffset: null,
     sortCursor: nextSortCursor,
@@ -633,8 +676,9 @@ async function jsonFieldSortQuery(
     ? offset + sortedIds.length
     : null;
 
+  const enriched = await attachFieldValues(ctx.prisma, runs);
   return {
-    runs: runs.map((r: any) => ({ ...r, id: sqidEncode(r.id) })),
+    runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id) })),
     nextCursor: null,
     nextOffset,
   };
@@ -714,8 +758,9 @@ async function metricSortQuery(
     ? offset + sortedRows.length
     : null;
 
+  const enriched = await attachFieldValues(ctx.prisma, runs);
   return {
-    runs: runs.map((r: any) => ({ ...r, id: sqidEncode(r.id) })),
+    runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id) })),
     nextCursor: null,
     nextOffset,
   };

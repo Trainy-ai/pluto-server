@@ -86,15 +86,18 @@ export function TablePagination({
           size="icon"
           className="h-7 w-7"
           onClick={() => {
-            const isLastPage =
-              pageIndex >= Math.ceil(runsLength / pageSize) - 1;
-            if (isLastPage && hasNextPage) {
+            const nextPageEnd = (pageIndex + 2) * pageSize;
+            const nextPageHasEnoughData = runsLength >= nextPageEnd;
+            if (!nextPageHasEnoughData && hasNextPage) {
+              // Next page doesn't have a full set of rows yet — fetch more
+              // data first; the useEffect will advance to the target page
+              // once the new data arrives.
               onFetchNextPage();
             } else {
               table.nextPage();
             }
           }}
-          disabled={!table.getCanNextPage() && !hasNextPage}
+          disabled={(!table.getCanNextPage() && !hasNextPage) || isFetchingNextPage}
           loading={isFetchingNextPage}
         >
           <ChevronRight className="h-4 w-4" />
