@@ -245,9 +245,15 @@ export function useSelectedRuns(
     initializedRef.current = false;
     prevUrlRunIdsRef.current = undefined;
 
+    // If URL specifies runs, skip cache restoration entirely — URL takes priority.
+    // This prevents the async cache load from overwriting URL-driven selection.
+    if (urlRunIds?.length) return;
+
     const loadCachedData = async () => {
       try {
         const cachedData = await runCacheDb.getData(storageKey);
+        // After async load, check again — URL params may have been applied while waiting
+        if (urlParamsAppliedRef.current) return;
         if (cachedData?.data) {
           // Only set state if there's meaningful data to restore
           if (Object.keys(cachedData.data.colors).length > 0) {
@@ -267,6 +273,9 @@ export function useSelectedRuns(
     };
 
     loadCachedData();
+    // urlRunIds intentionally read from closure but omitted from deps — we only
+    // check it on mount / project-change to decide whether to restore cache.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storageKey]);
 
   // Debounced save to cache - prevents main thread blocking on rapid changes
@@ -319,6 +328,33 @@ export function useSelectedRuns(
     [urlRunIds],
   );
 
+  // Apply URL-driven selection + hidden state.
+  // Shared by the URL-change effect and the initialization effect.
+  const applyUrlSelection = useCallback(
+    (availableRuns: Run[]) => {
+      urlParamsAppliedRef.current = true;
+      const newSelection = buildSelectionFromUrlParams(availableRuns);
+      if (newSelection) {
+        const newColors: Record<RunId, Color> = {};
+        for (const [id, entry] of Object.entries(newSelection)) {
+          newColors[id] = entry.color;
+        }
+        setRunColors(newColors);
+        setSelectedRunsWithColors(newSelection);
+        // Apply hidden IDs from URL (must be subset of selected)
+        if (urlHiddenIds?.length) {
+          const selectedSet = new Set(Object.keys(newSelection));
+          setHiddenRunIds(new Set(urlHiddenIds.filter((id) => selectedSet.has(id))));
+        } else {
+          setHiddenRunIds(new Set());
+        }
+        return true;
+      }
+      return false;
+    },
+    [buildSelectionFromUrlParams, urlHiddenIds],
+  );
+
   // Handle URL param changes (when navigating with different ?runs= param)
   useEffect(() => {
     // Check if URL params actually changed
@@ -350,24 +386,8 @@ export function useSelectedRuns(
     }
 
     // If we have runs loaded and URL params changed, apply the new selection
-    const newSelection = buildSelectionFromUrlParams(runs);
-    if (newSelection) {
-      const newColors: Record<RunId, Color> = {};
-      for (const [id, entry] of Object.entries(newSelection)) {
-        newColors[id] = entry.color;
-      }
-      setRunColors(newColors);
-      setSelectedRunsWithColors(newSelection);
-      // Apply hidden IDs from URL (must be subset of selected)
-      if (urlHiddenIds?.length) {
-        const selectedSet = new Set(Object.keys(newSelection));
-        setHiddenRunIds(new Set(urlHiddenIds.filter((id) => selectedSet.has(id))));
-      } else {
-        setHiddenRunIds(new Set());
-      }
-      urlParamsAppliedRef.current = true;
-    }
-  }, [urlRunIds, urlHiddenIds, runs, buildSelectionFromUrlParams]);
+    applyUrlSelection(runs);
+  }, [urlRunIds, runs, applyUrlSelection]);
 
   // Initialize or update selections when runs change.
   // Colors are only assigned to SELECTED runs (sequential from palette)
@@ -394,16 +414,7 @@ export function useSelectedRuns(
     if (!initializedRef.current && Object.keys(currentSelectedRuns).length === 0) {
       initializedRef.current = true;
       if (urlRunIds && urlRunIds.length > 0 && !urlParamsAppliedRef.current) {
-        urlParamsAppliedRef.current = true;
-        const newSelection = buildSelectionFromUrlParams(runs);
-        if (newSelection) {
-          const newColors: Record<RunId, Color> = {};
-          for (const [id, entry] of Object.entries(newSelection)) {
-            newColors[id] = entry.color;
-          }
-          setRunColors(newColors);
-          setSelectedRunsWithColors(newSelection);
-        } else {
+        if (!applyUrlSelection(runs)) {
           const { selected, colors } = selectDefaultRuns(5);
           setRunColors(colors);
           setSelectedRunsWithColors(selected);
@@ -417,20 +428,11 @@ export function useSelectedRuns(
       initializedRef.current = true;
       // Cache was restored before runs arrived — check for URL override
       if (urlRunIds && urlRunIds.length > 0 && !urlParamsAppliedRef.current) {
-        urlParamsAppliedRef.current = true;
-        const newSelection = buildSelectionFromUrlParams(runs);
-        if (newSelection) {
-          const newColors: Record<RunId, Color> = {};
-          for (const [id, entry] of Object.entries(newSelection)) {
-            newColors[id] = entry.color;
-          }
-          setRunColors(newColors);
-          setSelectedRunsWithColors(newSelection);
-        }
+        applyUrlSelection(runs);
       }
       // No need to assign colors to unselected runs — colors are only for selected runs
     }
-  }, [runs, urlRunIds, buildSelectionFromUrlParams]);
+  }, [runs, urlRunIds, applyUrlSelection]);
 
   // Keep stored run objects in sync when the upstream `runs` array is enriched
   // (e.g., when fieldValuesData loads and merges _flatConfig/_flatSystemMetadata).
