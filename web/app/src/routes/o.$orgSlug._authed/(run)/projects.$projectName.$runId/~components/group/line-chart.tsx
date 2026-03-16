@@ -49,6 +49,12 @@ type ChartConfig = {
 };
 
 
+/** Relative-time baseline: use run.createdAt when available, else first data point. */
+function getBaseline(firstPointMs: number, runCreatedAt?: string): number {
+  if (runCreatedAt) return new Date(runCreatedAt).getTime();
+  return firstPointMs;
+}
+
 // Custom hook to handle system charts
 function useSystemChartConfig(
   logName: string,
@@ -63,13 +69,8 @@ function useSystemChartConfig(
     (a, b) => parseChTimeMs(a.time) - parseChTimeMs(b.time),
   );
 
-  // Use run.createdAt as the baseline when available, falling back to first data point
-  const baselineMs = runCreatedAt
-    ? new Date(runCreatedAt).getTime()
-    : parseChTimeMs(sortedData[0].time);
+  const baselineMs = getBaseline(parseChTimeMs(sortedData[0].time), runCreatedAt);
 
-  // Keep x-values in raw seconds — the axis formatter picks display units
-  // dynamically based on the visible range.
   const getX = (d: BucketedChartDataPoint) =>
     (parseChTimeMs(d.time) - baselineMs) / 1000;
 
@@ -123,10 +124,7 @@ function buildChartStrategy(
       };
     },
     "Relative Time": () => {
-      // Use run.createdAt as the baseline when available, falling back to first data point
-      const baselineMs = runCreatedAt
-        ? new Date(runCreatedAt).getTime()
-        : parseChTimeMs(data[0].time);
+      const baselineMs = getBaseline(parseChTimeMs(data[0].time), runCreatedAt);
 
       // Keep x-values in raw seconds — the axis formatter picks display units
       // dynamically based on the visible range. This ensures all relative time
@@ -288,14 +286,14 @@ export const LineChartWithFetch = memo(
     // Register step<->time mapping for cross-axis zoom sync (single-run view)
     const chartSync = useChartSyncContext();
     useEffect(() => {
-      if (!data || data.length === 0 || !chartSync || !runCreatedAt) return;
+      if (!data || data.length === 0 || !chartSync) return;
       // Only register if no mapping exists yet (first chart to load wins)
       if (chartSync.stepTimeMappingRef.current) return;
       const sorted = [...data].sort((a, b) => a.step - b.step);
-      const createdAtMs = new Date(runCreatedAt).getTime();
+      const baselineMs = getBaseline(parseChTimeMs(sorted[0].time), runCreatedAt);
       const steps = sorted.map((d) => d.step);
       const relTimeSecs = sorted.map(
-        (d) => (parseChTimeMs(d.time) - createdAtMs) / 1000,
+        (d) => (parseChTimeMs(d.time) - baselineMs) / 1000,
       );
       chartSync.setStepTimeMapping(steps, relTimeSecs);
     }, [data, runCreatedAt, chartSync]);
@@ -309,6 +307,37 @@ export const LineChartWithFetch = memo(
       return map;
     }, [chartSync?.stepTimeMappingRef.current, runId]);
 
+    // Resolve synced zoom range for this chart's axis type.
+    // In single-run view, cross-axis zoom sync is supported: a Step zoom should
+    // trigger refetch for Relative Time charts (and vice versa) via the
+    // step↔time mapping. Use same-group range directly, or cross-group
+    // translated range when the mapping exists.
+    const syncedZoomRange = useMemo(() => {
+      const range = chartSync?.syncedZoomRange ?? null;
+      const group = chartSync?.syncedZoomGroupRef?.current ?? null;
+      const isRelativeTime = settings.selectedLog === "Relative Time";
+      const myGroup = isRelativeTime ? "relative-time" : "step";
+
+      // Same group: use directly
+      if (range && group === myGroup) return range;
+
+      // Cross-group: use translated range if available
+      const cross = chartSync?.crossGroupZoomRef?.current;
+      if (cross && cross.group === myGroup) return cross.range;
+
+      return null;
+    }, [chartSync?.syncedZoomRange, settings.selectedLog]);
+
+    // Extract original step bounds from cross-axis zoom to skip lossy roundtrip
+    const sourceStepRange = useMemo(() => {
+      const cross = chartSync?.crossGroupZoomRef?.current;
+      const isRelativeTime = settings.selectedLog === "Relative Time";
+      if (isRelativeTime && cross?.group === "relative-time" && cross.sourceStepRange) {
+        return cross.sourceStepRange;
+      }
+      return null;
+    }, [chartSync?.syncedZoomRange, settings.selectedLog]);
+
     // Zoom-triggered server re-fetch using bucketed downsampling
     const runIdsMemo = useMemo(() => [runId], [runId]);
     const logNamesMemo = useMemo(() => [logName], [logName]);
@@ -318,6 +347,8 @@ export const LineChartWithFetch = memo(
       logNames: logNamesMemo,
       runIds: runIdsMemo,
       selectedLog: settings.selectedLog,
+      syncedZoomRange,
+      sourceStepRange,
       timeStepMapping,
     });
     const zoomData = zoomDataMap?.get(zoomKey(runId, logName));

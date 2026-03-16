@@ -137,14 +137,16 @@ interface ChartSyncContextValue {
   // Hidden run IDs — set imperatively via DOM event, read by charts on creation
   hiddenRunIdsRef: React.RefObject<Set<string>>;
 
-  // Step↔time mapping for cross-axis zoom sync (single-run view only).
+  // Step↔time mapping for cross-axis zoom sync.
   // When set, zooming a step chart translates the range to relative time and vice versa.
   stepTimeMappingRef: React.RefObject<{ steps: number[]; relTimeSecs: number[] } | null>;
   setStepTimeMapping: (steps: number[], relTimeSecs: number[]) => void;
 
   // Cross-group zoom range — the translated range for the opposite zoom group.
   // Used by newly mounted charts to apply zoom from the translated group.
-  crossGroupZoomRef: React.RefObject<{ group: string; range: [number, number] } | null>;
+  // sourceStepRange preserves the original step bounds from a Step→RelTime translation
+  // so that refetch can skip the lossy time→step roundtrip.
+  crossGroupZoomRef: React.RefObject<{ group: string; range: [number, number]; sourceStepRange?: [number, number] } | null>;
 }
 
 // ============================
@@ -257,6 +259,11 @@ export function ChartSyncProvider({
     syncedZoomRangeRef.current = range;  // Sync - immediate access for new charts
     setSyncedZoomRangeInternal(range);   // Async - for React re-renders
     syncedZoomGroupRef.current = range ? (zoomGroup ?? "default") : null;
+    // Clear cross-group zoom when zoom is reset — prevents stale translated
+    // ranges from leaking when switching between axis modes.
+    if (!range) {
+      crossGroupZoomRef.current = null;
+    }
   }, []);
 
   // Table-highlighted series ref for synchronous access
@@ -445,7 +452,9 @@ export function ChartSyncProvider({
     highlightedRunIdRef.current = runId;
   }, []);
 
-  // Step↔time mapping for cross-axis zoom sync (single-run view only)
+  // Step↔time mapping for cross-axis zoom sync.
+  // Used in both single-run and multi-run/dashboard views when widgets use
+  // different x-axis types (Step vs Relative Time).
   const stepTimeMappingRef = useRef<{ steps: number[]; relTimeSecs: number[] } | null>(null);
 
   const setStepTimeMapping = useCallback((steps: number[], relTimeSecs: number[]) => {
@@ -454,7 +463,7 @@ export function ChartSyncProvider({
 
   // Cross-group zoom range — stores translated range for the opposite zoom group
   // Used so newly mounted charts in the translated group can pick up the zoom
-  const crossGroupZoomRef = useRef<{ group: string; range: [number, number] } | null>(null);
+  const crossGroupZoomRef = useRef<{ group: string; range: [number, number]; sourceStepRange?: [number, number] } | null>(null);
 
   // Flag to prevent zoom sync infinite loops
   const isSyncingZoomRef = useRef(false);
@@ -505,7 +514,8 @@ export function ChartSyncProvider({
           const relMin = interpolate(mapping.steps, mapping.relTimeSecs, xMin);
           const relMax = interpolate(mapping.steps, mapping.relTimeSecs, xMax);
           setSyncedZoomRange([xMin, xMax], "step");
-          crossGroupZoomRef.current = { group: "relative-time", range: [relMin, relMax] };
+          // Store original step bounds so refetch skips lossy time→step roundtrip
+          crossGroupZoomRef.current = { group: "relative-time", range: [relMin, relMax], sourceStepRange: [xMin, xMax] };
         } else if (sourceGroup === "relative-time") {
           const stepMin = interpolate(mapping.relTimeSecs, mapping.steps, xMin);
           const stepMax = interpolate(mapping.relTimeSecs, mapping.steps, xMax);

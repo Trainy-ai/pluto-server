@@ -572,7 +572,29 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         // Don't clear syncedZoomRange - other charts may still use it
       }
 
-      if (!rangeToApply) return;
+      // When there's no range to apply but the chart was previously zoomed
+      // (e.g. zoom group changed and syncedZoomRange was cleared), auto-scale
+      // back to the full data range.
+      if (!rangeToApply) {
+        if (userHasZoomedRef.current && chart) {
+          userHasZoomedRef.current = false;
+          lastAppliedGlobalRangeRef.current = null;
+          try {
+            isProgrammaticScaleRef.current = true;
+            const xData = chart.data[0] as number[];
+            if (xData.length > 0) {
+              const dataMin = xData[0];
+              const dataMax = xData[xData.length - 1];
+              chart.batch(() => {
+                chart.setScale("x", { min: dataMin, max: dataMax });
+              });
+            }
+          } catch { /* disposed chart */ } finally {
+            isProgrammaticScaleRef.current = false;
+          }
+        }
+        return;
+      }
 
       const [rangeMin, rangeMax] = rangeToApply;
 
@@ -823,8 +845,19 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       const cursor: uPlot.Cursor = {
         sync: {
           key: effectiveSyncKey,
-          scales: ["x", null], // Sync X-axis zoom across charts (Y-axis independent)
+          // IMPORTANT: Do NOT sync scales via uPlot's built-in mechanism.
+          // It syncs ALL charts with the same key regardless of zoom group,
+          // causing Step zoom to leak to Relative Time charts. Our custom
+          // syncXScale handles zoom sync with proper group filtering.
+          scales: [null, null],
           setSeries: false, // DISABLED - was causing seriesIdx to always be null due to cross-chart sync
+          // Filter out drag events on the receiving side to avoid uPlot bug:
+          // src.scales[xKeySrc].ori crashes when xKeySrc is null (from scales above).
+          // Cursor position sync still works; drag/zoom sync is handled by our syncXScale.
+          filters: {
+            pub: () => true,
+            sub: (_type: string, src: uPlot) => !(src?.cursor?.drag as any)?._x,
+          },
         },
         focus: {
           prox: -1, // Always highlight the closest series regardless of distance

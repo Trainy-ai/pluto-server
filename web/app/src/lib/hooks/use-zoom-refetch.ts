@@ -24,6 +24,11 @@ interface UseZoomRefetchOptions {
   /** External zoom range from chart sync context — drives refetch for synced charts */
   syncedZoomRange?: [number, number] | null;
   /**
+   * Original step bounds from a cross-axis zoom (Step→RelTime). When set,
+   * bypasses the lossy time→step interpolation roundtrip for refetch.
+   */
+  sourceStepRange?: [number, number] | null;
+  /**
    * Time-to-step mapping for translating relative-time zoom ranges to step ranges.
    * Each entry maps a run ID to its sorted arrays of [relTimeSecs, steps].
    * When omitted, relative-time zoom refetch is disabled.
@@ -67,6 +72,7 @@ export function useZoomRefetch({
   staleTime = Infinity,
   enabled = true,
   syncedZoomRange,
+  sourceStepRange,
   timeStepMapping,
 }: UseZoomRefetchOptions): UseZoomRefetchReturn {
   // Compute once on mount — changing bucket count changes query key, so avoid recomputing
@@ -80,10 +86,17 @@ export function useZoomRefetch({
   // Use synced range from context if available, otherwise use local range
   const rawZoomRange = syncedZoomRange ?? localZoomRange;
 
-  // For relative time, translate seconds → step range using the mapping
+  // For relative time, prefer sourceStepRange (original step bounds from cross-axis
+  // zoom) to avoid lossy time→step interpolation with irregular time spacing.
+  // Falls back to translateZoomToStepRange for direct relative-time zooms.
   const zoomStepRange = useMemo<[number, number] | null>(
-    () => translateZoomToStepRange(rawZoomRange, selectedLog, timeStepMapping),
-    [rawZoomRange, selectedLog, timeStepMapping],
+    () => {
+      if (isRelativeTime && sourceStepRange) {
+        return [Math.floor(sourceStepRange[0]), Math.ceil(sourceStepRange[1])];
+      }
+      return translateZoomToStepRange(rawZoomRange, selectedLog, timeStepMapping);
+    },
+    [rawZoomRange, selectedLog, timeStepMapping, isRelativeTime, sourceStepRange],
   );
 
   const isZooming = enabled && zoomStepRange !== null && supportsZoom;

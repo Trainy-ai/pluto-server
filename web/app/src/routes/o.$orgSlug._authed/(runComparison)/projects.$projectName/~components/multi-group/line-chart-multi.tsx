@@ -1,7 +1,7 @@
 "use client";
 
 import { default as LineChart } from "@/components/charts/line-wrapper";
-import { memo, useMemo } from "react";
+import { memo, useEffect, useMemo } from "react";
 import { useQueries, keepPreviousData } from "@tanstack/react-query";
 import { trpc, trpcClient } from "@/utils/trpc";
 import { useCheckDatabaseSize } from "@/lib/db/local-cache";
@@ -97,6 +97,9 @@ interface MultiLineChartProps {
 /** Props for the inner memo'd component (includes syncedZoomRange) */
 interface MultiLineChartInnerProps extends MultiLineChartProps {
   syncedZoomRange: [number, number] | null;
+  syncedZoomGroup: string | null;
+  /** Chart sync context for clearing stale state */
+  chartSyncContext: ReturnType<typeof useChartSyncContext>;
 }
 
 
@@ -109,7 +112,8 @@ interface MultiLineChartInnerProps extends MultiLineChartProps {
 export function MultiLineChart(props: MultiLineChartProps) {
   const chartSyncContext = useChartSyncContext();
   const syncedZoomRange = chartSyncContext?.syncedZoomRange ?? null;
-  return <MultiLineChartInner {...props} syncedZoomRange={syncedZoomRange} />;
+  const syncedZoomGroup = chartSyncContext?.syncedZoomGroupRef?.current ?? null;
+  return <MultiLineChartInner {...props} syncedZoomRange={syncedZoomRange} syncedZoomGroup={syncedZoomGroup} chartSyncContext={chartSyncContext} />;
 }
 
 const MultiLineChartInner = memo(
@@ -126,7 +130,9 @@ const MultiLineChartInner = memo(
     yMax,
     onDataRange,
     onResetBounds,
-    syncedZoomRange,
+    syncedZoomRange: syncedZoomRangeRaw,
+    syncedZoomGroup,
+    chartSyncContext,
     logXAxis: logXAxisOverride,
     logYAxis: logYAxisOverride,
     xAxisOverride,
@@ -149,10 +155,44 @@ const MultiLineChartInner = memo(
     // Use run-specific settings when available, otherwise fall back to "full"
     const { settings } = useLineSettings(organizationId, projectName, settingsRunId ?? "full");
 
+    // Cross-axis zoom sync (step ↔ relative time) is only enabled in the
+    // single-run dashboard view. settingsRunId is a real run ID only there;
+    // in the multi-run comparison view it's undefined.
+    const isSingleRunDashboard = !!settingsRunId;
+
     // Per-widget overrides take precedence over global settings
     const logXAxis = logXAxisOverride ?? settings.xAxisLogScale;
     const logYAxis = logYAxisOverride ?? settings.yAxisLogScale;
     const effectiveXAxis: DisplayLogName = xAxisOverride ?? settings.selectedLog;
+
+    // Resolve synced zoom range for this chart's axis type.
+    // Multi-run comparison: only sync within the same zoom group.
+    // Single-run dashboard: also support cross-axis sync via crossGroupZoomRef.
+    const myZoomGroup = effectiveXAxis === "Relative Time" ? "relative-time" : (effectiveXAxis === "Step" ? "step" : "default");
+    const syncedZoomRange = useMemo(() => {
+      // Same group: use directly
+      if (syncedZoomGroup === myZoomGroup) return syncedZoomRangeRaw;
+
+      // Cross-group: only in single-run dashboard
+      if (isSingleRunDashboard) {
+        const cross = chartSyncContext?.crossGroupZoomRef?.current;
+        if (cross && cross.group === myZoomGroup) return cross.range;
+      }
+
+      return null;
+    }, [syncedZoomRangeRaw, syncedZoomGroup, myZoomGroup, isSingleRunDashboard, chartSyncContext?.syncedZoomRange]);
+
+    // Extract original step bounds from cross-axis zoom to skip lossy roundtrip.
+    // Only in single-run dashboard — multi-run comparison doesn't support cross-axis zoom.
+    const sourceStepRange = useMemo(() => {
+      if (!isSingleRunDashboard) return null;
+      const cross = chartSyncContext?.crossGroupZoomRef?.current;
+      const isRelTime = effectiveXAxis === "Relative Time";
+      if (isRelTime && cross?.group === "relative-time" && cross.sourceStepRange) {
+        return cross.sourceStepRange;
+      }
+      return null;
+    }, [isSingleRunDashboard, chartSyncContext?.syncedZoomRange, effectiveXAxis]);
 
     // Use Infinity staleTime for completed runs since their data won't change
     const staleTime = allRunsCompleted ? COMPLETED_RUN_STALE_TIME : ACTIVE_RUN_STALE_TIME;
@@ -284,12 +324,35 @@ const MultiLineChartInner = memo(
         : [],
     );
 
+    // Compute per-run baselines for relative time: use run.createdAt when
+    // available, falling back to the first data point's timestamp.
+    const runBaselineMap = useMemo(() => {
+      const map = new Map<string, number>();
+      const firstMetricData = standardDataMap.values().next().value as
+        | Record<string, BucketedChartDataPoint[]>
+        | undefined;
+      if (!firstMetricData) return map;
+      for (const line of lines) {
+        const points = firstMetricData[line.runId];
+        if (!points || points.length === 0) continue;
+        const sorted = [...points].sort(
+          (a, b) => parseChTimeMs(a.time) - parseChTimeMs(b.time),
+        );
+        const firstPointMs = parseChTimeMs(sorted[0].time);
+        if (line.createdAt) {
+          map.set(line.runId, new Date(line.createdAt).getTime());
+        } else {
+          map.set(line.runId, firstPointMs);
+        }
+      }
+      return map;
+    }, [standardDataMap, lines]);
+
     // Build time→step mapping from bucketed data for relative-time zoom refetch.
-    // Uses createdAt as baseline (same as Relative Time chart data preparation).
+    // Uses the corrected baseline (same as Relative Time chart data preparation).
     const timeStepMapping = useMemo(() => {
       if (effectiveXAxis !== "Relative Time") return null;
       const map = new Map<string, { relTimeSecs: number[]; steps: number[] }>();
-      // Build per-run mapping from the first metric's standard data
       const firstMetricData = standardDataMap.values().next().value as
         | Record<string, BucketedChartDataPoint[]>
         | undefined;
@@ -298,17 +361,51 @@ const MultiLineChartInner = memo(
         const points = firstMetricData[line.runId];
         if (!points || points.length === 0) continue;
         const sorted = [...points].sort((a, b) => a.step - b.step);
-        const createdAtMs = line.createdAt
-          ? new Date(line.createdAt).getTime()
-          : parseChTimeMs(sorted[0].time);
+        const baselineMs = runBaselineMap.get(line.runId)
+          ?? parseChTimeMs(sorted[0].time);
         const relTimeSecs = sorted.map(
-          (d) => (parseChTimeMs(d.time) - createdAtMs) / 1000,
+          (d) => (parseChTimeMs(d.time) - baselineMs) / 1000,
         );
         const steps = sorted.map((d) => d.step);
         map.set(line.runId, { relTimeSecs, steps });
       }
       return map.size > 0 ? map : null;
-    }, [effectiveXAxis, standardDataMap, lines]);
+    }, [effectiveXAxis, standardDataMap, lines, runBaselineMap]);
+
+    // Cross-axis zoom sync: register step↔time mapping for single-run dashboards
+    // so zooming a Step widget syncs to Relative Time widgets (and vice versa).
+    // For multi-run, clear any stale mapping — different runs can have different
+    // step↔time relationships, making cross-axis translation unreliable.
+    // NOTE: Do NOT clear syncedZoomRange here — in dashboards with mixed
+    // Step/RelTime widgets, each widget's effect would race to clear the
+    // zoom set by another widget in the same group.
+    useEffect(() => {
+      if (!chartSyncContext) return;
+      if (!isSingleRunDashboard) {
+        // Multi-run comparison: clear mapping to prevent cross-axis zoom
+        chartSyncContext.stepTimeMappingRef.current = null;
+        chartSyncContext.crossGroupZoomRef.current = null;
+      } else {
+        // Single-run dashboard: register mapping if not already set
+        if (!chartSyncContext.stepTimeMappingRef.current) {
+          const firstMetricData = standardDataMap.values().next().value as
+            | Record<string, BucketedChartDataPoint[]>
+            | undefined;
+          const runId = lines[0]?.runId;
+          const points = runId ? firstMetricData?.[runId] : undefined;
+          if (points && points.length > 0) {
+            const sorted = [...points].sort((a, b) => a.step - b.step);
+            const baselineMs = runBaselineMap.get(runId!)
+              ?? parseChTimeMs(sorted[0].time);
+            const steps = sorted.map((d) => d.step);
+            const relTimeSecs = sorted.map(
+              (d) => (parseChTimeMs(d.time) - baselineMs) / 1000,
+            );
+            chartSyncContext.setStepTimeMapping(steps, relTimeSecs);
+          }
+        }
+      }
+    }, [chartSyncContext, isSingleRunDashboard, standardDataMap, lines, runBaselineMap]);
 
     // Zoom-triggered server re-fetch using bucketed downsampling
     const { zoomDataMap, onZoomRangeChange, isZoomFetching } = useZoomRefetch({
@@ -319,6 +416,7 @@ const MultiLineChartInner = memo(
       selectedLog: effectiveXAxis,
       staleTime,
       syncedZoomRange,
+      sourceStepRange,
       timeStepMapping,
     });
 
@@ -387,15 +485,9 @@ const MultiLineChartInner = memo(
         return null;
       }
 
-      // Build a map of runId → createdAt timestamp for relative time baseline.
-      // Uses run.createdAt (from lines prop) instead of first data point so all
-      // metrics within the same run share the same time origin.
-      const runCreatedAtMap = new Map<string, number>();
-      for (const line of lines) {
-        if (line.createdAt) {
-          runCreatedAtMap.set(line.runId, new Date(line.createdAt).getTime());
-        }
-      }
+      // Use the corrected per-run baselines computed above. These use createdAt
+      // when it's close to the first data point, falling back to first data point
+      // time when createdAt is too far ahead.
 
       // Helper to build series props from a query pair.
       // Single-run multi-metric: prefer color variation (more visually distinct)
@@ -450,7 +542,7 @@ const MultiLineChartInner = memo(
             );
             const props = seriesProps(pair);
             // Use run.createdAt as baseline when available, falling back to first data point
-            const baselineMs = runCreatedAtMap.get(pair.line.runId)
+            const baselineMs = runBaselineMap.get(pair.line.runId)
               ?? parseChTimeMs(sortedData[0].time);
             const getX = (d: BucketedChartDataPoint) =>
               (parseChTimeMs(d.time) - baselineMs) / 1000;
@@ -508,7 +600,7 @@ const MultiLineChartInner = memo(
               // Use run.createdAt as the baseline when available, falling back to
               // the first point of the STANDARD (full-range) data — NOT sourceData,
               // which may be zoom-refetched and would shift the baseline to 0.
-              const baselineMs = runCreatedAtMap.get(pair.line.runId)
+              const baselineMs = runBaselineMap.get(pair.line.runId)
                 ?? parseChTimeMs(tierData[0].time);
               const props = seriesProps(pair);
               const getX = (d: BucketedChartDataPoint) =>
@@ -632,7 +724,7 @@ const MultiLineChartInner = memo(
           };
         }
       }
-    }, [allData, customLogData, settings, effectiveXAxis, title, xlabel, hasAnyData, queryPairs, getSeriesLabel, zoomDataMap, isMultiMetric, isMultiRun, chartColors, metricNames, lines]);
+    }, [allData, customLogData, settings, effectiveXAxis, title, xlabel, hasAnyData, queryPairs, getSeriesLabel, zoomDataMap, isMultiMetric, isMultiRun, chartColors, metricNames, lines, runBaselineMap]);
 
     // Too many series warning
     if (tooManySeries) {

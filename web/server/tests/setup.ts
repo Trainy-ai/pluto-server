@@ -818,6 +818,158 @@ async function setupTestData(): Promise<TestData> {
     console.log(`   ✓ Bulk runs already exist (found needle run)`);
   }
 
+  // 5c. Create staircase-test run for zoom congruence E2E tests
+  console.log('\n5️⃣c Creating staircase-test run...');
+
+  let staircaseRun = await prisma.runs.findFirst({
+    where: {
+      projectId: project.id,
+      organizationId: org.id,
+      name: 'staircase-test',
+    },
+    select: { id: true, name: true, createdAt: true },
+  });
+
+  if (!staircaseRun) {
+    // Set createdAt to the past so this run isn't auto-selected as one of the
+    // newest runs — avoids interfering with existing tests that expect bulk-run data.
+    const staircaseCreatedAt = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000); // 1 year ago
+    staircaseRun = await prisma.runs.create({
+      data: {
+        name: 'staircase-test',
+        organizationId: org.id,
+        projectId: project.id,
+        createdById: user.id,
+        creatorApiKeyId: apiKey.id,
+        status: 'COMPLETED',
+        config: { epochs: 500, lr: 0.001 },
+        systemMetadata: { hostname: 'test-host', python: '3.11' },
+        createdAt: staircaseCreatedAt,
+        updatedAt: staircaseCreatedAt,
+      },
+    });
+    console.log(`   ✓ Created staircase-test run (ID: ${staircaseRun.id})`);
+
+    // Register the metrics in runLogs
+    await prisma.runLogs.createMany({
+      data: [
+        {
+          runId: staircaseRun.id,
+          logName: 'test/staircase',
+          logGroup: 'test',
+          logType: 'METRIC' as const,
+        },
+        {
+          runId: staircaseRun.id,
+          logName: 'test/staircase_irregular',
+          logGroup: 'test',
+          logType: 'METRIC' as const,
+        },
+      ],
+      skipDuplicates: true,
+    });
+    console.log('   ✓ Registered test/staircase and test/staircase_irregular metrics in run_logs');
+
+    // Seed ClickHouse with staircase metric: value = Math.floor(step / 50)
+    // 500 datapoints, 1 second apart, creating 10 distinct levels (0-9)
+    const clickhouseUrl = process.env.CLICKHOUSE_URL;
+    const clickhouseUser = process.env.CLICKHOUSE_USER || 'default';
+    const clickhousePassword = process.env.CLICKHOUSE_PASSWORD || '';
+
+    if (clickhouseUrl) {
+      const clickhouse = createClient({
+        url: clickhouseUrl,
+        username: clickhouseUser,
+        password: clickhousePassword,
+      });
+
+      const STAIRCASE_STEPS = 500;
+      const baseTime = staircaseRun.createdAt.getTime();
+      const staircaseRows: Record<string, unknown>[] = [];
+
+      for (let step = 0; step < STAIRCASE_STEPS; step++) {
+        staircaseRows.push({
+          tenantId: org.id,
+          projectName: project.name,
+          runId: Number(staircaseRun.id),
+          logGroup: 'test',
+          logName: 'test/staircase',
+          time: new Date(baseTime + step * 1000).toISOString().replace('T', ' ').replace('Z', ''),
+          step,
+          value: Math.floor(step / 50),
+        });
+      }
+
+      // Also seed an irregular-timing variant: same y-values but with variable
+      // time gaps between steps. This tests the sourceStepRange fix — with
+      // irregular spacing, step→time→step roundtrip produces wrong bounds.
+      // Pattern: steps 0-249 are 1s apart, steps 250-499 are 10s apart.
+      // This creates a 10x time density change at step 250.
+      for (let step = 0; step < STAIRCASE_STEPS; step++) {
+        const timeOffset = step < 250
+          ? step * 1000                        // 0-249: 1s apart (250s total)
+          : 250 * 1000 + (step - 250) * 10000; // 250-499: 10s apart (2500s total)
+        staircaseRows.push({
+          tenantId: org.id,
+          projectName: project.name,
+          runId: Number(staircaseRun.id),
+          logGroup: 'test',
+          logName: 'test/staircase_irregular',
+          time: new Date(baseTime + timeOffset).toISOString().replace('T', ' ').replace('Z', ''),
+          step,
+          value: Math.floor(step / 50),
+        });
+      }
+
+      await clickhouse.insert({
+        table: 'mlop_metrics',
+        values: staircaseRows,
+        format: 'JSONEachRow',
+      });
+      console.log(`   ✓ Seeded ${STAIRCASE_STEPS * 2} staircase metric datapoints (regular + irregular)`);
+
+      // Populate metric summaries for the staircase run
+      try {
+        await clickhouse.query({
+          query: `
+            INSERT INTO mlop_metric_summaries
+            SELECT
+              tenantId,
+              projectName,
+              runId,
+              logName,
+              min(value)               AS min_value,
+              max(value)               AS max_value,
+              sum(value)               AS sum_value,
+              toUInt64(count())        AS count_value,
+              argMaxState(value, step) AS last_value,
+              sum(value * value)       AS sum_sq_value
+            FROM mlop_metrics
+            WHERE tenantId = {tenantId: String}
+              AND projectName = {projectName: String}
+              AND runId = {runId: UInt64}
+              AND isFinite(value)
+            GROUP BY tenantId, projectName, runId, logName
+          `,
+          query_params: {
+            tenantId: org.id,
+            projectName: project.name,
+            runId: Number(staircaseRun.id),
+          },
+        });
+        console.log('   ✓ Populated metric summaries for staircase run');
+      } catch (err) {
+        console.log('   ⚠ Could not populate staircase metric summaries:', (err as Error).message);
+      }
+
+      await clickhouse.close();
+    } else {
+      console.log('   ⚠ CLICKHOUSE_URL not set, skipping staircase ClickHouse seeding');
+    }
+  } else {
+    console.log(`   ✓ staircase-test run already exists (ID: ${staircaseRun.id})`);
+  }
+
   // 6. Create a run in org 2 for org-switching tests
   console.log('\n6️⃣  Creating test run in org 2...');
   const existingOrg2Runs = await prisma.runs.findMany({
@@ -1049,6 +1201,106 @@ async function setupTestData(): Promise<TestData> {
     },
   });
   console.log('   ✓ Created Auto-Hide Test dashboard view');
+
+  // 8. Create "Staircase Zoom Test" dashboard view for zoom congruence E2E tests
+  console.log('\n8️⃣  Creating Staircase Zoom Test dashboard view...');
+
+  const staircaseZoomDashboardConfig = {
+    version: 1,
+    sections: [
+      {
+        id: 'section-staircase',
+        name: 'Staircase',
+        collapsed: false,
+        widgets: [
+          {
+            id: 'step-staircase',
+            type: 'chart',
+            config: {
+              metrics: ['test/staircase'],
+              xAxis: 'step',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+              aggregation: 'LAST',
+              showOriginal: false,
+            },
+            layout: { x: 0, y: 0, w: 6, h: 6 },
+          },
+          {
+            id: 'reltime-staircase',
+            type: 'chart',
+            config: {
+              metrics: ['test/staircase'],
+              xAxis: 'relative-time',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+              aggregation: 'LAST',
+              showOriginal: false,
+            },
+            layout: { x: 6, y: 0, w: 6, h: 6 },
+          },
+        ],
+      },
+      {
+        id: 'section-irregular',
+        name: 'Irregular Timing',
+        collapsed: false,
+        widgets: [
+          {
+            id: 'step-irregular',
+            type: 'chart',
+            config: {
+              metrics: ['test/staircase_irregular'],
+              xAxis: 'step',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+              aggregation: 'LAST',
+              showOriginal: false,
+            },
+            layout: { x: 0, y: 0, w: 6, h: 6 },
+          },
+          {
+            id: 'reltime-irregular',
+            type: 'chart',
+            config: {
+              metrics: ['test/staircase_irregular'],
+              xAxis: 'relative-time',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+              aggregation: 'LAST',
+              showOriginal: false,
+            },
+            layout: { x: 6, y: 0, w: 6, h: 6 },
+          },
+        ],
+      },
+    ],
+    settings: {
+      gridCols: 12,
+      rowHeight: 80,
+      compactType: 'vertical',
+    },
+  };
+
+  await prisma.dashboardView.upsert({
+    where: {
+      organizationId_projectId_name: {
+        organizationId: org.id,
+        projectId: project.id,
+        name: 'Staircase Zoom Test',
+      },
+    },
+    update: { config: staircaseZoomDashboardConfig },
+    create: {
+      name: 'Staircase Zoom Test',
+      organizationId: org.id,
+      projectId: project.id,
+      createdById: user.id,
+      isDefault: false,
+      config: staircaseZoomDashboardConfig,
+    },
+  });
+  console.log('   ✓ Created Staircase Zoom Test dashboard view');
 
   const testData: TestData = {
     userId: user.id,
