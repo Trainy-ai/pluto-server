@@ -45,7 +45,7 @@ async function hashApiKey(key: string): Promise<string> {
  * Creates realistic training metrics (loss curves with exponential decay).
  */
 async function seedClickHouseMetrics(
-  runs: { id: bigint; name: string }[],
+  runs: { id: bigint; name: string; createdAt: Date }[],
   tenantId: string,
   projectName: string,
   metricsPerRun: number,
@@ -73,9 +73,9 @@ async function seedClickHouseMetrics(
   const BATCH_SIZE = 50000;
   let batch: Record<string, unknown>[] = [];
   let insertedCount = 0;
-  const baseTime = Date.now() - datapointsPerMetric * 1000;
 
   for (const run of runs) {
+    const baseTime = run.createdAt.getTime();
     for (let m = 0; m < metricsPerRun; m++) {
       const metricName = `train/metric_${String(m).padStart(2, '0')}`;
 
@@ -165,6 +165,7 @@ async function seedClickHouseMetrics(
  */
 async function seedNanInfMetrics(
   runId: bigint,
+  runCreatedAt: Date,
   tenantId: string,
   projectName: string,
 ): Promise<void> {
@@ -190,7 +191,7 @@ async function seedNanInfMetrics(
     'train/throughput', 'train/latency',
   ];
   const STEPS = 100;
-  const baseTime = Date.now() - STEPS * 1000;
+  const baseTime = runCreatedAt.getTime();
   const rows: string[] = [];
 
   for (let m = 0; m < metricNames.length; m++) {
@@ -719,7 +720,7 @@ async function setupTestData(): Promise<TestData> {
         organizationId: org.id,
         name: { startsWith: 'bulk-run-' },
       },
-      select: { id: true, name: true },
+      select: { id: true, name: true, createdAt: true },
     });
 
     // Also fetch the needle run
@@ -729,7 +730,7 @@ async function setupTestData(): Promise<TestData> {
         organizationId: org.id,
         name: 'hidden-needle-experiment',
       },
-      select: { id: true, name: true },
+      select: { id: true, name: true, createdAt: true },
     });
 
     if (needleRunCreated) {
@@ -788,7 +789,7 @@ async function setupTestData(): Promise<TestData> {
         organizationId: org.id,
         name: 'nan-inf-metrics',
       },
-      select: { id: true, name: true },
+      select: { id: true, name: true, createdAt: true },
     });
 
     if (nanInfRun) {
@@ -811,7 +812,7 @@ async function setupTestData(): Promise<TestData> {
       console.log(`   ✓ Registered ${nanInfMetricNames.length} NaN/Inf metric names in run_logs`);
 
       // Insert NaN/Inf metric values via raw SQL
-      await seedNanInfMetrics(nanInfRun.id, org.id, project.name);
+      await seedNanInfMetrics(nanInfRun.id, nanInfRun.createdAt, org.id, project.name);
     }
   } else {
     console.log(`   ✓ Bulk runs already exist (found needle run)`);

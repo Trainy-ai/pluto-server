@@ -12,7 +12,6 @@ import { useLineSettings, type LineChartSettings } from "../use-line-settings";
 import { useChartSyncContext } from "@/components/charts/context/chart-sync-context";
 import { useZoomRefetch, zoomKey } from "@/lib/hooks/use-zoom-refetch";
 import {
-  getTimeUnitForDisplay,
   alignAndUnzip,
   applySmoothing,
   bucketedAndSmooth,
@@ -68,16 +67,10 @@ function useSystemChartConfig(
     ? new Date(runCreatedAt).getTime()
     : new Date(sortedData[0].time).getTime();
 
-  // Calculate relative times in seconds
-  const relativeTimes = sortedData.map(
-    (d) => (new Date(d.time).getTime() - baselineMs) / 1000,
-  );
-
-  const maxSeconds = Math.max(...relativeTimes);
-  const { divisor, unit } = getTimeUnitForDisplay(maxSeconds);
-
+  // Keep x-values in raw seconds — the axis formatter picks display units
+  // dynamically based on the visible range.
   const getX = (d: BucketedChartDataPoint) =>
-    (new Date(d.time).getTime() - baselineMs) / 1000 / divisor;
+    (new Date(d.time).getTime() - baselineMs) / 1000;
 
   return {
     lines: bucketedAndSmooth(
@@ -87,7 +80,7 @@ function useSystemChartConfig(
     ),
     title: logName,
     isDateTime: false,
-    xlabel: `relative time (${unit})`,
+    xlabel: "relative time",
     isSystem: true,
   };
 }
@@ -134,21 +127,21 @@ function buildChartStrategy(
         ? new Date(runCreatedAt).getTime()
         : new Date(data[0].time).getTime();
 
-      const relativeTimes = data.map(
-        (d) => (new Date(d.time).getTime() - baselineMs) / 1000,
-      );
-      const maxSeconds = Math.max(...relativeTimes);
-      const { divisor, unit } = getTimeUnitForDisplay(maxSeconds);
-
+      // Keep x-values in raw seconds — the axis formatter picks display units
+      // dynamically based on the visible range. This ensures all relative time
+      // charts share the same numeric scale and can sync zoom correctly.
       const getX = (d: BucketedChartDataPoint) =>
-        (new Date(d.time).getTime() - baselineMs) / 1000 / divisor;
+        (new Date(d.time).getTime() - baselineMs) / 1000;
+
+      // Use zoom data (re-bucketed for zoomed range) when available
+      const sourceData = zoomData ?? data;
 
       return {
         lines: bucketedAndSmooth(
-          data, logName, color, smoothingSettings,
+          sourceData, logName, color, smoothingSettings,
           false, undefined, undefined, getX,
         ),
-        xlabel: `relative time (${unit})`,
+        xlabel: "relative time",
         showLegend: smoothingSettings.enabled,
       };
     },
@@ -306,6 +299,15 @@ export const LineChartWithFetch = memo(
       chartSync.setStepTimeMapping(steps, relTimeSecs);
     }, [data, runCreatedAt, chartSync]);
 
+    // Build time→step mapping for zoom refetch on relative-time charts
+    const timeStepMapping = useMemo(() => {
+      const mapping = chartSync?.stepTimeMappingRef.current;
+      if (!mapping) return null;
+      const map = new Map<string, { relTimeSecs: number[]; steps: number[] }>();
+      map.set(runId, mapping);
+      return map;
+    }, [chartSync?.stepTimeMappingRef.current, runId]);
+
     // Zoom-triggered server re-fetch using bucketed downsampling
     const runIdsMemo = useMemo(() => [runId], [runId]);
     const logNamesMemo = useMemo(() => [logName], [logName]);
@@ -315,6 +317,7 @@ export const LineChartWithFetch = memo(
       logNames: logNamesMemo,
       runIds: runIdsMemo,
       selectedLog: settings.selectedLog,
+      timeStepMapping,
     });
     const zoomData = zoomDataMap?.get(zoomKey(runId, logName));
 

@@ -317,7 +317,7 @@ function getMetricValueByName(metricName: string, step: number, totalSteps: numb
  * Uses high-fidelity subset: first 5 runs get 100k datapoints, rest get 1k.
  */
 async function seedClickHouseMetrics(
-  runs: { id: bigint; name: string }[],
+  runs: { id: bigint; name: string; createdAt: Date }[],
   tenantId: string,
   projectName: string,
 ): Promise<void> {
@@ -387,7 +387,8 @@ async function seedClickHouseMetrics(
 
     if (stepFreqConfig) {
       // Step-frequency comparison run: log at specific intervals up to STEP_FREQ_MAX_STEP
-      const baseTime = Date.now() - STEP_FREQ_MAX_STEP * 1000;
+      // Anchor metric timestamps to run.createdAt so relative time charts work correctly
+      const baseTime = run.createdAt.getTime();
       for (let m = 0; m < METRICS_PER_RUN; m++) {
         const { group, name } = getMetricName(m);
         for (let step = 0; step <= STEP_FREQ_MAX_STEP; step += stepFreqConfig.stepInterval) {
@@ -424,7 +425,8 @@ async function seedClickHouseMetrics(
         : runIndex < HIGH_FIDELITY_RUNS
           ? HIGH_FIDELITY_DATAPOINTS
           : STANDARD_DATAPOINTS;
-      const baseTime = Date.now() - datapointsForRun * 1000;
+      // Anchor metric timestamps to run.createdAt so relative time charts work correctly
+      const baseTime = run.createdAt.getTime();
 
       for (let m = 0; m < METRICS_PER_RUN; m++) {
         const { group, name } = getMetricName(m);
@@ -487,6 +489,7 @@ async function seedClickHouseMetrics(
  */
 async function seedNanInfMetrics(
   runId: bigint,
+  runCreatedAt: Date,
   tenantId: string,
   projectName: string,
 ): Promise<void> {
@@ -503,7 +506,8 @@ async function seedNanInfMetrics(
   });
 
   const STEPS = 100; // Enough to demonstrate the issue
-  const baseTime = Date.now() - STEPS * 1000;
+  // Anchor metric timestamps to run.createdAt
+  const baseTime = runCreatedAt.getTime();
   const rows: string[] = [];
 
   for (let m = TEST_METRIC_NAMES.length; m < TEST_METRIC_NAMES.length + 12; m++) {
@@ -733,7 +737,7 @@ function generateStoryLogs(runIndex: number, step: number, totalSteps: number): 
  * Story runs and high-fidelity runs get 5000 logs, standard runs get 200.
  */
 async function seedClickHouseLogs(
-  runs: { id: bigint; name: string }[],
+  runs: { id: bigint; name: string; createdAt: Date }[],
   tenantId: string,
   projectName: string,
 ): Promise<void> {
@@ -777,7 +781,8 @@ async function seedClickHouseLogs(
     const stepsPerLog = Math.floor(totalSteps / logsForRun);
     const totalEpochs = 100;
 
-    const baseTime = Date.now() - totalSteps * 1000;
+    // Anchor log timestamps to run.createdAt so relative time charts work correctly
+    const baseTime = run.createdAt.getTime();
     let lineNumber = 0;
 
     for (let logIdx = 0; logIdx < logsForRun; logIdx++) {
@@ -1292,7 +1297,7 @@ const FILE_SEED_RUN_COUNT = 3;
  * Seeds files for the first FILE_SEED_RUN_COUNT runs so cross-run comparison works.
  */
 async function seedClickHouseFiles(
-  runs: { id: bigint; name: string }[],
+  runs: { id: bigint; name: string; createdAt: Date }[],
   tenantId: string,
   projectName: string,
 ): Promise<void> {
@@ -1331,11 +1336,12 @@ async function seedClickHouseFiles(
   });
 
   const runsToSeed = runs.slice(0, FILE_SEED_RUN_COUNT);
-  const baseTime = Date.now() - 100000 * 1000;
   let totalFiles = 0;
 
   for (let runIndex = 0; runIndex < runsToSeed.length; runIndex++) {
     const run = runsToSeed[runIndex];
+    // Anchor file timestamps to run.createdAt
+    const baseTime = run.createdAt.getTime();
     const runId = Number(run.id);
     const files = generateRunFiles(runIndex);
     totalFiles += files.length;
@@ -1678,7 +1684,7 @@ async function main() {
       projectId: project.id,
       organizationId: org.id,
     },
-    select: { id: true, name: true },
+    select: { id: true, name: true, createdAt: true },
     orderBy: { id: 'asc' },
   });
 
@@ -1708,7 +1714,7 @@ async function main() {
   // (JSON.stringify can't represent NaN/Infinity, so these must be inserted separately)
   const nanInfRun = allRuns[NAN_INF_RUN_INDEX];
   if (nanInfRun) {
-    await seedNanInfMetrics(nanInfRun.id, org.id, project.name);
+    await seedNanInfMetrics(nanInfRun.id, nanInfRun.createdAt, org.id, project.name);
   }
 
   // Seed ClickHouse logs with story-driven patterns

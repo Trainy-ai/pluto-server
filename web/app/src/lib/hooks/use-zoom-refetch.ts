@@ -3,6 +3,10 @@ import { useQueries } from "@tanstack/react-query";
 import { trpc, trpcClient } from "@/utils/trpc";
 import type { BucketedChartDataPoint } from "@/lib/chart-data-utils";
 import { estimateStandardBuckets } from "@/lib/chart-bucket-estimate";
+import { translateZoomToStepRange, type TimeStepMapping } from "./zoom-translate";
+
+// Re-export for consumers
+export { translateZoomToStepRange, type TimeStepMapping } from "./zoom-translate";
 
 interface UseZoomRefetchOptions {
   organizationId: string;
@@ -11,7 +15,7 @@ interface UseZoomRefetchOptions {
   logNames: string[];
   /** Run IDs to fetch zoom data for (single-run = 1 element, multi-run = N elements) */
   runIds: string[];
-  /** Only fire zoom queries when selectedLog === "Step" */
+  /** X-axis mode — fires zoom queries for "Step" and "Relative Time" */
   selectedLog: string;
   /** Query stale time */
   staleTime?: number;
@@ -19,6 +23,12 @@ interface UseZoomRefetchOptions {
   enabled?: boolean;
   /** External zoom range from chart sync context — drives refetch for synced charts */
   syncedZoomRange?: [number, number] | null;
+  /**
+   * Time-to-step mapping for translating relative-time zoom ranges to step ranges.
+   * Each entry maps a run ID to its sorted arrays of [relTimeSecs, steps].
+   * When omitted, relative-time zoom refetch is disabled.
+   */
+  timeStepMapping?: TimeStepMapping | null;
 }
 
 /** Build a composite key for the zoom data map: "runId\0metricName" */
@@ -44,6 +54,9 @@ const BATCH_THRESHOLD = 1;
  * When the user zooms in, fires a graphBucketed/graphBatchBucketed query with
  * stepMin/stepMax to re-bucket only the visible range into 1000 buckets.
  * Single tier — no fast/full split needed since bucketed queries are fast.
+ *
+ * For "Relative Time" mode, translates the zoom range (in seconds) to step
+ * bounds using the provided timeStepMapping.
  */
 export function useZoomRefetch({
   organizationId,
@@ -54,17 +67,26 @@ export function useZoomRefetch({
   staleTime = Infinity,
   enabled = true,
   syncedZoomRange,
+  timeStepMapping,
 }: UseZoomRefetchOptions): UseZoomRefetchReturn {
   // Compute once on mount — changing bucket count changes query key, so avoid recomputing
   const zoomBuckets = useMemo(() => estimateStandardBuckets(), []);
   const [localZoomRange, setLocalZoomRange] = useState<[number, number] | null>(null);
 
-  // Use synced range from context if available, otherwise use local range
-  const zoomStepRange = syncedZoomRange
-    ? [Math.floor(syncedZoomRange[0]), Math.ceil(syncedZoomRange[1])] as [number, number]
-    : localZoomRange;
+  const isRelativeTime = selectedLog === "Relative Time";
+  const isStep = selectedLog === "Step";
+  const supportsZoom = isStep || isRelativeTime;
 
-  const isZooming = enabled && zoomStepRange !== null && selectedLog === "Step";
+  // Use synced range from context if available, otherwise use local range
+  const rawZoomRange = syncedZoomRange ?? localZoomRange;
+
+  // For relative time, translate seconds → step range using the mapping
+  const zoomStepRange = useMemo<[number, number] | null>(
+    () => translateZoomToStepRange(rawZoomRange, selectedLog, timeStepMapping),
+    [rawZoomRange, selectedLog, timeStepMapping],
+  );
+
+  const isZooming = enabled && zoomStepRange !== null && supportsZoom;
   const useBatch = runIds.length >= BATCH_THRESHOLD;
 
   // === Batch path: one batch query per metric (multi-run) ===
@@ -150,13 +172,19 @@ export function useZoomRefetch({
 
   const onZoomRangeChange = useCallback(
     (range: [number, number] | null) => {
-      if (range !== null && selectedLog === "Step") {
-        setLocalZoomRange([Math.floor(range[0]), Math.ceil(range[1])]);
+      if (range !== null && supportsZoom) {
+        if (isStep) {
+          setLocalZoomRange([Math.floor(range[0]), Math.ceil(range[1])]);
+        } else {
+          // For relative time, store the raw seconds range — translation
+          // to steps happens in the zoomStepRange useMemo above.
+          setLocalZoomRange(range);
+        }
       } else {
         setLocalZoomRange(null);
       }
     },
-    [selectedLog],
+    [supportsZoom, isStep],
   );
 
   const isZoomFetching = isZooming && (

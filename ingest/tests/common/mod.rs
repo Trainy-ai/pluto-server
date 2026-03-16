@@ -121,7 +121,7 @@ pub async fn setup_clickhouse_tables(clickhouse_url: &str, user: &str, password:
         .with_password(password);
 
     // Create metrics table
-    let metrics_sql = include_str!("../../docker-setup/sql/metrics.sql");
+    let metrics_sql = include_str!("../../docker-setup/sql/01_metrics.sql");
     client
         .query(metrics_sql)
         .execute()

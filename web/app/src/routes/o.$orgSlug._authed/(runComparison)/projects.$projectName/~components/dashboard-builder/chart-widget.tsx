@@ -42,6 +42,7 @@ export function ChartWidget({
       rawRunName: run.name,
       color,
       displayId: getDisplayIdForRun(run),
+      createdAt: run.createdAt,
     }));
   }, [selectedRuns]);
 

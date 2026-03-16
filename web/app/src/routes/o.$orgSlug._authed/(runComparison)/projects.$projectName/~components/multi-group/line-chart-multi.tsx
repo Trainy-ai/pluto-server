@@ -13,7 +13,6 @@ import { useZoomRefetch, zoomKey } from "@/lib/hooks/use-zoom-refetch";
 import { useChartColors } from "@/components/ui/color-picker";
 import { useChartSyncContext } from "@/components/charts/context/chart-sync-context";
 import {
-  getTimeUnitForDisplay,
   alignAndUnzip,
   applySmoothing,
   bucketedAndSmooth,
@@ -284,7 +283,33 @@ const MultiLineChartInner = memo(
         : [],
     );
 
-    // Zoom-triggered server re-fetch using bucketed downsampling (Step mode only)
+    // Build time→step mapping from bucketed data for relative-time zoom refetch.
+    // Uses createdAt as baseline (same as Relative Time chart data preparation).
+    const timeStepMapping = useMemo(() => {
+      if (effectiveXAxis !== "Relative Time") return null;
+      const map = new Map<string, { relTimeSecs: number[]; steps: number[] }>();
+      // Build per-run mapping from the first metric's standard data
+      const firstMetricData = standardDataMap.values().next().value as
+        | Record<string, BucketedChartDataPoint[]>
+        | undefined;
+      if (!firstMetricData) return null;
+      for (const line of lines) {
+        const points = firstMetricData[line.runId];
+        if (!points || points.length === 0) continue;
+        const sorted = [...points].sort((a, b) => a.step - b.step);
+        const createdAtMs = line.createdAt
+          ? new Date(line.createdAt).getTime()
+          : new Date(sorted[0].time).getTime();
+        const relTimeSecs = sorted.map(
+          (d) => (new Date(d.time).getTime() - createdAtMs) / 1000,
+        );
+        const steps = sorted.map((d) => d.step);
+        map.set(line.runId, { relTimeSecs, steps });
+      }
+      return map.size > 0 ? map : null;
+    }, [effectiveXAxis, standardDataMap, lines]);
+
+    // Zoom-triggered server re-fetch using bucketed downsampling
     const { zoomDataMap, onZoomRangeChange, isZoomFetching } = useZoomRefetch({
       organizationId,
       projectName,
@@ -293,6 +318,7 @@ const MultiLineChartInner = memo(
       selectedLog: effectiveXAxis,
       staleTime,
       syncedZoomRange,
+      timeStepMapping,
     });
 
     // Check error states and get data
@@ -412,26 +438,9 @@ const MultiLineChartInner = memo(
         (m) => m.startsWith("sys/") || m.startsWith("_sys/")
       );
       if (isSystemChart) {
-        // Calculate the appropriate time unit across all datasets
-        let unit = "s";
-        let divisor = 1;
-        if (allData.length > 0 && allData[0].data.length > 0) {
-          const timeSpans = allData.map(({ data }) => {
-            if (data.length < 2) return 0;
-            const sortedData = [...data].sort(
-              (a, b) => new Date(a.time).getTime() - new Date(b.time).getTime(),
-            );
-            const firstTime = new Date(sortedData[0].time).getTime();
-            const lastTime = new Date(sortedData[sortedData.length - 1].time).getTime();
-            return (lastTime - firstTime) / 1000;
-          });
-
-          const maxTimeSpan = Math.max(...timeSpans);
-          const timeUnit = getTimeUnitForDisplay(maxTimeSpan);
-          unit = timeUnit.unit;
-          divisor = timeUnit.divisor;
-        }
-
+        // Keep x-values in raw seconds — the axis formatter picks display units
+        // dynamically based on the visible range. This ensures system charts use
+        // the same numeric scale as regular relative time charts for zoom sync.
         const chartData = allData
           .filter((item) => item.data.length > 0)
           .flatMap(({ data, pair }) => {
@@ -443,7 +452,7 @@ const MultiLineChartInner = memo(
             const baselineMs = runCreatedAtMap.get(pair.line.runId)
               ?? new Date(sortedData[0].time).getTime();
             const getX = (d: BucketedChartDataPoint) =>
-              (new Date(d.time).getTime() - baselineMs) / 1000 / divisor;
+              (new Date(d.time).getTime() - baselineMs) / 1000;
 
             return withMeta(bucketedAndSmooth(
               sortedData, props.label, props.color,
@@ -454,7 +463,7 @@ const MultiLineChartInner = memo(
         return {
           type: "system" as const,
           data: chartData,
-          xlabel: `relative time (${unit})`,
+          xlabel: "relative time",
           isDateTime: false,
           className: "h-full min-h-96 w-full flex-grow",
         };
@@ -488,18 +497,24 @@ const MultiLineChartInner = memo(
           // dynamically based on the visible range. This ensures all relative
           // time charts (including system charts) share the same numeric scale
           // and can sync zoom correctly.
+          // Priority: zoom refetch data > standard data (same as Step mode)
           const data = allData
             .filter((item) => item.data.length > 0)
-            .flatMap(({ data, pair }) => {
-              // Use run.createdAt as the baseline when available, falling back to first data point
+            .flatMap(({ data: tierData, pair }) => {
+              const key = zoomKey(pair.line.runId, pair.metric);
+              const zoomData = zoomDataMap?.get(key);
+              const sourceData = zoomData ?? tierData;
+              // Use run.createdAt as the baseline when available, falling back to
+              // the first point of the STANDARD (full-range) data — NOT sourceData,
+              // which may be zoom-refetched and would shift the baseline to 0.
               const baselineMs = runCreatedAtMap.get(pair.line.runId)
-                ?? new Date(data[0].time).getTime();
+                ?? new Date(tierData[0].time).getTime();
               const props = seriesProps(pair);
               const getX = (d: BucketedChartDataPoint) =>
                 (new Date(d.time).getTime() - baselineMs) / 1000;
 
               return withMeta(bucketedAndSmooth(
-                data, props.label, props.color,
+                sourceData, props.label, props.color,
                 settings.smoothing, isMultiMetric, props.seriesId, props.dash, getX,
               ), props);
             });
