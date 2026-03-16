@@ -9,6 +9,7 @@ import { trpc, trpcClient } from "@/utils/trpc";
 import { useCheckDatabaseSize } from "@/lib/db/local-cache";
 import { metricsCache, type MetricDataPoint } from "@/lib/db/index";
 import { useLocalQueries } from "@/lib/hooks/use-local-query";
+import { parseChTimeMs } from "@/components/charts/lib/format";
 const SYNC_REFRESH_INTERVAL = 5 * 1000; // 5 seconds
 const GC_TIME = 0; // Immediate garbage collection when query is inactive
 
@@ -118,11 +119,11 @@ export const MultiLineChart = memo(
         .filter((item) => item.data.length > 0)
         .map(({ data, runInfo }) => {
           const sortedData = [...data].sort(
-            (a, b) => new Date(a.time).getTime() - new Date(b.time).getTime(),
+            (a, b) => parseChTimeMs(a.time) - parseChTimeMs(b.time),
           );
           return {
             x: sortedData.map((d: MetricDataPoint) =>
-              new Date(d.time + "Z").getTime(),
+              parseChTimeMs(d.time),
             ),
             y: sortedData.map((d: MetricDataPoint) => Number(d.value)),
             label: runInfo.runName,

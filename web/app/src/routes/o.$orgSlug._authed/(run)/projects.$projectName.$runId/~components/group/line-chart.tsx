@@ -18,6 +18,7 @@ import {
   type BucketedChartDataPoint,
   type ChartSeriesData,
 } from "@/lib/chart-data-utils";
+import { parseChTimeMs } from "@/components/charts/lib/format";
 
 interface LineChartWithFetchProps {
   logName: string;
@@ -59,18 +60,18 @@ function useSystemChartConfig(
   }
 
   const sortedData = [...data].sort(
-    (a, b) => new Date(a.time).getTime() - new Date(b.time).getTime(),
+    (a, b) => parseChTimeMs(a.time) - parseChTimeMs(b.time),
   );
 
   // Use run.createdAt as the baseline when available, falling back to first data point
   const baselineMs = runCreatedAt
     ? new Date(runCreatedAt).getTime()
-    : new Date(sortedData[0].time).getTime();
+    : parseChTimeMs(sortedData[0].time);
 
   // Keep x-values in raw seconds — the axis formatter picks display units
   // dynamically based on the visible range.
   const getX = (d: BucketedChartDataPoint) =>
-    (new Date(d.time).getTime() - baselineMs) / 1000;
+    (parseChTimeMs(d.time) - baselineMs) / 1000;
 
   return {
     lines: bucketedAndSmooth(
@@ -109,7 +110,7 @@ function buildChartStrategy(
       };
     },
     "Absolute Time": () => {
-      const getX = (d: BucketedChartDataPoint) => new Date(d.time).getTime();
+      const getX = (d: BucketedChartDataPoint) => parseChTimeMs(d.time);
 
       return {
         lines: bucketedAndSmooth(
@@ -125,13 +126,13 @@ function buildChartStrategy(
       // Use run.createdAt as the baseline when available, falling back to first data point
       const baselineMs = runCreatedAt
         ? new Date(runCreatedAt).getTime()
-        : new Date(data[0].time).getTime();
+        : parseChTimeMs(data[0].time);
 
       // Keep x-values in raw seconds — the axis formatter picks display units
       // dynamically based on the visible range. This ensures all relative time
       // charts share the same numeric scale and can sync zoom correctly.
       const getX = (d: BucketedChartDataPoint) =>
-        (new Date(d.time).getTime() - baselineMs) / 1000;
+        (parseChTimeMs(d.time) - baselineMs) / 1000;
 
       // Use zoom data (re-bucketed for zoomed range) when available
       const sourceData = zoomData ?? data;
@@ -294,7 +295,7 @@ export const LineChartWithFetch = memo(
       const createdAtMs = new Date(runCreatedAt).getTime();
       const steps = sorted.map((d) => d.step);
       const relTimeSecs = sorted.map(
-        (d) => (new Date(d.time).getTime() - createdAtMs) / 1000,
+        (d) => (parseChTimeMs(d.time) - createdAtMs) / 1000,
       );
       chartSync.setStepTimeMapping(steps, relTimeSecs);
     }, [data, runCreatedAt, chartSync]);

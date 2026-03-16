@@ -2,6 +2,23 @@
 // Axis / Value Formatting — Pure Functions
 // ============================
 
+/**
+ * Parse a ClickHouse DateTime64 string as UTC epoch milliseconds.
+ *
+ * ClickHouse returns DateTime64(3) values as naive strings without timezone
+ * suffix (e.g. "2026-03-16 02:21:32.278"). JavaScript's `new Date()` interprets
+ * these as **local time**, causing hour-offset bugs when the browser isn't in UTC.
+ * This helper ensures the string is always parsed as UTC.
+ */
+export function parseChTimeMs(time: string): number {
+  // If it already has timezone info (Z or +/-offset), parse as-is
+  if (time.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(time)) {
+    return new Date(time).getTime();
+  }
+  // Append 'Z' to treat as UTC — replace space with 'T' for strict ISO 8601
+  return new Date(time.replace(" ", "T") + "Z").getTime();
+}
+
 /** Format a single value with SI units (k, M, G, etc.) */
 export function formatAxisLabel(value: number | null | undefined): string {
   if (value == null) return "";

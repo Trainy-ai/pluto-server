@@ -18,6 +18,7 @@ import {
   bucketedAndSmooth,
 } from "@/lib/chart-data-utils";
 import { estimateStandardBuckets, PREVIEW_BUCKETS } from "@/lib/chart-bucket-estimate";
+import { parseChTimeMs } from "@/components/charts/lib/format";
 
 // For active runs, refresh every 30 seconds
 // For completed runs, data never changes so use Infinity
@@ -299,9 +300,9 @@ const MultiLineChartInner = memo(
         const sorted = [...points].sort((a, b) => a.step - b.step);
         const createdAtMs = line.createdAt
           ? new Date(line.createdAt).getTime()
-          : new Date(sorted[0].time).getTime();
+          : parseChTimeMs(sorted[0].time);
         const relTimeSecs = sorted.map(
-          (d) => (new Date(d.time).getTime() - createdAtMs) / 1000,
+          (d) => (parseChTimeMs(d.time) - createdAtMs) / 1000,
         );
         const steps = sorted.map((d) => d.step);
         map.set(line.runId, { relTimeSecs, steps });
@@ -445,14 +446,14 @@ const MultiLineChartInner = memo(
           .filter((item) => item.data.length > 0)
           .flatMap(({ data, pair }) => {
             const sortedData = [...data].sort(
-              (a, b) => new Date(a.time).getTime() - new Date(b.time).getTime(),
+              (a, b) => parseChTimeMs(a.time) - parseChTimeMs(b.time),
             );
             const props = seriesProps(pair);
             // Use run.createdAt as baseline when available, falling back to first data point
             const baselineMs = runCreatedAtMap.get(pair.line.runId)
-              ?? new Date(sortedData[0].time).getTime();
+              ?? parseChTimeMs(sortedData[0].time);
             const getX = (d: BucketedChartDataPoint) =>
-              (new Date(d.time).getTime() - baselineMs) / 1000;
+              (parseChTimeMs(d.time) - baselineMs) / 1000;
 
             return withMeta(bucketedAndSmooth(
               sortedData, props.label, props.color,
@@ -476,7 +477,7 @@ const MultiLineChartInner = memo(
             .filter((item) => item.data.length > 0)
             .flatMap(({ data, pair }) => {
               const props = seriesProps(pair);
-              const getX = (d: BucketedChartDataPoint) => new Date(d.time).getTime();
+              const getX = (d: BucketedChartDataPoint) => parseChTimeMs(d.time);
               return withMeta(bucketedAndSmooth(
                 data, props.label, props.color,
                 settings.smoothing, isMultiMetric, props.seriesId, props.dash, getX,
@@ -508,10 +509,10 @@ const MultiLineChartInner = memo(
               // the first point of the STANDARD (full-range) data — NOT sourceData,
               // which may be zoom-refetched and would shift the baseline to 0.
               const baselineMs = runCreatedAtMap.get(pair.line.runId)
-                ?? new Date(tierData[0].time).getTime();
+                ?? parseChTimeMs(tierData[0].time);
               const props = seriesProps(pair);
               const getX = (d: BucketedChartDataPoint) =>
-                (new Date(d.time).getTime() - baselineMs) / 1000;
+                (parseChTimeMs(d.time) - baselineMs) / 1000;
 
               return withMeta(bucketedAndSmooth(
                 sourceData, props.label, props.color,
