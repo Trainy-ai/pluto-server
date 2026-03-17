@@ -7,9 +7,9 @@ use crate::error::{invalid_auth_error, AppError, ErrorCode};
 /// Extract and validate the bearer token from headers without hitting the database.
 /// Returns the trimmed token string on success.
 pub fn extract_bearer_token(headers: &HeaderMap) -> Result<String, AppError> {
-    let auth_header = headers.get("Authorization").ok_or_else(|| {
-        AppError::new(ErrorCode::MissingToken, "Missing Authorization header")
-    })?;
+    let auth_header = headers
+        .get("Authorization")
+        .ok_or_else(|| AppError::new(ErrorCode::MissingToken, "Missing Authorization header"))?;
 
     let auth_str = auth_header.to_str().map_err(|_| {
         AppError::new(
@@ -54,7 +54,7 @@ pub async fn auth(headers: &HeaderMap, db: &Database) -> Result<Auth, AppError> 
     let token = extract_bearer_token(headers)?;
 
     // Record prefix for easier debugging without logging full token
-    tracing::Span::current().record("token_prefix", &token.chars().take(8).collect::<String>());
+    tracing::Span::current().record("token_prefix", token.chars().take(8).collect::<String>());
 
     debug!("Token extracted, querying database for tenant ID");
     let tenant_id = db.get_tenant_by_api_key(&token).await?;
@@ -110,7 +110,10 @@ mod tests {
     #[test]
     fn test_valid_bearer_token() {
         let mut headers = HeaderMap::new();
-        headers.insert("Authorization", "Bearer test-api-key_123.abc".parse().unwrap());
+        headers.insert(
+            "Authorization",
+            "Bearer test-api-key_123.abc".parse().unwrap(),
+        );
         let result = extract_bearer_token(&headers);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "test-api-key_123.abc");

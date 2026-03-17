@@ -153,7 +153,7 @@ where
                     error!(error = %e, "Failed to read stream chunk");
                     AppError::new(
                         ErrorCode::StreamProcessingError,
-                        format!("Failed to read stream chunk: {}", e),
+                        format!("Failed to read stream chunk: {e}"),
                     )
                 })?;
                 trace!(bytes = chunk.len(), "Read chunk from stream");
@@ -169,7 +169,7 @@ where
                     // Trim whitespace and newline characters from the extracted line
                     let start = line_bytes_mut.iter().position(|&b| !matches!(b, b' ' | b'\t')).unwrap_or(0);
                     let end = line_bytes_mut.iter().rposition(|&b| !matches!(b, b'\r' | b'\n' | b' ' | b'\t')).map_or(0, |p| p + 1);
-                    
+
                     // Check if the effective line is empty after trimming conceptually
                     if start >= end {
                         trace!(line = line_counter, "Skipping empty line");
@@ -210,7 +210,7 @@ where
                                 error!(error = %e, "Failed to send record to background processor channel");
                                 AppError::new(
                                     ErrorCode::StreamProcessingError,
-                                    format!("Failed to send record to processor: {}", e),
+                                    format!("Failed to send record to processor: {e}"),
                                 )
                             })?;
                             let send_duration = send_start.elapsed();
@@ -234,7 +234,7 @@ where
 
             // After the stream ends, check if there's any remaining data in the buffer
             // Drain the remaining buffer
-            let mut remaining_bytes = line_buffer.drain(..).collect::<Vec<u8>>();
+            let mut remaining_bytes = std::mem::take(&mut line_buffer);
             let start = remaining_bytes.iter().position(|&b| !matches!(b, b' ' | b'\t')).unwrap_or(0);
             let end = remaining_bytes.iter().rposition(|&b| !matches!(b, b'\r' | b'\n' | b' ' | b'\t')).map_or(0, |p| p + 1);
 
@@ -242,7 +242,7 @@ where
             if start < end {
                 line_counter += 1;
                 let trimmed_line_slice = &mut remaining_bytes[start..end];
-                
+
                 if !trimmed_line_slice.is_empty() {
                     info!(
                         line = line_counter,
@@ -267,7 +267,7 @@ where
                                 error!(error = %e, "Failed to send remaining record to background processor channel");
                                 AppError::new(
                                     ErrorCode::StreamProcessingError,
-                                    format!("Failed to send record to processor: {}", e),
+                                    format!("Failed to send record to processor: {e}"),
                                 )
                             })?;
                             let send_duration = send_start.elapsed();
@@ -311,8 +311,7 @@ where
 
             // Return a success message with the total count
             Ok(format!(
-                "Stream processed successfully: {} records",
-                final_count
+                "Stream processed successfully: {final_count} records"
             ))
         }.instrument(span).await // Instrument the main async block
     }
@@ -321,11 +320,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{
-        log::LogInput,
-        metrics::MetricInput,
-        data::DataInput,
-    };
+    use crate::models::{data::DataInput, log::LogInput, metrics::MetricInput};
 
     // --- try_parse_with_sanitize for MetricInput ---
 
@@ -408,7 +403,8 @@ mod tests {
 
     #[test]
     fn test_parse_valid_data_json() {
-        let original = br#"{"time":1000,"data":"payload","step":1,"dataType":"table","logName":"eval"}"#;
+        let original =
+            br#"{"time":1000,"data":"payload","step":1,"dataType":"table","logName":"eval"}"#;
         let mut buf = original.to_vec();
         let result = try_parse_with_sanitize::<DataInput>(&mut buf, original, false);
         assert!(result.is_ok());

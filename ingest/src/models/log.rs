@@ -180,7 +180,8 @@ mod tests {
 
     #[test]
     fn test_log_input_deserialization() {
-        let json = r#"{"time":1704067200,"message":"Training started","lineNumber":42,"logType":"INFO"}"#;
+        let json =
+            r#"{"time":1704067200,"message":"Training started","lineNumber":42,"logType":"INFO"}"#;
         let input: LogInput = serde_json::from_str(json).unwrap();
         assert_eq!(input.time, 1704067200);
         assert_eq!(input.message, "Training started");
@@ -243,7 +244,8 @@ mod tests {
             line_number: 5,
             log_type: "ERROR".to_string(),
         };
-        let row = <LogRow as DatabaseRow<LogInput, LogEnrichment>>::from(input, make_enrichment()).unwrap();
+        let row = <LogRow as DatabaseRow<LogInput, LogEnrichment>>::from(input, make_enrichment())
+            .unwrap();
         assert_eq!(row.time, 1000);
         assert_eq!(row.message, "test message");
         assert_eq!(row.line_number, 5);
@@ -261,7 +263,8 @@ mod tests {
             line_number: 1,
             log_type: "".to_string(),
         };
-        let result = <LogRow as DatabaseRow<LogInput, LogEnrichment>>::from(input, make_enrichment());
+        let result =
+            <LogRow as DatabaseRow<LogInput, LogEnrichment>>::from(input, make_enrichment());
         assert!(result.is_err());
     }
 

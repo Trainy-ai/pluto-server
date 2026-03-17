@@ -2,7 +2,7 @@ use crate::dlq::storage::{self, DlqError};
 use crate::dlq::types::CleanupStats;
 use crate::dlq::DlqConfig;
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
-use std::path::PathBuf;
+use std::path::Path;
 use tokio::fs;
 use tracing::{info, warn};
 
@@ -128,17 +128,14 @@ pub async fn enforce_disk_quota(config: &DlqConfig) -> Result<(), DlqError> {
 }
 
 /// Checks if a batch is older than the cutoff time by parsing the filename timestamp
-async fn is_batch_expired(path: &PathBuf, cutoff: DateTime<Utc>) -> Result<bool, DlqError> {
+async fn is_batch_expired(path: &Path, cutoff: DateTime<Utc>) -> Result<bool, DlqError> {
     // Extract filename: "2024-07-25T12-34-56.123_<uuid>.json"
-    let filename = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .ok_or_else(|| {
-            DlqError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "Invalid batch filename",
-            ))
-        })?;
+    let filename = path.file_name().and_then(|n| n.to_str()).ok_or_else(|| {
+        DlqError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Invalid batch filename",
+        ))
+    })?;
 
     // Parse timestamp part (before underscore)
     let timestamp_str = filename.split('_').next().ok_or_else(|| {
@@ -160,13 +157,13 @@ async fn is_batch_expired(path: &PathBuf, cutoff: DateTime<Utc>) -> Result<bool,
 
     let date_part = parts[0];
     let time_part = parts[1].replace('-', ":");
-    let iso_format = format!("{}T{}", date_part, time_part);
+    let iso_format = format!("{date_part}T{time_part}");
 
-    let naive_dt = NaiveDateTime::parse_from_str(&iso_format, "%Y-%m-%dT%H:%M:%S%.3f")
-        .map_err(|e| {
+    let naive_dt =
+        NaiveDateTime::parse_from_str(&iso_format, "%Y-%m-%dT%H:%M:%S%.3f").map_err(|e| {
             DlqError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                format!("Failed to parse timestamp: {}", e),
+                format!("Failed to parse timestamp: {e}"),
             ))
         })?;
 

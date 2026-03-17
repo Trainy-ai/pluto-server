@@ -72,7 +72,7 @@ where
     let json_data = serde_json::to_vec(&envelope)?;
 
     // Atomic write: write to temp file, then rename
-    let temp_path = table_dir.join(format!("{}.tmp", filename));
+    let temp_path = table_dir.join(format!("{filename}.tmp"));
     fs::write(&temp_path, &json_data).await?;
     fs::rename(&temp_path, &file_path).await?;
 

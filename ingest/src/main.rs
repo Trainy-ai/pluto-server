@@ -51,14 +51,14 @@ async fn main() {
     // Load environment variables based on --env flag
     match &cli.env {
         Some(env_name) => {
-            let filename = format!(".env.{}", env_name);
+            let filename = format!(".env.{env_name}");
             // Check if the file exists
             if !std::path::Path::new(&filename).exists() {
-                panic!("File {} does not exist", filename);
+                panic!("File {filename} does not exist");
             }
             match dotenv::from_filename(&filename) {
-                Ok(_) => println!("Loaded environment variables from {}", filename),
-                Err(_) => panic!("Could not load {}", filename),
+                Ok(_) => println!("Loaded environment variables from {filename}"),
+                Err(_) => panic!("Could not load {filename}"),
             }
         }
         None => {
@@ -74,19 +74,16 @@ async fn main() {
                         "\x1b[31m" // Red
                     };
 
-                    println!("\n{}⚠️  We strongly recommend using a specific environment .env.<ENV> file, not a default .env file\x1b[0m", color);
-                    println!("{}⚠️  For example: `cargo run -- --env dev`\x1b[0m", color);
-                    println!(
-                        "{}⚠️  Supported environments: local, dev, prod\x1b[0m\n",
-                        color
-                    );
+                    println!("\n{color}⚠️  We strongly recommend using a specific environment .env.<ENV> file, not a default .env file\x1b[0m");
+                    println!("{color}⚠️  For example: `cargo run -- --env dev`\x1b[0m");
+                    println!("{color}⚠️  Supported environments: local, dev, prod\x1b[0m\n");
 
                     // Check for BYPASS_ENV_WARNING env var
                     if std::env::var("BYPASS_ENV_WARNING").unwrap_or_default() != "true" {
-                        println!("{}⚠️  Exiting due to environment warning\x1b[0m", color);
+                        println!("{color}⚠️  Exiting due to environment warning\x1b[0m");
                         std::process::exit(1);
                     } else {
-                        println!("{}⚠️  BYPASS_ENV_WARNING is set to true, skipping environment warning\x1b[0m", color);
+                        println!("{color}⚠️  BYPASS_ENV_WARNING is set to true, skipping environment warning\x1b[0m");
                     }
                 }
                 Err(_) => println!("No .env file specified or found, proceeding without it."),
@@ -160,7 +157,9 @@ async fn main() {
                 &replay_client,
                 &replay_config,
                 crate::config::METRICS_TABLE_NAME,
-            ).await {
+            )
+            .await
+            {
                 Ok(stats) => info!(
                     table = crate::config::METRICS_TABLE_NAME,
                     replayed = stats.replayed,
@@ -176,7 +175,9 @@ async fn main() {
                 &replay_client,
                 &replay_config,
                 crate::config::LOGS_TABLE_NAME,
-            ).await {
+            )
+            .await
+            {
                 Ok(stats) => info!(
                     table = crate::config::LOGS_TABLE_NAME,
                     replayed = stats.replayed,
@@ -192,7 +193,9 @@ async fn main() {
                 &replay_client,
                 &replay_config,
                 crate::config::DATA_TABLE_NAME,
-            ).await {
+            )
+            .await
+            {
                 Ok(stats) => info!(
                     table = crate::config::DATA_TABLE_NAME,
                     replayed = stats.replayed,
@@ -208,7 +211,9 @@ async fn main() {
                 &replay_client,
                 &replay_config,
                 crate::config::FILES_TABLE_NAME,
-            ).await {
+            )
+            .await
+            {
                 Ok(stats) => info!(
                     table = crate::config::FILES_TABLE_NAME,
                     replayed = stats.replayed,
@@ -273,7 +278,9 @@ async fn main() {
                 // Spawn cleanup loop in nested task to catch panics
                 let task_config = cleanup_config.clone();
                 let handle = tokio::spawn(async move {
-                    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(task_config.cleanup_interval_secs));
+                    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(
+                        task_config.cleanup_interval_secs,
+                    ));
                     loop {
                         interval.tick().await;
                         if let Err(e) = dlq::cleanup::cleanup_expired_batches(&task_config).await {
@@ -297,8 +304,11 @@ async fn main() {
 
                 // Exponential backoff before restart (capped at max_backoff_secs)
                 restart_count += 1;
-                let backoff_secs = (2u64.pow(restart_count).min(max_backoff_secs as u64)) as u64;
-                tracing::warn!(backoff_secs = backoff_secs, "Waiting before restarting DLQ cleanup task");
+                let backoff_secs = 2u64.pow(restart_count).min(max_backoff_secs as u64);
+                tracing::warn!(
+                    backoff_secs = backoff_secs,
+                    "Waiting before restarting DLQ cleanup task"
+                );
                 tokio::time::sleep(tokio::time::Duration::from_secs(backoff_secs)).await;
             }
         });
@@ -314,7 +324,8 @@ async fn main() {
                 metrics_client,
                 metrics_config,
                 crate::config::METRICS_TABLE_NAME.to_string(),
-            ).await;
+            )
+            .await;
         });
 
         // Logs replay loop
@@ -325,7 +336,8 @@ async fn main() {
                 logs_client,
                 logs_config,
                 crate::config::LOGS_TABLE_NAME.to_string(),
-            ).await;
+            )
+            .await;
         });
 
         // Data replay loop
@@ -336,7 +348,8 @@ async fn main() {
                 data_client,
                 data_config,
                 crate::config::DATA_TABLE_NAME.to_string(),
-            ).await;
+            )
+            .await;
         });
 
         // Files replay loop
@@ -347,7 +360,8 @@ async fn main() {
                 files_client,
                 files_config,
                 crate::config::FILES_TABLE_NAME.to_string(),
-            ).await;
+            )
+            .await;
         });
 
         info!("DLQ replay loops spawned for all tables");

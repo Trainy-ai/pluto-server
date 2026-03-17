@@ -240,7 +240,9 @@ mod tests {
             data_type: "histogram".to_string(),
             log_name: "train/loss/hist".to_string(),
         };
-        let row = <DataRow as DatabaseRow<DataInput, DataEnrichment>>::from(input, make_enrichment()).unwrap();
+        let row =
+            <DataRow as DatabaseRow<DataInput, DataEnrichment>>::from(input, make_enrichment())
+                .unwrap();
         assert_eq!(row.log_group, "train/loss");
         assert_eq!(row.log_name, "train/loss/hist");
         assert_eq!(row.data_type, "histogram");
@@ -257,7 +259,9 @@ mod tests {
             data_type: "table".to_string(),
             log_name: "simple_name".to_string(),
         };
-        let row = <DataRow as DatabaseRow<DataInput, DataEnrichment>>::from(input, make_enrichment()).unwrap();
+        let row =
+            <DataRow as DatabaseRow<DataInput, DataEnrichment>>::from(input, make_enrichment())
+                .unwrap();
         assert_eq!(row.log_group, "");
     }
 

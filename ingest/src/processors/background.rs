@@ -154,7 +154,7 @@ async fn flush_records<F, R, E>(
     let records_to_flush: Vec<_> = buffer.drain(..).collect();
     let num_records = records_to_flush.len();
     // Update the span with the actual number of records being flushed
-    tracing::Span::current().record("batch_size", &num_records);
+    tracing::Span::current().record("batch_size", num_records);
 
     let max_retries = 3; // Maximum number of retries for flushing
     let mut retry_count = 0;
@@ -217,7 +217,7 @@ async fn flush_records<F, R, E>(
             Err(e) => {
                 // Failure
                 retry_count += 1;
-                let error_message = format!("{}", e);
+                let error_message = format!("{e}");
                 warn!(attempt = retry_count, max_attempts = max_retries, error = %error_message, "Error uploading batch");
 
                 // Check if max retries reached
@@ -228,10 +228,15 @@ async fn flush_records<F, R, E>(
                     );
 
                     // Persist to DLQ instead of dropping
-                    if let Err(e) = dlq::persist_batch(&records_to_flush, table_name.clone(), dlq_config).await {
+                    if let Err(e) =
+                        dlq::persist_batch(&records_to_flush, table_name.clone(), dlq_config).await
+                    {
                         error!(error = %e, "CRITICAL: Failed to persist to DLQ. DATA LOSS POSSIBLE.");
                     } else {
-                        info!(batch_size = records_to_flush.len(), "Batch persisted to DLQ");
+                        info!(
+                            batch_size = records_to_flush.len(),
+                            "Batch persisted to DLQ"
+                        );
                     }
 
                     // Increment consecutive errors, update last flush (attempt) time, and return
@@ -263,7 +268,7 @@ where
     let records_to_flush: Vec<_> = buffer.drain(..).collect();
     let num_records = records_to_flush.len();
     // Update span field
-    tracing::Span::current().record("batch_size", &num_records);
+    tracing::Span::current().record("batch_size", num_records);
 
     if num_records == 0 {
         info!("Final flush called with empty buffer, skipping.");
@@ -308,15 +313,14 @@ where
             Err(e) => {
                 // Failure
                 retry_count += 1;
-                let error_message = format!("{}", e);
+                let error_message = format!("{e}");
                 error!(attempt = retry_count, max_attempts = max_retries, error = %error_message, "Error in final flush");
                 // Check if max retries reached
                 if retry_count >= max_retries {
                     // Panic if the final flush fails after all retries
                     // This is considered a critical failure as data would be lost
                     panic!(
-                        "Failed to flush final batch of {} records to table '{}' after {} attempts. Error: {}",
-                        num_records, table_name, max_retries, error_message
+                        "Failed to flush final batch of {num_records} records to table '{table_name}' after {max_retries} attempts. Error: {error_message}"
                     );
                 }
                 // Calculate backoff and wait

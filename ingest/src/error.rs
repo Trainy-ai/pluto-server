@@ -128,7 +128,7 @@ impl ErrorCode {
 
 impl fmt::Display for ErrorCode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }
 
@@ -193,7 +193,7 @@ impl From<clickhouse::error::Error> for AppError {
     fn from(err: clickhouse::error::Error) -> Self {
         AppError::new(
             ErrorCode::DatabaseError,
-            format!("Database operation failed: {}", err),
+            format!("Database operation failed: {err}"),
         )
     }
 }
@@ -202,7 +202,7 @@ impl From<serde_json::Error> for AppError {
     fn from(err: serde_json::Error) -> Self {
         AppError::new(
             ErrorCode::InvalidJsonFormat,
-            format!("JSON parsing failed: {}", err),
+            format!("JSON parsing failed: {err}"),
         )
     }
 }
@@ -227,7 +227,7 @@ impl From<StatusCode> for AppError {
 pub fn missing_header_error(header_name: &str) -> AppError {
     AppError::new(
         ErrorCode::InvalidHeaderFormat,
-        format!("Missing required header: {}", header_name),
+        format!("Missing required header: {header_name}"),
     )
 }
 

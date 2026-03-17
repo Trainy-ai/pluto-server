@@ -33,6 +33,7 @@ where
     E: EnrichmentData,
     F: DatabaseRow<R, E>,
 {
+    #[allow(async_fn_in_trait)]
     async fn process_stream(
         self,
         headers: HeaderMap,

@@ -136,7 +136,7 @@ async fn dlq_health(State(state): State<Arc<AppState>>) -> Json<dlq::types::DlqH
             // Actual record counts are available when replaying batches.
             for batch_path in batches {
                 if let Ok(metadata) = tokio::fs::metadata(&batch_path).await {
-                    stats.records_pending += (metadata.len() / 1024) as u64;
+                    stats.records_pending += metadata.len() / 1024;
                 }
             }
         }

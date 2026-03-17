@@ -17,6 +17,12 @@ pub struct Config {
     pub database_url: String,
 }
 
+impl Default for Config {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Config {
     // Loads configuration from environment variables
     // Panics if any required variable is not set

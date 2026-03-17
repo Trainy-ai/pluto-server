@@ -4,11 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use testcontainers::{
-    core::IntoContainerPort,
-    runners::AsyncRunner,
-    ContainerAsync,
-    GenericImage,
-    ImageExt,
+    core::IntoContainerPort, runners::AsyncRunner, ContainerAsync, GenericImage, ImageExt,
 };
 use testcontainers_modules::postgres::Postgres;
 use tokio::sync::mpsc;
@@ -25,7 +21,7 @@ use server_rs::models::{data::DataRow, files::FilesRow, log::LogRow, metrics::Me
 pub fn clickhouse_image() -> GenericImage {
     GenericImage::new("clickhouse/clickhouse-server", "23.3.8.21-alpine")
         .with_exposed_port(8123.tcp())
-        // No wait condition - we'll poll for readiness manually after starting
+    // No wait condition - we'll poll for readiness manually after starting
 }
 
 /// Poll ClickHouse HTTP endpoint until it's ready, with retries.
@@ -91,7 +87,7 @@ pub async fn setup_test_database(database_url: &str) -> PgPool {
 
 // Create a test API key in the database
 pub async fn create_test_api_key(pool: &PgPool, api_key: &str, tenant_id: &str) {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
 
     // Hash the API key
     let mut hasher = Sha256::new();
@@ -177,11 +173,13 @@ impl TestContainers {
             .await
             .expect("Failed to start postgres container");
 
-        let postgres_port = postgres_container.get_host_port_ipv4(5432).await.expect("Failed to get postgres port");
+        let postgres_port = postgres_container
+            .get_host_port_ipv4(5432)
+            .await
+            .expect("Failed to get postgres port");
         let postgres_url = format!(
             "postgresql://postgres:postgres@{}:{}/postgres",
-            testcontainers_host,
-            postgres_port
+            testcontainers_host, postgres_port
         );
 
         // Start ClickHouse container using GenericImage (no built-in readiness wait)
@@ -190,7 +188,10 @@ impl TestContainers {
             .await
             .expect("Failed to start clickhouse container");
 
-        let clickhouse_port = clickhouse_container.get_host_port_ipv4(8123).await.expect("Failed to get clickhouse port");
+        let clickhouse_port = clickhouse_container
+            .get_host_port_ipv4(8123)
+            .await
+            .expect("Failed to get clickhouse port");
         let clickhouse_url = format!("http://{}:{}", testcontainers_host, clickhouse_port);
 
         // Poll until ClickHouse is actually ready to accept queries
@@ -266,6 +267,41 @@ pub fn create_test_app_state(
     )
 }
 
+/// Poll ClickHouse until a query returns at least `expected` rows, or panic after timeout.
+pub async fn poll_clickhouse_count(
+    clickhouse_url: &str,
+    query: &str,
+    bind_value: &str,
+    expected: u64,
+    timeout_secs: u64,
+) -> u64 {
+    let client = clickhouse::Client::default()
+        .with_url(clickhouse_url)
+        .with_user("default")
+        .with_password("");
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
+    loop {
+        if let Ok(count) = client
+            .query(query)
+            .bind(bind_value)
+            .fetch_one::<u64>()
+            .await
+        {
+            if count >= expected {
+                return count;
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            panic!(
+                "Timed out after {}s waiting for {} rows. Query: {}",
+                timeout_secs, expected, query
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
 // Test fixture that encapsulates all test setup
 pub struct TestFixture {
     #[allow(dead_code)]
@@ -288,7 +324,7 @@ impl TestFixture {
     pub async fn new() -> Self {
         // Install rustls crypto provider (safe to call multiple times)
         let _ = rustls::crypto::CryptoProvider::install_default(
-            rustls::crypto::aws_lc_rs::default_provider()
+            rustls::crypto::aws_lc_rs::default_provider(),
         );
 
         // Setup test containers (includes API key creation)

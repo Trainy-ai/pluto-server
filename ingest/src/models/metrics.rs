@@ -55,10 +55,7 @@ impl<'de> Deserialize<'de> for MetricValue {
                     "NaN" => Ok(MetricValue(f64::NAN)),
                     "Infinity" => Ok(MetricValue(f64::INFINITY)),
                     "-Infinity" => Ok(MetricValue(f64::NEG_INFINITY)),
-                    _ => Err(E::custom(format!(
-                        "unexpected string metric value: '{}'",
-                        v
-                    ))),
+                    _ => Err(E::custom(format!("unexpected string metric value: '{v}'"))),
                 }
             }
         }
@@ -144,7 +141,7 @@ impl MetricInput {
             ));
         }
 
-        for (key, _value) in &self.data {
+        for key in self.data.keys() {
             if key.trim().is_empty() {
                 return Err(AppError::new(
                     ErrorCode::InvalidMetricFormat,
@@ -181,7 +178,7 @@ impl IntoRows<MetricEnrichment, MetricRow> for MetricInput {
                 log_name,
                 value,
                 tenant_id: enrichment.tenant_id.clone(),
-                run_id: enrichment.run_id.clone(),
+                run_id: enrichment.run_id,
                 project_name: enrichment.project_name.clone(),
             })
             .collect())
@@ -320,7 +317,8 @@ mod tests {
 
     #[test]
     fn test_all_non_finite_preserved() {
-        let input = br#"{"time": 100, "step": 1, "data": {"a": NaN, "b": Infinity, "c": -Infinity}}"#;
+        let input =
+            br#"{"time": 100, "step": 1, "data": {"a": NaN, "b": Infinity, "c": -Infinity}}"#;
         let metric = parse_metric_input(input);
         assert_eq!(metric.data.len(), 3);
         assert!(metric.data["a"].is_nan());
@@ -396,7 +394,8 @@ mod tests {
 
     #[test]
     fn test_into_rows_all_non_finite_preserved() {
-        let input = br#"{"time": 100, "step": 1, "data": {"a": NaN, "b": Infinity, "c": -Infinity}}"#;
+        let input =
+            br#"{"time": 100, "step": 1, "data": {"a": NaN, "b": Infinity, "c": -Infinity}}"#;
         let metric = parse_metric_input(input);
         let enrichment = MetricEnrichment {
             tenant_id: "test-tenant".to_string(),

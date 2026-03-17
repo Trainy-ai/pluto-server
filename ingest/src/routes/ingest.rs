@@ -39,7 +39,7 @@ async fn ingest_metrics(
         // Map processor errors to AppError
         AppError::new(
             ErrorCode::ProcessingFailed,
-            format!("Failed to process metrics stream: {}", e),
+            format!("Failed to process metrics stream: {e}"),
         )
     })
 }
@@ -60,7 +60,7 @@ async fn ingest_logs(
     processor.process_stream(headers, body).await.map_err(|e| {
         AppError::new(
             ErrorCode::ProcessingFailed,
-            format!("Failed to process logs stream: {}", e),
+            format!("Failed to process logs stream: {e}"),
         )
     })
 }
@@ -81,7 +81,7 @@ async fn ingest_data(
     processor.process_stream(headers, body).await.map_err(|e| {
         AppError::new(
             ErrorCode::ProcessingFailed,
-            format!("Failed to process data stream: {}", e),
+            format!("Failed to process data stream: {e}"),
         )
     })
 }

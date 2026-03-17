@@ -67,6 +67,7 @@ pub enum FileType {
 
 impl FileType {
     // Returns the standard MIME type string for the file type
+    #[allow(dead_code)]
     pub fn mime_type(&self) -> String {
         match self {
             // Images
@@ -308,10 +309,10 @@ pub async fn generate_presigned_urls(
 
     // Extract enrichment data (like run_id, project_name) from headers
     let enrichment_data = FilesEnrichment::from_headers(tenant_id.clone(), &headers)?;
-    let run_id = enrichment_data.run_id.clone();
+    let run_id = enrichment_data.run_id;
     let project_name = enrichment_data.project_name.clone();
 
-    println!("[FILES] Payload \n {:?}", payload);
+    println!("[FILES] Payload \n {payload:?}");
     println!("[FILES] Enrichment time: {:?}", enrichment_start.elapsed());
 
     let send_start = Instant::now();
@@ -358,7 +359,12 @@ pub async fn generate_presigned_urls(
     // Only set endpoint_url for non-AWS S3 (MinIO, R2, etc.)
     // AWS S3 handles virtual-hosted style automatically; setting endpoint_url
     // causes signature mismatch between path-style and virtual-hosted URLs
-    if !state.config.storage_endpoint.to_lowercase().contains("amazonaws.com") {
+    if !state
+        .config
+        .storage_endpoint
+        .to_lowercase()
+        .contains("amazonaws.com")
+    {
         config_builder = config_builder.endpoint_url(state.config.storage_endpoint.as_str());
     }
 
@@ -384,7 +390,7 @@ pub async fn generate_presigned_urls(
         let cfg: Arc<PresigningConfig> = Arc::clone(&presigning_config);
         let tenant = tenant_id.clone();
         let project = project_name.clone();
-        let run = run_id.clone();
+        let run = run_id;
 
         let storage_bucket = state.config.storage_bucket.clone();
 
@@ -399,10 +405,7 @@ pub async fn generate_presigned_urls(
             // Note: content_type and content_length are intentionally NOT included
             // in the presigned URL signature because the client may send different
             // values, causing SignatureDoesNotMatch errors
-            let req = s3
-                .put_object()
-                .bucket(storage_bucket.as_str())
-                .key(key);
+            let req = s3.put_object().bucket(storage_bucket.as_str()).key(key);
 
             // Generate the presigned URL for the PutObject request
             let presigned = req
@@ -418,7 +421,7 @@ pub async fn generate_presigned_urls(
     // Wait for all presigned URL generation tasks to complete
     let results = join_all(url_futures).await;
     let duration = start.elapsed();
-    println!("[FILES] Generated presigned URLs in {:?}", duration);
+    println!("[FILES] Generated presigned URLs in {duration:?}");
 
     // Process the results, grouping URLs by log_name
     let mut log_files: HashMap<String, Vec<HashMap<String, String>>> = HashMap::new();

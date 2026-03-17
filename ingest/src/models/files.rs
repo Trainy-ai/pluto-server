@@ -161,7 +161,9 @@ mod tests {
             step: 1,
             file_size: 2048,
         };
-        let row = <FilesRow as DatabaseRow<FileInput, FilesEnrichment>>::from(input, make_enrichment()).unwrap();
+        let row =
+            <FilesRow as DatabaseRow<FileInput, FilesEnrichment>>::from(input, make_enrichment())
+                .unwrap();
         assert_eq!(row.log_group, "images/val");
         assert_eq!(row.log_name, "images/val/epoch_1");
         assert_eq!(row.file_name, "sample.png");
@@ -181,7 +183,9 @@ mod tests {
             step: 1,
             file_size: 1024,
         };
-        let row = <FilesRow as DatabaseRow<FileInput, FilesEnrichment>>::from(input, make_enrichment()).unwrap();
+        let row =
+            <FilesRow as DatabaseRow<FileInput, FilesEnrichment>>::from(input, make_enrichment())
+                .unwrap();
         assert_eq!(row.log_group, "");
     }
 

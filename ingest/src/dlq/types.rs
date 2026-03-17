@@ -15,6 +15,7 @@ pub struct BatchEnvelope<T> {
 }
 
 /// Statistics about DLQ operations
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DlqStats {
     /// Total batches persisted to DLQ

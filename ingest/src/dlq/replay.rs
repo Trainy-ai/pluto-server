@@ -104,11 +104,8 @@ where
 ///
 /// This function includes panic recovery - if the replay loop panics, it will
 /// automatically restart with exponential backoff (up to 5 minutes).
-pub async fn start_replay_loop<F, R, E>(
-    client: Client,
-    config: Arc<DlqConfig>,
-    table_name: String,
-) where
+pub async fn start_replay_loop<F, R, E>(client: Client, config: Arc<DlqConfig>, table_name: String)
+where
     F: DatabaseRow<R, E> + Send + Sync + 'static + Clone,
     R: InputData,
     E: EnrichmentData,
@@ -157,7 +154,7 @@ pub async fn start_replay_loop<F, R, E>(
 
         // Exponential backoff before restart (capped at max_backoff_secs)
         restart_count += 1;
-        let backoff_secs = (2u64.pow(restart_count).min(max_backoff_secs as u64)) as u64;
+        let backoff_secs = 2u64.pow(restart_count).min(max_backoff_secs as u64);
         warn!(
             table = %table_name,
             backoff_secs = backoff_secs,
@@ -168,11 +165,8 @@ pub async fn start_replay_loop<F, R, E>(
 }
 
 /// Inner replay loop that runs the actual replay logic
-async fn replay_loop_inner<F, R, E>(
-    client: Client,
-    config: Arc<DlqConfig>,
-    table_name: String,
-) where
+async fn replay_loop_inner<F, R, E>(client: Client, config: Arc<DlqConfig>, table_name: String)
+where
     F: DatabaseRow<R, E> + Send + Sync + 'static + Clone,
     R: InputData,
     E: EnrichmentData,
