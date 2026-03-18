@@ -8,7 +8,7 @@ import { useCheckDatabaseSize } from "@/lib/db/local-cache";
 import { bucketedMetricsCache, metricsCache, type MetricDataPoint } from "@/lib/db/index";
 import type { BucketedChartDataPoint, ChartSeriesData } from "@/lib/chart-data-utils";
 import { useLocalQueries } from "@/lib/hooks/use-local-query";
-import { useLineSettings, type DisplayLogName } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/use-line-settings";
+import { useLineSettings, DEFAULT_SETTINGS, type DisplayLogName } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/use-line-settings";
 import { useZoomRefetch, zoomKey } from "@/lib/hooks/use-zoom-refetch";
 import { useChartColors } from "@/components/ui/color-picker";
 import { useChartSyncContext } from "@/components/charts/context/chart-sync-context";
@@ -26,8 +26,6 @@ const ACTIVE_RUN_STALE_TIME = 30 * 1000; // 30 seconds
 const COMPLETED_RUN_STALE_TIME = Infinity; // Never refetch completed runs
 const GC_TIME = 0; // Immediate garbage collection when query is inactive
 
-// Maximum number of series (metrics × runs) before showing a warning
-const MAX_SERIES_COUNT = 200;
 
 /** Distinct dash patterns per metric index (metric 0 = solid). */
 // Base dash patterns for multi-metric charts. Values are horizontal pixel
@@ -207,8 +205,9 @@ const MultiLineChartInner = memo(
       [metricNames, lines]
     );
 
-    // Safety check: too many series
-    const tooManySeries = queryPairs.length > MAX_SERIES_COUNT;
+    // Safety check: too many series (0 = no limit)
+    const maxSeries = settings.maxSeriesCount ?? DEFAULT_SETTINGS.maxSeriesCount;
+    const tooManySeries = maxSeries > 0 && queryPairs.length > maxSeries;
 
     const runIds = useMemo(() => lines.map((l) => l.runId), [lines]);
 
@@ -732,7 +731,7 @@ const MultiLineChartInner = memo(
         <div className="flex h-full w-full flex-grow flex-col items-center justify-center bg-accent/50 p-4">
           <p className="text-sm font-medium text-foreground">{title}</p>
           <p className="mt-2 text-center text-sm text-muted-foreground">
-            Too many series ({queryPairs.length}). Maximum is {MAX_SERIES_COUNT}.
+            Too many series ({queryPairs.length}). Maximum is {maxSeries}.
           </p>
           <p className="text-center text-xs text-muted-foreground">
             Reduce the number of selected runs or metrics.

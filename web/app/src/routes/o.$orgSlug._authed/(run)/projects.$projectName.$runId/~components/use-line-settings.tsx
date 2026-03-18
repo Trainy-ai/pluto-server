@@ -31,6 +31,9 @@ export interface LineChartSettings {
   /** When true, break lines at missing/null values instead of connecting across gaps.
    *  Default false (lines connect across gaps). */
   skipMissingValues: boolean;
+  /** Maximum number of series (metrics × runs) per chart widget before showing a warning.
+   *  0 = no limit. Default 500. */
+  maxSeriesCount: number;
 }
 
 export const DEFAULT_SETTINGS: LineChartSettings = {
@@ -50,6 +53,7 @@ export const DEFAULT_SETTINGS: LineChartSettings = {
   maxPointsPerSeries: 2000,
   tooltipInterpolation: "linear",
   skipMissingValues: false,
+  maxSeriesCount: 500,
 };
 
 const lineSettingsDb = new LocalCache<LineChartSettings>(
