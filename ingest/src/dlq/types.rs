@@ -14,24 +14,6 @@ pub struct BatchEnvelope<T> {
     pub records: Vec<T>,
 }
 
-/// Statistics about DLQ operations
-#[allow(dead_code)]
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct DlqStats {
-    /// Total batches persisted to DLQ
-    pub batches_persisted_total: u64,
-    /// Total batches successfully replayed
-    pub batches_replayed_total: u64,
-    /// Number of batches currently pending replay
-    pub batches_pending: u64,
-    /// Number of records in pending batches
-    pub records_pending: u64,
-    /// Disk usage in MB
-    pub disk_usage_mb: u64,
-    /// Age of oldest batch in hours
-    pub oldest_batch_age_hours: f64,
-}
-
 /// Statistics returned by DLQ health endpoint
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DlqHealthStats {
@@ -81,13 +63,5 @@ mod tests {
         assert_eq!(envelope.table_name, deserialized.table_name);
         assert_eq!(envelope.record_count, deserialized.record_count);
         assert_eq!(envelope.records, deserialized.records);
-    }
-
-    #[test]
-    fn test_dlq_stats_default() {
-        let stats = DlqStats::default();
-        assert_eq!(stats.batches_persisted_total, 0);
-        assert_eq!(stats.batches_replayed_total, 0);
-        assert_eq!(stats.batches_pending, 0);
     }
 }

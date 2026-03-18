@@ -66,58 +66,7 @@ pub enum FileType {
 }
 
 impl FileType {
-    // Returns the standard MIME type string for the file type
-    #[allow(dead_code)]
-    pub fn mime_type(&self) -> String {
-        match self {
-            // Images
-            FileType::Jpeg => "image/jpeg".to_string(),
-            FileType::Jpg => "image/jpeg".to_string(),
-            FileType::Png => "image/png".to_string(),
-            FileType::Gif => "image/gif".to_string(),
-            FileType::Svg => "image/svg+xml".to_string(),
-            FileType::Webp => "image/webp".to_string(),
-            // Videos
-            FileType::Mp4 => "video/mp4".to_string(),
-            FileType::Webm => "video/webm".to_string(),
-            FileType::Avi => "video/x-msvideo".to_string(),
-            FileType::Mov => "video/quicktime".to_string(),
-            // Audio
-            FileType::Mp3 => "audio/mpeg".to_string(),
-            FileType::Wav => "audio/x-wav".to_string(), // TODO: fix all mimetypes
-            FileType::Ogg => "audio/ogg".to_string(),
-            // Documents
-            FileType::Pdf => "application/pdf".to_string(),
-            FileType::Doc => "application/msword".to_string(),
-            FileType::Docx => {
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                    .to_string()
-            }
-            FileType::Xls => "application/vnd.ms-excel".to_string(),
-            FileType::Xlsx => {
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".to_string()
-            }
-            FileType::Txt | FileType::Log => "text/plain".to_string(),
-            // Data
-            FileType::Json => "application/json".to_string(),
-            FileType::Csv => "text/csv".to_string(),
-            FileType::Xml => "application/xml".to_string(),
-            FileType::Yaml => "application/x-yaml".to_string(),
-            // ML specific
-            FileType::Onnx => "application/octet-stream".to_string(),
-            FileType::Pkl => "application/octet-stream".to_string(),
-            FileType::H5 => "application/x-hdf5".to_string(),
-            FileType::TfLite => "application/octet-stream".to_string(),
-            FileType::SavedModel => "application/octet-stream".to_string(),
-            FileType::Pt => "application/octet-stream".to_string(),
-            FileType::Ckpt => "application/octet-stream".to_string(),
-            // Custom
-            FileType::Custom(mime_type) => mime_type.clone(),
-        }
-    }
-
     // Returns the common file extension for the file type
-    #[allow(dead_code)]
     pub fn extension(&self) -> String {
         match self {
             // Images
@@ -481,28 +430,6 @@ mod tests {
             Some(FileType::Custom(s)) => assert_eq!(s, "xyz123"),
             other => panic!("Expected Custom, got {:?}", other),
         }
-    }
-
-    // --- FileType::mime_type ---
-
-    #[test]
-    fn test_mime_types() {
-        assert_eq!(FileType::Png.mime_type(), "image/png");
-        assert_eq!(FileType::Jpeg.mime_type(), "image/jpeg");
-        assert_eq!(FileType::Jpg.mime_type(), "image/jpeg");
-        assert_eq!(FileType::Mp4.mime_type(), "video/mp4");
-        assert_eq!(FileType::Mp3.mime_type(), "audio/mpeg");
-        assert_eq!(FileType::Pdf.mime_type(), "application/pdf");
-        assert_eq!(FileType::Json.mime_type(), "application/json");
-        assert_eq!(FileType::Csv.mime_type(), "text/csv");
-        assert_eq!(FileType::Txt.mime_type(), "text/plain");
-        assert_eq!(FileType::Log.mime_type(), "text/plain");
-        assert_eq!(FileType::Onnx.mime_type(), "application/octet-stream");
-        assert_eq!(FileType::Pt.mime_type(), "application/octet-stream");
-        assert_eq!(
-            FileType::Custom("video/x-custom".to_string()).mime_type(),
-            "video/x-custom"
-        );
     }
 
     // --- FileType::extension ---

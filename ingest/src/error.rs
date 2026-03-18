@@ -160,19 +160,6 @@ impl AppError {
             details: None,
         }
     }
-
-    #[allow(dead_code)]
-    pub fn with_details(
-        code: ErrorCode,
-        message: impl Into<String>,
-        details: serde_json::Value,
-    ) -> Self {
-        Self {
-            code,
-            message: message.into(),
-            details: Some(details),
-        }
-    }
 }
 
 impl IntoResponse for AppError {
