@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { useHiddenRunIds } from "@/hooks/use-hidden-run-ids";
 import { useQueries } from "@tanstack/react-query";
 import { trpc } from "@/utils/trpc";
 import type { FileGroupWidgetConfig } from "../../~types/dashboard-types";
@@ -30,13 +31,17 @@ export function FileGroupWidget({
   organizationId,
   projectName,
 }: FileGroupWidgetProps) {
+  const hiddenRunIds = useHiddenRunIds();
+
   const runs = useMemo(() => {
-    return Object.entries(selectedRuns).map(([runId, { run, color }]) => ({
-      runId,
-      runName: formatRunLabel(run.name, getDisplayIdForRun(run)),
-      color,
-    }));
-  }, [selectedRuns]);
+    return Object.entries(selectedRuns)
+      .filter(([runId]) => !hiddenRunIds.has(runId))
+      .map(([runId, { run, color }]) => ({
+        runId,
+        runName: formatRunLabel(run.name, getDisplayIdForRun(run)),
+        color,
+      }));
+  }, [selectedRuns, hiddenRunIds]);
 
   const selectedRunIds = useMemo(() => Object.keys(selectedRuns), [selectedRuns]);
   const hasPatterns = config.files?.some(isPatternValue) ?? false;

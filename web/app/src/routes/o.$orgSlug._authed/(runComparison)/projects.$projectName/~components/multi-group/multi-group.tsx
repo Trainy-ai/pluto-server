@@ -10,6 +10,7 @@ import { ChartCardWrapper } from "./chart-card-wrapper";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useMemo, useCallback, memo } from "react";
+import { useHiddenRunIds } from "@/hooks/use-hidden-run-ids";
 import { cn } from "@/lib/utils";
 import type { RunLogType, RunStatus } from "@/lib/grouping/types";
 import { trpc } from "@/utils/trpc";
@@ -68,6 +69,8 @@ export const MultiGroup = ({
   globalLogXAxis,
   globalLogYAxis,
 }: MultiGroupProps) => {
+  const hiddenRunIds = useHiddenRunIds();
+
   // Memoize lines arrays for each metric to prevent recreation
   const memoizedLines = useMemo(() => {
     return metrics.map((metric) => {
@@ -125,10 +128,13 @@ export const MultiGroup = ({
         }
 
         // Format runName with displayId for non-METRIC types
-        const formattedRuns = metric.data.map((d) => ({
-          ...d,
-          runName: formatRunLabel(d.runName, d.displayId),
-        }));
+        // Filter out hidden runs so media components re-render without them
+        const formattedRuns = metric.data
+          .filter((d) => !hiddenRunIds.has(d.runId))
+          .map((d) => ({
+            ...d,
+            runName: formatRunLabel(d.runName, d.displayId),
+          }));
 
         if (metric.type === "HISTOGRAM") {
           return () => (
@@ -182,6 +188,7 @@ export const MultiGroup = ({
     [
       metrics,
       memoizedLines,
+      hiddenRunIds,
       className,
       organizationId,
       projectName,
