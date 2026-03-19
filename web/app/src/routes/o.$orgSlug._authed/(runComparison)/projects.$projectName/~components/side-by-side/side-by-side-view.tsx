@@ -9,9 +9,13 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { ChevronDown, ChevronRight, Eye, EyeOff, Search, X, Code2, Text, GitCompareArrows } from "lucide-react";
+import { ChevronDown, ChevronRight, Eye, EyeOff, Search, X, Code2, Text, GitCompareArrows, Braces } from "lucide-react";
 import { formatValue } from "@/lib/flatten-object";
+import { computeInlineDiff, type DiffSpan } from "@/lib/inline-diff";
+import { tryPrettyPrintJson } from "@/lib/json-format";
 import { getDisplayIdForRun } from "../../~lib/metrics-utils";
+import { CollapsibleCell } from "./collapsible-cell";
+import { InlineDiffText } from "./inline-diff-span";
 
 interface SideBySideViewProps {
   selectedRunsWithColors: Record<string, { run: Run; color: string }>;
@@ -39,11 +43,39 @@ const IMPORT_KEY_PRIORITY = new Map([
   "sys/size", "sys/archived", "sys/trashed", "sys/group_tags",
 ].map((key, i) => [key, i] as const));
 
-const COLLAPSED_MAX_HEIGHT = 60; // px - roughly 3 lines of monospace text
-
 // Diff highlight colors (git-style)
 const DIFF_ADDED_BG = "color-mix(in srgb, hsl(142 76% 36%) 25%, hsl(var(--background)))";
 const DIFF_REMOVED_BG = "color-mix(in srgb, hsl(0 72% 51%) 25%, hsl(var(--background)))";
+
+/** Pre-computed data for a single keyed row in the side-by-side table. */
+interface KeyedRowData<T> {
+  item: T;
+  values: string[];
+  highlights: (string | undefined)[];
+  inlineDiffs: (DiffSpan[] | undefined)[];
+}
+
+/**
+ * Compute inline word-level diffs for a row of values against the reference cell.
+ * Pretty-prints JSON before diffing so diffs are line-by-line on formatted JSON.
+ */
+function computeRowInlineDiffs(
+  values: string[],
+  refIndex: number,
+  expandJson: boolean,
+): (DiffSpan[] | undefined)[] {
+  const refValue = values[refIndex];
+  const prettyRef = expandJson ? tryPrettyPrintJson(refValue) : refValue;
+
+  // Only highlight non-reference cells. The reference cell already has a
+  // cell-level red background; showing refSpans from diff(A,B) would be
+  // misleading when other columns (C, D) differ in different places.
+  return values.map((v, i) => {
+    if (i === refIndex || v === refValue) return undefined;
+    const prettyOther = expandJson ? tryPrettyPrintJson(v) : v;
+    return computeInlineDiff(prettyRef, prettyOther)?.otherSpans;
+  });
+}
 
 // Check if values differ across runs for a given row.
 // Returns true if at least two runs have different formatted values.
@@ -182,68 +214,6 @@ function SectionHeader({
         />
       ))}
     </tr>
-  );
-}
-
-// Collapsible cell for long content - default collapsed
-function CollapsibleCell({ value, isEmpty }: { value: string; isEmpty: boolean }) {
-  const [isExpanded, setIsExpanded] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const contentRef = useRef<HTMLDivElement>(null);
-  const [needsCollapse, setNeedsCollapse] = useState(false);
-
-  const checkOverflow = useCallback((el: HTMLDivElement | null) => {
-    contentRef.current = el;
-    if (el) {
-      setNeedsCollapse(el.scrollHeight > COLLAPSED_MAX_HEIGHT);
-    }
-  }, []);
-
-  const handleToggle = useCallback(() => {
-    const wasExpanded = isExpanded;
-    setIsExpanded(!wasExpanded);
-    // When collapsing, scroll the row back into view so the user isn't stranded
-    if (wasExpanded && containerRef.current) {
-      // Use requestAnimationFrame to wait for the DOM to update after state change
-      requestAnimationFrame(() => {
-        containerRef.current?.closest("tr")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-      });
-    }
-  }, [isExpanded]);
-
-  if (isEmpty) {
-    return <span className="break-all font-mono text-xs">-</span>;
-  }
-
-  return (
-    <div ref={containerRef}>
-      <div
-        ref={checkOverflow}
-        className="break-all font-mono text-xs overflow-hidden"
-        style={!isExpanded && needsCollapse ? { maxHeight: COLLAPSED_MAX_HEIGHT } : undefined}
-      >
-        {value}
-      </div>
-      {needsCollapse && (
-        <button
-          type="button"
-          onClick={handleToggle}
-          className="mt-1 flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
-        >
-          {isExpanded ? (
-            <>
-              <ChevronDown className="h-3 w-3" />
-              Show less
-            </>
-          ) : (
-            <>
-              <ChevronRight className="h-3 w-3" />
-              Show more
-            </>
-          )}
-        </button>
-      )}
-    </div>
   );
 }
 
@@ -400,6 +370,9 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
 
   // Diff-only mode: show only rows where values differ across runs
   const [showOnlyDiffs, setShowOnlyDiffs] = useState(false);
+
+  // JSON pretty-print toggle (default: off — compact single-line)
+  const [prettyJson, setPrettyJson] = useState(false);
 
   // Index of the reference run for diff highlighting (default: first run)
   const [referenceRunIndex, setReferenceRunIndex] = useState(0);
@@ -637,28 +610,30 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
     [activeSearch, isRegexMode],
   );
 
-  // Shared filter+precompute helper: filters keys by search & diff, pre-computes values and highlights.
-  // Addresses both code duplication and redundant value computation across filter and render phases.
+  // Shared filter+precompute helper: filters keys by search & diff, pre-computes values, highlights, and inline diffs.
   const filterKeyedSection = useCallback(
     <T,>(
       keys: T[],
       getKey: (item: T) => string,
       getValues: (item: T) => string[],
       getRawValues?: (item: T) => unknown[],
-    ): { item: T; values: string[]; highlights: (string | undefined)[] }[] => {
+    ): KeyedRowData<T>[] => {
       const diffEnabled = showOnlyDiffs && selectedRuns.length >= 2;
-      return keys.reduce<{ item: T; values: string[]; highlights: (string | undefined)[] }[]>((acc, item) => {
+      return keys.reduce<KeyedRowData<T>[]>((acc, item) => {
         const key = getKey(item);
         const values = getValues(item);
         const rawValues = getRawValues ? getRawValues(item) : values;
         if (!keyMatchesSearch(key, () => rawValues)) return acc;
         if (diffEnabled && !hasRowDiff(values)) return acc;
         const highlights = diffEnabled ? getDiffHighlights(values, clampedRefIndex) : values.map(() => undefined);
-        acc.push({ item, values, highlights });
+        const inlineDiffs = diffEnabled && highlights.some((h) => h !== undefined)
+          ? computeRowInlineDiffs(values, clampedRefIndex, prettyJson)
+          : values.map(() => undefined);
+        acc.push({ item, values, highlights, inlineDiffs });
         return acc;
       }, []);
     },
-    [keyMatchesSearch, showOnlyDiffs, selectedRuns.length, clampedRefIndex],
+    [keyMatchesSearch, showOnlyDiffs, selectedRuns.length, clampedRefIndex, prettyJson],
   );
 
   // Filter pluto metadata rows (pre-compute values + highlights)
@@ -813,6 +788,22 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
             <p>{showOnlyDiffs ? "Show all rows" : "Show only differences"}</p>
           </TooltipContent>
         </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => setPrettyJson((prev) => !prev)}
+              className={`shrink-0 h-8 w-8 ${prettyJson ? "bg-accent" : ""}`}
+              aria-label="Format JSON values"
+            >
+              <Braces className="h-3.5 w-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>{prettyJson ? "Collapse JSON" : "Expand JSON"}</p>
+          </TooltipContent>
+        </Tooltip>
         <div className="relative min-w-0 flex-1">
           <Search className="pointer-events-none absolute top-2 left-2 h-3.5 w-3.5 text-muted-foreground" />
           <Input
@@ -928,7 +919,7 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
             />
             {!collapsedSections["pluto"] && (
               <>
-                {filteredPlutoRows.map(({ item: row, values, highlights }, idx) => (
+                {filteredPlutoRows.map(({ item: row, values, highlights, inlineDiffs }, idx) => (
                   <tr
                     key={row.key}
                     className={`border-b border-border/50 ${
@@ -957,7 +948,9 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
                           style={highlights[colIdx] ? { background: highlights[colIdx] } : undefined}
                         >
                           <span className="break-all font-mono text-xs">
-                            {value}
+                            {inlineDiffs[colIdx] ? (
+                              <InlineDiffText spans={inlineDiffs[colIdx]} />
+                            ) : value}
                           </span>
                         </td>
                       );
@@ -1022,7 +1015,7 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
                   onToggle={() => toggleSection("import")}
                 />
                 {!collapsedSections["import"] &&
-                  filteredImportRows.map(({ item: key, values, highlights }, idx) => (
+                  filteredImportRows.map(({ item: key, values, highlights, inlineDiffs }, idx) => (
                     <tr
                       key={`imp-${key}`}
                       className={`border-b border-border/50 ${
@@ -1050,7 +1043,7 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
                             }`}
                             style={highlights[colIdx] ? { background: highlights[colIdx] } : undefined}
                           >
-                            <CollapsibleCell value={displayValue} isEmpty={isEmpty} />
+                            <CollapsibleCell value={displayValue} isEmpty={isEmpty} diffSpans={inlineDiffs[colIdx]} prettyJson={prettyJson} />
                           </td>
                         );
                       })}
@@ -1069,7 +1062,7 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
                   onToggle={() => toggleSection("sysmeta")}
                 />
                 {!collapsedSections["sysmeta"] &&
-                  filteredSysMetaRows.map(({ item: key, values, highlights }, idx) => (
+                  filteredSysMetaRows.map(({ item: key, values, highlights, inlineDiffs }, idx) => (
                     <tr
                       key={`sys-${key}`}
                       className={`border-b border-border/50 ${
@@ -1097,7 +1090,7 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
                             }`}
                             style={highlights[colIdx] ? { background: highlights[colIdx] } : undefined}
                           >
-                            <CollapsibleCell value={displayValue} isEmpty={isEmpty} />
+                            <CollapsibleCell value={displayValue} isEmpty={isEmpty} diffSpans={inlineDiffs[colIdx]} prettyJson={prettyJson} />
                           </td>
                         );
                       })}
@@ -1116,7 +1109,7 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
                   onToggle={() => toggleSection("config")}
                 />
                 {!collapsedSections["config"] &&
-                  filteredConfigRows.map(({ item: key, values, highlights }, idx) => (
+                  filteredConfigRows.map(({ item: key, values, highlights, inlineDiffs }, idx) => (
                     <tr
                       key={`cfg-${key}`}
                       className={`border-b border-border/50 ${
@@ -1144,7 +1137,7 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
                             }`}
                             style={highlights[colIdx] ? { background: highlights[colIdx] } : undefined}
                           >
-                            <CollapsibleCell value={displayValue} isEmpty={isEmpty} />
+                            <CollapsibleCell value={displayValue} isEmpty={isEmpty} diffSpans={inlineDiffs[colIdx]} prettyJson={prettyJson} />
                           </td>
                         );
                       })}

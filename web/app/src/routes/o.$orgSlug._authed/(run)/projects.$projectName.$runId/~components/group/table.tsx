@@ -1,3 +1,4 @@
+import { isJsonString, tryPrettyPrintJson as formatJson } from "@/lib/json-format";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState, useRef, useEffect, useCallback } from "react";
 import {
@@ -116,41 +117,6 @@ const NUMERIC_OPERATORS = ["=", ">", ">=", "<", "<=", "!="];
 // ==============================
 // Utility Functions
 // ==============================
-
-/**
- * Checks if a string is valid JSON
- * @param str The string to check
- * @returns True if the string is valid JSON, false otherwise
- */
-const isJsonString = (str: string): boolean => {
-  if (typeof str !== "string") return false;
-  if (str.trim().length === 0) return false;
-
-  try {
-    const firstChar = str.trim()[0];
-    // Only attempt to parse if it starts with { or [
-    if (firstChar === "{" || firstChar === "[") {
-      JSON.parse(str);
-      return true;
-    }
-    return false;
-  } catch (e) {
-    return false;
-  }
-};
-
-/**
- * Formats a JSON string with indentation
- * @param jsonString The JSON string to format
- * @returns The formatted JSON string with indentation
- */
-const formatJson = (jsonString: string): string => {
-  try {
-    return JSON.stringify(JSON.parse(jsonString), null, 2);
-  } catch (e) {
-    return jsonString;
-  }
-};
 
 /**
  * Generates a unique ID for filters
