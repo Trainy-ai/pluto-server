@@ -118,7 +118,7 @@ export function useZoomRefetch({
             };
             return {
               queryKey: [...trpc.runs.data.graphBatchBucketed.queryOptions(opts).queryKey, "zoom"],
-              queryFn: () => trpcClient.runs.data.graphBatchBucketed.query(opts),
+              queryFn: ({ signal }: { signal: AbortSignal }) => trpcClient.runs.data.graphBatchBucketed.query(opts, { signal }),
               staleTime,
               gcTime: 60_000,
             };
@@ -143,7 +143,7 @@ export function useZoomRefetch({
               };
               return {
                 queryKey: [...trpc.runs.data.graphBucketed.queryOptions(opts).queryKey, "zoom"],
-                queryFn: () => trpcClient.runs.data.graphBucketed.query(opts),
+                queryFn: ({ signal }: { signal: AbortSignal }) => trpcClient.runs.data.graphBucketed.query(opts, { signal }),
                 staleTime,
                 gcTime: 60_000,
               };

@@ -19,7 +19,7 @@ type LocalQueryKey = TRPCQueryKey | QueryKey;
 
 interface LocalQueryOptions<T> extends UseQueryOptions<T> {
   queryKey: LocalQueryKey;
-  queryFn: () => Promise<T>;
+  queryFn: (opts?: { signal?: AbortSignal }) => Promise<T>;
   staleTime: number;
   localCache: LocalCache<T>;
 }
@@ -70,7 +70,7 @@ export function useLocalQuery<T>({
   const placeholderData =
     isKeyStable && cachedRecord ? cachedRecord.data : undefined;
 
-  const cachedQueryFn = async () => {
+  const cachedQueryFn = async (signal?: AbortSignal) => {
     // Re-read cached record (in case it was updated)
     const cached = await localCache.getData(storageKey);
     // Use cached data if it's already finished or if it has been recently synced.
@@ -82,7 +82,7 @@ export function useLocalQuery<T>({
       return cached.data;
     }
     // Otherwise, fetch fresh data.
-    const data = await queryFn();
+    const data = await queryFn({ signal });
     if (data) {
       // console.log("setting data", storageKey);
       await localCache.setData(storageKey, data);
@@ -92,7 +92,7 @@ export function useLocalQuery<T>({
 
   return useQuery({
     queryKey: queryKey,
-    queryFn: () => cachedQueryFn(),
+    queryFn: ({ signal }) => cachedQueryFn(signal),
     staleTime,
     // @ts-expect-error TanStack Query v5 NonFunctionGuard<T> rejects generic T for placeholderData; safe since T is always API response data
     placeholderData,
@@ -131,7 +131,7 @@ export function useSuspenseLocalQuery<T>({
   const placeholderData =
     isKeyStable && cachedRecord ? cachedRecord.data : undefined;
 
-  const cachedQueryFn = useCallback(async () => {
+  const cachedQueryFn = useCallback(async (signal?: AbortSignal) => {
     // Re-read cached record (in case it was updated)
     const cached = await localCache.getData(storageKey);
     // Use cached data if it's already finished or if it has been recently synced.
@@ -143,7 +143,7 @@ export function useSuspenseLocalQuery<T>({
       return cached.data;
     }
     // Otherwise, fetch fresh data.
-    const data = await queryFn();
+    const data = await queryFn({ signal });
     if (data) {
       // console.log("setting data", storageKey);
       await localCache.setData(storageKey, data);
@@ -153,7 +153,7 @@ export function useSuspenseLocalQuery<T>({
 
   return useSuspenseQuery({
     queryKey: queryKey,
-    queryFn: () => cachedQueryFn(),
+    queryFn: ({ signal }) => cachedQueryFn(signal),
     staleTime,
     placeholderData,
     ...rest,
@@ -200,7 +200,7 @@ export function useLocalQueries<T>(
       const placeholderData =
         isKeysStable && cachedRecord ? cachedRecord.data : undefined;
 
-      const cachedQueryFn = async () => {
+      const cachedQueryFn = async ({ signal }: { signal?: AbortSignal } = {}) => {
         // Re-read cached record (in case it was updated)
         const cached = await opt.localCache.getData(storageKey);
 
@@ -214,7 +214,7 @@ export function useLocalQueries<T>(
         }
 
         // Otherwise, fetch fresh data.
-        const data = await opt.queryFn();
+        const data = await opt.queryFn({ signal });
         if (data) {
           // console.log("setting data", storageKey);
           await opt.localCache.setData(storageKey, data);

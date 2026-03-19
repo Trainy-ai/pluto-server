@@ -59,7 +59,7 @@ export const MultiLineChart = memo(
 
         return {
           queryKey: queryOptions.queryKey,
-          queryFn: () => trpcClient.runs.data.graph.query(opts),
+          queryFn: ({ signal }: { signal?: AbortSignal } = {}) => trpcClient.runs.data.graph.query(opts, { signal }),
           staleTime: SYNC_REFRESH_INTERVAL,
           gcTime: GC_TIME,
           localCache: metricsCache,

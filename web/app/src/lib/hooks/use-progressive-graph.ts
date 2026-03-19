@@ -64,7 +64,7 @@ export function useProgressiveGraph(
 
   const previewQuery = useQuery({
     queryKey: [...trpc.runs.data.graphBucketed.queryOptions(previewOpts).queryKey, "preview"],
-    queryFn: () => trpcClient.runs.data.graphBucketed.query(previewOpts),
+    queryFn: ({ signal }: { signal: AbortSignal }) => trpcClient.runs.data.graphBucketed.query(previewOpts, { signal }),
     staleTime: Infinity,
     gcTime: 0,
     enabled: !hasStandard,

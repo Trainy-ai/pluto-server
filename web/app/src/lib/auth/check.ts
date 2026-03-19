@@ -41,7 +41,7 @@ export const userAuthCheck = async (options?: AuthCheckOptions) => {
     queryClient,
     {
       queryKey: trpc.auth.queryKey(),
-      queryFn: trpcClient.auth.query,
+      queryFn: () => trpcClient.auth.query(),
       staleTime: 1000 * 60, // 1 minute cache unless forced fresh
       localCache: authCache,
     },

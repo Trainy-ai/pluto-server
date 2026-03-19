@@ -225,7 +225,7 @@ const MultiLineChartInner = memo(
             };
             return {
               queryKey: trpc.runs.data.graphBatchBucketed.queryOptions(opts).queryKey,
-              queryFn: () => trpcClient.runs.data.graphBatchBucketed.query(opts),
+              queryFn: ({ signal }: { signal: AbortSignal }) => trpcClient.runs.data.graphBatchBucketed.query(opts, { signal }),
               staleTime,
               gcTime: GC_TIME,
               placeholderData: keepPreviousData,
@@ -272,7 +272,7 @@ const MultiLineChartInner = memo(
                 ...trpc.runs.data.graphBatchBucketed.queryOptions(opts).queryKey,
                 "preview",
               ],
-              queryFn: () => trpcClient.runs.data.graphBatchBucketed.query(opts),
+              queryFn: ({ signal }: { signal: AbortSignal }) => trpcClient.runs.data.graphBatchBucketed.query(opts, { signal }),
               staleTime: Infinity,
               gcTime: 0,
               enabled: runIds.length > 0 && !hasAnyStandard,
@@ -313,7 +313,7 @@ const MultiLineChartInner = memo(
 
             return {
               queryKey: queryOptions.queryKey,
-              queryFn: () => trpcClient.runs.data.graph.query(opts),
+              queryFn: ({ signal }: { signal?: AbortSignal } = {}) => trpcClient.runs.data.graph.query(opts, { signal }),
               staleTime,
               gcTime: GC_TIME,
               localCache: metricsCache,
