@@ -106,20 +106,51 @@ describe('extractAndUpsertColumnKeys', () => {
     expect(keys).toContain('optimizer.betas');
   });
 
-  it('should skip imported key prefixes (sys/, source_code/)', async () => {
+  it('should skip imported key prefixes (sys/, source_code/) from column keys but include in field values', async () => {
     await extractAndUpsertColumnKeys(
       mockPrisma as any,
       'org-1',
       BigInt(1),
       { 'sys/hostname': 'test', 'source_code/git_hash': 'abc123', batch_size: 32 },
       null,
+      BigInt(100),
     );
 
+    // Imported keys should NOT appear in project_column_keys (column picker)
     const callArgs = mockPrisma.projectColumnKey.createMany.mock.calls[0][0];
     const keys = callArgs.data.map((r: any) => r.key);
     expect(keys).not.toContain('sys/hostname');
     expect(keys).not.toContain('source_code/git_hash');
     expect(keys).toContain('batch_size');
+
+    // Imported keys SHOULD appear in run_field_values (side-by-side view needs them)
+    const valCallArgs = mockPrisma.runFieldValue.createMany.mock.calls[0][0];
+    const valKeys = valCallArgs.data.map((r: any) => r.key);
+    expect(valKeys).toContain('sys/hostname');
+    expect(valKeys).toContain('source_code/git_hash');
+    expect(valKeys).toContain('batch_size');
+  });
+
+  it('should write imported-only config to field values even when no column keys are produced', async () => {
+    await extractAndUpsertColumnKeys(
+      mockPrisma as any,
+      'org-1',
+      BigInt(1),
+      { 'sys/name': 'my-run', 'sys/id': 'RUN-123', 'source_code/entrypoint': 'train.py' },
+      null,
+      BigInt(200),
+    );
+
+    // No non-imported config keys and no systemMetadata → no column key records at all
+    expect(mockPrisma.projectColumnKey.createMany).not.toHaveBeenCalled();
+
+    // But all imported keys should be in run_field_values
+    const valCallArgs = mockPrisma.runFieldValue.createMany.mock.calls[0][0];
+    const configVals = valCallArgs.data.filter((r: any) => r.source === 'config');
+    expect(configVals).toHaveLength(3);
+    expect(configVals.map((r: any) => r.key)).toEqual(
+      expect.arrayContaining(['sys/name', 'sys/id', 'source_code/entrypoint']),
+    );
   });
 
   it('should infer date type for ISO 8601 strings', async () => {

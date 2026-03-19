@@ -33,6 +33,7 @@ import {
 import type { prisma } from "../lib/prisma";
 import type { ApiKey, Organization, User } from "@prisma/client";
 import { extractAndUpsertColumnKeys } from "../lib/extract-column-keys";
+import { deepMerge } from "../lib/deep-merge";
 import { generateRunPrefix } from "../lib/run-prefix";
 
 // Type for API key with relations
@@ -257,7 +258,8 @@ router.openapi(createRunRoute, async (c) => {
   }
 
   // Fire-and-forget: cache column keys for fast search
-  {
+  if (!resumed) {
+    // New run — materialize whatever config/systemMetadata was provided.
     const parsedCfg = config && config !== "null" ? JSON.parse(config) : null;
     const parsedSm = systemMetadata && systemMetadata !== "null" ? JSON.parse(systemMetadata) : null;
     if (parsedCfg || parsedSm) {
@@ -271,6 +273,37 @@ router.openapi(createRunRoute, async (c) => {
       ).catch((err) => {
         console.error("Failed to extract/upsert column keys on run creation:", err);
       });
+    }
+  } else {
+    // Resumed run (old SDK path via externalId) — deep-merge any new config
+    // into the existing run so data from other processes is not lost.
+    const parsedCfg = config && config !== "null" ? JSON.parse(config) : null;
+    if (parsedCfg && typeof parsedCfg === "object" && !Array.isArray(parsedCfg)) {
+      const existingRun = await ctx.prisma.runs.findUnique({
+        where: { id: run.id },
+        select: { config: true, systemMetadata: true, projectId: true },
+      });
+      if (existingRun) {
+        const existingConfig = (existingRun.config || {}) as Record<string, unknown>;
+        const mergedConfig = deepMerge(existingConfig, parsedCfg);
+        ctx.prisma.runs.update({
+          where: { id: run.id },
+          data: { config: mergedConfig as Prisma.InputJsonValue },
+        }).then(() => {
+          extractAndUpsertColumnKeys(
+            ctx.prisma,
+            apiKey.organization.id,
+            existingRun.projectId,
+            mergedConfig,
+            existingRun.systemMetadata,
+            run!.id
+          ).catch((err) => {
+            console.error("Failed to extract/upsert column keys on resumed run config merge:", err);
+          });
+        }).catch((err) => {
+          console.error("Failed to merge config on resumed run:", err);
+        });
+      }
     }
   }
 
@@ -761,11 +794,14 @@ router.openapi(updateConfigRoute, async (c) => {
     return c.json({ error: "Run not found" }, 404);
   }
 
-  let updatedConfig = (run.config || {}) as Record<string, any>;
+  let updatedConfig = (run.config || {}) as Record<string, unknown>;
   if (config && config !== "null") {
     try {
-      const newConfig = JSON.parse(config) as Record<string, any>;
-      updatedConfig = { ...updatedConfig, ...newConfig };
+      const newConfig = JSON.parse(config);
+      if (typeof newConfig !== "object" || newConfig === null || Array.isArray(newConfig)) {
+        return c.json({ error: "Invalid config JSON: expected an object" }, 400);
+      }
+      updatedConfig = deepMerge(updatedConfig, newConfig as Record<string, unknown>);
     } catch (error) {
       return c.json({ error: "Invalid config JSON" }, 400);
     }
@@ -774,7 +810,7 @@ router.openapi(updateConfigRoute, async (c) => {
   await c.get("prisma").runs.update({
     where: { id: runId, organizationId: apiKey.organization.id },
     data: {
-      config: Object.keys(updatedConfig).length > 0 ? updatedConfig : Prisma.DbNull,
+      config: Object.keys(updatedConfig).length > 0 ? (updatedConfig as Prisma.InputJsonValue) : Prisma.DbNull,
     },
   });
 

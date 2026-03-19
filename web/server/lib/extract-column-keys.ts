@@ -66,17 +66,19 @@ export async function extractAndUpsertColumnKeys(
   // Extract config keys
   const flatConfig = flattenObject(config);
   for (const [key, value] of Object.entries(flatConfig)) {
-    if (IMPORTED_KEY_PREFIXES.some((prefix) => key.startsWith(prefix))) {
-      continue;
-    }
+    const isImported = IMPORTED_KEY_PREFIXES.some((prefix) => key.startsWith(prefix));
     const dataType = inferType(value);
-    keyRecords.push({
-      organizationId,
-      projectId,
-      source: "config",
-      key,
-      dataType,
-    });
+    // Imported keys (sys/*, source_code/*) are excluded from the column picker
+    // but still written to run_field_values so they appear in the side-by-side view.
+    if (!isImported) {
+      keyRecords.push({
+        organizationId,
+        projectId,
+        source: "config",
+        key,
+        dataType,
+      });
+    }
     if (runId != null) {
       valueRecords.push({
         runId,
