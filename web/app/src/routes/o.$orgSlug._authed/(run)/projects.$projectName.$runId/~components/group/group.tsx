@@ -17,6 +17,7 @@ interface DataGroupProps {
   runId: string;
   boundsResetKey?: number;
   runCreatedAt?: string;
+  runName?: string;
 }
 
 // Internal base component that handles the rendering logic
@@ -27,6 +28,7 @@ const DataGroupBase = ({
   runId,
   boundsResetKey,
   runCreatedAt,
+  runName,
 }: DataGroupProps) => {
   const groupId = `metrics-${group.groupName}`;
 
@@ -49,9 +51,10 @@ const DataGroupBase = ({
         runId={runId}
         boundsResetKey={boundsResetKey}
         runCreatedAt={runCreatedAt}
+        runName={runName}
       />
     ));
-  }, [sortedLogs, tenantId, projectName, runId, boundsResetKey, runCreatedAt]);
+  }, [sortedLogs, tenantId, projectName, runId, boundsResetKey, runCreatedAt, runName]);
 
   // Only wrap in ImageStepSyncProvider if the group contains image logs
   const hasImageLogs = useMemo(
@@ -85,6 +88,7 @@ interface LogViewProps {
   runId: string;
   boundsResetKey?: number;
   runCreatedAt?: string;
+  runName?: string;
 }
 
 const LogView = memo(
@@ -95,6 +99,7 @@ const LogView = memo(
     runId,
     boundsResetKey,
     runCreatedAt,
+    runName,
   }: LogViewProps) => {
     if (log.logType === "METRIC") {
       return (
@@ -105,6 +110,7 @@ const LogView = memo(
           runId={runId}
           boundsResetKey={boundsResetKey}
           runCreatedAt={runCreatedAt}
+          runName={runName}
         />
       );
     }

@@ -17,7 +17,7 @@ import type { TooltipInterpolation } from "@/lib/math/interpolation";
 import { applyAlpha } from "@/lib/math/color-alpha";
 
 // Extracted modules
-import { formatAxisLabels, formatRelativeTimeValues, smartDateFormatter } from "./lib/format";
+import { formatAxisLabel, formatAxisLabels, formatRelativeTimeValue, formatRelativeTimeValues, smartDateFormatter } from "./lib/format";
 import { arrayMin, arrayMax, filterDataForLogScale, alignDataForUPlot } from "./lib/data-processing";
 
 /** Check if a zoom range [min, max] overlaps with the data in an x-axis array. */
@@ -685,8 +685,14 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         if (!u) return;
 
         if (seriesLabel) {
-          // Find the series index by label
-          const seriesIdx = u.series.findIndex((s, i) => i > 0 && typeof s.label === "string" && s.label === seriesLabel);
+          // Find the series index by label — check both the uPlot label and the original
+          // processedLines label (which may differ if the legend uses a short displayId)
+          const seriesIdx = u.series.findIndex((s, i) => {
+            if (i === 0) return false;
+            if (typeof s.label === "string" && s.label === seriesLabel) return true;
+            const origLabel = processedLinesRef.current[i - 1]?.label;
+            return origLabel === seriesLabel;
+          });
           if (seriesIdx > 0) {
             lastFocusedSeriesRef.current = seriesIdx;
             (u as any)._lastFocusedSeriesIdx = seriesIdx;
@@ -744,7 +750,16 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         lastFocusedSeriesRef,
         crossChartRunIdRef,
         tableHighlightRef,
-      }, { spanGaps, theme });
+      }, {
+        spanGaps,
+        theme,
+        // Legend x-axis value formatter — matches the axis tick formatter
+        xLegendValue: isDateTime
+          ? (_u, val) => val == null ? "--" : smartDateFormatter(val, timeRange)
+          : isRelativeTime
+            ? (_u, val) => val == null ? "--" : formatRelativeTimeValue(val)
+            : (_u, val) => val == null ? "--" : formatAxisLabel(val),
+      });
 
       // Scales configuration
       // IMPORTANT: Always use auto:true for X-axis to allow zoom to work.
@@ -1040,8 +1055,37 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           ],
           setSeries: [
             (u, seriesIdx, opts) => {
-              // This hook fires when uPlot's built-in focus changes (rarely works with sync)
-              // Manual focus detection in setCursor handles emphasis instead
+              // When a user clicks a legend entry to toggle visibility, also toggle
+              // companion series (smoothing originals + min/max envelope bands)
+              // so they stay in sync with the primary series.
+              if (seriesIdx == null || seriesIdx < 1) return;
+
+              const toggled = processedLinesRef.current[seriesIdx - 1];
+              if (!toggled) return;
+              // Only handle primary series toggles (not companions themselves)
+              if (toggled.envelopeOf || toggled.hideFromLegend) return;
+
+              const shouldShow = u.series[seriesIdx].show;
+              const seriesId = (u.series[seriesIdx] as any)?._seriesId as string | undefined;
+              // Use the original label from processedLines (not the potentially-shortened series label)
+              const originalLabel = toggled.label;
+
+              // Find and sync companion series
+              for (let i = 1; i < u.series.length; i++) {
+                if (i === seriesIdx) continue;
+                const companion = processedLinesRef.current[i - 1];
+                if (!companion) continue;
+
+                const isCompanion =
+                  // Envelope boundaries reference the parent's original label
+                  (companion.envelopeOf && companion.envelopeOf === originalLabel) ||
+                  // Hidden-from-legend companions share the same seriesId
+                  (companion.hideFromLegend && seriesId && (companion.seriesId === seriesId));
+
+                if (isCompanion && u.series[i].show !== shouldShow) {
+                  u.setSeries(i, { show: shouldShow }, false);
+                }
+              }
             },
           ],
           draw: [

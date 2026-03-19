@@ -187,9 +187,10 @@ function RouteComponent() {
         runId={runId}
         boundsResetKey={boundsResetKey}
         runCreatedAt={runCreatedAtStr}
+        runName={runData?.name}
       />
     ));
-  }, [filteredLogGroups, organizationId, projectName, runId, boundsResetKey, runCreatedAtStr]);
+  }, [filteredLogGroups, organizationId, projectName, runId, boundsResetKey, runCreatedAtStr, runData?.name]);
 
   if (isLoading || !runData) {
     return (

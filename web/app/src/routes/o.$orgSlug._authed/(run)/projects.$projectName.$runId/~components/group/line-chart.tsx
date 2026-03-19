@@ -27,6 +27,7 @@ interface LineChartWithFetchProps {
   runId: string;
   boundsResetKey?: number;
   runCreatedAt?: string;
+  runName?: string;
 }
 
 type ChartData = {
@@ -88,6 +89,16 @@ function useSystemChartConfig(
 }
 
 
+/** Inject tooltip metadata (runId / runName / metricName) into chart series */
+function withMeta(
+  lines: ChartSeriesData[],
+  logName: string,
+  displayId?: string,
+  runName?: string,
+): ChartSeriesData[] {
+  return lines.map((s) => ({ ...s, metricName: logName, runId: displayId, runName }));
+}
+
 // Chart strategy helper — builds chart config from bucketed data
 function buildChartStrategy(
   strategy: string,
@@ -97,6 +108,8 @@ function buildChartStrategy(
   smoothingSettings: LineChartSettings["smoothing"],
   zoomData?: BucketedChartDataPoint[],
   runCreatedAt?: string,
+  displayId?: string,
+  runName?: string,
 ): ChartConfig {
   const strategies: Record<string, () => ChartConfig> = {
     Step: () => {
@@ -104,23 +117,24 @@ function buildChartStrategy(
       const sourceData = zoomData ?? data;
 
       return {
-        lines: bucketedAndSmooth(
+        lines: withMeta(bucketedAndSmooth(
           sourceData, logName, color, smoothingSettings,
-        ),
+        ), logName, displayId, runName),
         xlabel: "step",
+        showLegend: true,
       };
     },
     "Absolute Time": () => {
       const getX = (d: BucketedChartDataPoint) => parseChTimeMs(d.time);
 
       return {
-        lines: bucketedAndSmooth(
+        lines: withMeta(bucketedAndSmooth(
           data, logName, color, smoothingSettings,
           false, undefined, undefined, getX,
-        ),
+        ), logName, displayId, runName),
         xlabel: "absolute time",
         isDateTime: true,
-        showLegend: smoothingSettings.enabled,
+        showLegend: true,
       };
     },
     "Relative Time": () => {
@@ -136,18 +150,19 @@ function buildChartStrategy(
       const sourceData = zoomData ?? data;
 
       return {
-        lines: bucketedAndSmooth(
+        lines: withMeta(bucketedAndSmooth(
           sourceData, logName, color, smoothingSettings,
           false, undefined, undefined, getX,
-        ),
+        ), logName, displayId, runName),
         xlabel: "relative time",
-        showLegend: smoothingSettings.enabled,
+        showLegend: true,
       };
     },
     default: () => {
       return {
-        lines: bucketedAndSmooth(data, logName, color, smoothingSettings),
+        lines: withMeta(bucketedAndSmooth(data, logName, color, smoothingSettings), logName, displayId, runName),
         xlabel: "step",
+        showLegend: true,
       };
     },
   };
@@ -165,6 +180,7 @@ function useChartConfig(
   settings: LineChartSettings,
   zoomData?: BucketedChartDataPoint[],
   runCreatedAt?: string,
+  runName?: string,
 ): [ChartConfig | null, boolean] {
   const [chartConfig, setChartConfig] = useState<ChartConfig | null>(null);
   const [isLoadingCustomChart, setIsLoadingCustomChart] = useState(false);
@@ -180,6 +196,9 @@ function useChartConfig(
       // Check if this is a system chart
       const systemConfig = useSystemChartConfig(logName, data, runCreatedAt);
       if (systemConfig) {
+        // Inject metadata and enable legend for system charts too
+        systemConfig.lines = withMeta(systemConfig.lines, logName, runId, runName);
+        systemConfig.showLegend = true;
         setChartConfig(systemConfig);
         return;
       }
@@ -197,6 +216,8 @@ function useChartConfig(
             settings.smoothing,
             zoomData,
             runCreatedAt,
+            runId,
+            runName,
           ),
         );
         return;
@@ -215,7 +236,7 @@ function useChartConfig(
 
         if (!selectLogData || selectLogData.length === 0) {
           setChartConfig(
-            buildChartStrategy("default", data, logName, COLOR, settings.smoothing),
+            buildChartStrategy("default", data, logName, COLOR, settings.smoothing, undefined, undefined, runId, runName),
           );
           return;
         }
@@ -239,17 +260,20 @@ function useChartConfig(
           y,
           label: logName,
           color: COLOR,
+          metricName: logName,
+          runId,
+          runName,
         };
 
         setChartConfig({
-          lines: applySmoothing(baseData, settings.smoothing),
+          lines: withMeta(applySmoothing(baseData, settings.smoothing), logName, runId, runName),
           xlabel: selectedLog,
-          showLegend: settings.smoothing.enabled,
+          showLegend: true,
         });
       } catch (error) {
         console.error("Error generating custom chart:", error);
         setChartConfig(
-          buildChartStrategy("default", data, logName, COLOR, settings.smoothing),
+          buildChartStrategy("default", data, logName, COLOR, settings.smoothing, undefined, undefined, runId, runName),
         );
       } finally {
         setIsLoadingCustomChart(false);
@@ -257,7 +281,7 @@ function useChartConfig(
     };
 
     generateChartConfig();
-  }, [data, logName, settings, tenantId, projectName, runId, zoomData, runCreatedAt]);
+  }, [data, logName, settings, tenantId, projectName, runId, zoomData, runCreatedAt, runName]);
 
   return [chartConfig, isLoadingCustomChart];
 }
@@ -271,6 +295,7 @@ export const LineChartWithFetch = memo(
     runId,
     boundsResetKey,
     runCreatedAt,
+    runName,
   }: LineChartWithFetchProps) => {
     useCheckDatabaseSize(metricsCache);
 
@@ -362,6 +387,7 @@ export const LineChartWithFetch = memo(
       settings,
       zoomData,
       runCreatedAt,
+      runName,
     );
 
     // Render loading state
@@ -441,6 +467,7 @@ export const LineChartWithFetch = memo(
                   lines={chartConfig.lines}
                   isDateTime={chartConfig.isDateTime}
                   xlabel={chartConfig.xlabel}
+                  showLegend={chartConfig.showLegend}
                   yMin={yMin}
                   yMax={yMax}
                   onDataRange={onDataRange}

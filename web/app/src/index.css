@@ -252,3 +252,92 @@ input[type="number"] {
   background: rgba(100, 150, 255, 0.2) !important;
   border: 1px solid rgba(100, 150, 255, 0.9) !important;
 }
+
+/* Fullscreen chart legend sidebar — uPlot's .u-legend is moved here via JS */
+.fullscreen-legend-sidebar {
+  /* width is set dynamically via inline style */
+  flex-shrink: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0.5rem 0.5rem 0.5rem 0.75rem;
+}
+
+.fullscreen-legend-sidebar:empty {
+  display: none;
+}
+
+/* Drag handle between chart and sidebar */
+.fullscreen-legend-resize-handle {
+  width: 4px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: hsl(var(--border));
+  transition: background 0.15s;
+}
+
+.fullscreen-legend-resize-handle:hover,
+.fullscreen-legend-resize-handle:active {
+  background: hsl(var(--primary) / 0.5);
+}
+
+/* Override uPlot's default inline/horizontal legend layout for vertical sidebar */
+.fullscreen-legend-sidebar .u-legend {
+  text-align: left !important;
+  font-size: 0.75rem !important;
+  margin: 0 !important;
+  line-height: 1.4 !important;
+}
+
+/* Stack series rows vertically instead of inline */
+.fullscreen-legend-sidebar .u-inline tr {
+  display: flex !important;
+  align-items: center !important;
+  gap: 0.25rem;
+  margin-right: 0 !important;
+  margin-bottom: 0.125rem;
+  min-width: 0;
+}
+
+/* Preserve hidden state for smoothing companion series (set via inline style) */
+.fullscreen-legend-sidebar .u-inline tr.u-series[style*="display: none"] {
+  display: none !important;
+}
+
+/* Reset inline-block on children so they flow naturally within each row */
+.fullscreen-legend-sidebar .u-inline * {
+  display: inline !important;
+}
+
+/* Color marker: small filled circle */
+.fullscreen-legend-sidebar .u-legend .u-marker {
+  display: inline-block !important;
+  width: 0.5rem !important;
+  height: 0.5rem !important;
+  border-radius: 9999px !important;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+/* Reduce padding inside series cells */
+.fullscreen-legend-sidebar .u-series > * {
+  padding: 1px 0 !important;
+}
+
+/* Series header (marker + label) — truncate long names */
+.fullscreen-legend-sidebar .u-series th {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: normal !important;
+  min-width: 0;
+  flex: 1;
+}
+
+/* Value cell — compact, muted */
+.fullscreen-legend-sidebar .u-series .u-value {
+  white-space: nowrap;
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+
+/* Hide companion series (smoothing originals) from sidebar — already hidden via inline style */

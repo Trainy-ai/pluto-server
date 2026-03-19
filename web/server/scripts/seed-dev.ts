@@ -1677,6 +1677,39 @@ async function main() {
     console.log(`   ${existingRunCount} runs already exist (target: ${RUNS_COUNT})`);
   }
 
+  // Backfill run numbers for any runs that have number = NULL
+  // (e.g., runs created outside the seed script via API without auto-numbering)
+  const unnumberedRuns = await prisma.runs.findMany({
+    where: { projectId: project.id, organizationId: org.id, number: null },
+    select: { id: true },
+    orderBy: { id: 'asc' },
+  });
+
+  if (unnumberedRuns.length > 0) {
+    // Find the current max number in the project
+    const maxNumberResult = await prisma.runs.aggregate({
+      where: { projectId: project.id, organizationId: org.id, number: { not: null } },
+      _max: { number: true },
+    });
+    let nextNumber = (maxNumberResult._max.number ?? 0) + 1;
+
+    console.log(`   Backfilling ${unnumberedRuns.length} runs with missing number (starting at ${nextNumber})...`);
+    for (const run of unnumberedRuns) {
+      await prisma.runs.update({
+        where: { id: run.id },
+        data: { number: nextNumber },
+      });
+      nextNumber++;
+    }
+
+    // Update the project's nextRunNumber counter
+    await prisma.projects.update({
+      where: { id: project.id },
+      data: { nextRunNumber: nextNumber },
+    });
+    console.log(`   Backfilled ${unnumberedRuns.length} run numbers`);
+  }
+
   // Fetch ALL runs to ensure metrics are seeded
   // Order by ID to ensure story runs (1-5) are processed first
   const allRuns = await prisma.runs.findMany({

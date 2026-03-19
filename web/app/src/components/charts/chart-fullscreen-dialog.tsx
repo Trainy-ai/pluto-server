@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef } from "react";
+import { useRef, useEffect, useCallback, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -11,6 +11,22 @@ import { SlidersHorizontalIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ChartBoundsPopover } from "./chart-bounds-popover";
 import { ChartExportMenu } from "./chart-export-menu";
+
+const SIDEBAR_STORAGE_KEY = "fullscreen-legend-sidebar-width";
+const DEFAULT_SIDEBAR_WIDTH = 256; // 16rem
+const MIN_SIDEBAR_WIDTH = 120;
+const MAX_SIDEBAR_WIDTH = 500;
+
+function loadSidebarWidth(): number {
+  try {
+    const stored = localStorage.getItem(SIDEBAR_STORAGE_KEY);
+    if (stored) {
+      const w = Number(stored);
+      if (w >= MIN_SIDEBAR_WIDTH && w <= MAX_SIDEBAR_WIDTH) return w;
+    }
+  } catch {}
+  return DEFAULT_SIDEBAR_WIDTH;
+}
 
 interface ChartFullscreenDialogProps {
   open: boolean;
@@ -42,6 +58,74 @@ export function ChartFullscreenDialog({
   onResetAll,
 }: ChartFullscreenDialogProps) {
   const chartContentRef = useRef<HTMLDivElement>(null);
+  const chartAreaRef = useRef<HTMLDivElement>(null);
+  const legendSidebarRef = useRef<HTMLDivElement>(null);
+  const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth);
+  const isDraggingRef = useRef(false);
+
+  // Move uPlot's .u-legend into the sidebar. Uses polling because the dialog
+  // portals asynchronously and the chart renders in its own useEffect, so
+  // refs may not be ready when this effect first runs.
+  useEffect(() => {
+    if (!open) return;
+
+    let currentLegend: Element | null = null;
+
+    function moveLegend() {
+      const chartArea = chartAreaRef.current;
+      const sidebar = legendSidebarRef.current;
+      if (!chartArea || !sidebar) return;
+
+      const legend = chartArea.querySelector(".u-legend");
+      if (legend && legend !== currentLegend) {
+        while (sidebar.firstChild) {
+          sidebar.removeChild(sidebar.firstChild);
+        }
+        currentLegend = legend;
+        sidebar.appendChild(legend);
+      }
+    }
+
+    const intervalId = setInterval(moveLegend, 100);
+
+    return () => {
+      clearInterval(intervalId);
+      currentLegend = null;
+    };
+  }, [open]);
+
+  // Drag-to-resize sidebar
+  const handleDragStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    isDraggingRef.current = true;
+    const startX = e.clientX;
+    const startWidth = sidebarWidth;
+
+    function onMouseMove(ev: MouseEvent) {
+      // Dragging left increases sidebar width
+      const delta = startX - ev.clientX;
+      const newWidth = Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, startWidth + delta));
+      setSidebarWidth(newWidth);
+    }
+
+    function onMouseUp() {
+      isDraggingRef.current = false;
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      // Persist
+      setSidebarWidth((w) => {
+        try { localStorage.setItem(SIDEBAR_STORAGE_KEY, String(w)); } catch {}
+        return w;
+      });
+    }
+
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+  }, [sidebarWidth]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -103,7 +187,21 @@ export function ChartFullscreenDialog({
             </div>
           </div>
         </DialogHeader>
-        <div ref={chartContentRef} className="flex-1 min-h-0">{children}</div>
+        <div ref={chartContentRef} className="flex flex-1 min-h-0 gap-0">
+          <div ref={chartAreaRef} className="flex-1 min-w-0">
+            {children}
+          </div>
+          {/* Drag handle to resize sidebar */}
+          <div
+            className="fullscreen-legend-resize-handle"
+            onMouseDown={handleDragStart}
+          />
+          <div
+            ref={legendSidebarRef}
+            className="fullscreen-legend-sidebar"
+            style={{ width: sidebarWidth }}
+          />
+        </div>
       </DialogContent>
     </Dialog>
   );

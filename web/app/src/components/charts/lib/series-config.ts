@@ -30,7 +30,7 @@ export function buildSeriesConfig(
   xlabel: string | undefined,
   chartLineWidth: number,
   refs: SeriesConfigRefs,
-  options?: { spanGaps?: boolean; theme?: "light" | "dark" },
+  options?: { spanGaps?: boolean; theme?: "light" | "dark"; xLegendValue?: (u: uPlot, val: number | null) => string },
 ): uPlot.Series[] {
   const spanGaps = options?.spanGaps ?? true;
   const isDark = options?.theme === "dark";
@@ -47,8 +47,9 @@ export function buildSeriesConfig(
 
   return [
     {
-      // X axis
+      // X axis — format legend value to match the axis type
       label: xlabel || "x",
+      ...(options?.xLegendValue ? { value: options.xLegendValue } : {}),
     },
     ...processedLines.map((line, i) => {
       // Envelope boundary series — invisible lines, only used for band fill
@@ -69,7 +70,7 @@ export function buildSeriesConfig(
       const baseColor = line.color || `hsl(${(i * 137) % 360}, 70%, 50%)`;
 
       return {
-        label: line.label,
+        label: line.runId || line.runName || line.label,
         _seriesId: line.seriesId ?? line.label,
         // Use a function for stroke that checks both local and cross-chart focus
         // and applies per-series opacity (used by smoothing to dim raw data)
