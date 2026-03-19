@@ -8,6 +8,7 @@ import { HistogramView } from "./histogram-view";
 import { VideoView } from "./video";
 import { TableView } from "./table";
 import { TextView } from "./text-view";
+import { ImageStepSyncProvider } from "../../~context/image-step-sync-context";
 
 interface DataGroupProps {
   group: LogGroup;
@@ -52,13 +53,25 @@ const DataGroupBase = ({
     ));
   }, [sortedLogs, tenantId, projectName, runId, boundsResetKey, runCreatedAt]);
 
-  return (
+  // Only wrap in ImageStepSyncProvider if the group contains image logs
+  const hasImageLogs = useMemo(
+    () => group.logs.some((log) => log.logType === "IMAGE"),
+    [group.logs],
+  );
+
+  const content = (
     <DropdownRegion
       title={group.groupName}
       components={children}
       groupId={groupId}
     />
   );
+
+  if (hasImageLogs) {
+    return <ImageStepSyncProvider>{content}</ImageStepSyncProvider>;
+  }
+
+  return content;
 };
 
 // Export a memoized version of the component

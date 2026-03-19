@@ -152,7 +152,7 @@ export function FileGroupWidget({
     grouped.set(logType, existing);
   }
 
-  return (
+  const content = (
     <div className="flex h-full flex-col gap-4 overflow-y-auto">
       {Array.from(grouped.entries()).map(([logType, files]) =>
         files.map((logName) => (
@@ -177,6 +177,8 @@ export function FileGroupWidget({
       )}
     </div>
   );
+
+  return content;
 }
 
 function FileGroupEntry({

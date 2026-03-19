@@ -18,7 +18,7 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { StepNavigator } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/shared/step-navigator";
-import { useStepNavigation } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~hooks/use-step-navigation";
+import { useSyncedStepNavigation } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~hooks/use-synced-step-navigation";
 
 interface MultiGroupImageProps {
   logName: string;
@@ -94,14 +94,17 @@ const MultiGroupImageComponent = ({
     [queriesWithRuns],
   );
 
-  // Use step navigation hook
+  // Use synced step navigation hook
   const {
     currentStepIndex,
     currentStepValue,
     availableSteps,
     goToStepIndex,
     hasMultipleSteps,
-  } = useStepNavigation(allImages);
+    isLocked,
+    setIsLocked,
+    hasSyncContext,
+  } = useSyncedStepNavigation(allImages);
 
   // Filter images for current step and group by run
   const imagesByRun = useMemo(() => {
@@ -319,6 +322,9 @@ const MultiGroupImageComponent = ({
               currentStepValue={currentStepValue}
               availableSteps={availableSteps}
               onStepChange={goToStepIndex}
+              isLocked={isLocked}
+              onLockChange={setIsLocked}
+              showLock={hasSyncContext}
             />
           </div>
         )}

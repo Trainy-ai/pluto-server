@@ -17,6 +17,7 @@ import { trpc } from "@/utils/trpc";
 import { useQuery } from "@tanstack/react-query";
 import { arePropsEqual } from "./props-comparison";
 import { formatRunLabel } from "@/lib/format-run-label";
+import { ImageStepSyncProvider } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~context/image-step-sync-context";
 
 // Re-export for backwards compatibility
 export { arePropsEqual } from "./props-comparison";
@@ -198,9 +199,21 @@ export const MultiGroup = ({
     ],
   );
 
-  return (
+  // Only wrap in ImageStepSyncProvider if the group contains image logs
+  const hasImageLogs = useMemo(
+    () => metrics.some((m) => m.type === "IMAGE"),
+    [metrics],
+  );
+
+  const content = (
     <DropdownRegion title={title} components={components} groupId={groupId} />
   );
+
+  if (hasImageLogs) {
+    return <ImageStepSyncProvider>{content}</ImageStepSyncProvider>;
+  }
+
+  return content;
 };
 
 

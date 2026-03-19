@@ -1,17 +1,26 @@
-import React, { useState, useCallback } from "react";
+import React, { useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { ChevronLeft, ChevronRight } from "lucide-react";
-import { toast } from "@/components/ui/sonner";
-import { findNearestStep, findNearestStepIndex } from "../../~lib/step-utils";
+import { Link, Unlink } from "lucide-react";
+import { Slider } from "@/components/ui/slider";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 interface StepNavigatorProps {
   currentStepIndex: number;
   currentStepValue: number;
   availableSteps: number[];
   onStepChange: (index: number) => void;
-  onStepValueChange?: (value: number) => void; // Optional: handles finding nearest
+  onStepValueChange?: (value: number) => void;
   className?: string;
+  /** Whether this panel's step is synced with other panels */
+  isLocked?: boolean;
+  /** Callback to toggle sync lock for this panel */
+  onLockChange?: (locked: boolean) => void;
+  /** Whether the sync system is available (provider exists) */
+  showLock?: boolean;
 }
 
 export const StepNavigator: React.FC<StepNavigatorProps> = ({
@@ -21,134 +30,88 @@ export const StepNavigator: React.FC<StepNavigatorProps> = ({
   onStepChange,
   onStepValueChange,
   className = "",
+  isLocked,
+  onLockChange,
+  showLock = false,
 }) => {
-  const [inputValue, setInputValue] = useState(currentStepValue.toString());
-
   const totalSteps = availableSteps.length;
-  const maxStepValue = availableSteps[totalSteps - 1] ?? 0;
-  const isFirstStep = currentStepIndex === 0;
-  const isLastStep = currentStepIndex === totalSteps - 1;
 
-  // Sync input value when currentStepValue changes
-  React.useEffect(() => {
-    setInputValue(currentStepValue.toString());
-  }, [currentStepValue]);
-
-  // Handle text input submission
-  const handleInputSubmit = useCallback(() => {
-    const value = Number.parseInt(inputValue, 10);
-
-    // Check if input is valid number
-    if (Number.isNaN(value)) {
-      toast.error("Please enter a valid number");
-      setInputValue(currentStepValue.toString());
-      return;
-    }
-
-    // Check if step exists
-    const stepIndex = availableSteps.indexOf(value);
-    if (stepIndex !== -1) {
-      // Exact match found
-      onStepChange(stepIndex);
+  const handleSliderChange = useCallback(
+    (values: number[]) => {
+      const index = values[0] ?? 0;
+      onStepChange(index);
       if (onStepValueChange) {
-        onStepValueChange(value);
-      }
-    } else {
-      // Find nearest step using shared utility
-      const nearestStep = findNearestStep(value, availableSteps);
-      const nearestIndex = findNearestStepIndex(value, availableSteps);
-
-      toast.info(
-        `Step ${value} not available. Navigating to nearest step: ${nearestStep}`
-      );
-
-      onStepChange(nearestIndex);
-      if (onStepValueChange) {
-        onStepValueChange(nearestStep);
-      }
-      setInputValue(nearestStep.toString());
-    }
-  }, [
-    inputValue,
-    currentStepValue,
-    availableSteps,
-    onStepChange,
-    onStepValueChange,
-  ]);
-
-  // Handle input key press
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLInputElement>) => {
-      if (e.key === "Enter") {
-        handleInputSubmit();
-        e.currentTarget.blur();
-      } else if (e.key === "Escape") {
-        setInputValue(currentStepValue.toString());
-        e.currentTarget.blur();
+        onStepValueChange(availableSteps[index] ?? 0);
       }
     },
-    [handleInputSubmit, currentStepValue]
+    [onStepChange, onStepValueChange, availableSteps]
   );
 
-  // Handle prev button
-  const handlePrev = useCallback(() => {
-    if (!isFirstStep) {
-      onStepChange(currentStepIndex - 1);
-    }
-  }, [isFirstStep, currentStepIndex, onStepChange]);
-
-  // Handle next button
-  const handleNext = useCallback(() => {
-    if (!isLastStep) {
-      onStepChange(currentStepIndex + 1);
-    }
-  }, [isLastStep, currentStepIndex, onStepChange]);
-
-  // Don't render if only one step or no steps
   if (totalSteps <= 1) {
     return null;
   }
 
-  return (
-    <div className={`mx-auto max-w-2xl px-4 ${className}`}>
-      <div className="flex items-center justify-center gap-3">
-        <Button
-          variant="outline"
-          size="icon"
-          onClick={handlePrev}
-          disabled={isFirstStep}
-          className="h-8 w-8"
-        >
-          <ChevronLeft className="h-4 w-4" />
-        </Button>
+  const maxIndex = totalSteps - 1;
+  const percentage = maxIndex > 0 ? (currentStepIndex / maxIndex) * 100 : 0;
 
-        <Input
-          type="number"
-          value={inputValue}
-          onChange={(e) => setInputValue(e.target.value)}
-          onBlur={handleInputSubmit}
-          onKeyDown={handleKeyDown}
-          className="h-8 w-20 text-center font-mono text-sm"
+  return (
+    <div data-testid="step-navigator" className={`flex items-center gap-3 ${className}`}>
+      <div className="relative flex w-full min-w-[120px] flex-col">
+        {/* Value label positioned above thumb */}
+        <div
+          className="pointer-events-none absolute -top-5 font-mono text-xs tabular-nums text-foreground"
+          style={{
+            left: `${percentage}%`,
+            transform: "translateX(-50%)",
+          }}
+        >
+          {currentStepValue}
+        </div>
+
+        {/* Index-based slider */}
+        <Slider
           min={0}
-          max={maxStepValue}
+          max={maxIndex}
+          step={1}
+          value={[currentStepIndex]}
+          onValueChange={handleSliderChange}
         />
 
-        <Button
-          variant="outline"
-          size="icon"
-          onClick={handleNext}
-          disabled={isLastStep}
-          className="h-8 w-8"
-        >
-          <ChevronRight className="h-4 w-4" />
-        </Button>
-
-        <div className="flex min-w-[100px] items-center justify-center">
-          <span className="font-mono text-sm font-medium">
-            Step {currentStepValue}/{maxStepValue}
+        {/* Min/Max step value labels */}
+        <div className="mt-1 flex justify-between">
+          <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
+            {availableSteps[0]}
+          </span>
+          <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
+            {availableSteps[maxIndex]}
           </span>
         </div>
       </div>
+
+      {/* Sync link/unlink toggle */}
+      {showLock && onLockChange && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => onLockChange(!isLocked)}
+              className="h-6 w-6"
+            >
+              {isLocked ? (
+                <Link className="h-3 w-3 text-muted-foreground" />
+              ) : (
+                <Unlink className="h-3 w-3 text-muted-foreground" />
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            {isLocked
+              ? "Steps synced with other panels. Click to unlink."
+              : "Steps independent. Click to sync with other panels."}
+          </TooltipContent>
+        </Tooltip>
+      )}
     </div>
   );
 };

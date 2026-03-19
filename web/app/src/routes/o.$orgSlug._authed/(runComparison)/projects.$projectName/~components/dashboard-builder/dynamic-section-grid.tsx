@@ -8,6 +8,7 @@ import { useDynamicSectionWidgets } from "./use-dynamic-section";
 import { WidgetRenderer } from "./widget-renderer";
 import { ChartFullscreenDialog } from "@/components/charts/chart-fullscreen-dialog";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { ImageStepSyncProvider } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~context/image-step-sync-context";
 import type { Widget, ChartWidgetConfig } from "../../~types/dashboard-types";
 import type { GroupedMetrics } from "@/lib/grouping/types";
 import type { SelectedRunWithColor } from "../../~hooks/use-selected-runs";
@@ -119,7 +120,10 @@ export function DynamicSectionGrid({
     );
   }
 
-  return (
+  // Wrap in ImageStepSyncProvider so all image widgets in this dynamic section sync steps
+  const hasFileWidgets = filteredWidgets.some((w) => w.type === "file-group");
+
+  const gridContent = (
     <>
       <div className="grid grid-cols-2 gap-4">
         {filteredWidgets.map((widget) => {
@@ -292,6 +296,12 @@ export function DynamicSectionGrid({
       )}
     </>
   );
+
+  if (hasFileWidgets) {
+    return <ImageStepSyncProvider>{gridContent}</ImageStepSyncProvider>;
+  }
+
+  return gridContent;
 }
 
 function getWidgetTitle(widget: Widget): string {

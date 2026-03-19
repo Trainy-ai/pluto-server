@@ -16,7 +16,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
-import { useStepNavigation } from "../../~hooks/use-step-navigation";
+import { useSyncedStepNavigation } from "../../~hooks/use-synced-step-navigation";
 import { StepNavigator } from "../shared/step-navigator";
 
 interface ImagesViewProps {
@@ -274,13 +274,16 @@ export const ImagesView = ({
   const [currentPage, setCurrentPage] = useState(0);
   const imagesPerPage = 4;
 
-  // Use step navigation hook
+  // Use synced step navigation hook
   const {
     currentStepIndex,
     currentStepValue,
     availableSteps,
     goToStepIndex,
-  } = useStepNavigation(data || []);
+    isLocked,
+    setIsLocked,
+    hasSyncContext,
+  } = useSyncedStepNavigation(data || []);
 
   const currentStepImages = useMemo(() => {
     if (!data) return [];
@@ -364,6 +367,9 @@ export const ImagesView = ({
         currentStepValue={currentStepValue}
         availableSteps={availableSteps}
         onStepChange={handleStepChange}
+        isLocked={isLocked}
+        onLockChange={setIsLocked}
+        showLock={hasSyncContext}
       />
 
       {/* Images Grid */}
