@@ -46,7 +46,7 @@ interface WidgetCardProps {
   onResetBounds?: () => void;
   renderWidget: (
     onDataRange?: (dataMin: number, dataMax: number) => void,
-    onResetBounds?: () => void
+    onResetBounds?: () => void,
   ) => ReactNode;
 }
 
@@ -201,7 +201,7 @@ export function WidgetCard({
               : undefined,
             widget.type === "chart"
               ? () => onUpdateBounds?.(undefined, undefined)
-              : undefined
+              : undefined,
           )}
         </VirtualizedChart>
       </div>

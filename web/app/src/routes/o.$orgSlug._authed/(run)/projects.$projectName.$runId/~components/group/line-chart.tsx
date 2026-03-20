@@ -442,7 +442,7 @@ export const LineChartWithFetch = memo(
         globalLogXAxis={settings.xAxisLogScale}
         globalLogYAxis={settings.yAxisLogScale}
         boundsResetKey={boundsResetKey}
-        renderChart={(yMin, yMax, onDataRange, onResetBounds, logXAxis, logYAxis) => {
+        renderChart={(yMin, yMax, onDataRange, onResetBounds, logXAxis, logYAxis, _yZoom, yZoomRange, onYZoomRangeChange) => {
           const commonProps = {
             className: "h-full",
             title: logName,
@@ -451,6 +451,8 @@ export const LineChartWithFetch = memo(
             tooltipInterpolation: settings.tooltipInterpolation,
             outlierDetection: settings.yAxisScaleMode === "outlier-aware",
             spanGaps: !settings.skipMissingValues,
+            yZoomRange,
+            onYZoomRangeChange,
           };
 
           return (

@@ -1354,8 +1354,104 @@ async function setupTestData(): Promise<TestData> {
   });
   console.log('   ✓ Created Staircase Zoom Test dashboard view');
 
-  // 8. Seed image and file data for file-viewer and step-sync E2E tests
-  console.log('\n8️⃣ Seeding image and file data...');
+  // 9. Create "Dynamic Section Test" dashboard view with a dynamic pattern section
+  console.log('\n9️⃣  Creating Dynamic Section Test dashboard view...');
+
+  const dynamicSectionDashboardConfig = {
+    version: 1,
+    sections: [
+      {
+        id: 'section-dynamic-train',
+        name: 'Train Metrics (Dynamic)',
+        collapsed: false,
+        widgets: [],
+        dynamicPattern: 'train/*',
+        dynamicPatternMode: 'search',
+      },
+    ],
+    settings: {
+      gridCols: 12,
+      rowHeight: 80,
+      compactType: 'vertical',
+    },
+  };
+
+  await prisma.dashboardView.upsert({
+    where: {
+      organizationId_projectId_name: {
+        organizationId: org.id,
+        projectId: project.id,
+        name: 'Dynamic Section Test',
+      },
+    },
+    update: { config: dynamicSectionDashboardConfig },
+    create: {
+      name: 'Dynamic Section Test',
+      organizationId: org.id,
+      projectId: project.id,
+      createdById: user.id,
+      isDefault: false,
+      config: dynamicSectionDashboardConfig,
+    },
+  });
+  console.log('   ✓ Created Dynamic Section Test dashboard view');
+
+  // 10. Create "Y-Zoom Widget Test" dashboard view for Y-axis zoom E2E tests
+  console.log('\n🔟  Creating Y-Zoom Widget Test dashboard view...');
+
+  const yZoomWidgetDashboardConfig = {
+    version: 1,
+    sections: [
+      {
+        id: 'section-yzoom-test',
+        name: 'Y-Zoom Test',
+        collapsed: false,
+        widgets: [
+          {
+            id: 'widget-yzoom-metric00',
+            type: 'chart',
+            config: {
+              metrics: ['train/metric_00'],
+              xAxis: 'step',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+              aggregation: 'LAST',
+              showOriginal: false,
+            },
+            layout: { x: 0, y: 0, w: 6, h: 4 },
+          },
+        ],
+      },
+    ],
+    settings: {
+      gridCols: 12,
+      rowHeight: 80,
+      compactType: 'vertical',
+    },
+  };
+
+  await prisma.dashboardView.upsert({
+    where: {
+      organizationId_projectId_name: {
+        organizationId: org.id,
+        projectId: project.id,
+        name: 'Y-Zoom Widget Test',
+      },
+    },
+    update: { config: yZoomWidgetDashboardConfig },
+    create: {
+      name: 'Y-Zoom Widget Test',
+      organizationId: org.id,
+      projectId: project.id,
+      createdById: user.id,
+      isDefault: false,
+      config: yZoomWidgetDashboardConfig,
+    },
+  });
+  console.log('   ✓ Created Y-Zoom Widget Test dashboard view');
+
+  // 11. Seed image and file data for file-viewer and step-sync E2E tests
+  console.log('\n1️⃣1️⃣ Seeding image and file data...');
 
   const storageEndpoint = process.env.STORAGE_ENDPOINT;
   const storageAccessKey = process.env.STORAGE_ACCESS_KEY_ID;
@@ -1535,7 +1631,7 @@ async function setupTestData(): Promise<TestData> {
     apiKey: fullApiKey,
     apiKeyId: apiKey.id,
     projectName: project.name,
-    projectId: project.id,
+    projectId: String(project.id),
   };
 
   console.log('\n✅ Test database setup complete!\n');

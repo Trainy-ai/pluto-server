@@ -70,6 +70,8 @@ export function DashboardBuilder({
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [showDraftRestore, setShowDraftRestore] = useState(false);
   const [fullscreenWidget, setFullscreenWidget] = useState<Widget | null>(null);
+  // Y zoom ranges keyed by widget ID, shared between mini and fullscreen
+  const [widgetYZoomRanges, setWidgetYZoomRanges] = useState<Record<string, [number, number] | null>>({});
   const [coarseMode, setCoarseMode] = useState(true);
   const [dynamicWidgetCounts, setDynamicWidgetCounts] = useState<Record<string, number>>({});
   const [copiedWidget, setCopiedWidget] = useState<Widget | null>(null);
@@ -492,6 +494,8 @@ export function DashboardBuilder({
                         onDataRange={onDataRange}
                         onResetBounds={onResetBounds}
                         settingsRunId={settingsRunId}
+                        yZoomRange={widgetYZoomRanges[widget.id] ?? null}
+                        onYZoomRangeChange={(range) => setWidgetYZoomRanges((prev) => ({ ...prev, [widget.id]: range }))}
                       />
                     )}
                   />
@@ -532,7 +536,9 @@ export function DashboardBuilder({
         <ChartFullscreenDialog
           open={!!fullscreenWidget}
           onOpenChange={(open) => {
-            if (!open) setFullscreenWidget(null);
+            if (!open) {
+              setFullscreenWidget(null);
+            }
           }}
           title={
             fullscreenWidget.config.title ||
@@ -606,6 +612,8 @@ export function DashboardBuilder({
             organizationId={organizationId}
             projectName={projectName}
             settingsRunId={settingsRunId}
+            yZoomRange={widgetYZoomRanges[fullscreenWidget.id] ?? null}
+            onYZoomRangeChange={(range) => setWidgetYZoomRanges((prev) => ({ ...prev, [fullscreenWidget.id]: range }))}
           />
         </ChartFullscreenDialog>
       )}

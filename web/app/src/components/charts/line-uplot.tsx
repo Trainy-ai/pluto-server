@@ -174,6 +174,14 @@ interface LineChartProps extends React.HTMLAttributes<HTMLDivElement> {
   outlierDetection?: boolean;
   /** When false, lines break at null/missing values instead of connecting across gaps (default: true) */
   spanGaps?: boolean;
+  /** Enable Y-axis drag-to-zoom. When enabled, drag direction determines axis:
+   *  horizontal drag zooms X, vertical drag zooms Y (adaptive mode). */
+  yZoom?: boolean;
+  /** Externally-stored Y zoom range. When provided, the chart initializes with this
+   *  Y range instead of auto-scaling. Used to persist Y zoom across mini/fullscreen. */
+  yZoomRange?: [number, number] | null;
+  /** Called when the user drags to zoom the Y axis, or null when Y zoom is reset. */
+  onYZoomRangeChange?: (range: [number, number] | null) => void;
 }
 
 /** Ref handle exposed to parent components */
@@ -247,6 +255,9 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       onZoomRangeChange,
       outlierDetection = false,
       spanGaps = true,
+      yZoom = true,
+      yZoomRange,
+      onYZoomRangeChange,
       className,
       ...rest
     },
@@ -513,6 +524,17 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
     // Track if user has manually zoomed - if so, don't overwrite with global range
     const userHasZoomedRef = useRef(false);
 
+    // Track if user has manually zoomed Y-axis via drag (when yZoom enabled).
+    // When set, auto Y-rescale on X zoom is skipped to preserve the user's Y range.
+    const userHasZoomedYRef = useRef(yZoomRange != null);
+    // Store the user's Y zoom range so we can restore it after uPlot's auto-range overwrites it
+    const userYZoomRangeRef = useRef<[number, number] | null>(yZoomRange ?? null);
+    // Flag to suppress Y handler from overwriting saved range during X zoom auto-range
+    const isXZoomAutoRangeRef = useRef(false);
+    // Ref for onYZoomRangeChange callback so we don't recreate the chart when it changes
+    const onYZoomRangeChangeRef = useRef(onYZoomRangeChange);
+    onYZoomRangeChangeRef.current = onYZoomRangeChange;
+
     // Track the last applied global range to avoid redundant setScale calls
     const lastAppliedGlobalRangeRef = useRef<[number, number] | null>(null);
 
@@ -526,6 +548,32 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
     // Track if we've shown the "no visible data" toast for current zoom
     // Reset when zoom changes to allow showing again
     const noDataToastShownRef = useRef<string | null>(null);
+
+    // Sync Y zoom range from prop (e.g. fullscreen chart updated the shared range).
+    // Updates refs and applies to the live chart so mini↔fullscreen stay in sync.
+    useEffect(() => {
+      // Update refs to match prop
+      if (yZoomRange) {
+        userHasZoomedYRef.current = true;
+        userYZoomRangeRef.current = yZoomRange;
+      } else {
+        userHasZoomedYRef.current = false;
+        userYZoomRangeRef.current = null;
+      }
+      // Apply to live chart
+      const chart = chartRef.current;
+      if (!chart) return;
+      try {
+        isProgrammaticScaleRef.current = true;
+        if (yZoomRange) {
+          chart.batch(() => {
+            chart.setScale("y", { min: yZoomRange[0], max: yZoomRange[1] });
+          });
+        }
+      } catch { /* disposed chart */ } finally {
+        isProgrammaticScaleRef.current = false;
+      }
+    }, [yZoomRange]);
 
     // Update existing charts when zoom range changes (either global or synced)
     // Priority: syncedZoomRange > globalXRange
@@ -651,7 +699,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             delete (u as any)._lastFocusedSeriesIdx;
             (u as any)._crossHighlightRunId = null;
             applySeriesHighlight(u, tableHighlightRef.current, '_seriesId', chartLineWidthRef.current);
-            u.redraw(); // Full redraw to reset stroke colors and widths
+            u.redraw(false); // Redraw without rebuildPaths to preserve Y-axis zoom
           }
 
           // Clear cross-chart emphasis for OTHER charts (falls back to table highlight internally)
@@ -704,7 +752,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             for (let si = 1; si < u.series.length; si++) {
               u.series[si].width = si === seriesIdx ? highlightedWidth : dimmedWidth;
             }
-            u.redraw();
+            u.redraw(false);
           }
           // Cross-chart highlighting
           highlightedSeriesRef.current = seriesLabel;
@@ -720,7 +768,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           (u as any)._crossHighlightRunId = null;
           const lw = chartLineWidthRef.current;
           applySeriesHighlight(u, tableHighlightRef.current, '_seriesId', lw);
-          u.redraw();
+          u.redraw(false);
           ctx?.highlightUPlotSeries(chartId, null);
         }
       };
@@ -787,6 +835,9 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
                   }
                   let lo = yMinProp ?? dataMin;
                   let hi = yMaxProp ?? dataMax;
+                  // Clamp to positive for log scale (log10(0) crashes tick generator)
+                  if (lo <= 0) { lo = dataMin > 0 ? dataMin : 1e-6; }
+                  if (hi <= 0) { hi = 10; }
                   if (lo >= hi) { hi = lo * 10 || 10; }
                   return [lo, hi];
                 },
@@ -871,7 +922,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           // Cursor position sync still works; drag/zoom sync is handled by our syncXScale.
           filters: {
             pub: () => true,
-            sub: (_type: string, src: uPlot) => !(src?.cursor?.drag as any)?._x,
+            sub: (_type: string, src: uPlot) => !(src?.cursor?.drag as any)?._x && !(src?.cursor?.drag as any)?._y,
           },
         },
         focus: {
@@ -879,7 +930,8 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         },
         drag: {
           x: true,
-          y: false,
+          y: yZoom,
+          ...(yZoom && { uni: Infinity }),
           setScale: true,
         },
       };
@@ -1207,9 +1259,24 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
                 }
 
                 // Auto-scale Y axis when X scale changes (zoom)
+                // Skip if user has manually zoomed Y-axis (yZoom mode) to preserve their range.
                 // For log scale without manual bounds, let uPlot handle it via distr:3
                 // For log scale WITH manual bounds, apply them during zoom too
-                if (!logYAxis || (logYAxis && (yMinProp != null || yMaxProp != null))) {
+                // If user has manually zoomed Y, restore their range after uPlot's auto:true overwrites it.
+                // queueMicrotask runs after uPlot finishes processing (including auto-range) but before paint.
+                if (userHasZoomedYRef.current && userYZoomRangeRef.current) {
+                  const [savedYMin, savedYMax] = userYZoomRangeRef.current;
+                  isXZoomAutoRangeRef.current = true;
+                  queueMicrotask(() => {
+                    isXZoomAutoRangeRef.current = false;
+                    try {
+                      isProgrammaticScaleRef.current = true;
+                      u.setScale("y", { min: savedYMin, max: savedYMax });
+                    } finally {
+                      isProgrammaticScaleRef.current = false;
+                    }
+                  });
+                } else if (!userHasZoomedYRef.current && (!logYAxis || (logYAxis && (yMinProp != null || yMaxProp != null)))) {
                   // Find Y min/max for data points within visible X range
                   let visibleYMin = Infinity;
                   let visibleYMax = -Infinity;
@@ -1255,7 +1322,12 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
 
                     if (Math.abs(newYMin - currentYMin) > threshold ||
                         Math.abs(newYMax - currentYMax) > threshold) {
-                      u.setScale("y", { min: newYMin, max: newYMax });
+                      try {
+                        isProgrammaticScaleRef.current = true;
+                        u.setScale("y", { min: newYMin, max: newYMax });
+                      } finally {
+                        isProgrammaticScaleRef.current = false;
+                      }
                     }
                   }
                 }
@@ -1345,10 +1417,33 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
                   }, 150); // 150ms debounce
                 }
               }
+
+              // Y-axis zoom detection moved to setSelect hook below
             },
           ],
-          // Note: setSelect hook removed - zoom is handled by cursor.drag.setScale: true
-          // The setScale hook above handles Y-axis auto-scaling when X scale changes
+          // Capture Y-axis drag-zoom directly from the selection rect.
+          // setSelect fires during mouseUp BEFORE _setScale, so we can compute
+          // the Y range from the selection box. This avoids relying on the setScale
+          // hook for Y (which fires at unpredictable times due to deferred commits).
+          ...(yZoom ? { setSelect: [
+            (u: uPlot) => {
+              const sel = u.select;
+              // Check for real Y drag: sel.height must be > 0 AND less than the
+              // full plot height. uPlot sets sel.height = full height during X-only
+              // drags (uni: Infinity mode), which is NOT a Y zoom.
+              const plotHeight = u.bbox.height / devicePixelRatio;
+              if (sel.height > 0 && sel.height < plotHeight - 1) {
+                // Selection has Y component — compute Y range from pixel positions
+                const yMin = u.posToVal(sel.top + sel.height, "y");
+                const yMax = u.posToVal(sel.top, "y");
+                if (yMin != null && yMax != null && Number.isFinite(yMin) && Number.isFinite(yMax)) {
+                  userHasZoomedYRef.current = true;
+                  userYZoomRangeRef.current = [yMin, yMax];
+                  onYZoomRangeChangeRef.current?.([yMin, yMax]);
+                }
+              }
+            },
+          ] } : {}),
         },
       };
       // Note: width/height excluded from deps - size changes handled by separate setSize() effect
@@ -1377,6 +1472,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       yMaxProp,
       tooltipInterpolation,
       yRange,
+      yZoom,
     ]);
 
     // Store cleanup function ref for proper cleanup on unmount
@@ -1384,9 +1480,6 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
 
     // Track if chart has been created - used to decide between create vs resize
     const chartCreatedRef = useRef(false);
-
-    // Track initial dimensions for chart creation
-    const initialDimensionsRef = useRef<{ width: number; height: number } | null>(null);
 
     // Track zoom state to preserve across chart recreations
     const zoomStateRef = useRef<{ xMin: number; xMax: number } | null>(null);
@@ -1400,20 +1493,13 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
     // Track previous options reference to detect options-only changes (e.g. Y bounds)
     const prevOptionsRef = useRef<uPlot.Options | null>(null);
 
-    // Store dimensions when first valid
-    useEffect(() => {
-      if (width > 0 && height > 0 && !initialDimensionsRef.current) {
-        initialDimensionsRef.current = { width, height };
-      }
-    }, [width, height]);
-
     // Create chart when container has dimensions and data is ready
     // Note: We intentionally recreate the chart when options change because
     // uPlot doesn't support updating options after creation. The yRangeFn
     // for auto-scaling is baked into the options at creation time.
     useEffect(() => {
-      // Use stored initial dimensions or current dimensions
-      const dims = initialDimensionsRef.current || { width, height };
+      // Always use current dimensions from ResizeObserver
+      const dims = { width, height };
 
       if (!chartContainerRef.current || dims.width === 0 || dims.height === 0) {
         return;
@@ -1484,6 +1570,13 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         if (xScale.min != null && xScale.max != null) {
           zoomStateRef.current = { xMin: xScale.min, xMax: xScale.max };
         }
+        // Clean up mouseleave handler before destroying
+        const lh = (chartRef.current as any)._leaveHandler;
+        if (lh) {
+          lh.el.removeEventListener("mouseleave", lh.fn);
+          lh.el.removeEventListener("pointerdown", lh.pointerDownFn);
+          document.removeEventListener("pointerup", lh.docPointerUpFn);
+        }
         chartRef.current.destroy();
         chartRef.current = null;
       }
@@ -1535,6 +1628,36 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             }
           }
         });
+      }
+
+      // Fix: when mouse leaves the chart during an active chart drag, dispatch a
+      // synthetic mouseup so uPlot finalizes the zoom BEFORE its mouseLeave handler
+      // resets internal drag state. Only fires when the mousedown originated on the
+      // chart overlay (not e.g. sidebar resize handle that happens to cross the chart).
+      const overEl = chart.root.querySelector(".u-over") as HTMLElement | null;
+      if (overEl) {
+        let isDraggingInChart = false;
+        const handleOverPointerDown = () => { isDraggingInChart = true; };
+        const handleDocPointerUp = () => { isDraggingInChart = false; };
+        const handleLeaveWhileDragging = (e: MouseEvent) => {
+          if (isDraggingInChart && e.buttons > 0) {
+            isDraggingInChart = false;
+            document.dispatchEvent(new MouseEvent("mouseup", {
+              bubbles: true,
+              clientX: e.clientX,
+              clientY: e.clientY,
+            }));
+          }
+        };
+        overEl.addEventListener("pointerdown", handleOverPointerDown);
+        document.addEventListener("pointerup", handleDocPointerUp);
+        overEl.addEventListener("mouseleave", handleLeaveWhileDragging);
+        (chart as any)._leaveHandler = {
+          el: overEl,
+          fn: handleLeaveWhileDragging,
+          pointerDownFn: handleOverPointerDown,
+          docPointerUpFn: handleDocPointerUp,
+        };
       }
 
       // Track data structure, data reference, and options for future optimization
@@ -1656,6 +1779,21 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         }
       }
 
+      // Apply externally-stored Y zoom range (persisted across mini/fullscreen)
+      if (userYZoomRangeRef.current && userHasZoomedYRef.current) {
+        const [savedYMin, savedYMax] = userYZoomRangeRef.current;
+        try {
+          isProgrammaticScaleRef.current = true;
+          chart.batch(() => {
+            chart.setScale("y", { min: savedYMin, max: savedYMax });
+          });
+        } catch {
+          // Ignore errors if chart was already destroyed
+        } finally {
+          isProgrammaticScaleRef.current = false;
+        }
+      }
+
       // Style the selection box for zoom visibility (uPlot's default is nearly invisible)
       // Use requestAnimationFrame to ensure uPlot has created the DOM elements
       const containerEl = chartContainerRef.current;
@@ -1712,9 +1850,12 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           isProgrammaticScaleRef.current = false;
         }
         userHasZoomedRef.current = false;
+        userHasZoomedYRef.current = false;
+        userYZoomRangeRef.current = null;
         zoomStateRef.current = null;
         lastAppliedGlobalRangeRef.current = null;
         onZoomRangeChangeRef.current?.(null);
+        onYZoomRangeChangeRef.current?.(null);
       });
 
       // Register a zoom callback that wraps setScale in isProgrammaticScaleRef guard.
@@ -1826,11 +1967,15 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         zoomStateRef.current = null;
         // Clear user zoom flag so global range can be applied again
         userHasZoomedRef.current = false;
+        // Clear user Y-zoom flag so auto Y-rescale resumes
+        userHasZoomedYRef.current = false;
+        userYZoomRangeRef.current = null;
         lastAppliedGlobalRangeRef.current = globalRange ?? null;
         // Reset toast tracking so it can show again if needed
         noDataToastShownRef.current = null;
         // Notify parent that zoom was reset (clear server re-fetch)
         onZoomRangeChangeRef.current?.(null);
+        onYZoomRangeChangeRef.current?.(null);
         // Clear synced zoom in context so all charts reset
         chartSyncContextRef.current?.setSyncedZoomRange(null);
         // Clear cross-group zoom
@@ -1859,6 +2004,10 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       return () => {
         cleanupRef.current?.();
         if (chartRef.current) {
+          const lh = (chartRef.current as any)._leaveHandler;
+          if (lh) {
+            lh.el.removeEventListener("mouseleave", lh.fn);
+          }
           chartRef.current.destroy();
           chartRef.current = null;
         }

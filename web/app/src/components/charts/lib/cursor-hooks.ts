@@ -100,8 +100,10 @@ export function buildFocusDetectionHook(deps: FocusDetectionDeps): (u: uPlot) =>
         u.series[si].width = si === closestSeriesIdx ? highlightedWidth : dimmedWidth;
       }
 
-      // Trigger redraw so stroke functions re-evaluate with new focus
-      u.redraw();
+      // Trigger redraw so stroke functions re-evaluate with new focus.
+      // Pass false to skip rebuildPaths (which calls _setScale("x", ...) internally,
+      // causing Y auto-range to recalculate and overwrite any user Y-axis zoom).
+      u.redraw(false);
 
       // CROSS-CHART highlighting
       const seriesLabel = deps.processedLines[closestSeriesIdx - 1]?.label ?? null;

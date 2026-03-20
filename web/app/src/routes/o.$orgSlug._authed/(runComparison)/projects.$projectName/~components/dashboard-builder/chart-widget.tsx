@@ -23,6 +23,10 @@ interface ChartWidgetProps {
   onDataRange?: (dataMin: number, dataMax: number) => void;
   onResetBounds?: () => void;
   settingsRunId?: string;
+  /** Externally-stored Y zoom range for persistence across mini/fullscreen */
+  yZoomRange?: [number, number] | null;
+  /** Called when user drags to zoom Y axis, or null on reset */
+  onYZoomRangeChange?: (range: [number, number] | null) => void;
 }
 
 export function ChartWidget({
@@ -34,6 +38,8 @@ export function ChartWidget({
   onDataRange,
   onResetBounds,
   settingsRunId,
+  yZoomRange,
+  onYZoomRangeChange,
 }: ChartWidgetProps) {
   const lines = useMemo(() => {
     return Object.entries(selectedRuns).map(([runId, { run, color }]) => ({
@@ -161,6 +167,8 @@ export function ChartWidget({
         logYAxis={config.yAxisScale === "log" ? true : undefined}
         xAxisOverride={mapXAxisToDisplayLogName(config.xAxis)}
         settingsRunId={settingsRunId}
+        yZoomRange={yZoomRange}
+        onYZoomRangeChange={onYZoomRangeChange}
       />
     </div>
   );

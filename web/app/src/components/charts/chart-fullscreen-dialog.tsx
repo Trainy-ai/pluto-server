@@ -63,9 +63,9 @@ export function ChartFullscreenDialog({
   const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth);
   const isDraggingRef = useRef(false);
 
-  // Move uPlot's .u-legend into the sidebar. Uses polling because the dialog
-  // portals asynchronously and the chart renders in its own useEffect, so
-  // refs may not be ready when this effect first runs.
+  // Move uPlot's .u-legend into the sidebar. The chart area hides .u-legend
+  // via CSS (fullscreen-chart-area class) so the legend is invisible while
+  // still at the bottom, preventing flicker. Polling moves it to the sidebar.
   useEffect(() => {
     if (!open) return;
 
@@ -130,7 +130,7 @@ export function ChartFullscreenDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="flex max-w-[95vw] h-[90vh] flex-col p-6"
+        className="flex max-w-[95vw] h-[90vh] flex-col p-6 data-[state=open]:!animate-none"
         onPointerDownOutside={(e) => {
           // Prevent closing when clicking on tooltip elements portaled to document.body
           const target = e.target as HTMLElement | null;
@@ -188,7 +188,7 @@ export function ChartFullscreenDialog({
           </div>
         </DialogHeader>
         <div ref={chartContentRef} className="flex flex-1 min-h-0 gap-0">
-          <div ref={chartAreaRef} className="flex-1 min-w-0">
+          <div ref={chartAreaRef} className="fullscreen-chart-area flex-1 min-w-0 overflow-hidden">
             {children}
           </div>
           {/* Drag handle to resize sidebar */}

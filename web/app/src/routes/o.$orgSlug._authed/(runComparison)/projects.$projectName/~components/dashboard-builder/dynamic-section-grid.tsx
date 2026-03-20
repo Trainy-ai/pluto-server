@@ -8,6 +8,11 @@ import { useDynamicSectionWidgets } from "./use-dynamic-section";
 import { WidgetRenderer } from "./widget-renderer";
 import { ChartFullscreenDialog } from "@/components/charts/chart-fullscreen-dialog";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { ImageStepSyncProvider } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~context/image-step-sync-context";
 import type { Widget, ChartWidgetConfig } from "../../~types/dashboard-types";
 import type { GroupedMetrics } from "@/lib/grouping/types";
@@ -33,6 +38,7 @@ interface WidgetBounds {
   yMax?: number;
   logXAxis?: boolean;
   logYAxis?: boolean;
+  yZoomRange?: [number, number] | null;
 }
 
 export function DynamicSectionGrid({
@@ -186,6 +192,7 @@ export function DynamicSectionGrid({
                       variant="ghost"
                       size="icon"
                       className="size-7 opacity-0 group-hover:opacity-100"
+                      data-testid="chart-fullscreen-btn"
                       onClick={() => setFullscreenWidget(effectiveWidget)}
                     >
                       <Maximize2Icon className="size-3.5" />
@@ -207,6 +214,11 @@ export function DynamicSectionGrid({
                     organizationId={organizationId}
                     projectName={projectName}
                     settingsRunId={settingsRunId}
+                    yZoomRange={bounds.yZoomRange ?? null}
+                    onYZoomRangeChange={(range) => setWidgetBounds((prev) => ({
+                      ...prev,
+                      [widget.id]: { ...prev[widget.id], yZoomRange: range },
+                    }))}
                   />
                 </VirtualizedChart>
               </div>
@@ -291,6 +303,11 @@ export function DynamicSectionGrid({
             organizationId={organizationId}
             projectName={projectName}
             settingsRunId={settingsRunId}
+            yZoomRange={widgetBounds[fullscreenWidget.id]?.yZoomRange ?? null}
+            onYZoomRangeChange={(range) => setWidgetBounds((prev) => ({
+              ...prev,
+              [fullscreenWidget.id]: { ...prev[fullscreenWidget.id], yZoomRange: range },
+            }))}
           />
         </ChartFullscreenDialog>
       )}

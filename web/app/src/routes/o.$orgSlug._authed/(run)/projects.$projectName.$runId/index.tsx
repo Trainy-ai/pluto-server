@@ -210,7 +210,7 @@ function RouteComponent() {
       disableScroll
     >
       <div className="flex h-full flex-col overflow-y-auto overscroll-y-contain">
-        <div className="sticky top-0 z-10 flex items-center gap-4 bg-background px-4 pt-4 pb-2">
+        <div className="sticky top-0 z-20 flex items-center gap-4 bg-background px-4 pt-4 pb-2">
           <DashboardViewSelector
             organizationId={organizationId}
             projectName={projectName}

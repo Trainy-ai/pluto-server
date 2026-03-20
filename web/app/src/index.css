@@ -253,6 +253,12 @@ input[type="number"] {
   border: 1px solid rgba(100, 150, 255, 0.9) !important;
 }
 
+/* Hide uPlot's legend while it's still in the chart area (before being moved to sidebar).
+   This prevents the legend from flickering at the bottom and affecting chart width on zoom. */
+.fullscreen-chart-area .u-legend {
+  display: none !important;
+}
+
 /* Fullscreen chart legend sidebar — uPlot's .u-legend is moved here via JS */
 .fullscreen-legend-sidebar {
   /* width is set dynamically via inline style */
@@ -262,9 +268,8 @@ input[type="number"] {
   padding: 0.5rem 0.5rem 0.5rem 0.75rem;
 }
 
-.fullscreen-legend-sidebar:empty {
-  display: none;
-}
+/* Note: no display:none on :empty — the sidebar must always reserve its width
+   so the chart area has a consistent size across zoom/chart recreations. */
 
 /* Drag handle between chart and sidebar */
 .fullscreen-legend-resize-handle {

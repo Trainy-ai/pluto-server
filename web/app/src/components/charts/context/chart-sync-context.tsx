@@ -318,7 +318,7 @@ export function ChartSyncProvider({
         // Store on instance so stroke function can read it synchronously
         (chart as any)._tableHighlightRunId = runId;
         applySeriesHighlight(chart, runId, '_seriesId', lw);
-        chart.redraw();
+        chart.redraw(false);
       });
     }
     document.addEventListener("run-table-hover", handleRunTableHover);
@@ -419,8 +419,8 @@ export function ChartSyncProvider({
             // Match by _seriesId prefix — handles both "runId" and "runId:metric" formats
             applySeriesHighlight(chart, id, '_seriesId', lw);
           }
-          // Full redraw so stroke functions re-evaluate with new _crossHighlightRunId
-          chart.redraw();
+          // Redraw without rebuildPaths to preserve Y-axis zoom
+          chart.redraw(false);
         });
       });
     },

@@ -263,7 +263,7 @@ export function SectionContainer({
 
       {/* Edit Section Dialog */}
       <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
-        <DialogContent className="sm:max-w-[425px]">
+        <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Edit Section</DialogTitle>
             <DialogDescription>
@@ -443,7 +443,7 @@ export function AddSectionButton({ onAddSection, organizationId, projectName, se
       </div>
 
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-        <DialogContent className="sm:max-w-[425px]">
+        <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Create New Section</DialogTitle>
             <DialogDescription>

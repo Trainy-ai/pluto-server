@@ -22,6 +22,10 @@ interface WidgetRendererProps {
   onResetBounds?: () => void;
   /** When provided, reads line settings from this runId instead of the "full" key */
   settingsRunId?: string;
+  /** Externally-stored Y zoom range for persistence across mini/fullscreen */
+  yZoomRange?: [number, number] | null;
+  /** Called when user drags to zoom Y axis, or null on reset */
+  onYZoomRangeChange?: (range: [number, number] | null) => void;
 }
 
 export function WidgetRenderer({
@@ -33,6 +37,8 @@ export function WidgetRenderer({
   onDataRange,
   onResetBounds,
   settingsRunId,
+  yZoomRange,
+  onYZoomRangeChange,
 }: WidgetRendererProps) {
   switch (widget.type) {
     case "chart":
@@ -46,6 +52,8 @@ export function WidgetRenderer({
           onDataRange={onDataRange}
           onResetBounds={onResetBounds}
           settingsRunId={settingsRunId}
+          yZoomRange={yZoomRange}
+          onYZoomRangeChange={onYZoomRangeChange}
         />
       );
     case "histogram":

@@ -85,6 +85,10 @@ interface MultiLineChartProps {
   logXAxis?: boolean;
   /** Override log Y-axis scale (per-widget config takes precedence over global settings) */
   logYAxis?: boolean;
+  /** Externally-stored Y zoom range for persistence across mini/fullscreen */
+  yZoomRange?: [number, number] | null;
+  /** Called when user drags to zoom Y axis, or null on reset */
+  onYZoomRangeChange?: (range: [number, number] | null) => void;
   /** Override x-axis mode (per-widget config takes precedence over global line settings).
    *  Values: "Step", "Absolute Time", "Relative Time", or a custom metric name. */
   xAxisOverride?: DisplayLogName;
@@ -133,6 +137,8 @@ const MultiLineChartInner = memo(
     chartSyncContext,
     logXAxis: logXAxisOverride,
     logYAxis: logYAxisOverride,
+    yZoomRange,
+    onYZoomRangeChange,
     xAxisOverride,
     settingsRunId,
   }: MultiLineChartInnerProps) => {
@@ -842,6 +848,8 @@ const MultiLineChartInner = memo(
           outlierDetection={settings.yAxisScaleMode === "outlier-aware"}
           spanGaps={!settings.skipMissingValues}
           onZoomRangeChange={onZoomRangeChange}
+          yZoomRange={yZoomRange}
+          onYZoomRangeChange={onYZoomRangeChange}
         />
       </div>
     );

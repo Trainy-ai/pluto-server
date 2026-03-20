@@ -71,6 +71,9 @@ interface ChartCardWrapperProps {
     onResetBounds?: () => void,
     logXAxis?: boolean,
     logYAxis?: boolean,
+    yZoom?: boolean,
+    yZoomRange?: [number, number] | null,
+    onYZoomRangeChange?: (range: [number, number] | null) => void,
   ) => React.ReactNode;
   /** Incrementing this key forces re-reading settings from localStorage (used after reset all) */
   boundsResetKey?: number;
@@ -93,6 +96,8 @@ export function ChartCardWrapper({
   );
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [dataRange, setDataRange] = useState<{ min: number; max: number } | null>(null);
+  // Y zoom range shared between mini and fullscreen chart instances
+  const [yZoomRange, setYZoomRange] = useState<[number, number] | null>(null);
 
   // Re-read settings from localStorage when boundsResetKey changes
   const prevResetKeyRef = useRef(boundsResetKey);
@@ -146,6 +151,10 @@ export function ChartCardWrapper({
     saveSettings(groupId, metricName, newSettings);
   }, [groupId, metricName]);
 
+  const handleYZoomRangeChange = useCallback((range: [number, number] | null) => {
+    setYZoomRange(range);
+  }, []);
+
   // Determine if data is being clipped by user-set bounds
   const clippingInfo = (() => {
     if (!dataRange) return null;
@@ -166,9 +175,9 @@ export function ChartCardWrapper({
 
   return (
     <>
-      <div ref={chartContainerRef} className="relative h-full w-full" data-testid="chart-card" data-log-x-scale={effectiveLogXAxis || undefined} data-log-y-scale={effectiveLogYAxis || undefined} onDoubleClick={handleResetBounds}>
+      <div ref={chartContainerRef} className="group relative h-full w-full" data-testid="chart-card" data-log-x-scale={effectiveLogXAxis || undefined} data-log-y-scale={effectiveLogYAxis || undefined} onDoubleClick={handleResetBounds}>
         {/* Chart content */}
-        {renderChart(settings.yMin, settings.yMax, handleDataRange, handleResetBounds, effectiveLogXAxis, effectiveLogYAxis)}
+        {renderChart(settings.yMin, settings.yMax, handleDataRange, handleResetBounds, effectiveLogXAxis, effectiveLogYAxis, true, yZoomRange, handleYZoomRangeChange)}
 
         {/* Hover toolbar - top right */}
         <div className="absolute top-1 right-1 z-10 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
@@ -246,7 +255,7 @@ export function ChartCardWrapper({
         onLogScaleChange={handleLogScaleChange}
         onResetAll={handleResetAll}
       >
-        {renderChart(settings.yMin, settings.yMax, handleDataRange, handleResetBounds, effectiveLogXAxis, effectiveLogYAxis)}
+        {renderChart(settings.yMin, settings.yMax, handleDataRange, handleResetBounds, effectiveLogXAxis, effectiveLogYAxis, true, yZoomRange, handleYZoomRangeChange)}
       </ChartFullscreenDialog>
     </>
   );

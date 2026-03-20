@@ -254,7 +254,7 @@ export function WidgetGrid({
                   widget.type === "chart"
                     ? (dataMin: number, dataMax: number) => handleWidgetDataRange(widget.id, dataMin, dataMax)
                     : undefined,
-                  onResetBounds
+                  onResetBounds,
                 )
               }
             />

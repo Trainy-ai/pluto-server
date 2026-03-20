@@ -135,7 +135,7 @@ export function AddWidgetModal({
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="max-h-[85vh] max-w-3xl overflow-y-auto">
+      <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
             {isEditing ? "Edit Widget" : "Choose Widget Type"}

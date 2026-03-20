@@ -48,6 +48,12 @@ interface LineChartWrapperProps extends React.HTMLAttributes<HTMLDivElement> {
   outlierDetection?: boolean;
   /** When false, lines break at null/missing values instead of connecting across gaps */
   spanGaps?: boolean;
+  /** Enable Y-axis drag-to-zoom (adaptive: horizontal drag zooms X, vertical drag zooms Y) */
+  yZoom?: boolean;
+  /** Externally-stored Y zoom range for persistence across mini/fullscreen */
+  yZoomRange?: [number, number] | null;
+  /** Called when user drags to zoom Y axis, or null on reset */
+  onYZoomRangeChange?: (range: [number, number] | null) => void;
 }
 
 // Loading fallback for lazy-loaded charts
@@ -69,7 +75,7 @@ function ChartLoadingFallback() {
  * - Cross-chart series highlighting
  */
 const LineChartWrapper = forwardRef<LineChartUPlotRef, LineChartWrapperProps>(
-  ({ syncKey, className, tooltipInterpolation, rawLines, downsampleTarget, reprocessForZoom, onZoomRangeChange, outlierDetection, spanGaps, ...props }, ref) => {
+  ({ syncKey, className, tooltipInterpolation, rawLines, downsampleTarget, reprocessForZoom, onZoomRangeChange, outlierDetection, spanGaps, yZoom, yZoomRange, onYZoomRangeChange, ...props }, ref) => {
     // Use title as key to force remount when switching between different charts
     // This ensures each chart gets a clean uPlot instance with correct data
     const chartKey = props.title || "uplot-chart";
@@ -97,6 +103,9 @@ const LineChartWrapper = forwardRef<LineChartUPlotRef, LineChartWrapperProps>(
             onZoomRangeChange={onZoomRangeChange}
             outlierDetection={outlierDetection}
             spanGaps={spanGaps}
+            yZoom={yZoom}
+            yZoomRange={yZoomRange}
+            onYZoomRangeChange={onYZoomRangeChange}
             {...props}
           />
         </Suspense>
