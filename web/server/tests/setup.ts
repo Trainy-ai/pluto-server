@@ -719,7 +719,14 @@ async function setupTestData(): Promise<TestData> {
       createdById: user.id,
       creatorApiKeyId: apiKey.id,
       status: 'COMPLETED' as const,
-      config: { epochs: 100, lr: 0.001, batch_size: 32 },
+      config: {
+        epochs: 100,
+        lr: 0.001,
+        batch_size: 32,
+        // Python repr strings to exercise JSON pretty-print in side-by-side view
+        dataset: `{'path': 'acme/eval-suite', 'name': '${['LOOP_CITY-5T', 'MODEL_A', 'BASELINE_B'][i % 3]}', 'split': 'valid'}`,
+        optimizer: "{'type': 'AdamW', 'betas': [0.9, 0.999], 'weight_decay': 0.01, 'eps': 1e-08}",
+      },
       systemMetadata: { hostname: 'test-host', python: '3.11' },
       updatedAt: new Date(),
     }));

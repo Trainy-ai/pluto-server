@@ -13,13 +13,46 @@ export function isJsonString(str: string): boolean {
     JSON.parse(trimmed);
     return true;
   } catch {
-    return false;
+    return tryParseAsPython(trimmed) !== null;
   }
 }
 
 /**
- * Pretty-print a string if it's valid JSON (object or array).
- * Returns the formatted string, or the original value unchanged if not JSON.
+ * Attempt to convert a Python repr string (single-quoted dicts/lists,
+ * True/False/None) into a parseable JSON string.
+ * Returns the parsed object on success, or null on failure.
+ */
+function tryParseAsPython(str: string): unknown {
+  try {
+    // Replace Python booleans and None with JSON equivalents.
+    // Use word-boundary matching to avoid replacing inside strings.
+    let converted = str
+      .replace(/\bTrue\b/g, "true")
+      .replace(/\bFalse\b/g, "false")
+      .replace(/\bNone\b/g, "null");
+
+    // Replace single-quoted strings with double-quoted strings.
+    // This regex matches: single quote, then any sequence of
+    // escaped single quotes (\') or non-single-quote chars, then closing single quote.
+    // It avoids replacing apostrophes inside double-quoted strings.
+    converted = converted.replace(
+      /'((?:[^'\\]|\\.)*)'/g,
+      (_match, content: string) => {
+        // Escape any unescaped double quotes inside the content
+        const escaped = content.replace(/\\'/g, "'").replace(/"/g, '\\"');
+        return `"${escaped}"`;
+      },
+    );
+
+    return JSON.parse(converted);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Pretty-print a string if it's valid JSON (object or array) or Python repr.
+ * Returns the formatted string, or the original value unchanged if not parseable.
  */
 export function tryPrettyPrintJson(value: string): string {
   const trimmed = value.trim();
@@ -27,10 +60,16 @@ export function tryPrettyPrintJson(value: string): string {
     (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
     (trimmed.startsWith("[") && trimmed.endsWith("]"))
   ) {
+    // Try standard JSON first
     try {
       return JSON.stringify(JSON.parse(trimmed), null, 2);
     } catch {
-      return value;
+      // Fall through to Python repr attempt
+    }
+    // Try Python repr conversion
+    const parsed = tryParseAsPython(trimmed);
+    if (parsed !== null) {
+      return JSON.stringify(parsed, null, 2);
     }
   }
   return value;

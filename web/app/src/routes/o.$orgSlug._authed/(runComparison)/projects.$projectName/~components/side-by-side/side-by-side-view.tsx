@@ -371,8 +371,8 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
   // Diff-only mode: show only rows where values differ across runs
   const [showOnlyDiffs, setShowOnlyDiffs] = useState(false);
 
-  // JSON pretty-print toggle (default: off — compact single-line)
-  const [prettyJson, setPrettyJson] = useState(false);
+  // JSON pretty-print toggle (default: on — expanded with indentation)
+  const [prettyJson, setPrettyJson] = useState(true);
 
   // Index of the reference run for diff highlighting (default: first run)
   const [referenceRunIndex, setReferenceRunIndex] = useState(0);

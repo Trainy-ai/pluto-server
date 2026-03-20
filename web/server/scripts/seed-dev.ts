@@ -1633,6 +1633,10 @@ async function main() {
               lr: 0.001 * (i + 1),
               batch_size: [16, 32, 64, 128][i % 4],
               epochs: 100,
+              // Python repr strings to exercise JSON pretty-print in side-by-side view
+              dataset: `{'path': 'acme/eval-suite', 'name': '${['LOOP_CITY-5T', 'MODEL_A', 'BASELINE_B'][i % 3]}', 'split': 'valid'}`,
+              tags: `['linear:TAG-${String(i).padStart(4, '0')}', '${['ablation', 'sweep', 'final'][i % 3]}']`,
+              optimizer: `{'type': 'AdamW', 'betas': [0.9, 0.999], 'weight_decay': 0.01, 'eps': 1e-08}`,
             },
         systemMetadata: {
           hostname: `dev-machine-${i % 3}`,
