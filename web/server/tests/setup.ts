@@ -13,7 +13,9 @@
 import { PrismaClient } from '@prisma/client';
 import crypto from 'crypto';
 import { nanoid } from 'nanoid';
+import zlib from 'zlib';
 import { createClient } from '@clickhouse/client-web';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { extractAndUpsertColumnKeys } from '../lib/extract-column-keys';
 
 // Bulk run seeding configuration for server-side search testing
@@ -38,6 +40,49 @@ interface TestData {
 
 async function hashApiKey(key: string): Promise<string> {
   return crypto.createHash('sha256').update(key).digest('hex');
+}
+
+function createPNGChunk(type: string, data: Buffer): Buffer {
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(data.length, 0);
+  const typeBuffer = Buffer.from(type, 'ascii');
+  const crcData = Buffer.concat([typeBuffer, data]);
+  let crc = 0xffffffff;
+  for (let i = 0; i < crcData.length; i++) {
+    crc ^= crcData[i];
+    for (let k = 0; k < 8; k++) {
+      crc = crc & 1 ? 0xedb88320 ^ (crc >>> 1) : crc >>> 1;
+    }
+  }
+  const crcBuf = Buffer.alloc(4);
+  crcBuf.writeUInt32BE((crc ^ 0xffffffff) >>> 0, 0);
+  return Buffer.concat([length, typeBuffer, data, crcBuf]);
+}
+
+function createSimplePNG(
+  width: number,
+  height: number,
+  r: number,
+  g: number,
+  b: number,
+): Buffer {
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const ihdrData = Buffer.alloc(13);
+  ihdrData.writeUInt32BE(width, 0);
+  ihdrData.writeUInt32BE(height, 4);
+  ihdrData[8] = 8;
+  ihdrData[9] = 2; // 8-bit RGB
+  const ihdrChunk = createPNGChunk('IHDR', ihdrData);
+  const rawData: number[] = [];
+  for (let y = 0; y < height; y++) {
+    rawData.push(0); // filter: none
+    for (let x = 0; x < width; x++) {
+      rawData.push(r, g, b);
+    }
+  }
+  const idatChunk = createPNGChunk('IDAT', zlib.deflateSync(Buffer.from(rawData)));
+  const iendChunk = createPNGChunk('IEND', Buffer.alloc(0));
+  return Buffer.concat([signature, ihdrChunk, idatChunk, iendChunk]);
 }
 
 /**
@@ -1301,6 +1346,178 @@ async function setupTestData(): Promise<TestData> {
     },
   });
   console.log('   ✓ Created Staircase Zoom Test dashboard view');
+
+  // 8. Seed image and file data for file-viewer and step-sync E2E tests
+  console.log('\n8️⃣ Seeding image and file data...');
+
+  const storageEndpoint = process.env.STORAGE_ENDPOINT;
+  const storageAccessKey = process.env.STORAGE_ACCESS_KEY_ID;
+  const storageSecretKey = process.env.STORAGE_SECRET_ACCESS_KEY;
+  const storageBucket = process.env.STORAGE_BUCKET;
+  const storageRegion = process.env.STORAGE_REGION || 'us-east-1';
+  const clickhouseUrlForFiles = process.env.CLICKHOUSE_URL;
+  const clickhouseUserForFiles = process.env.CLICKHOUSE_USER || 'default';
+  const clickhousePasswordForFiles = process.env.CLICKHOUSE_PASSWORD || '';
+
+  if (clickhouseUrlForFiles && storageEndpoint && storageAccessKey && storageSecretKey && storageBucket) {
+    const s3 = new S3Client({
+      endpoint: storageEndpoint,
+      region: storageRegion,
+      credentials: {
+        accessKeyId: storageAccessKey,
+        secretAccessKey: storageSecretKey,
+      },
+      forcePathStyle: true,
+    });
+
+    const chForFiles = createClient({
+      url: clickhouseUrlForFiles,
+      username: clickhouseUserForFiles,
+      password: clickhousePasswordForFiles,
+    });
+
+    // Use first 5 bulk runs for image/file seeding
+    const fileSeedRuns = await prisma.runs.findMany({
+      where: {
+        projectId: project.id,
+        organizationId: org.id,
+        name: { startsWith: 'bulk-run-' },
+      },
+      select: { id: true, name: true, createdAt: true },
+      orderBy: { name: 'asc' },
+      take: 5,
+    });
+
+    if (fileSeedRuns.length > 0) {
+      const imageSteps = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+
+      // Create RunLogs entries for IMAGE and TEXT logs
+      const fileRunLogData = fileSeedRuns.flatMap((run) => [
+        {
+          runId: run.id,
+          logName: 'media/training_samples',
+          logGroup: 'media',
+          logType: 'IMAGE' as const,
+        },
+        {
+          runId: run.id,
+          logName: 'logs/training.log',
+          logGroup: 'logs',
+          logType: 'TEXT' as const,
+        },
+      ]);
+      await prisma.runLogs.createMany({
+        data: fileRunLogData,
+        skipDuplicates: true,
+      });
+      console.log(`   ✓ Registered IMAGE and TEXT log names for ${fileSeedRuns.length} runs`);
+
+      // Insert ClickHouse mlop_files rows and upload to S3
+      const imageFileRows: Record<string, unknown>[] = [];
+      const textFileRows: Record<string, unknown>[] = [];
+      const s3Uploads: Promise<unknown>[] = [];
+
+      for (const run of fileSeedRuns) {
+        const baseTime = run.createdAt.getTime();
+
+        // Image files: 11 steps
+        for (const step of imageSteps) {
+          const fileName = `step_${String(step).padStart(5, '0')}.png`;
+          // Vary color by step for variety
+          const png = createSimplePNG(8, 8, (step * 25) % 256, 100, 150);
+          const s3Key = `${org.id}/${project.name}/${run.id}/media/training_samples/${fileName}`;
+
+          imageFileRows.push({
+            tenantId: org.id,
+            projectName: project.name,
+            runId: Number(run.id),
+            logGroup: 'media',
+            logName: 'media/training_samples',
+            time: new Date(baseTime + step * 1000)
+              .toISOString()
+              .replace('T', ' ')
+              .replace('Z', ''),
+            step,
+            fileName,
+            fileType: 'image/png',
+            fileSize: png.length,
+          });
+
+          s3Uploads.push(
+            s3.send(
+              new PutObjectCommand({
+                Bucket: storageBucket,
+                Key: s3Key,
+                Body: png,
+                ContentType: 'image/png',
+              }),
+            ),
+          );
+        }
+
+        // Text file: 1 file per run at step 0
+        const logContent = `Training log for run ${run.name}\nEpoch 1: loss=0.5\nEpoch 2: loss=0.3\nTraining complete.\n`;
+        const logBuffer = Buffer.from(logContent, 'utf-8');
+        const textFileName = 'training_run.log';
+        const textS3Key = `${org.id}/${project.name}/${run.id}/logs/training.log/${textFileName}`;
+
+        textFileRows.push({
+          tenantId: org.id,
+          projectName: project.name,
+          runId: Number(run.id),
+          logGroup: 'logs',
+          logName: 'logs/training.log',
+          time: new Date(baseTime).toISOString().replace('T', ' ').replace('Z', ''),
+          step: 0,
+          fileName: textFileName,
+          fileType: 'text/plain',
+          fileSize: logBuffer.length,
+        });
+
+        s3Uploads.push(
+          s3.send(
+            new PutObjectCommand({
+              Bucket: storageBucket,
+              Key: textS3Key,
+              Body: logBuffer,
+              ContentType: 'text/plain',
+            }),
+          ),
+        );
+      }
+
+      // Insert ClickHouse rows
+      if (imageFileRows.length > 0) {
+        await chForFiles.insert({
+          table: 'mlop_files',
+          values: imageFileRows,
+          format: 'JSONEachRow',
+        });
+        console.log(`   ✓ Inserted ${imageFileRows.length} image file rows into ClickHouse`);
+      }
+
+      if (textFileRows.length > 0) {
+        await chForFiles.insert({
+          table: 'mlop_files',
+          values: textFileRows,
+          format: 'JSONEachRow',
+        });
+        console.log(`   ✓ Inserted ${textFileRows.length} text file rows into ClickHouse`);
+      }
+
+      // Upload all files to S3
+      await Promise.all(s3Uploads);
+      console.log(`   ✓ Uploaded ${s3Uploads.length} files to S3/MinIO`);
+
+      await chForFiles.close();
+    } else {
+      console.log('   ⚠ No bulk runs found for file seeding');
+    }
+  } else {
+    console.log(
+      '   ⚠ Missing CLICKHOUSE_URL or STORAGE_* env vars, skipping image/file seeding',
+    );
+  }
 
   const testData: TestData = {
     userId: user.id,
