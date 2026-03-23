@@ -60,6 +60,14 @@ function RouteComponent() {
   const isStripeConfigured = billingConfig?.isConfigured ?? false;
   const seatPrice = billingConfig?.seatPriceDollars;
 
+  // Fetch members once for both billing display and MembersLimit
+  const { data: members = [], isLoading: isMembersLoading } = useQuery(
+    trpc.organization.listMembers.queryOptions({
+      organizationId,
+    }),
+  );
+  const actualMemberCount = members.length;
+
   // Show toast for successful upgrade
   useEffect(() => {
     if (search.success) {
@@ -177,7 +185,7 @@ function RouteComponent() {
                     </div>
                     {isPro && seatPrice !== undefined && (
                       <p className="text-sm text-muted-foreground mt-1">
-                        {orgSubscription.seats} {orgSubscription.seats === 1 ? "seat" : "seats"} × ${seatPrice} = ${orgSubscription.seats * seatPrice}/month
+                        {actualMemberCount} {actualMemberCount === 1 ? "seat" : "seats"} × ${seatPrice} = ${actualMemberCount * seatPrice}/month
                       </p>
                     )}
                   </>
@@ -243,8 +251,9 @@ function RouteComponent() {
         <div className="grid gap-4">
           <h2 className="text-xl font-semibold">Usage</h2>
           <MembersLimit
-            organizationId={organizationId}
             maxMembers={orgSubscription.seats}
+            memberCount={actualMemberCount}
+            isLoading={isMembersLoading}
           />
           <Usage
             organizationId={organizationId}

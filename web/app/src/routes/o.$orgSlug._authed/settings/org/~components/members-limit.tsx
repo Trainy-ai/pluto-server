@@ -1,5 +1,3 @@
-import { trpc } from "@/utils/trpc";
-import { useQuery } from "@tanstack/react-query";
 import {
   Card,
   CardContent,
@@ -17,20 +15,16 @@ import {
 } from "@/components/ui/tooltip";
 
 interface MembersLimitProps {
-  organizationId: string;
   maxMembers: number;
+  memberCount: number;
+  isLoading: boolean;
 }
 
 export function MembersLimit({
-  organizationId,
   maxMembers,
+  memberCount,
+  isLoading,
 }: MembersLimitProps) {
-  const { data: members, isLoading } = useQuery(
-    trpc.organization.listMembers.queryOptions({
-      organizationId,
-    }),
-  );
-
   if (isLoading) {
     return (
       <div className="space-y-4">
@@ -53,20 +47,7 @@ export function MembersLimit({
     );
   }
 
-  if (!members) {
-    return (
-      <div className="space-y-4">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-lg">Organization Members</CardTitle>
-            <CardDescription>No member data available</CardDescription>
-          </CardHeader>
-        </Card>
-      </div>
-    );
-  }
-
-  const totalMembers = members.length;
+  const totalMembers = memberCount;
   const usagePercentage =
     maxMembers > 0 ? (totalMembers / maxMembers) * 100 : 0;
 
