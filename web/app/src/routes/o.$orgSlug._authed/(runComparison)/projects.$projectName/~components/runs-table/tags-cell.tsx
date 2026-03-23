@@ -17,63 +17,80 @@ interface TagsCellProps {
   organizationId?: string;
 }
 
-/** Approximate width per tag badge character + padding/margins */
-const TAG_CHAR_WIDTH = 7;
-const TAG_PADDING = 24; // badge horizontal padding + gap
-const TAG_MAX_WIDTH = 120; // matches TagBadge max-w-[120px] truncate
-const OVERFLOW_BADGE_WIDTH = 32; // "+N" badge width
-const EDIT_BUTTON_WIDTH = 28; // pencil button
+const GAP_PX = 4; // gap-1 = 0.25rem = 4px
+const EDIT_BUTTON_WIDTH = 28; // h-6 w-6 button + gap
+const OVERFLOW_BADGE_WIDTH = 36; // approximate "+N" badge width
 
 export function TagsCell({ tags, allTags, onTagsUpdate, organizationId }: TagsCellProps) {
   const [isHovered, setIsHovered] = useState(false);
-  const [maxVisible, setMaxVisible] = useState(2);
-  const containerRef = useRef<HTMLDivElement>(null);
   const leaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const outerRef = useRef<HTMLDivElement>(null);
+  const measureRef = useRef<HTMLDivElement>(null);
+  const [visibleCount, setVisibleCount] = useState(tags.length > 0 ? 1 : 0);
+
   useEffect(() => () => clearTimeout(leaveTimer.current), []);
   const onPointerEnter = useCallback(() => { clearTimeout(leaveTimer.current); setIsHovered(true); }, []);
   const onPointerLeave = useCallback(() => { leaveTimer.current = setTimeout(() => setIsHovered(false), 100); }, []);
 
-  // Measure available width and compute how many tags fit
+  // Dynamically compute how many tags fit in the available width
   useEffect(() => {
-    const el = containerRef.current;
-    if (!el || tags.length === 0) return;
+    const outer = outerRef.current;
+    const measureEl = measureRef.current;
+    if (!outer || !measureEl || tags.length === 0) return;
 
-    const compute = () => {
-      const availableWidth = el.clientWidth - EDIT_BUTTON_WIDTH;
+    function measure() {
+      const outerEl = outerRef.current;
+      const mEl = measureRef.current;
+      if (!outerEl || !mEl) return;
+
+      const availableWidth = outerEl.clientWidth - EDIT_BUTTON_WIDTH;
+      const tagEls = Array.from(mEl.children) as HTMLElement[];
+
       let usedWidth = 0;
       let count = 0;
 
-      for (let i = 0; i < tags.length; i++) {
-        const tagWidth = Math.min(tags[i].length * TAG_CHAR_WIDTH + TAG_PADDING, TAG_MAX_WIDTH);
-        const needsOverflow = i < tags.length - 1; // not the last tag
-        const reserveForOverflow = needsOverflow ? OVERFLOW_BADGE_WIDTH : 0;
+      for (let i = 0; i < tagEls.length; i++) {
+        const w = tagEls[i].offsetWidth;
+        const gapBefore = count > 0 ? GAP_PX : 0;
+        const remaining = tagEls.length - i - 1;
+        const overflowSpace = remaining > 0 ? OVERFLOW_BADGE_WIDTH + GAP_PX : 0;
 
-        if (usedWidth + tagWidth + reserveForOverflow <= availableWidth) {
-          usedWidth += tagWidth;
+        if (usedWidth + gapBefore + w + overflowSpace <= availableWidth) {
+          usedWidth += gapBefore + w;
           count++;
         } else {
           break;
         }
       }
 
-      setMaxVisible(Math.max(1, count));
-    };
+      setVisibleCount(Math.max(count, 1));
+    }
 
-    compute();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(compute);
-    observer.observe(el);
+    measure(); // Perform an initial measurement
+
+    const observer = new ResizeObserver(measure);
+    observer.observe(outer);
     return () => observer.disconnect();
   }, [tags]);
 
-  const visibleTags = tags.slice(0, maxVisible);
-  const hiddenCount = tags.length - visibleTags.length;
-  const hasOverflow = hiddenCount > 0;
+  const visibleTags = tags.slice(0, visibleCount);
+  const hasOverflow = tags.length > visibleCount;
   const hasLongTag = visibleTags.some((tag) => tag.length > 15);
   const showTooltip = hasOverflow || hasLongTag;
 
   return (
-    <div ref={containerRef} className="flex items-center gap-1 overflow-hidden">
+    <div ref={outerRef} className="relative flex items-center gap-1 overflow-hidden">
+      {/* Hidden measurement row — renders all tags so we can measure their widths */}
+      <div
+        ref={measureRef}
+        className="pointer-events-none invisible absolute flex items-center gap-1"
+        aria-hidden="true"
+      >
+        {tags.map((tag) => (
+          <TagBadge key={tag} tag={tag} truncate />
+        ))}
+      </div>
+
       <Tooltip open={isHovered}>
         <TooltipTrigger asChild>
           <div
@@ -86,7 +103,7 @@ export function TagsCell({ tags, allTags, onTagsUpdate, organizationId }: TagsCe
             ))}
             {hasOverflow && (
               <Badge variant="outline" className="text-xs bg-primary/10 shrink-0">
-                +{hiddenCount}
+                +{tags.length - visibleCount}
               </Badge>
             )}
           </div>

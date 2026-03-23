@@ -1,15 +1,6 @@
-import { describe, it, expect, vi, afterEach, beforeAll } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
+import { render, screen, cleanup, act } from "@testing-library/react";
 import { TagsCell } from "../tags-cell";
-
-// Mock ResizeObserver for jsdom
-beforeAll(() => {
-  global.ResizeObserver = class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  } as unknown as typeof ResizeObserver;
-});
 
 // Mock the TagsEditorPopover since it has complex dependencies (tRPC, popover)
 vi.mock("@/components/tags-editor-popover", () => ({
@@ -53,6 +44,72 @@ vi.mock("@/components/tag-badge", () => ({
   ),
 }));
 
+// ── ResizeObserver stub ──────────────────────────────────────────────
+// jsdom doesn't provide ResizeObserver. We store the last callback so tests
+// can trigger measurement with a controlled container width.
+
+let resizeCallback: ResizeObserverCallback | null = null;
+
+class FakeResizeObserver {
+  constructor(cb: ResizeObserverCallback) {
+    resizeCallback = cb;
+  }
+  observe() {}
+  unobserve() {}
+  disconnect() {
+    resizeCallback = null;
+  }
+}
+
+beforeEach(() => {
+  vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+});
+
+afterEach(() => {
+  resizeCallback = null;
+  vi.restoreAllMocks();
+});
+
+/**
+ * Helper: simulate a ResizeObserver callback that makes the measurement
+ * logic see a specific container `clientWidth`.  Because jsdom elements
+ * always report 0 for `clientWidth`/`offsetWidth`, we need to stub the
+ * element properties that the measurement code reads.
+ *
+ * `tagWidths` lets us control the per-tag `offsetWidth` returned by the
+ * hidden measurement row children.
+ */
+function simulateResize(
+  containerWidth: number,
+  tagWidths: number[]
+) {
+  if (!resizeCallback) return;
+
+  // The component's outerRef is the first `div.relative` rendered.
+  // Its `clientWidth` is read inside `measure()`.
+  const outerDiv = document.querySelector<HTMLElement>("[data-testid='tooltip-root']")?.closest<HTMLElement>("div.relative");
+  if (!outerDiv) return;
+
+  // Stub clientWidth on the outer container
+  Object.defineProperty(outerDiv, "clientWidth", { value: containerWidth, configurable: true });
+
+  // The hidden measurement div is the first child with aria-hidden
+  const measureDiv = outerDiv.querySelector<HTMLElement>('[aria-hidden="true"]');
+  if (measureDiv) {
+    const children = Array.from(measureDiv.children) as HTMLElement[];
+    children.forEach((child, i) => {
+      Object.defineProperty(child, "offsetWidth", {
+        value: tagWidths[i] ?? 50,
+        configurable: true,
+      });
+    });
+  }
+
+  act(() => {
+    resizeCallback!([], {} as ResizeObserver);
+  });
+}
+
 describe("TagsCell", () => {
   afterEach(cleanup);
 
@@ -62,10 +119,12 @@ describe("TagsCell", () => {
     organizationId: "org-1",
   };
 
+  // ── Basic rendering (initial state: visibleCount = 1 to avoid flicker) ──
+
   it("renders tags and keeps them accessible", () => {
     render(<TagsCell {...defaultProps} tags={["tag-a", "tag-b"]} />);
 
-    // Both tags should appear at least once (in cell and/or tooltip)
+    // Both tags should appear at least once (in measurement row and/or visible area)
     expect(screen.getAllByText("tag-a").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("tag-b").length).toBeGreaterThanOrEqual(1);
   });
@@ -73,9 +132,8 @@ describe("TagsCell", () => {
   it("renders single short tag without tooltip", () => {
     render(<TagsCell {...defaultProps} tags={["only-tag"]} />);
 
-    expect(screen.getAllByText("only-tag")).toHaveLength(1);
+    expect(screen.getAllByText("only-tag")).toHaveLength(2); // 1 measure + 1 visible
     expect(screen.queryByText(/^\+\d+$/)).toBeNull();
-    // No tooltip content for short tags
     expect(screen.queryByTestId("tooltip-content")).toBeNull();
   });
 
@@ -85,7 +143,6 @@ describe("TagsCell", () => {
 
     expect(screen.getAllByText(longTag).length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText(/^\+\d+$/)).toBeNull();
-    // Tooltip content should be rendered for long truncated tags
     const content = screen.getByTestId("tooltip-content");
     expect(content.textContent).toContain(longTag);
   });
@@ -93,57 +150,103 @@ describe("TagsCell", () => {
   it("renders empty state without overflow", () => {
     render(<TagsCell {...defaultProps} tags={[]} />);
 
-    // No tooltip content (overflow tooltip not rendered)
     expect(screen.queryByTestId("tooltip-content")).toBeNull();
     expect(screen.queryByText(/^\+\d+$/)).toBeNull();
   });
 
-  it("shows overflow badge when tags exceed visible count", () => {
-    render(
-      <TagsCell {...defaultProps} tags={["tag-a", "tag-b", "tag-c"]} />
-    );
+  // ── Hidden measurement row ──
 
-    // At least first tag visible
-    expect(screen.getAllByText("tag-a").length).toBeGreaterThanOrEqual(1);
-    // Overflow badge present (exact count depends on container width in jsdom)
-    expect(screen.queryByText(/^\+\d+$/)).not.toBeNull();
+  it("renders a hidden measurement row with all tags", () => {
+    const tags = ["tag-a", "tag-b", "tag-c", "tag-d"];
+    render(<TagsCell {...defaultProps} tags={tags} />);
+
+    const measureRow = document.querySelector('[aria-hidden="true"]');
+    expect(measureRow).not.toBeNull();
+    // Measurement row contains all tags (one TagBadge per tag)
+    const measureBadges = measureRow!.querySelectorAll('[data-testid="tag-badge"]');
+    expect(measureBadges).toHaveLength(tags.length);
   });
 
-  it("wraps overflow badge in tooltip showing all tags", () => {
-    render(
-      <TagsCell
-        {...defaultProps}
-        tags={["tag-a", "tag-b", "tag-c", "tag-d"]}
-      />
-    );
+  // ── Dynamic visibility via ResizeObserver ──
 
-    // Overflow badge present
-    expect(screen.queryByText(/^\+\d+$/)).not.toBeNull();
-    // Tooltip structure present
-    expect(screen.getByTestId("tooltip-root")).toBeDefined();
-    expect(screen.getByTestId("tooltip-trigger")).toBeDefined();
-    // Tooltip content shows ALL tags (including ones not visible in table)
+  it("shows overflow badge when container is too narrow for all tags", () => {
+    const tags = ["tag-a", "tag-b", "tag-c", "tag-d"];
+    render(<TagsCell {...defaultProps} tags={tags} />);
+
+    // Simulate a narrow container (only fits 2 tags)
+    // Each tag ~50px, gap 4px, overflow badge 36px, edit button 28px
+    // Available = 200 - 28 = 172. Two tags: 50 + 4 + 50 + 4 + 36 = 144 fits, three: 50+4+50+4+50+4+36=198 > 172
+    simulateResize(200, [50, 50, 50, 50]);
+
+    // Should show +2 overflow badge
+    expect(screen.getByText("+2")).toBeDefined();
+    // Tooltip content should show all tags
     const content = screen.getByTestId("tooltip-content");
     expect(content.textContent).toContain("tag-a");
-    expect(content.textContent).toContain("tag-b");
-    expect(content.textContent).toContain("tag-c");
     expect(content.textContent).toContain("tag-d");
   });
 
-  it("shows correct overflow count for many tags", () => {
+  it("shows all tags (no overflow) when container is wide enough", () => {
+    const tags = ["tag-a", "tag-b", "tag-c"];
+    render(<TagsCell {...defaultProps} tags={tags} />);
+
+    // Wide container: 500 - 28 = 472 available, 3 tags @ 50px each = 158px total, easily fits
+    simulateResize(500, [50, 50, 50]);
+
+    // No overflow badge
+    expect(screen.queryByText(/^\+\d+$/)).toBeNull();
+    // No tooltip (tags are short and all visible)
+    expect(screen.queryByTestId("tooltip-content")).toBeNull();
+  });
+
+  it("updates visible count when container resizes wider", () => {
     const tags = ["t1", "t2", "t3", "t4", "t5", "t6"];
     render(<TagsCell {...defaultProps} tags={tags} />);
 
-    // Should have an overflow badge
-    const overflowBadge = screen.queryByText(/^\+\d+$/);
-    expect(overflowBadge).not.toBeNull();
-    // First tag always visible
-    expect(screen.getAllByText("t1").length).toBeGreaterThanOrEqual(1);
+    // Start narrow — only 2 fit
+    simulateResize(200, [50, 50, 50, 50, 50, 50]);
+    expect(screen.getByText("+4")).toBeDefined();
+
+    // Resize wider — now 4 fit
+    simulateResize(300, [50, 50, 50, 50, 50, 50]);
+    expect(screen.getByText("+2")).toBeDefined();
   });
 
-  it("always renders the edit button", () => {
-    render(<TagsCell {...defaultProps} tags={["tag-a", "tag-b", "tag-c"]} />);
-    expect(screen.getByTestId("tags-editor")).toBeDefined();
+  it("always shows at least 1 tag even in very narrow container", () => {
+    const tags = ["tag-a", "tag-b"];
+    render(<TagsCell {...defaultProps} tags={tags} />);
+
+    // Extremely narrow — nothing really fits, but we clamp to 1
+    simulateResize(30, [50, 50]);
+
+    // Should still show 1 visible tag badge in the visible area
+    const visibleBadges = screen.getAllByText("tag-a");
+    expect(visibleBadges.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("shows correct overflow count for many tags in narrow cell", () => {
+    const tags = ["t1", "t2", "t3", "t4", "t5", "t6"];
+    render(<TagsCell {...defaultProps} tags={tags} />);
+
+    // Narrow: only 1 fits
+    simulateResize(100, [50, 50, 50, 50, 50, 50]);
+
+    expect(screen.getByText("+5")).toBeDefined();
+  });
+
+  // ── Tooltip content always shows all tags ──
+
+  it("tooltip content includes all tags regardless of visible count", () => {
+    const tags = ["alpha", "beta", "gamma", "delta", "epsilon"];
+    render(<TagsCell {...defaultProps} tags={tags} />);
+
+    // Narrow container
+    simulateResize(200, [60, 60, 60, 60, 60]);
+
+    const content = screen.getByTestId("tooltip-content");
+    for (const tag of tags) {
+      expect(content.textContent).toContain(tag);
+    }
   });
 
   it("tooltip tags have truncate prop for long tag handling", () => {
@@ -163,18 +266,8 @@ describe("TagsCell", () => {
     });
   });
 
-  it("renders with dynamic overflow count based on hidden tags", () => {
-    // In jsdom with 0-width container, maxVisible defaults to 1 (Math.max(1, 0))
-    // So with 5 tags, overflow should be +4
-    const tags = ["alpha", "beta", "gamma", "delta", "epsilon"];
-    render(<TagsCell {...defaultProps} tags={tags} />);
-
-    const overflowBadge = screen.queryByText(/^\+\d+$/);
-    expect(overflowBadge).not.toBeNull();
-    // The hidden count should equal total - visible
-    const visibleBadges = screen.getByTestId("tooltip-trigger").querySelectorAll("[data-testid='tag-badge']");
-    const overflowText = overflowBadge!.textContent!;
-    const hiddenCount = parseInt(overflowText.replace("+", ""));
-    expect(hiddenCount + visibleBadges.length).toBe(tags.length);
+  it("always renders the edit button", () => {
+    render(<TagsCell {...defaultProps} tags={["tag-a", "tag-b", "tag-c"]} />);
+    expect(screen.getByTestId("tags-editor")).toBeDefined();
   });
 });
