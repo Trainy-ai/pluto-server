@@ -338,11 +338,14 @@ input[type="number"] {
   flex: 1;
 }
 
-/* Value cell — compact, muted */
+/* Value cell — compact, muted, fixed-width to prevent flicker on hover */
 .fullscreen-legend-sidebar .u-series .u-value {
   white-space: nowrap;
   opacity: 0.6;
   flex-shrink: 0;
+  min-width: 7.5rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Hide companion series (smoothing originals) from sidebar — already hidden via inline style */
