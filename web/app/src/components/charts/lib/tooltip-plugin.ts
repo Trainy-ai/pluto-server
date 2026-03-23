@@ -1518,7 +1518,13 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     // Close button is safe — it lives on tooltipEl, outside contentContainer.
     if (isPinned) {
       const syncIdx = u.cursor.idx ?? lastIdx;
-      if (syncIdx != null && tooltipEl) {
+      // Only rebuild tooltip DOM when cursor moves to a different data point.
+      // Rebuilding on every setCursor call (even same index) destroys row DOM
+      // elements, breaking mouseenter/mouseleave handlers for hover emphasis
+      // and stealing focus from the search input.
+      if (syncIdx != null && syncIdx !== lastIdx && tooltipEl) {
+        lastIdx = syncIdx;
+        syncHoverState();
         savedPinnedLeft = tooltipEl.style.left;
         savedPinnedTop = tooltipEl.style.top;
         // Capture search input state before DOM rebuild

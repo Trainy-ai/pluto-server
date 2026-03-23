@@ -145,6 +145,15 @@ export function ChartFullscreenDialog({
             e.preventDefault();
           }
         }}
+        onFocusOutside={(e) => {
+          // Prevent Dialog focus trap from stealing focus from tooltip elements
+          // (e.g. search input in pinned tooltip). Without this, the user cannot
+          // type in the tooltip search or interact with tooltip controls.
+          const target = e.target as HTMLElement | null;
+          if (target?.closest?.("[data-tooltip]") || target?.closest?.("[data-tooltip-add-dropdown]")) {
+            e.preventDefault();
+          }
+        }}
         onEscapeKeyDown={(e) => {
           // Prevent closing when a pinned tooltip is active — let the tooltip
           // handle Escape first (unpin). The dialog closes on the next Escape.
