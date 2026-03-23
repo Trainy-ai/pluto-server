@@ -321,6 +321,11 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
     const spanGapsRef = useRef(spanGaps);
     spanGapsRef.current = spanGaps;
 
+    // Track series manually hidden via legend clicks (seriesId → hidden).
+    // Persists across chart recreations (e.g. zoom-triggered re-fetch) so toggled
+    // series stay hidden. Separate from context's hiddenRunIdsRef (runs table toggle).
+    const legendHiddenSeriesRef = useRef<Set<string>>(new Set());
+
     // Ref to access processedLines in callbacks without causing dependency issues
     const processedLinesRef = useRef<typeof lines>([]);
 
@@ -356,6 +361,16 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
 
     // Keep ref in sync for callbacks
     processedLinesRef.current = processedLines;
+
+    // Prune stale entries from legend-hidden set when series change (e.g. runs deselected)
+    if (legendHiddenSeriesRef.current.size > 0) {
+      const validIds = new Set(processedLines.map((l) => l.seriesId ?? l.label));
+      legendHiddenSeriesRef.current.forEach((id) => {
+        if (!validIds.has(id)) {
+          legendHiddenSeriesRef.current.delete(id);
+        }
+      });
+    }
 
     // Cross-chart highlight is handled fully by the imperative highlightUPlotSeries path
     // in chart-sync-context.tsx which directly sets _crossHighlightRunId on chart instances
@@ -1122,6 +1137,16 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
               // Use the original label from processedLines (not the potentially-shortened series label)
               const originalLabel = toggled.label;
 
+              // Track legend-toggled visibility so it persists across chart recreations
+              // (e.g. zoom-triggered data refetch that rebuilds the chart).
+              if (seriesId) {
+                if (shouldShow) {
+                  legendHiddenSeriesRef.current.delete(seriesId);
+                } else {
+                  legendHiddenSeriesRef.current.add(seriesId);
+                }
+              }
+
               // Find and sync companion series
               for (let i = 1; i < u.series.length; i++) {
                 if (i === seriesIdx) continue;
@@ -1617,13 +1642,15 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
 
       // Apply hidden run state from context (series that should be invisible)
       const hiddenIds = chartSyncContextRef.current?.hiddenRunIdsRef?.current;
-      if (hiddenIds && hiddenIds.size > 0) {
+      // Apply legend-toggled visibility (series hidden via legend click, persists across recreations)
+      const legendHidden = legendHiddenSeriesRef.current;
+      if ((hiddenIds && hiddenIds.size > 0) || legendHidden.size > 0) {
         chart.batch(() => {
           for (let i = 1; i < chart.series.length; i++) {
             const seriesId = (chart.series[i] as any)?._seriesId as string | undefined;
             if (!seriesId) continue;
             const runId = seriesId.includes(':') ? seriesId.split(':')[0] : seriesId;
-            if (hiddenIds.has(runId)) {
+            if ((hiddenIds && hiddenIds.has(runId)) || legendHidden.has(seriesId)) {
               chart.setSeries(i, { show: false });
             }
           }
