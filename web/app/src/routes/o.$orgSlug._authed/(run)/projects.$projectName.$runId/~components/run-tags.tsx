@@ -17,7 +17,7 @@ export function RunTags({ tags, onTagsUpdate, organizationId }: RunTagsProps) {
           <span className="text-sm text-muted-foreground">No tags</span>
         )}
         {tags.map((tag) => (
-          <TagBadge key={tag} tag={tag} />
+          <TagBadge key={tag} tag={tag} className="max-w-[200px] truncate" />
         ))}
       </div>
       <TagsEditorPopover

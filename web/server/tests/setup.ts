@@ -712,6 +712,9 @@ async function setupTestData(): Promise<TestData> {
 
   if (!needleRun) {
     // Create bulk runs with sequential names
+    // First 10 runs get incrementing tag counts for tags-column-width e2e test:
+    //   bulk-run-000: 1 tag, bulk-run-001: 2 tags, ..., bulk-run-009: 10 tags
+    const TAG_POOL = ['training', 'eval', 'sweep', 'baseline', 'production', 'debug', 'nightly', 'gpu', 'distributed', 'final'];
     const bulkRunData = Array.from({ length: SEARCH_TEST_RUN_COUNT }, (_, i) => ({
       name: `bulk-run-${String(i).padStart(3, '0')}`,
       organizationId: org.id,
@@ -719,6 +722,7 @@ async function setupTestData(): Promise<TestData> {
       createdById: user.id,
       creatorApiKeyId: apiKey.id,
       status: 'COMPLETED' as const,
+      ...(i < 10 ? { tags: TAG_POOL.slice(0, i + 1) } : {}),
       config: {
         epochs: 100,
         lr: 0.001,

@@ -151,7 +151,8 @@ export function TagsEditorPopover({
           <CommandInput
             placeholder="Search or add tag..."
             value={inputValue}
-            onValueChange={setInputValue}
+            maxLength={30}
+            onValueChange={(v) => setInputValue(v.slice(0, 30))}
             onKeyDown={(e) => {
               if (e.key === "Enter" && inputValue.trim()) {
                 e.preventDefault();
@@ -166,8 +167,8 @@ export function TagsEditorPopover({
                   className="flex w-full items-center gap-2 px-2 py-1.5 text-sm hover:bg-accent"
                   onClick={handleAddNewTag}
                 >
-                  <Plus className="h-4 w-4" />
-                  Create "{inputValue.trim()}"
+                  <Plus className="h-4 w-4 shrink-0" />
+                  <span className="truncate">Create "{inputValue.trim()}"</span>
                 </button>
               ) : (
                 emptyText
@@ -223,9 +224,10 @@ export function TagsEditorPopover({
                 <Badge
                   key={tag}
                   variant="secondary"
-                  className="gap-1 pr-1 text-xs"
+                  className="gap-1 pr-1 text-xs max-w-full"
+                  title={tag}
                 >
-                  {tag}
+                  <span className="truncate">{tag}</span>
                   <button
                     className="ml-1 rounded-full hover:bg-muted"
                     onClick={(e) => handleRemoveTag(e, tag)}

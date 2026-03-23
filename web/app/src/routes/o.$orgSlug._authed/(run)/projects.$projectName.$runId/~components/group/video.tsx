@@ -474,8 +474,8 @@ export const VideoView: React.FC<VideoViewProps> = ({
   );
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col space-y-4">
-      <h2 className="text-center font-mono text-lg">{log.logName}</h2>
+    <div className="flex h-full w-full flex-col space-y-4 p-4">
+      <h2 className="text-center font-mono text-sm font-medium text-muted-foreground">{log.logName}</h2>
 
       {currentStepVideos.length === 1 ? (
         <div className="flex h-full min-h-0 w-full flex-1">

@@ -88,15 +88,28 @@ export const getColorForRun = (runId: string, colors: string[]): Color => {
 };
 
 /**
+ * Generate a visually distinct color using the golden angle for hue spacing.
+ * This produces colors that are maximally separated in hue space.
+ */
+function generateGoldenAngleColor(index: number): string {
+  const goldenAngle = 137.508;
+  const hue = (index * goldenAngle) % 360;
+  return `hsl(${hue.toFixed(1)}, 70%, 55%)`;
+}
+
+/**
  * Get the next available color from the palette that isn't already in use.
  * This ensures selected runs always get maximally distinct colors.
- * Falls back to cycling through the palette if all colors are taken.
+ * When the palette is exhausted, generates new colors using the golden angle
+ * for infinite visually distinct colors.
  */
 function getNextAvailableColor(usedColors: Set<string>, palette: string[]): string {
   for (const color of palette) {
     if (!usedColors.has(color)) return color;
   }
-  return palette[usedColors.size % palette.length];
+  // Palette exhausted — generate a unique color beyond the palette
+  const overflowIndex = usedColors.size - palette.length;
+  return generateGoldenAngleColor(overflowIndex);
 }
 
 /**

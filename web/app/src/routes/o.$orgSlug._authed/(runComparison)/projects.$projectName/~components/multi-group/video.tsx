@@ -149,14 +149,14 @@ export const MultiGroupVideo = ({
   return (
     <div
       className={cn(
-        "flex h-full w-full flex-grow flex-col space-y-4 p-4",
+        "flex h-full w-full flex-col space-y-4 p-4",
         className,
       )}
     >
       <h3 className="text-center font-mono text-sm font-medium text-muted-foreground">
         {logName}
       </h3>
-      <div className="grid h-full flex-1 grid-cols-1 gap-4 overflow-auto sm:grid-cols-2">
+      <div className="grid flex-1 grid-cols-1 gap-4 overflow-auto sm:grid-cols-2">
         {videosByRun.map(({ run, videos }) => {
           const video = videos[0]; // Take the first video for each run
           const isRunLoading = queriesWithRuns.find(

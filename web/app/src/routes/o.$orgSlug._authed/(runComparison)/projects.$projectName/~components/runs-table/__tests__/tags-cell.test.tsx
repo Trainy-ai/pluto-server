@@ -1,6 +1,15 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeAll } from "vitest";
 import { render, screen, cleanup } from "@testing-library/react";
 import { TagsCell } from "../tags-cell";
+
+// Mock ResizeObserver for jsdom
+beforeAll(() => {
+  global.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver;
+});
 
 // Mock the TagsEditorPopover since it has complex dependencies (tRPC, popover)
 vi.mock("@/components/tags-editor-popover", () => ({
@@ -37,8 +46,10 @@ vi.mock("@/components/ui/tooltip", () => ({
 
 // Mock TagBadge to render tag text directly
 vi.mock("@/components/tag-badge", () => ({
-  TagBadge: ({ tag }: { tag: string; truncate?: boolean }) => (
-    <span data-testid="tag-badge">{tag}</span>
+  TagBadge: ({ tag, truncate, className }: { tag: string; truncate?: boolean; className?: string }) => (
+    <span data-testid="tag-badge" data-truncate={truncate || undefined} data-classname={className || undefined}>
+      {tag}
+    </span>
   ),
 }));
 
@@ -51,15 +62,12 @@ describe("TagsCell", () => {
     organizationId: "org-1",
   };
 
-  it("renders all tags when 2 or fewer", () => {
+  it("renders tags and keeps them accessible", () => {
     render(<TagsCell {...defaultProps} tags={["tag-a", "tag-b"]} />);
 
-    expect(screen.getAllByText("tag-a")).toHaveLength(1);
-    expect(screen.getAllByText("tag-b")).toHaveLength(1);
-    // No overflow badge
-    expect(screen.queryByText(/^\+\d+$/)).toBeNull();
-    // No tooltip content (overflow tooltip not rendered)
-    expect(screen.queryByTestId("tooltip-content")).toBeNull();
+    // Both tags should appear at least once (in cell and/or tooltip)
+    expect(screen.getAllByText("tag-a").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("tag-b").length).toBeGreaterThanOrEqual(1);
   });
 
   it("renders single short tag without tooltip", () => {
@@ -90,16 +98,15 @@ describe("TagsCell", () => {
     expect(screen.queryByText(/^\+\d+$/)).toBeNull();
   });
 
-  it("shows first 2 tags and +N badge when more than 2 tags", () => {
+  it("shows overflow badge when tags exceed visible count", () => {
     render(
       <TagsCell {...defaultProps} tags={["tag-a", "tag-b", "tag-c"]} />
     );
 
-    // First 2 visible in table + all 3 in tooltip content
+    // At least first tag visible
     expect(screen.getAllByText("tag-a").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText("tag-b").length).toBeGreaterThanOrEqual(1);
-    // Overflow badge
-    expect(screen.getByText("+1")).toBeDefined();
+    // Overflow badge present (exact count depends on container width in jsdom)
+    expect(screen.queryByText(/^\+\d+$/)).not.toBeNull();
   });
 
   it("wraps overflow badge in tooltip showing all tags", () => {
@@ -110,8 +117,8 @@ describe("TagsCell", () => {
       />
     );
 
-    // Overflow badge
-    expect(screen.getByText("+2")).toBeDefined();
+    // Overflow badge present
+    expect(screen.queryByText(/^\+\d+$/)).not.toBeNull();
     // Tooltip structure present
     expect(screen.getByTestId("tooltip-root")).toBeDefined();
     expect(screen.getByTestId("tooltip-trigger")).toBeDefined();
@@ -127,14 +134,47 @@ describe("TagsCell", () => {
     const tags = ["t1", "t2", "t3", "t4", "t5", "t6"];
     render(<TagsCell {...defaultProps} tags={tags} />);
 
-    expect(screen.getByText("+4")).toBeDefined();
-    // First 2 visible
+    // Should have an overflow badge
+    const overflowBadge = screen.queryByText(/^\+\d+$/);
+    expect(overflowBadge).not.toBeNull();
+    // First tag always visible
     expect(screen.getAllByText("t1").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText("t2").length).toBeGreaterThanOrEqual(1);
   });
 
   it("always renders the edit button", () => {
     render(<TagsCell {...defaultProps} tags={["tag-a", "tag-b", "tag-c"]} />);
     expect(screen.getByTestId("tags-editor")).toBeDefined();
+  });
+
+  it("tooltip tags have truncate prop for long tag handling", () => {
+    render(
+      <TagsCell
+        {...defaultProps}
+        tags={["tag-a", "tag-b", "tag-c"]}
+      />
+    );
+
+    // Tooltip content tags should have truncate prop
+    const tooltipContent = screen.getByTestId("tooltip-content");
+    const tooltipBadges = tooltipContent.querySelectorAll("[data-testid='tag-badge']");
+    expect(tooltipBadges.length).toBe(3);
+    tooltipBadges.forEach((badge) => {
+      expect(badge.getAttribute("data-truncate")).toBe("true");
+    });
+  });
+
+  it("renders with dynamic overflow count based on hidden tags", () => {
+    // In jsdom with 0-width container, maxVisible defaults to 1 (Math.max(1, 0))
+    // So with 5 tags, overflow should be +4
+    const tags = ["alpha", "beta", "gamma", "delta", "epsilon"];
+    render(<TagsCell {...defaultProps} tags={tags} />);
+
+    const overflowBadge = screen.queryByText(/^\+\d+$/);
+    expect(overflowBadge).not.toBeNull();
+    // The hidden count should equal total - visible
+    const visibleBadges = screen.getByTestId("tooltip-trigger").querySelectorAll("[data-testid='tag-badge']");
+    const overflowText = overflowBadge!.textContent!;
+    const hiddenCount = parseInt(overflowText.replace("+", ""));
+    expect(hiddenCount + visibleBadges.length).toBe(tags.length);
   });
 });

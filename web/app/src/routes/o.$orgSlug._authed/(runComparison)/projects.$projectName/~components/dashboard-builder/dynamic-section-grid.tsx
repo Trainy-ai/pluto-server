@@ -154,7 +154,7 @@ export function DynamicSectionGrid({
           return (
             <div
               key={widget.id}
-              className="group relative min-h-[300px] rounded-lg border bg-card shadow-sm"
+              className="group relative h-[384px] rounded-lg border bg-card shadow-sm"
             >
               {/* Widget Header */}
               <div className="relative z-10 flex items-center justify-between border-b px-3 py-2 bg-card">

@@ -73,10 +73,14 @@ export function TagBadge({ tag, className, truncate }: TagBadgeProps) {
   return (
     <Badge
       variant="outline"
-      className={cn("shrink-0 text-xs bg-primary/10", truncate && "max-w-[120px] truncate", className)}
-      title={truncate ? parsed.display : undefined}
+      className={cn(
+        "text-xs bg-primary/10 overflow-hidden",
+        truncate ? "max-w-[120px]" : "shrink-0",
+        className,
+      )}
+      title={parsed.display}
     >
-      {parsed.display}
+      <span className="truncate">{parsed.display}</span>
     </Badge>
   );
 }

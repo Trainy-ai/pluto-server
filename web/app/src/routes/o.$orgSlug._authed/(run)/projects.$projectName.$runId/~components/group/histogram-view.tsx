@@ -1,79 +1,22 @@
-import React, { useEffect, useRef, useState, useCallback } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { trpc } from "@/utils/trpc";
+import React, { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Button } from "@/components/ui/button";
-import { Slider } from "@/components/ui/slider";
-import {
-  Play,
-  Pause,
-  SkipBack,
-  SkipForward,
-  Camera,
-  Film,
-  Settings,
-} from "lucide-react";
 import { useTheme } from "@/lib/hooks/use-theme";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import GIF from "gif.js";
 import { toast } from "@/components/ui/sonner";
 import { useGetHistogram } from "../../~queries/get-histogram";
 import { StepNavigator } from "../shared/step-navigator";
 import { useHistogramCanvas } from "@/routes/o.$orgSlug._authed/(runComparison)/projects.$projectName/~components/multi-group/hooks/use-histogram-canvas";
+import { AnimationControls } from "@/routes/o.$orgSlug._authed/(runComparison)/projects.$projectName/~components/multi-group/components/animation-controls";
 
-// ---------------------- Constants ----------------------
+// Default color for single-run histograms
+const DEFAULT_HISTOGRAM_COLOR = "hsl(216, 66%, 60%)";
+
 const ANIMATION_CONFIG = {
   MIN_SPEED: 1,
   MAX_SPEED: 1000,
-  SPEED_STEP: 10,
   DEFAULT_SPEED: 10,
-  GIF_FRAME_DELAY: 100, // in ms
+  GIF_FRAME_DELAY: 100,
 } as const;
-
-const TICK_CONFIG = {
-  X_AXIS_TICKS: 10,
-  Y_AXIS_TICKS: 5,
-  TICK_LENGTH: 5,
-} as const;
-
-// Default color for single-run histograms (matches line chart color)
-const DEFAULT_HISTOGRAM_COLOR = "hsl(216, 66%, 60%)";
-
-// ---------------------- Utility Functions ----------------------
-function generateNiceNumbers(
-  min: number,
-  max: number,
-  numberOfTicks: number,
-): number[] {
-  const range = max - min;
-  const unroundedTickSize = range / (numberOfTicks - 1);
-  const exponent = Math.ceil(Math.log10(unroundedTickSize) - 1);
-  const pow10 = Math.pow(10, exponent);
-  const roundedTickSize = Math.ceil(unroundedTickSize / pow10) * pow10;
-  const niceMin = Math.floor(min / roundedTickSize) * roundedTickSize;
-  const niceMax = Math.ceil(max / roundedTickSize) * roundedTickSize;
-
-  const ticks: number[] = [];
-  for (let tick = niceMin; tick <= niceMax; tick += roundedTickSize) {
-    ticks.push(Number(tick.toFixed(10)));
-  }
-  return ticks;
-}
-
-function formatNumber(value: number, isInteger = false): string {
-  if (value === 0) return "0";
-  if (isInteger) return value.toFixed(0);
-  const absValue = Math.abs(value);
-  if (absValue < 0.0001 || absValue >= 1000000) return value.toExponential(2);
-  if (absValue < 0.1) return value.toFixed(4);
-  if (absValue < 1000) return value.toFixed(2);
-  return value.toFixed(1);
-}
 
 // ---------------------- Type Definitions ----------------------
 interface HistogramData {
@@ -91,221 +34,37 @@ interface HistogramStep {
   histogramData: HistogramData;
 }
 
-interface AnimationControlsProps {
-  currentStep: number;
-  maxStep: number;
-  isPlaying: boolean;
-  animationSpeed: number;
-  onPlayPause: () => void;
-  onStepChange: (step: number) => void;
-  onSpeedChange: (speed: number) => void;
-  onExport: (type: "snapshot" | "gif") => void;
+// ---------------------- Utility ----------------------
+function formatNumber(value: number, isInteger = false): string {
+  if (value === 0) return "0";
+  if (isInteger) return value.toFixed(0);
+  const absValue = Math.abs(value);
+  if (absValue < 0.0001 || absValue >= 1000000) return value.toExponential(2);
+  if (absValue < 0.1) return value.toFixed(4);
+  if (absValue < 1000) return value.toFixed(2);
+  return value.toFixed(1);
 }
 
-// ---------------------- Components ----------------------
-
-// Animation control buttons and sliders
-const AnimationControls: React.FC<AnimationControlsProps> = ({
-  currentStep,
-  maxStep,
-  isPlaying,
-  animationSpeed,
-  onPlayPause,
-  onStepChange,
-  onSpeedChange,
-  onExport,
-}) => {
-  return (
-    <div className="flex items-center gap-2">
-      <div className="flex items-center gap-1">
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => onStepChange(Math.max(0, currentStep - 1))}
-          disabled={currentStep === 0}
-        >
-          <SkipBack className="h-4 w-4" />
-        </Button>
-        <Button variant="ghost" size="icon" onClick={onPlayPause}>
-          {isPlaying ? (
-            <Pause className="h-4 w-4" />
-          ) : (
-            <Play className="h-4 w-4" />
-          )}
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => onStepChange(Math.min(maxStep, currentStep + 1))}
-          disabled={currentStep === maxStep}
-        >
-          <SkipForward className="h-4 w-4" />
-        </Button>
-      </div>
-      <Slider
-        className="w-32 flex-1"
-        value={[currentStep]}
-        min={0}
-        max={maxStep}
-        step={1}
-        onValueChange={(value) => onStepChange(value[0])}
-      />
-
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="icon">
-            <Settings className="h-4 w-4" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-48">
-          <div className="p-2">
-            <div className="mb-2 text-sm font-medium">Animation Speed</div>
-            <Slider
-              className="my-4"
-              value={[
-                ANIMATION_CONFIG.MAX_SPEED -
-                  animationSpeed +
-                  ANIMATION_CONFIG.MIN_SPEED,
-              ]}
-              min={ANIMATION_CONFIG.MIN_SPEED}
-              max={ANIMATION_CONFIG.MAX_SPEED}
-              step={ANIMATION_CONFIG.SPEED_STEP}
-              onValueChange={(value) =>
-                onSpeedChange(
-                  ANIMATION_CONFIG.MAX_SPEED -
-                    value[0] +
-                    ANIMATION_CONFIG.MIN_SPEED,
-                )
-              }
-            />
-          </div>
-          <DropdownMenuItem onClick={() => onExport("snapshot")}>
-            <Camera className="mr-2 h-4 w-4" />
-            Export Snapshot
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => onExport("gif")}>
-            <Film className="mr-2 h-4 w-4" />
-            Export Animation
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </div>
-  );
-};
-
-interface HistogramCanvasProps {
+// ---------------------- Shared Canvas Component ----------------------
+// Same canvas component used by multi-group/histogram-view.tsx (SingleRunHistogramCanvas)
+function HistogramCanvas({
+  data,
+  theme,
+  globalMaxFreq,
+  xAxisRange,
+  color = DEFAULT_HISTOGRAM_COLOR,
+  canvasRef: externalCanvasRef,
+}: {
   data: HistogramStep;
   theme: string;
   globalMaxFreq: number;
-  xAxisRange: {
-    min: number;
-    max: number;
-    globalMin: number;
-    globalMax: number;
-  };
-}
-
-// Common drawing routines for axes and ticks
-function drawAxes(
-  ctx: CanvasRenderingContext2D,
-  canvas: HTMLCanvasElement,
-  theme: string,
-  xAxisRange: HistogramCanvasProps["xAxisRange"],
-  globalMaxFreq: number,
-  padding: number,
-) {
-  ctx.beginPath();
-  ctx.strokeStyle = theme === "dark" ? "#94a3b8" : "#666";
-  ctx.lineWidth = 1.5;
-
-  // Y-axis
-  ctx.moveTo(padding, 0);
-  ctx.lineTo(padding, canvas.height - padding);
-  // X-axis
-  ctx.moveTo(padding, canvas.height - padding);
-  ctx.lineTo(canvas.width - padding, canvas.height - padding);
-  ctx.stroke();
-}
-
-function drawXTicks(
-  ctx: CanvasRenderingContext2D,
-  canvas: HTMLCanvasElement,
-  theme: string,
-  xAxisRange: HistogramCanvasProps["xAxisRange"],
-  width: number,
-  padding: number,
-) {
-  const xTicks = generateNiceNumbers(
-    xAxisRange.min,
-    xAxisRange.max,
-    TICK_CONFIG.X_AXIS_TICKS,
-  );
-  xTicks.forEach((tickValue) => {
-    const normalizedX =
-      (tickValue - xAxisRange.min) / (xAxisRange.max - xAxisRange.min);
-    const x = padding + normalizedX * width;
-
-    // Only draw ticks if they are within the plot area (after y-axis)
-    if (x >= padding && x <= canvas.width - padding) {
-      ctx.beginPath();
-      ctx.moveTo(x, canvas.height - padding);
-      ctx.lineTo(x, canvas.height - padding + TICK_CONFIG.TICK_LENGTH);
-      ctx.stroke();
-      ctx.fillStyle = theme === "dark" ? "#94a3b8" : "#666";
-      ctx.font = "12px sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "top";
-      ctx.fillText(
-        formatNumber(tickValue),
-        x,
-        canvas.height - padding + TICK_CONFIG.TICK_LENGTH + 2,
-      );
-    }
-  });
-}
-
-function drawYTicks(
-  ctx: CanvasRenderingContext2D,
-  canvas: HTMLCanvasElement,
-  theme: string,
-  globalMaxFreq: number,
-  height: number,
-  padding: number,
-) {
-  const yTicks = generateNiceNumbers(
-    0,
-    globalMaxFreq,
-    TICK_CONFIG.Y_AXIS_TICKS,
-  );
-  yTicks.forEach((tickValue) => {
-    const normalizedY = tickValue / globalMaxFreq;
-    const y = canvas.height - padding - normalizedY * height;
-    ctx.beginPath();
-    ctx.moveTo(padding - TICK_CONFIG.TICK_LENGTH, y);
-    ctx.lineTo(padding, y);
-    ctx.stroke();
-    ctx.fillStyle = theme === "dark" ? "#94a3b8" : "#666";
-    ctx.font = "12px sans-serif";
-    ctx.textAlign = "right";
-    ctx.textBaseline = "middle";
-    ctx.fillText(
-      formatNumber(tickValue, true),
-      padding - TICK_CONFIG.TICK_LENGTH - 4,
-      y,
-    );
-  });
-}
-
-// Canvas for rendering histogram for a given step
-// Uses the shared useHistogramCanvas hook for visual consistency with the project dashboard
-const HistogramCanvas = React.forwardRef<
-  HTMLCanvasElement,
-  HistogramCanvasProps
->(({ data, theme, globalMaxFreq, xAxisRange }, forwardedRef) => {
+  xAxisRange: { min: number; max: number };
+  color?: string;
+  canvasRef?: React.RefObject<HTMLCanvasElement | null>;
+}) {
   const containerRef = useRef<HTMLDivElement>(null);
   const internalCanvasRef = useRef<HTMLCanvasElement>(null);
-  const canvasRef =
-    (forwardedRef as React.RefObject<HTMLCanvasElement>) || internalCanvasRef;
+  const canvasRef = externalCanvasRef || internalCanvasRef;
   const { drawSingleHistogram } = useHistogramCanvas();
 
   useEffect(() => {
@@ -321,7 +80,7 @@ const HistogramCanvas = React.forwardRef<
         xAxisRange,
         theme,
         globalMaxFreq,
-        color: DEFAULT_HISTOGRAM_COLOR,
+        color,
         hideStepLabel: true,
       });
     };
@@ -330,149 +89,13 @@ const HistogramCanvas = React.forwardRef<
     const observer = new ResizeObserver(draw);
     observer.observe(containerRef.current);
     return () => observer.disconnect();
-  }, [data, theme, globalMaxFreq, xAxisRange, canvasRef, drawSingleHistogram]);
+  }, [data, theme, globalMaxFreq, xAxisRange, canvasRef, drawSingleHistogram, color]);
 
   return (
-    <div ref={containerRef} className="relative min-h-[200px] w-full overflow-hidden rounded-lg bg-background/50">
+    <div ref={containerRef} className="relative min-h-[200px] w-full overflow-hidden rounded-md bg-background/50">
       <canvas ref={canvasRef} className="absolute inset-0" />
     </div>
   );
-});
-HistogramCanvas.displayName = "HistogramCanvas";
-
-// ---------------------- GIF Export Utility ----------------------
-async function createHistogramGif(
-  canvas: HTMLCanvasElement,
-  steps: HistogramStep[],
-  theme: string,
-  globalMaxFreq: number,
-  xAxisRange: {
-    min: number;
-    max: number;
-    globalMin: number;
-    globalMax: number;
-  },
-  onProgress: (progress: number) => void,
-): Promise<Blob> {
-  return new Promise((resolve, reject) => {
-    try {
-      const gif = new GIF({
-        workers: 2,
-        quality: 10,
-        width: canvas.width,
-        height: canvas.height,
-        workerScript: "/gif.worker.js",
-        background: theme === "dark" ? "#000000" : "#ffffff",
-        debug: true,
-      });
-
-      let processedFrames = 0;
-      const totalFrames = steps.length;
-
-      const tempCanvas = document.createElement("canvas");
-      tempCanvas.width = canvas.width;
-      tempCanvas.height = canvas.height;
-      const tempCtx = tempCanvas.getContext("2d");
-      if (!tempCtx)
-        throw new Error("Failed to create temporary canvas context");
-
-      gif.on("progress", (p: number) => onProgress(p));
-
-      steps.forEach((step) => {
-        try {
-          tempCtx.clearRect(0, 0, tempCanvas.width, tempCanvas.height);
-          const padding = 40;
-          const width = tempCanvas.width - padding * 2;
-          const height = tempCanvas.height - padding * 2;
-
-          // Draw axes and ticks on temp canvas
-          drawAxes(
-            tempCtx,
-            tempCanvas,
-            theme,
-            xAxisRange,
-            globalMaxFreq,
-            padding,
-          );
-          drawXTicks(tempCtx, tempCanvas, theme, xAxisRange, width, padding);
-          drawYTicks(
-            tempCtx,
-            tempCanvas,
-            theme,
-            globalMaxFreq,
-            height,
-            padding,
-          );
-
-          // Draw histogram bars on temp canvas
-          const { freq, bins } = step.histogramData;
-          const dataBinWidth = (bins.max - bins.min) / bins.num;
-          const visibleStartBin = Math.max(
-            0,
-            Math.floor((xAxisRange.min - bins.min) / dataBinWidth),
-          );
-          const visibleEndBin = Math.min(
-            bins.num - 1,
-            Math.ceil((xAxisRange.max - bins.min) / dataBinWidth),
-          );
-          for (let i = visibleStartBin; i <= visibleEndBin; i++) {
-            const frequency = freq[i];
-            if (frequency === undefined) continue;
-            const binStart = bins.min + i * dataBinWidth;
-            const binEnd = binStart + dataBinWidth;
-            const xStart =
-              padding +
-              ((binStart - xAxisRange.min) /
-                (xAxisRange.max - xAxisRange.min)) *
-                width;
-            const xEnd =
-              padding +
-              ((binEnd - xAxisRange.min) / (xAxisRange.max - xAxisRange.min)) *
-                width;
-            const barWidth = xEnd - xStart;
-            const barHeight = (frequency / globalMaxFreq) * height;
-            const y = tempCanvas.height - padding - barHeight;
-            const gradient = tempCtx.createLinearGradient(
-              xStart,
-              y,
-              xStart,
-              tempCanvas.height - padding,
-            );
-            gradient.addColorStop(0, "rgba(59, 130, 246, 0.8)");
-            gradient.addColorStop(1, "rgba(59, 130, 246, 0.2)");
-            tempCtx.fillStyle = gradient;
-            tempCtx.fillRect(xStart, y, barWidth, barHeight);
-          }
-
-          // Render step annotation
-          tempCtx.fillStyle = theme === "dark" ? "#94a3b8" : "#666";
-          tempCtx.font = "14px sans-serif";
-          tempCtx.textAlign = "right";
-          tempCtx.fillText(
-            `Step: ${formatNumber(step.step, true)}`,
-            tempCanvas.width - padding,
-            tempCanvas.height - padding - 10,
-          );
-
-          gif.addFrame(tempCanvas, {
-            delay: ANIMATION_CONFIG.GIF_FRAME_DELAY,
-            copy: true,
-            dispose: 2,
-          });
-          processedFrames++;
-          if (processedFrames === totalFrames) gif.render();
-        } catch (frameError) {
-          console.error("Error processing frame:", frameError);
-          throw frameError;
-        }
-      });
-
-      gif.on("finished", (blob: Blob) => resolve(blob));
-      gif.on("error", (error: Error) => reject(error));
-    } catch (error) {
-      reject(error);
-    }
-  });
 }
 
 // ---------------------- Main Component ----------------------
@@ -497,6 +120,7 @@ export const HistogramView = ({
     ANIMATION_CONFIG.DEFAULT_SPEED,
   );
   const { resolvedTheme: theme } = useTheme();
+  const { drawSingleHistogram } = useHistogramCanvas();
   const lastTimeRef = useRef<number>(0);
   const animationFrameRef = useRef<number>(0);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -508,11 +132,11 @@ export const HistogramView = ({
     logName,
   );
 
-  const sortedData = React.useMemo(() => {
+  const sortedData = useMemo(() => {
     return data ? [...data].sort((a, b) => a.step - b.step) : [];
   }, [data]);
 
-  const { globalMaxFreq, xAxisRange, normalizedData } = React.useMemo(() => {
+  const { globalMaxFreq, xAxisRange, normalizedData } = useMemo(() => {
     if (!sortedData.length) {
       return {
         globalMaxFreq: 0,
@@ -596,7 +220,6 @@ export const HistogramView = ({
 
   const maxStepIndex = normalizedData.length - 1;
   const currentStep = normalizedData[currentStepIndex]?.step ?? 0;
-  const minStep = normalizedData[0]?.step ?? 0;
   const maxStep = normalizedData[maxStepIndex]?.step ?? 0;
 
   useEffect(() => {
@@ -621,9 +244,7 @@ export const HistogramView = ({
   const handleExport = useCallback(
     async (exportType: "snapshot" | "gif") => {
       if (!canvasRef.current) {
-        toast("Canvas reference not available", {
-          description: "Export failed",
-        });
+        toast("Canvas reference not available", { description: "Export failed" });
         return;
       }
       try {
@@ -643,6 +264,7 @@ export const HistogramView = ({
             theme,
             globalMaxFreq,
             xAxisRange,
+            drawSingleHistogram,
             (progress) => setExportProgress(progress),
           );
           const url = URL.createObjectURL(gifBlob);
@@ -656,23 +278,14 @@ export const HistogramView = ({
       } catch (error) {
         console.error("Export failed:", error);
         toast("Export failed", {
-          description:
-            error instanceof Error ? error.message : "Unknown error occurred",
+          description: error instanceof Error ? error.message : "Unknown error occurred",
         });
       } finally {
         setIsExporting(false);
         setExportProgress(0);
       }
     },
-    [
-      canvasRef,
-      currentStep,
-      logName,
-      normalizedData,
-      theme,
-      globalMaxFreq,
-      xAxisRange,
-    ],
+    [currentStep, logName, normalizedData, theme, globalMaxFreq, xAxisRange, drawSingleHistogram],
   );
 
   if (isLoading) {
@@ -688,7 +301,7 @@ export const HistogramView = ({
 
   if (!data || data.length === 0) {
     return (
-      <div className="space-y-2 p-2">
+      <div className="h-full w-full space-y-4 p-2">
         <h3 className="text-center font-mono text-sm font-medium text-muted-foreground">
           {logName}
         </h3>
@@ -701,16 +314,16 @@ export const HistogramView = ({
 
   return (
     <div className="h-full w-full space-y-4 p-2">
-      <h3 className="text-center font-mono text-sm font-medium">{logName}</h3>
+      <h3 className="text-center font-mono text-sm font-medium text-muted-foreground">{logName}</h3>
       <div className="space-y-2">
         <div className="relative">
           {normalizedData[currentStepIndex] && (
             <HistogramCanvas
-              ref={canvasRef}
               data={normalizedData[currentStepIndex]}
               theme={theme}
               globalMaxFreq={globalMaxFreq}
               xAxisRange={xAxisRange}
+              canvasRef={canvasRef}
             />
           )}
           {isExporting && (
@@ -745,6 +358,7 @@ export const HistogramView = ({
               onStepChange={setCurrentStepIndex}
               onSpeedChange={setAnimationSpeed}
               onExport={handleExport}
+              isExporting={isExporting}
             />
           </>
         )}
@@ -752,3 +366,60 @@ export const HistogramView = ({
     </div>
   );
 };
+
+// ---------------------- GIF Export ----------------------
+async function createHistogramGif(
+  canvas: HTMLCanvasElement,
+  steps: HistogramStep[],
+  theme: string,
+  globalMaxFreq: number,
+  xAxisRange: { min: number; max: number; globalMin: number; globalMax: number },
+  drawFn: (opts: any) => void,
+  onProgress: (progress: number) => void,
+): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    try {
+      const gif = new GIF({
+        workers: 2,
+        quality: 10,
+        width: canvas.width,
+        height: canvas.height,
+        workerScript: "/gif.worker.js",
+        background: theme === "dark" ? "#000000" : "#ffffff",
+        debug: true,
+      });
+
+      const tempCanvas = document.createElement("canvas");
+      tempCanvas.width = canvas.width;
+      tempCanvas.height = canvas.height;
+
+      gif.on("progress", (p: number) => onProgress(p));
+
+      let processedFrames = 0;
+      steps.forEach((step) => {
+        drawFn({
+          canvas: tempCanvas,
+          data: step,
+          xAxisRange,
+          theme,
+          globalMaxFreq,
+          color: DEFAULT_HISTOGRAM_COLOR,
+          hideStepLabel: false,
+        });
+
+        gif.addFrame(tempCanvas, {
+          delay: ANIMATION_CONFIG.GIF_FRAME_DELAY,
+          copy: true,
+          dispose: 2,
+        });
+        processedFrames++;
+        if (processedFrames === steps.length) gif.render();
+      });
+
+      gif.on("finished", (blob: Blob) => resolve(blob));
+      gif.on("error", (error: Error) => reject(error));
+    } catch (error) {
+      reject(error);
+    }
+  });
+}

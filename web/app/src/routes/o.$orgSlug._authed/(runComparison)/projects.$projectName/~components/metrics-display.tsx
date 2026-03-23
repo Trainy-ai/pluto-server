@@ -198,7 +198,7 @@ export const MetricsDisplay = memo(function MetricsDisplay({
   return (
     <ChartSyncProvider syncKey={`all-metrics-${projectName}`}>
       <div className="flex-1 space-y-4">
-        <div className="sticky top-0 z-10 flex items-center gap-4 bg-background pb-2">
+        <div className="sticky top-0 z-20 flex items-center gap-4 bg-background pb-2">
           <DashboardViewSelector
             organizationId={organizationId}
             projectName={projectName}
