@@ -91,6 +91,8 @@ interface DataTableProps {
   onSortingChange: (sorting: SortingState) => void;
   pageSize: number;
   onPageSizeChange: (pageSize: number) => void;
+  pageBase?: number;
+  onJumpToPage?: (absolutePageIndex: number) => void;
   viewSelector?: React.ReactNode;
   activeChartViewId?: string | null;
   onToggleColumnPin?: (colId: string, source: string, aggregation?: string) => void;
@@ -158,6 +160,8 @@ export function DataTable({
   onSortingChange,
   pageSize,
   onPageSizeChange,
+  pageBase = 0,
+  onJumpToPage,
   viewSelector,
   activeChartViewId,
   onToggleColumnPin,
@@ -489,6 +493,8 @@ export function DataTable({
         hasNextPage={hasNextPage}
         isFetchingNextPage={isFetchingNextPage}
         onFetchNextPage={handleFetchNextPage}
+        pageBase={pageBase}
+        onJumpToPage={onJumpToPage}
       />
     </div>
   );

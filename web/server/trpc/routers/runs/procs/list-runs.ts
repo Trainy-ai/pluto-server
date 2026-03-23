@@ -161,6 +161,7 @@ async function defaultCursorQuery(
     systemFilters?: z.infer<typeof systemFilterSchema>[];
     limit: number;
     cursor?: number;
+    offset?: number;
     direction: "forward" | "backward";
   },
 ) {
@@ -192,6 +193,9 @@ async function defaultCursorQuery(
 
   const dateWhere = buildPrismaDateWhere(input.dateFilters, !!searchMatchIds);
 
+  // When offset is provided (and no cursor), use offset-based pagination for page jumping
+  const useOffset = input.offset != null && input.offset > 0 && !input.cursor;
+
   const runs = await ctx.prisma.runs.findMany({
     where: {
       project: { name: input.projectName },
@@ -209,12 +213,22 @@ async function defaultCursorQuery(
       project: { select: { runPrefix: true } },
     },
     take: input.limit,
-    skip: input.cursor ? 1 : 0,
-    cursor: input.cursor ? { id: input.cursor } : undefined,
+    skip: useOffset ? input.offset! : (input.cursor ? 1 : 0),
+    cursor: useOffset ? undefined : (input.cursor ? { id: input.cursor } : undefined),
   });
 
-  const nextCursor = runs.length === input.limit ? runs[runs.length - 1].id : null;
   const enriched = await attachFieldValues(ctx.prisma, runs);
+
+  if (useOffset) {
+    const nextOffset = runs.length === input.limit ? input.offset! + runs.length : null;
+    return {
+      runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id) })),
+      nextCursor: null,
+      nextOffset,
+    };
+  }
+
+  const nextCursor = runs.length === input.limit ? runs[runs.length - 1].id : null;
   return {
     runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id) })),
     nextCursor,
@@ -240,6 +254,7 @@ async function defaultCursorQueryWithFieldFilters(
     systemFilters?: z.infer<typeof systemFilterSchema>[];
     limit: number;
     cursor?: number;
+    offset?: number;
     direction: "forward" | "backward";
   },
 ) {
@@ -310,9 +325,12 @@ async function defaultCursorQueryWithFieldFilters(
     conditions.push(`r.id = ANY($${queryParams.length}::bigint[])`);
   }
 
-  // Cursor pagination
+  // When offset is provided (and no cursor), use offset-based pagination for page jumping
+  const useOffset = input.offset != null && input.offset > 0 && !input.cursor;
+
+  // Cursor pagination (only when not using offset)
   const dir = input.direction === "forward" ? "DESC" : "ASC";
-  if (input.cursor) {
+  if (!useOffset && input.cursor) {
     queryParams.push(BigInt(input.cursor) as any);
     conditions.push(`r.id ${input.direction === "forward" ? "<" : ">"} $${queryParams.length}::bigint`);
   }
@@ -327,6 +345,7 @@ async function defaultCursorQueryWithFieldFilters(
     WHERE ${conditions.join(" AND ")}
     ORDER BY r."createdAt" ${dir}
     LIMIT ${input.limit}
+    ${useOffset ? `OFFSET ${input.offset}` : ""}
   `;
 
   const rows: { id: bigint }[] = await ctx.prisma.$queryRawUnsafe(query, ...queryParams);
@@ -345,8 +364,18 @@ async function defaultCursorQueryWithFieldFilters(
   const idOrder = new Map(rows.map((r, i) => [r.id, i]));
   runs.sort((a: any, b: any) => (idOrder.get(a.id) ?? 0) - (idOrder.get(b.id) ?? 0));
 
-  const nextCursor = runs.length === input.limit ? runs[runs.length - 1].id : null;
   const enriched = await attachFieldValues(ctx.prisma, runs);
+
+  if (useOffset) {
+    const nextOffset = runs.length === input.limit ? input.offset! + runs.length : null;
+    return {
+      runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id) })),
+      nextCursor: null,
+      nextOffset,
+    };
+  }
+
+  const nextCursor = runs.length === input.limit ? runs[runs.length - 1].id : null;
   return {
     runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id) })),
     nextCursor,
@@ -370,6 +399,7 @@ async function systemColumnSortQuery(
     metricFilters?: z.infer<typeof metricFilterSchema>[];
     systemFilters?: z.infer<typeof systemFilterSchema>[];
     limit: number;
+    offset?: number;
     sortField?: string;
     sortDirection?: "asc" | "desc";
     sortCursor?: string;
@@ -448,21 +478,19 @@ async function systemColumnSortQuery(
     conditions.push(`r.id = ANY($${queryParams.length}::bigint[])`);
   }
 
+  // When offset is provided (and no sortCursor), use offset-based pagination for page jumping
+  const useOffset = input.offset != null && input.offset > 0 && !input.sortCursor;
+
   // Keyset pagination: WHERE (sortCol, id) > ($cursorVal, $cursorId)
-  if (input.sortCursor) {
+  if (!useOffset && input.sortCursor) {
     const parts = input.sortCursor.split("::");
     if (parts.length === 2) {
       const cursorVal = parts[0];
       const cursorId = parts[1];
-      // Use row-value comparison for correct keyset behavior
-      // For nullable columns, NULLs need special handling but for the common case
-      // where cursor exists, the value is non-null
       queryParams.push(cursorVal);
       const valIdx = queryParams.length;
       queryParams.push(BigInt(cursorId) as any);
       const idIdx = queryParams.length;
-      // Row-value comparison: (col, id) > (cursorVal, cursorId) for ASC
-      // or (col, id) < (cursorVal, cursorId) for DESC
       conditions.push(`(r.${sqlCol}, r.id) ${gtLt} ($${valIdx}::${getSqlCastType(field)}, $${idIdx}::bigint)`);
     }
   }
@@ -477,6 +505,7 @@ async function systemColumnSortQuery(
     WHERE ${conditions.join(" AND ")}
     ORDER BY r.${sqlCol} ${dir} NULLS LAST, r.id ${dir}
     LIMIT ${input.limit}
+    ${useOffset ? `OFFSET ${input.offset}` : ""}
   `;
 
   const rows: { id: bigint; sort_val: any }[] = await ctx.prisma.$queryRawUnsafe(query, ...queryParams);
@@ -500,13 +529,24 @@ async function systemColumnSortQuery(
   const idOrder = new Map(rows.map((r, i) => [r.id, i]));
   runs.sort((a: any, b: any) => (idOrder.get(a.id) ?? 0) - (idOrder.get(b.id) ?? 0));
 
+  const enriched = await attachFieldValues(ctx.prisma, runs);
+
+  if (useOffset) {
+    const nextOffset = runs.length === input.limit ? input.offset! + runs.length : null;
+    return {
+      runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id) })),
+      nextCursor: null,
+      nextOffset,
+      sortCursor: null,
+    };
+  }
+
   // Build next keyset cursor from last row
   const lastRow = rows[rows.length - 1];
   const nextSortCursor = rows.length === input.limit
     ? `${lastRow.sort_val instanceof Date ? lastRow.sort_val.toISOString() : String(lastRow.sort_val)}::${lastRow.id}`
     : null;
 
-  const enriched = await attachFieldValues(ctx.prisma, runs);
   return {
     runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id) })),
     nextCursor: null,

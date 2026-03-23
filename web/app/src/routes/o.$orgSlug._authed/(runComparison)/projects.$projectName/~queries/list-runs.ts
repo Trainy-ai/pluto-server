@@ -1,7 +1,7 @@
 import { trpc, trpcClient } from "@/utils/trpc";
 import { useInfiniteQuery, keepPreviousData } from "@tanstack/react-query";
 import type { inferOutput } from "@trpc/tanstack-react-query";
-import { RUNS_FETCH_LIMIT } from "../~components/runs-table/config";
+import { DEFAULT_PAGE_SIZE, RUNS_FETCH_LIMIT } from "../~components/runs-table/config";
 import type { DateFilterParam, FieldFilterParam, MetricFilterParam, SystemFilterParam, SortParam } from "@/lib/run-filters";
 
 // Define proper type for the list runs response
@@ -20,6 +20,7 @@ export const useListRuns = (
   metricFilters?: MetricFilterParam[],
   systemFilters?: SystemFilterParam[],
   pageSize?: number,
+  pageBase?: number,
 ) => {
   // Fetch at least 2x the display page size so clicking "next" always has data
   const fetchLimit = Math.max(pageSize ? pageSize * 2 : RUNS_FETCH_LIMIT, RUNS_FETCH_LIMIT);
@@ -40,19 +41,36 @@ export const useListRuns = (
   // - JSON field / metric sort: offset-based
   const paginationMode = !sort ? "cursor" : sort.source === "system" ? "keyset" : "offset";
 
+  // When pageBase > 0, we jumped to a specific page. Use offset mode for all
+  // pagination to avoid cursor/keyset dependencies on prior pages.
+  const jumped = pageBase != null && pageBase > 0;
+  const jumpOffset = jumped ? pageBase * (pageSize || DEFAULT_PAGE_SIZE) : 0;
+
   return useInfiniteQuery({
-    queryKey: [...queryOptions.queryKey, { tags, status, search, dateFilters, sort, fieldFilters, metricFilters, systemFilters }],
+    // Include pageBase in queryKey so jumping creates a fresh cache entry
+    queryKey: [...queryOptions.queryKey, { tags, status, search, dateFilters, sort, fieldFilters, metricFilters, systemFilters, pageBase: pageBase || 0 }],
     queryFn: async ({ pageParam }) => {
+      // After a jump, all fetches use offset mode (no cursor/keyset dependency)
+      const useOffsetMode = jumped;
+
+      let paginationParams: Record<string, unknown> = {};
+
+      if (useOffsetMode) {
+        // First fetch after jump: use jumpOffset. Subsequent: use nextOffset from response.
+        paginationParams = { offset: pageParam != null ? Number(pageParam) : jumpOffset };
+      } else if (paginationMode === "cursor") {
+        paginationParams = pageParam ? { cursor: Number(pageParam) } : {};
+      } else if (paginationMode === "keyset") {
+        paginationParams = pageParam ? { sortCursor: String(pageParam) } : {};
+      } else {
+        paginationParams = { offset: pageParam ? Number(pageParam) : 0 };
+      }
+
       const result = await trpcClient.runs.list.query({
         organizationId: orgId,
         projectName: projectName,
         limit: fetchLimit,
-        // Pagination param depends on mode
-        ...(paginationMode === "cursor"
-          ? { cursor: pageParam ? Number(pageParam) : undefined }
-          : paginationMode === "keyset"
-            ? { sortCursor: pageParam ? String(pageParam) : undefined }
-            : { offset: pageParam ? Number(pageParam) : 0 }),
+        ...paginationParams,
         tags: tags && tags.length > 0 ? tags : undefined,
         status: status && status.length > 0 ? status as ("RUNNING" | "COMPLETED" | "FAILED" | "TERMINATED" | "CANCELLED")[] : undefined,
         search: search && search.trim() ? search.trim() : undefined,

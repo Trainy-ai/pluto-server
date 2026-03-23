@@ -21,6 +21,8 @@ interface TablePaginationProps {
   hasNextPage?: boolean;
   isFetchingNextPage?: boolean;
   onFetchNextPage: () => void;
+  pageBase?: number;
+  onJumpToPage?: (absolutePageIndex: number) => void;
 }
 
 export function TablePagination({
@@ -34,7 +36,20 @@ export function TablePagination({
   hasNextPage,
   isFetchingNextPage,
   onFetchNextPage,
+  pageBase = 0,
+  onJumpToPage,
 }: TablePaginationProps) {
+  const effectiveCount = isPinningActive
+    ? runCount - pinnedRunCount
+    : runCount;
+  const totalPages = Math.max(
+    1,
+    Math.ceil(effectiveCount / pageSize),
+  );
+  // Absolute display page (1-based)
+  const absolutePage = pageBase + pageIndex + 1;
+  const isLastAbsolutePage = absolutePage >= totalPages;
+
   return (
     <div className="flex shrink-0 items-center justify-between pt-2">
       <div className="flex items-center gap-2">
@@ -62,8 +77,15 @@ export function TablePagination({
           variant="ghost"
           size="icon"
           className="h-7 w-7"
-          onClick={() => table.previousPage()}
-          disabled={!table.getCanPreviousPage()}
+          onClick={() => {
+            if (table.getCanPreviousPage()) {
+              table.previousPage();
+            } else if (pageBase > 0 && onJumpToPage) {
+              // At the start of the jumped-to data — jump back
+              onJumpToPage(Math.max(0, pageBase - 1));
+            }
+          }}
+          disabled={!table.getCanPreviousPage() && pageBase === 0}
         >
           <ChevronLeft className="h-4 w-4" />
         </Button>
@@ -74,7 +96,11 @@ export function TablePagination({
           pinnedRunCount={pinnedRunCount}
           isPinningActive={isPinningActive}
           hasNextPage={hasNextPage}
+          runsLength={runsLength}
+          pageSize={pageSize}
           onFetchNextPage={onFetchNextPage}
+          pageBase={pageBase}
+          onJumpToPage={onJumpToPage}
         />
 
         <Button
@@ -85,15 +111,12 @@ export function TablePagination({
             const nextPageEnd = (pageIndex + 2) * pageSize;
             const nextPageHasEnoughData = runsLength >= nextPageEnd;
             if (!nextPageHasEnoughData && hasNextPage) {
-              // Next page doesn't have a full set of rows yet — fetch more
-              // data first; the useEffect will advance to the target page
-              // once the new data arrives.
               onFetchNextPage();
             } else {
               table.nextPage();
             }
           }}
-          disabled={(!table.getCanNextPage() && !hasNextPage) || isFetchingNextPage}
+          disabled={(isLastAbsolutePage && !hasNextPage) || isFetchingNextPage}
           loading={isFetchingNextPage}
         >
           <ChevronRight className="h-4 w-4" />
@@ -109,7 +132,11 @@ interface PageInputProps {
   pinnedRunCount: number;
   isPinningActive: boolean;
   hasNextPage?: boolean;
+  runsLength: number;
+  pageSize: number;
   onFetchNextPage: () => void;
+  pageBase: number;
+  onJumpToPage?: (absolutePageIndex: number) => void;
 }
 
 function PageInput({
@@ -118,7 +145,11 @@ function PageInput({
   pinnedRunCount,
   isPinningActive,
   hasNextPage,
+  runsLength,
+  pageSize,
   onFetchNextPage,
+  pageBase,
+  onJumpToPage,
 }: PageInputProps) {
   const effectiveCount = isPinningActive
     ? runCount - pinnedRunCount
@@ -127,10 +158,9 @@ function PageInput({
     1,
     Math.ceil(effectiveCount / table.getState().pagination.pageSize),
   );
-  const currentPage = Math.min(
-    table.getState().pagination.pageIndex + 1,
-    totalPages,
-  );
+  // Absolute current page (1-based) accounting for the jump offset
+  const tablePageIndex = table.getState().pagination.pageIndex;
+  const currentPage = Math.min(pageBase + tablePageIndex + 1, totalPages);
 
   const [inputValue, setInputValue] = useState(String(currentPage));
   const [isEditing, setIsEditing] = useState(false);
@@ -152,24 +182,39 @@ function PageInput({
     }
 
     const targetPageOneBased = Math.max(1, Math.min(parsed, totalPages));
-    const targetPageIndex = targetPageOneBased - 1;
-    const availablePages = table.getPageCount();
+    const targetAbsoluteIndex = targetPageOneBased - 1; // 0-based absolute page
 
-    if (targetPageIndex < availablePages) {
-      table.setPageIndex(targetPageIndex);
-    } else if (hasNextPage) {
-      table.setPageIndex(availablePages - 1);
+    // Convert to relative index within currently loaded data
+    const relativeIndex = targetAbsoluteIndex - pageBase;
+    const loadedTablePages = Math.ceil(runsLength / pageSize);
+
+    if (relativeIndex >= 0 && relativeIndex < loadedTablePages) {
+      // Target is within already-loaded data — just navigate
+      table.setPageIndex(relativeIndex);
+    } else if (relativeIndex >= loadedTablePages && relativeIndex < loadedTablePages + 2 && hasNextPage) {
+      // Target is just 1 fetch away — use progressive fetch (keep existing data).
+      // After fetching, the useEffect that syncs pageIndex on data arrival will
+      // advance to the last loaded page. We fetch once and let the user land on
+      // whatever page the new data reaches.
       onFetchNextPage();
+    } else if (onJumpToPage) {
+      // Target is far away — use offset-based jump (single query)
+      onJumpToPage(targetAbsoluteIndex);
     } else {
-      table.setPageIndex(availablePages - 1);
+      // No jump support — go to last available
+      table.setPageIndex(Math.max(0, loadedTablePages - 1));
     }
   }, [
     inputValue,
     totalPages,
     table,
     currentPage,
+    pageBase,
+    runsLength,
+    pageSize,
     hasNextPage,
     onFetchNextPage,
+    onJumpToPage,
   ]);
 
   return (
@@ -204,12 +249,26 @@ function PageInput({
           } else if (e.key === "ArrowUp") {
             e.preventDefault();
             if (currentPage < totalPages) {
-              table.setPageIndex(currentPage); // currentPage is 1-based, so this goes to next
+              // Move to next absolute page
+              const nextRelative = tablePageIndex + 1;
+              const loadedPages = Math.ceil(runsLength / pageSize);
+              if (nextRelative < loadedPages) {
+                table.setPageIndex(nextRelative);
+              } else if (hasNextPage) {
+                // Progressive fetch — consistent with Next button behavior
+                onFetchNextPage();
+              } else if (onJumpToPage) {
+                onJumpToPage(pageBase + nextRelative);
+              }
             }
           } else if (e.key === "ArrowDown") {
             e.preventDefault();
             if (currentPage > 1) {
-              table.setPageIndex(currentPage - 2); // go to previous page
+              if (tablePageIndex > 0) {
+                table.setPageIndex(tablePageIndex - 1);
+              } else if (pageBase > 0 && onJumpToPage) {
+                onJumpToPage(pageBase - 1);
+              }
             }
           }
         }}

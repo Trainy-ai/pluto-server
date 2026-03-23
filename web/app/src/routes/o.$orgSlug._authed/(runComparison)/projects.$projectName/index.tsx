@@ -355,6 +355,9 @@ function RouteComponent() {
     return DEFAULT_PAGE_SIZE;
   }, [defaultPageSizeKey]);
   const [pageSize, setPageSize] = useState<number>(getDefaultPageSize);
+  // Page jump offset: 0-based display page index that table page 0 corresponds to.
+  // When pageBase > 0, the infinite query fetches starting from (pageBase * pageSize).
+  const [pageBase, setPageBase] = useState(0);
   const activeViewIdRef = useRef(activeViewId);
   activeViewIdRef.current = activeViewId;
   // Called from the page size dropdown in the table — persist only for default view
@@ -482,6 +485,11 @@ function RouteComponent() {
     projectName,
   );
 
+  // Reset pageBase when sort/filter/search changes so the user starts at page 1
+  useEffect(() => {
+    setPageBase(0);
+  }, [sortParam, serverFilters, debouncedSearch]);
+
   // Load runs using infinite query with standard TanStack/tRPC v11 approach
   const {
     data,
@@ -492,7 +500,7 @@ function RouteComponent() {
     isFetching,
     isError,
     error,
-  } = useListRuns(organizationId, projectName, serverFilters.tags, serverFilters.status, debouncedSearch, serverFilters.dateFilters, sortParam, serverFilters.fieldFilters as FieldFilterParam[] | undefined, serverFilters.metricFilters as MetricFilterParam[] | undefined, serverFilters.systemFilters as SystemFilterParam[] | undefined, pageSize);
+  } = useListRuns(organizationId, projectName, serverFilters.tags, serverFilters.status, debouncedSearch, serverFilters.dateFilters, sortParam, serverFilters.fieldFilters as FieldFilterParam[] | undefined, serverFilters.metricFilters as MetricFilterParam[] | undefined, serverFilters.systemFilters as SystemFilterParam[] | undefined, pageSize, pageBase);
 
   // Mutation for updating tags
   const updateTagsMutation = useUpdateTags(organizationId, projectName);
@@ -1024,6 +1032,8 @@ function RouteComponent() {
                 onSortingChange={setSorting}
                 pageSize={pageSize}
                 onPageSizeChange={handlePageSizeChange}
+                pageBase={pageBase}
+                onJumpToPage={setPageBase}
                 viewSelector={
                   <RunTableViewSelector
                     organizationId={organizationId}
