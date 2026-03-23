@@ -678,12 +678,14 @@ const MultiLineChartInner = memo(
                 return { pair, alignedData: null };
               }
 
-              // Convert bucketed data to ChartDataPoint for alignment
-              const yData = data.map((d) => ({
-                step: d.step,
-                time: d.time,
-                value: d.value,
-              }));
+              // Convert bucketed data to ChartDataPoint for alignment, filtering out null values
+              const yData = data
+                .filter((d) => d.value != null)
+                .map((d) => ({
+                  step: d.step,
+                  time: d.time,
+                  value: d.value as number,
+                }));
 
               const alignedData = alignAndUnzip(matchingXData, yData);
 

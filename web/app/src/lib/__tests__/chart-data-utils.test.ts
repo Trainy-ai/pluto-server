@@ -6,10 +6,12 @@ import {
   getTimeUnitForDisplay,
   alignAndUnzip,
   applyDownsampling,
+  applyServerBuckets,
   type ChartSeriesData,
   type BaseSeriesData,
   type SmoothingSettings,
   type ChartDataPoint,
+  type BucketedChartDataPoint,
 } from "../chart-data-utils";
 
 // ---------------------------------------------------------------------------
@@ -157,7 +159,7 @@ describe("applySmoothing", () => {
           expect(smoothedY.length).toBe(y.length);
 
           const inputMean = mean(y);
-          const outputMean = mean(smoothedY);
+          const outputMean = mean(smoothedY.filter((v): v is number => v !== null));
           const shift = relDiff(outputMean, inputMean);
           expect(shift).toBeLessThan(tolerance);
         });
@@ -279,7 +281,7 @@ describe("downsampleAndSmooth", () => {
           expect(mainSeries).toBeDefined();
 
           const inputMean = mean(y);
-          const outputMean = mean(mainSeries!.y);
+          const outputMean = mean(mainSeries!.y.filter((v): v is number => v !== null));
           const shift = relDiff(outputMean, inputMean);
           // Allow slightly more tolerance for the combined pipeline
           expect(shift).toBeLessThan(0.15);
@@ -334,8 +336,8 @@ describe("applyDownsampling", () => {
     const result = applyDownsampling(base, 50);
     const [main, envMin, envMax] = result;
     for (let i = 0; i < main.x.length; i++) {
-      expect(envMin.y[i]).toBeLessThanOrEqual(main.y[i] + 1e-9);
-      expect(envMax.y[i]).toBeGreaterThanOrEqual(main.y[i] - 1e-9);
+      expect(envMin.y[i]!).toBeLessThanOrEqual(main.y[i]! + 1e-9);
+      expect(envMax.y[i]!).toBeGreaterThanOrEqual(main.y[i]! - 1e-9);
     }
   });
 });
@@ -423,5 +425,152 @@ describe("alignAndUnzip", () => {
     const result = alignAndUnzip(xData, yData);
     expect(result.x).toEqual([10, 30]);
     expect(result.y).toEqual([0.5, 0.9]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// smoothPass with null y-values (Fix 1)
+// ---------------------------------------------------------------------------
+
+describe("applySmoothing with null y-values", () => {
+  it("smoothing skips null values without creating dips", () => {
+    const N = 100;
+    const x = makeX(N);
+    const y = makeLoss(N);
+
+    // Insert nulls at known positions
+    const yWithNulls: (number | null)[] = [...y];
+    const nullPositions = [10, 25, 50, 75, 90];
+    for (const pos of nullPositions) {
+      yWithNulls[pos] = null;
+    }
+
+    const series: ChartSeriesData = makeChartSeries(x, y);
+    const seriesWithNulls: ChartSeriesData = {
+      ...makeChartSeries(x, y),
+      y: yWithNulls,
+    };
+    const settings: SmoothingSettings = {
+      enabled: true,
+      algorithm: "gaussian",
+      parameter: 3,
+      showOriginalData: false,
+    };
+
+    const resultClean = applySmoothing(series, settings);
+    const resultNulls = applySmoothing(seriesWithNulls, settings);
+
+    // Null positions should remain null
+    for (const pos of nullPositions) {
+      expect(resultNulls[0].y[pos]).toBeNull();
+    }
+
+    // Adjacent values should NOT be pulled toward 0.
+    // Compare to clean smoothing — values near gaps should be similar
+    // (not dramatically different due to null→0 coercion).
+    for (const pos of nullPositions) {
+      for (const adj of [pos - 1, pos + 1]) {
+        if (adj < 0 || adj >= N || nullPositions.includes(adj)) continue;
+        const cleanVal = resultClean[0].y[adj] as number;
+        const nullsVal = resultNulls[0].y[adj] as number;
+        // Adjacent values should be within 30% of clean result (not pulled to 0)
+        expect(
+          Math.abs(nullsVal - cleanVal) / Math.max(Math.abs(cleanVal), 1e-9)
+        ).toBeLessThan(0.3);
+      }
+    }
+  });
+
+  it("smoothing preserves mean with sprinkled nulls", () => {
+    const N = 200;
+    const x = makeX(N);
+    const y = makeGpuUtil(N);
+
+    // Insert ~5% random nulls (deterministic positions)
+    const yWithNulls: (number | null)[] = [...y];
+    for (let i = 0; i < N; i++) {
+      if (i % 20 === 7) yWithNulls[i] = null; // 5% = every 20th
+    }
+
+    const series: ChartSeriesData = {
+      ...makeChartSeries(x, y),
+      y: yWithNulls,
+    };
+    const settings: SmoothingSettings = {
+      enabled: true,
+      algorithm: "gaussian",
+      parameter: 2,
+      showOriginalData: false,
+    };
+
+    const result = applySmoothing(series, settings);
+    const outputNonNull = result[0].y.filter((v): v is number => v !== null);
+    const inputNonNull = yWithNulls.filter((v): v is number => v !== null);
+
+    const inputMean = mean(inputNonNull);
+    const outputMean = mean(outputNonNull);
+    const shift = relDiff(outputMean, inputMean);
+    expect(shift).toBeLessThan(0.1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// applyServerBuckets with non-finite flags (Fix 3b)
+// ---------------------------------------------------------------------------
+
+describe("applyServerBuckets", () => {
+  it("emits null for all-NaN buckets", () => {
+    const data: BucketedChartDataPoint[] = [
+      { step: 0, time: "t0", value: 1.5, minY: 1.0, maxY: 2.0, count: 10 },
+      { step: 1, time: "t1", value: null, minY: null, maxY: null, count: 10, hasNaN: true },
+      { step: 2, time: "t2", value: 2.0, minY: 1.5, maxY: 2.5, count: 10 },
+    ];
+
+    const [main] = applyServerBuckets(data, "test", "#00f");
+    expect(main.y[0]).toBe(1.5);
+    expect(main.y[1]).toBeNull();
+    expect(main.y[2]).toBe(2.0);
+  });
+
+  it("preserves finite average for mixed buckets", () => {
+    const data: BucketedChartDataPoint[] = [
+      { step: 0, time: "t0", value: 1.5, minY: 1.0, maxY: 2.0, count: 10, hasNaN: true },
+      { step: 1, time: "t1", value: 3.0, minY: 2.5, maxY: 3.5, count: 10, hasInf: true },
+    ];
+
+    const [main] = applyServerBuckets(data, "test", "#00f");
+    // Mixed buckets: y-value is the finite average, not null or 0
+    expect(main.y[0]).toBe(1.5);
+    expect(main.y[1]).toBe(3.0);
+  });
+
+  it("builds nonFiniteMarkers map", () => {
+    const data: BucketedChartDataPoint[] = [
+      { step: 0, time: "t0", value: 1.5, minY: 1.0, maxY: 2.0, count: 10 },
+      { step: 1, time: "t1", value: null, minY: null, maxY: null, count: 10, hasNaN: true },
+      { step: 2, time: "t2", value: 2.0, minY: 1.5, maxY: 2.5, count: 10, hasInf: true, hasNegInf: true },
+      { step: 3, time: "t3", value: 3.0, minY: 2.5, maxY: 3.5, count: 10 },
+    ];
+
+    const [main] = applyServerBuckets(data, "test", "#00f");
+    expect(main.nonFiniteMarkers).toBeDefined();
+    const markers = main.nonFiniteMarkers!;
+
+    // Step 0: no flags
+    expect(markers.has(0)).toBe(false);
+
+    // Step 1: NaN only
+    expect(markers.has(1)).toBe(true);
+    expect(markers.get(1)!.has("NaN")).toBe(true);
+    expect(markers.get(1)!.size).toBe(1);
+
+    // Step 2: Inf + -Inf
+    expect(markers.has(2)).toBe(true);
+    expect(markers.get(2)!.has("Inf")).toBe(true);
+    expect(markers.get(2)!.has("-Inf")).toBe(true);
+    expect(markers.get(2)!.size).toBe(2);
+
+    // Step 3: no flags
+    expect(markers.has(3)).toBe(false);
   });
 });

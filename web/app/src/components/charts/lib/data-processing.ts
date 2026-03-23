@@ -37,12 +37,12 @@ export function filterDataForLogScale(
   return lines
     .map((line) => {
       const x: number[] = [];
-      const y: number[] = [];
+      const y: (number | null)[] = [];
       for (let i = 0; i < line.x.length; i++) {
         const xVal = line.x[i];
         const yVal = line.y[i];
         if (logXAxis && xVal <= 0) continue;
-        if (logYAxis && yVal <= 0) continue;
+        if (logYAxis && (yVal == null || yVal <= 0)) continue;
         x.push(xVal);
         y.push(yVal);
       }
@@ -149,7 +149,7 @@ export function alignDataForUPlot(
 
   // Create maps for efficient lookup
   const lineMaps = processedLines.map((line) => {
-    const map = new Map<number, number>();
+    const map = new Map<number, number | null>();
     line.x.forEach((x, i) => map.set(x, line.y[i]));
     return map;
   });

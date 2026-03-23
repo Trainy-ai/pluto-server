@@ -30,6 +30,7 @@ function zoomOverlapsData(zoom: [number, number], xData: readonly number[]): boo
 import { tooltipPlugin, type HoverState } from "./lib/tooltip-plugin";
 import { buildSeriesConfig } from "./lib/series-config";
 import { buildFocusDetectionHook, buildInterpolationDotsHook } from "./lib/cursor-hooks";
+import { nonFiniteMarkersPlugin } from "./lib/non-finite-markers-plugin";
 import { useContainerSize } from "./hooks/use-container-size";
 import { createPortal } from "react-dom";
 
@@ -92,7 +93,7 @@ const ChartTitle = React.memo(function ChartTitle({
 
 export interface LineData {
   x: number[];
-  y: number[];
+  y: (number | null)[];
   label: string;
   /** Unique identifier for this series (e.g. run ID). Used for highlighting when labels may not be unique. Falls back to label if not provided. */
   seriesId?: string;
@@ -107,6 +108,9 @@ export interface LineData {
   envelopeBound?: "min" | "max";
   /** Map from x-value to non-finite flag text ("NaN", "Inf", "-Inf") for tooltip display */
   valueFlags?: Map<number, string>;
+  /** Map from x-value to set of non-finite flags found in the aggregation bucket.
+   *  Used for rendering markers (△ for +Inf, ▽ for -Inf, ⊗ for NaN). */
+  nonFiniteMarkers?: Map<number, Set<"NaN" | "Inf" | "-Inf">>;
   /** Human-readable run name (for tooltip column customization) */
   runName?: string;
   /** Run ID / external ID (for tooltip column customization) */
@@ -1094,6 +1098,10 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             title,
             subtitle,
             onSeriesHover: handleTooltipSeriesHover, // Emphasis on tooltip row hover
+          }),
+          nonFiniteMarkersPlugin({
+            lines: processedLines,
+            theme: theme,
           }),
         ],
         hooks: {

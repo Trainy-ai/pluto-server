@@ -203,10 +203,13 @@ async function seedClickHouseMetrics(
  * with ClickHouse's native nan/inf literals.
  *
  * Layout (14 train/* metrics):
- * - Indices 0-3:   all NaN   (invisible in summaries MV)
- * - Indices 4-7:   all Inf   (invisible in summaries MV)
- * - Indices 8-11:  mixed     (10% NaN, 90% finite — visible in summaries)
- * - Indices 12-13: all finite (visible in summaries)
+ * - Indices 0-1:  realistic curves (loss, accuracy) with ~3% NaN sprinkled
+ * - Indices 2-3:  realistic curves (lr, grad_norm) with ~2% +Inf spikes
+ * - Index 4:      realistic curve (epoch_time) with ~1% -Inf
+ * - Index 5:      realistic curve (precision) with mixed ~2% NaN and ~2% Inf
+ * - Indices 6-9:  all-finite control metrics
+ * - Indices 10-11: all-NaN edge-case metrics
+ * - Indices 12-13: all-finite control metrics
  */
 async function seedNanInfMetrics(
   runId: bigint,
@@ -235,7 +238,7 @@ async function seedNanInfMetrics(
     'train/auc', 'train/perplexity', 'train/gpu_util', 'train/memory_used',
     'train/throughput', 'train/latency',
   ];
-  const STEPS = 100;
+  const STEPS = 3000;
   const baseTime = runCreatedAt.getTime();
   const rows: string[] = [];
 
@@ -248,17 +251,57 @@ async function seedNanInfMetrics(
         .replace('Z', '');
 
       let value: string;
-      if (m < 4) {
-        // All NaN (loss, accuracy, lr, grad_norm)
+      const rand = Math.random();
+
+      if (m === 0) {
+        // train/loss: exponential decay with ~3% NaN sprinkled
+        if (rand < 0.03) {
+          value = 'nan';
+        } else {
+          value = String(2.0 * Math.exp(-step / 600) + Math.random() * 0.1);
+        }
+      } else if (m === 1) {
+        // train/accuracy: sigmoid growth with ~3% NaN sprinkled
+        if (rand < 0.03) {
+          value = 'nan';
+        } else {
+          value = String(1.0 - Math.exp(-step / 500) + Math.random() * 0.05);
+        }
+      } else if (m === 2) {
+        // train/lr: linear decay with ~2% +Inf spikes (gradient explosions)
+        if (rand < 0.02) {
+          value = 'inf';
+        } else {
+          value = String(0.001 * (1 - step / STEPS));
+        }
+      } else if (m === 3) {
+        // train/grad_norm: noisy with ~2% +Inf spikes
+        if (rand < 0.02) {
+          value = 'inf';
+        } else {
+          value = String(Math.random() * 2 + 0.5);
+        }
+      } else if (m === 4) {
+        // train/epoch_time: ~10-20 range with ~1% -Inf
+        if (rand < 0.01) {
+          value = '-inf';
+        } else {
+          value = String(10 + Math.random() * 10);
+        }
+      } else if (m === 5) {
+        // train/precision: sigmoid growth with mixed ~2% NaN and ~2% Inf
+        if (rand < 0.02) {
+          value = 'nan';
+        } else if (rand < 0.04) {
+          value = 'inf';
+        } else {
+          value = String(0.5 + 0.4 * (1 - Math.exp(-step / 800)) + Math.random() * 0.03);
+        }
+      } else if (m === 10 || m === 11) {
+        // All-NaN edge case metrics (gpu_util, memory_used)
         value = 'nan';
-      } else if (m < 8) {
-        // All Inf (epoch_time, precision, recall, f1)
-        value = m % 2 === 0 ? 'inf' : '-inf';
-      } else if (m < 12) {
-        // Mixed: first 10% NaN, rest finite (auc, perplexity, gpu_util, memory_used)
-        value = step / STEPS < 0.1 ? 'nan' : String(Math.random() * 10);
       } else {
-        // All finite (throughput, latency)
+        // All-finite control metrics (recall, f1, auc, perplexity, throughput, latency)
         value = String(Math.random() * 10);
       }
 
@@ -1358,8 +1401,141 @@ async function setupTestData(): Promise<TestData> {
   });
   console.log('   ✓ Created Staircase Zoom Test dashboard view');
 
-  // 9. Create "Dynamic Section Test" dashboard view with a dynamic pattern section
-  console.log('\n9️⃣  Creating Dynamic Section Test dashboard view...');
+  // 9. Create "NaN Inf Markers Test" dashboard view for non-finite markers E2E tests
+  console.log('\n9️⃣  Creating NaN Inf Markers Test dashboard view...');
+
+  const nanInfDashboardConfig = {
+    version: 1,
+    sections: [
+      {
+        id: 'section-mixed-nan',
+        name: 'Mixed NaN (10% NaN + 90% finite)',
+        collapsed: false,
+        widgets: [
+          {
+            id: 'widget-mixed-auc',
+            type: 'chart',
+            config: {
+              metrics: ['train/auc'],
+              xAxis: 'step',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+              aggregation: 'LAST',
+              showOriginal: false,
+            },
+            layout: { x: 0, y: 0, w: 6, h: 4 },
+          },
+          {
+            id: 'widget-mixed-perplexity',
+            type: 'chart',
+            config: {
+              metrics: ['train/perplexity'],
+              xAxis: 'step',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+              aggregation: 'LAST',
+              showOriginal: false,
+            },
+            layout: { x: 6, y: 0, w: 6, h: 4 },
+          },
+        ],
+      },
+      {
+        id: 'section-inf',
+        name: 'Infinity Values',
+        collapsed: false,
+        widgets: [
+          {
+            id: 'widget-pos-inf',
+            type: 'chart',
+            config: {
+              metrics: ['train/epoch_time'],
+              xAxis: 'step',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+              aggregation: 'LAST',
+              showOriginal: false,
+            },
+            layout: { x: 0, y: 0, w: 6, h: 4 },
+          },
+          {
+            id: 'widget-neg-inf',
+            type: 'chart',
+            config: {
+              metrics: ['train/precision'],
+              xAxis: 'step',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+              aggregation: 'LAST',
+              showOriginal: false,
+            },
+            layout: { x: 6, y: 0, w: 6, h: 4 },
+          },
+        ],
+      },
+      {
+        id: 'section-finite-control',
+        name: 'Finite Control',
+        collapsed: false,
+        widgets: [
+          {
+            id: 'widget-finite-throughput',
+            type: 'chart',
+            config: {
+              metrics: ['train/throughput'],
+              xAxis: 'step',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+              aggregation: 'LAST',
+              showOriginal: false,
+            },
+            layout: { x: 0, y: 0, w: 6, h: 4 },
+          },
+          {
+            id: 'widget-finite-latency',
+            type: 'chart',
+            config: {
+              metrics: ['train/latency'],
+              xAxis: 'step',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+              aggregation: 'LAST',
+              showOriginal: false,
+            },
+            layout: { x: 6, y: 0, w: 6, h: 4 },
+          },
+        ],
+      },
+    ],
+    settings: {
+      gridCols: 12,
+      rowHeight: 80,
+      compactType: 'vertical',
+    },
+  };
+
+  await prisma.dashboardView.upsert({
+    where: {
+      organizationId_projectId_name: {
+        organizationId: org.id,
+        projectId: project.id,
+        name: 'NaN Inf Markers Test',
+      },
+    },
+    update: { config: nanInfDashboardConfig },
+    create: {
+      name: 'NaN Inf Markers Test',
+      organizationId: org.id,
+      projectId: project.id,
+      createdById: user.id,
+      isDefault: false,
+      config: nanInfDashboardConfig,
+    },
+  });
+  console.log('   ✓ Created NaN Inf Markers Test dashboard view');
+
+  // 10. Create "Dynamic Section Test" dashboard view with a dynamic pattern section
+  console.log('\n🔟  Creating Dynamic Section Test dashboard view...');
 
   const dynamicSectionDashboardConfig = {
     version: 1,
@@ -1400,8 +1576,8 @@ async function setupTestData(): Promise<TestData> {
   });
   console.log('   ✓ Created Dynamic Section Test dashboard view');
 
-  // 10. Create "Y-Zoom Widget Test" dashboard view for Y-axis zoom E2E tests
-  console.log('\n🔟  Creating Y-Zoom Widget Test dashboard view...');
+  // 11. Create "Y-Zoom Widget Test" dashboard view for Y-axis zoom E2E tests
+  console.log('\n1️⃣1️⃣  Creating Y-Zoom Widget Test dashboard view...');
 
   const yZoomWidgetDashboardConfig = {
     version: 1,
@@ -1454,8 +1630,8 @@ async function setupTestData(): Promise<TestData> {
   });
   console.log('   ✓ Created Y-Zoom Widget Test dashboard view');
 
-  // 11. Seed image and file data for file-viewer and step-sync E2E tests
-  console.log('\n1️⃣1️⃣ Seeding image and file data...');
+  // 12. Seed image and file data for file-viewer and step-sync E2E tests
+  console.log('\n1️⃣2️⃣ Seeding image and file data...');
 
   const storageEndpoint = process.env.STORAGE_ENDPOINT;
   const storageAccessKey = process.env.STORAGE_ACCESS_KEY_ID;

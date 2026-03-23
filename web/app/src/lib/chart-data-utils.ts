@@ -45,10 +45,13 @@ export interface BaseSeriesData {
   metricName?: string;
 }
 
+/** Set of non-finite value types found in a bucketed aggregation range */
+export type NonFiniteFlags = Set<"NaN" | "Inf" | "-Inf">;
+
 /** Chart series data with all optional fields for smoothing/envelope/display */
 export interface ChartSeriesData {
   x: number[];
-  y: number[];
+  y: (number | null)[];
   label: string;
   color?: string;
   seriesId?: string;
@@ -60,6 +63,9 @@ export interface ChartSeriesData {
   envelopeBound?: "min" | "max";
   /** Map from x-value to non-finite flag text ("NaN", "Inf", "-Inf") for tooltip display */
   valueFlags?: Map<number, string>;
+  /** Map from x-value to set of non-finite flags found in the aggregation bucket.
+   *  Used for rendering markers (△ for +Inf, ▽ for -Inf, ⊗ for NaN). */
+  nonFiniteMarkers?: Map<number, NonFiniteFlags>;
   /** Human-readable run name (for tooltip column customization) */
   runName?: string;
   /** Run ID / external ID (for tooltip column customization) */
@@ -203,36 +209,45 @@ const AUTO_SMOOTH_THRESHOLD = 500;
  */
 function smoothPass(
   x: number[],
-  y: number[],
+  y: (number | null)[],
   algorithm: SmoothingAlgorithm,
   parameter: number,
   valueFlags: Map<number, string> | undefined,
-): number[] {
-  if (valueFlags && valueFlags.size > 0) {
-    const result = new Array<number>(x.length);
-    let segStart = -1;
-    for (let i = 0; i <= x.length; i++) {
-      const isFlagged = i < x.length && valueFlags.has(x[i]);
-      if (isFlagged || i === x.length) {
-        if (segStart >= 0) {
-          const segX = x.slice(segStart, i);
-          const segY = y.slice(segStart, i);
-          const smoothed = smoothData(segX, segY, algorithm, parameter);
-          for (let j = 0; j < smoothed.length; j++) {
-            result[segStart + j] = smoothed[j];
-          }
-          segStart = -1;
-        }
-        if (isFlagged) {
-          result[i] = y[i]; // placeholder — will become null gap
-        }
-      } else if (segStart < 0) {
-        segStart = i;
-      }
-    }
-    return result;
+): (number | null)[] {
+  // Segment the data at gaps (flagged positions OR null y-values) and smooth
+  // each contiguous finite segment independently. This prevents null→0 coercion
+  // in the smoothing kernel which would create artificial dips.
+  const hasFlags = valueFlags && valueFlags.size > 0;
+  const hasNulls = y.some((v) => v === null);
+
+  if (!hasFlags && !hasNulls) {
+    return smoothData(x, y as number[], algorithm, parameter);
   }
-  return smoothData(x, y, algorithm, parameter);
+
+  const result = new Array<number | null>(x.length);
+  let segStart = -1;
+  for (let i = 0; i <= x.length; i++) {
+    const isGap = i < x.length && (
+      (hasFlags && valueFlags!.has(x[i])) || y[i] === null
+    );
+    if (isGap || i === x.length) {
+      if (segStart >= 0) {
+        const segX = x.slice(segStart, i);
+        const segY = y.slice(segStart, i) as number[];
+        const smoothed = smoothData(segX, segY, algorithm, parameter);
+        for (let j = 0; j < smoothed.length; j++) {
+          result[segStart + j] = smoothed[j];
+        }
+        segStart = -1;
+      }
+      if (i < x.length) {
+        result[i] = y[i]; // preserve null / flagged placeholder
+      }
+    } else if (segStart < 0) {
+      segStart = i;
+    }
+  }
+  return result;
 }
 
 /**
@@ -308,10 +323,13 @@ export function applySmoothing(
 export interface BucketedChartDataPoint {
   step: number;
   time: string;
-  value: number;   // avg(value) — the line
-  minY: number;    // min(value) — envelope bottom
-  maxY: number;    // max(value) — envelope top
+  value: number | null;   // avg(finite values) — the line (null if all non-finite)
+  minY: number | null;    // min(finite values) — envelope bottom (null if all non-finite)
+  maxY: number | null;    // max(finite values) — envelope top (null if all non-finite)
   count: number;   // points in bucket
+  hasNaN?: boolean;    // bucket contained NaN value(s)
+  hasInf?: boolean;    // bucket contained +Infinity value(s)
+  hasNegInf?: boolean; // bucket contained -Infinity value(s)
 }
 
 /**
@@ -330,9 +348,23 @@ export function applyServerBuckets(
   getX: (d: BucketedChartDataPoint) => number = (d) => Number(d.step),
 ): ChartSeriesData[] {
   const x = bucketedData.map(getX);
-  const y = bucketedData.map((d) => Number(d.value));
-  const yMin = bucketedData.map((d) => Number(d.minY));
-  const yMax = bucketedData.map((d) => Number(d.maxY));
+  const y = bucketedData.map((d) => d.value != null ? Number(d.value) : null);
+  const yMin = bucketedData.map((d) => d.minY != null ? Number(d.minY) : null);
+  const yMax = bucketedData.map((d) => d.maxY != null ? Number(d.maxY) : null);
+
+  // Build non-finite markers map from bucket flags
+  let nonFiniteMarkers: Map<number, NonFiniteFlags> | undefined;
+  for (let i = 0; i < bucketedData.length; i++) {
+    const d = bucketedData[i];
+    if (d.hasNaN || d.hasInf || d.hasNegInf) {
+      if (!nonFiniteMarkers) nonFiniteMarkers = new Map();
+      const flags: NonFiniteFlags = new Set();
+      if (d.hasNaN) flags.add("NaN");
+      if (d.hasInf) flags.add("Inf");
+      if (d.hasNegInf) flags.add("-Inf");
+      nonFiniteMarkers.set(x[i], flags);
+    }
+  }
 
   const main: ChartSeriesData = {
     x,
@@ -341,6 +373,7 @@ export function applyServerBuckets(
     color,
     seriesId,
     dash,
+    nonFiniteMarkers,
   };
 
   return [

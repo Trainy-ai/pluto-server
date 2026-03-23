@@ -221,6 +221,36 @@ interface TooltipRowData {
   runName?: string;
   runId?: string;
   metricName?: string;
+  /** Non-finite flags present in this bucket (for bucketed data) */
+  nonFiniteFlags?: Set<"NaN" | "Inf" | "-Inf">;
+}
+
+/** Append non-finite marker icons (△ ▽ ⊗) after the value text */
+function appendNonFiniteIcons(
+  parent: HTMLSpanElement,
+  flags: Set<"NaN" | "Inf" | "-Inf">,
+) {
+  if (flags.has("Inf")) {
+    const icon = document.createElement("span");
+    icon.style.cssText = "margin-left: 3px; font-size: 10px; opacity: 0.85";
+    icon.title = "+Infinity in this range";
+    icon.textContent = "\u25b3"; // △
+    parent.appendChild(icon);
+  }
+  if (flags.has("-Inf")) {
+    const icon = document.createElement("span");
+    icon.style.cssText = "margin-left: 3px; font-size: 10px; opacity: 0.85";
+    icon.title = "-Infinity in this range";
+    icon.textContent = "\u25bd"; // ▽
+    parent.appendChild(icon);
+  }
+  if (flags.has("NaN")) {
+    const icon = document.createElement("span");
+    icon.style.cssText = "margin-left: 3px; color: #d4a017; font-size: 10px";
+    icon.title = "NaN in this range";
+    icon.textContent = "\u2297"; // ⊗
+    parent.appendChild(icon);
+  }
 }
 
 /** Helper to format a value span with proper styling for flags/interpolation */
@@ -248,6 +278,10 @@ function formatValueContent(
     } else {
       valueSpan.textContent = data.isInterpolated ? `~${formatAxisLabel(data.value)}` : formatAxisLabel(data.value);
     }
+  }
+  // Append non-finite marker icons if this bucket contains NaN/Inf
+  if (data.nonFiniteFlags && data.nonFiniteFlags.size > 0) {
+    appendNonFiniteIcons(valueSpan, data.nonFiniteFlags);
   }
 }
 
@@ -813,7 +847,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
 
     // Gather series values
     const textColor = theme === "dark" ? "#fff" : "#000";
-    const seriesItems: { name: string; value: number; color: string; hidden: boolean; rawValue?: number; isInterpolated: boolean; flagText?: string; rawFlagText?: string; dash?: number[]; runName?: string; runId?: string; metricName?: string }[] = [];
+    const seriesItems: { name: string; value: number; color: string; hidden: boolean; rawValue?: number; isInterpolated: boolean; flagText?: string; rawFlagText?: string; dash?: number[]; runName?: string; runId?: string; metricName?: string; nonFiniteFlags?: Set<"NaN" | "Inf" | "-Inf"> }[] = [];
 
     // First pass: collect raw (original) values and flags from hidden smoothing series
     const rawValues = new Map<string, number>();
@@ -873,6 +907,33 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
         continue;
       }
 
+      // Handle all-non-finite buckets (bucketed data path): value is null but
+      // nonFiniteMarkers has flags — show descriptive flag text instead of "0"
+      if (yVal == null && lineData?.nonFiniteMarkers) {
+        const bucketFlags = lineData.nonFiniteMarkers.get(xAtIdx);
+        if (bucketFlags && bucketFlags.size > 0) {
+          const parts: string[] = [];
+          if (bucketFlags.has("NaN")) parts.push("NaN");
+          if (bucketFlags.has("Inf")) parts.push("+Inf");
+          if (bucketFlags.has("-Inf")) parts.push("-Inf");
+          const labelText = typeof series.label === "string" ? series.label : `Series ${i}`;
+          const seriesColor = lineData.color || `hsl(${((i - 1) * 137) % 360}, 70%, 50%)`;
+          seriesItems.push({
+            name: labelText,
+            value: 0,
+            color: seriesColor,
+            hidden: lineData.hideFromLegend || false,
+            isInterpolated: false,
+            flagText: parts.join(", "),
+            dash: lineData.dash,
+            runName: lineData.runName,
+            runId: lineData.runId,
+            metricName: lineData.metricName,
+          });
+          continue;
+        }
+      }
+
       // If value is null and interpolation is enabled, try to interpolate.
       // When spanGaps is false (skip missing values), don't interpolate across
       // large data gaps — only interpolate small alignment gaps where a series
@@ -902,6 +963,16 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
         const labelText = typeof series.label === "string" ? series.label : `Series ${i}`;
         // Get color from lineData (series.stroke is a function, not a string)
         const seriesColor = lineData?.color || `hsl(${((i - 1) * 137) % 360}, 70%, 50%)`;
+        // Check for non-finite markers in this bucket (bucketed data path)
+        const bucketFlags = lineData?.nonFiniteMarkers?.get(xAtIdx);
+        // For mixed buckets (finite average + non-finite values), show the
+        // dominant flag as prominent text so it's immediately obvious.
+        let bucketFlagText: string | undefined;
+        if (bucketFlags && bucketFlags.size > 0) {
+          if (bucketFlags.has("NaN")) bucketFlagText = "NaN";
+          else if (bucketFlags.has("Inf")) bucketFlagText = "+Inf";
+          else if (bucketFlags.has("-Inf")) bucketFlagText = "-Inf";
+        }
         seriesItems.push({
           name: labelText,
           value: yVal,
@@ -909,11 +980,13 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
           hidden: lineData?.hideFromLegend || false,
           rawValue: rawValues.get(labelText),
           isInterpolated,
+          flagText: bucketFlagText,
           rawFlagText: rawFlags.get(labelText),
           dash: lineData?.dash,
           runName: lineData?.runName,
           runId: lineData?.runId,
           metricName: lineData?.metricName,
+          nonFiniteFlags: bucketFlags,
         });
       }
     }
@@ -1342,6 +1415,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
         runName: s.runName,
         runId: s.runId,
         metricName: s.metricName,
+        nonFiniteFlags: s.nonFiniteFlags,
       }, textColor, columns, theme);
 
       // Hover emphasis on tooltip rows (pinned only — unpinned has pointer-events: none)

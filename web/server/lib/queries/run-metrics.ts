@@ -295,10 +295,13 @@ export async function queryRunMetricsByLogName(
 export interface BucketedMetricDataPoint {
   step: number;       // min(step) in bucket — representative x
   time: string;       // time at first step in bucket
-  value: number;      // avg(value) — the line
-  minY: number;       // min(value) — envelope bottom
-  maxY: number;       // max(value) — envelope top
+  value: number | null; // avg(finite values) — the line (null if all non-finite)
+  minY: number | null;  // min(finite values) — envelope bottom (null if all non-finite)
+  maxY: number | null;  // max(finite values) — envelope top (null if all non-finite)
   count: number;      // points in bucket
+  hasNaN: boolean;    // bucket contained NaN value(s)
+  hasInf: boolean;    // bucket contained +Infinity value(s)
+  hasNegInf: boolean; // bucket contained -Infinity value(s)
 }
 
 const DEFAULT_BUCKETS = 1000;
@@ -306,13 +309,24 @@ const PREVIEW_BUCKETS = 200;
 
 /**
  * Sanitize bucketed metric rows: null values (from ClickHouse JSON serialization
- * of NaN/Inf/-Inf) become 0 for value/minY/maxY.
+ * of NaN/Inf/-Inf) become 0 for value/minY/maxY. Boolean flags are coerced from
+ * ClickHouse UInt8 (0/1) to proper booleans.
  */
 function sanitizeBucketedRows<T extends BucketedMetricDataPoint>(rows: T[]): T[] {
   for (const row of rows) {
-    row.value = row.value ?? 0;
-    row.minY = row.minY ?? 0;
-    row.maxY = row.maxY ?? 0;
+    // ClickHouse returns booleans as 0/1 integers in JSON
+    row.hasNaN = !!row.hasNaN;
+    row.hasInf = !!row.hasInf;
+    row.hasNegInf = !!row.hasNegInf;
+    // If value is null AND the bucket has non-finite flags, the bucket is all
+    // non-finite — preserve null so the frontend can show flag text instead of "0".
+    if (row.value == null && (row.hasNaN || row.hasInf || row.hasNegInf)) {
+      // leave value/minY/maxY as null
+    } else {
+      row.value = row.value ?? 0;
+      row.minY = row.minY ?? 0;
+      row.maxY = row.maxY ?? 0;
+    }
   }
   return rows;
 }
@@ -381,10 +395,13 @@ export async function queryRunMetricsBucketedByLogName(
       intDiv(m.step - b.minStep, greatest(toUInt64(1), intDiv(b.maxStep - b.minStep + 1, toUInt64({numBuckets: UInt32})))) AS bucket,
       min(m.step) AS step,
       argMin(m.time, m.step) AS time,
-      avg(m.value) AS value,
-      min(m.value) AS minY,
-      max(m.value) AS maxY,
-      toUInt64(count()) AS count
+      avgIf(m.value, isFinite(m.value)) AS value,
+      minIf(m.value, isFinite(m.value)) AS minY,
+      maxIf(m.value, isFinite(m.value)) AS maxY,
+      toUInt64(count()) AS count,
+      countIf(isNaN(m.value)) > 0 AS hasNaN,
+      countIf(isInfinite(m.value) AND m.value > 0) > 0 AS hasInf,
+      countIf(isInfinite(m.value) AND m.value < 0) > 0 AS hasNegInf
     FROM mlop_metrics m
     CROSS JOIN bounds b
     WHERE ${whereClause}${mainStepRange}
@@ -465,10 +482,13 @@ export async function queryRunMetricsBatchBucketedByLogName(
       intDiv(m.step - p.minStep, p.bucketWidth) AS bucket,
       any(toUInt64(p.minStep + intDiv(m.step - p.minStep, p.bucketWidth) * p.bucketWidth)) AS step,
       argMin(m.time, m.step) AS time,
-      avg(m.value) AS value,
-      min(m.value) AS minY,
-      max(m.value) AS maxY,
-      toUInt64(count()) AS count
+      avgIf(m.value, isFinite(m.value)) AS value,
+      minIf(m.value, isFinite(m.value)) AS minY,
+      maxIf(m.value, isFinite(m.value)) AS maxY,
+      toUInt64(count()) AS count,
+      countIf(isNaN(m.value)) > 0 AS hasNaN,
+      countIf(isInfinite(m.value) AND m.value > 0) > 0 AS hasInf,
+      countIf(isInfinite(m.value) AND m.value < 0) > 0 AS hasNegInf
     FROM mlop_metrics m
     CROSS JOIN params p
     WHERE ${whereClause}${mainStepRange}
@@ -485,7 +505,7 @@ export async function queryRunMetricsBatchBucketedByLogName(
   const grouped: Record<number, BucketedMetricDataPoint[]> = {};
   for (const row of rows) {
     const arr = grouped[row.runId] ?? (grouped[row.runId] = []);
-    arr.push({ step: row.step, time: row.time, value: row.value, minY: row.minY, maxY: row.maxY, count: row.count });
+    arr.push({ step: row.step, time: row.time, value: row.value, minY: row.minY, maxY: row.maxY, count: row.count, hasNaN: row.hasNaN, hasInf: row.hasInf, hasNegInf: row.hasNegInf });
   }
 
   return grouped;

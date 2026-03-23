@@ -3248,6 +3248,105 @@ describe('SDK API Endpoints (with API Key)', () => {
       }
     });
 
+    it('Test 24.2c: graphBatchBucketed returns null value and hasNaN for all-NaN metric', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+
+      // Find the nan-inf-metrics run
+      const listResponse = await makeTrpcRequest('runs.list', {
+        projectName: TEST_PROJECT_NAME,
+        search: 'nan-inf-metrics',
+        limit: 5,
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(listResponse.status).toBe(200);
+      const listData = await listResponse.json();
+      const runs = listData.result?.data?.runs;
+      expect(runs).toBeDefined();
+      expect(runs.length).toBeGreaterThan(0);
+
+      const nanInfRun = runs.find((r: any) => r.name === 'nan-inf-metrics');
+      expect(nanInfRun).toBeDefined();
+
+      // Query bucketed data for train/gpu_util (all-NaN metric)
+      const response = await makeTrpcRequest('runs.data.graphBatchBucketed', {
+        runIds: [nanInfRun.id],
+        projectName: TEST_PROJECT_NAME,
+        logName: 'train/gpu_util',
+        buckets: 50,
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      const result = data.result?.data;
+      expect(result).toBeDefined();
+
+      // Get data for this run
+      const runData = result[nanInfRun.id];
+      expect(runData).toBeDefined();
+      expect(runData.length).toBeGreaterThan(0);
+
+      // All buckets should have hasNaN: true and null value (all-NaN metric)
+      for (const bucket of runData) {
+        expect(bucket.hasNaN).toBe(true);
+        expect(bucket.value).toBeNull();
+      }
+    });
+
+    it('Test 24.2d: graphBatchBucketed returns finite average with flags for mixed metric', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+
+      // Find the nan-inf-metrics run
+      const listResponse = await makeTrpcRequest('runs.list', {
+        projectName: TEST_PROJECT_NAME,
+        search: 'nan-inf-metrics',
+        limit: 5,
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(listResponse.status).toBe(200);
+      const listData = await listResponse.json();
+      const runs = listData.result?.data?.runs;
+      expect(runs).toBeDefined();
+      expect(runs.length).toBeGreaterThan(0);
+
+      const nanInfRun = runs.find((r: any) => r.name === 'nan-inf-metrics');
+      expect(nanInfRun).toBeDefined();
+
+      // Query bucketed data for train/loss (3% NaN sprinkle — mixed metric)
+      const response = await makeTrpcRequest('runs.data.graphBatchBucketed', {
+        runIds: [nanInfRun.id],
+        projectName: TEST_PROJECT_NAME,
+        logName: 'train/loss',
+        buckets: 50,
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      const result = data.result?.data;
+      expect(result).toBeDefined();
+
+      const runData = result[nanInfRun.id];
+      expect(runData).toBeDefined();
+      expect(runData.length).toBeGreaterThan(0);
+
+      // Some buckets should have hasNaN: true with non-null value (mixed)
+      const nanBuckets = runData.filter((b: any) => b.hasNaN === true);
+      expect(nanBuckets.length).toBeGreaterThan(0);
+
+      // Mixed buckets should have a finite average value
+      const mixedBuckets = nanBuckets.filter((b: any) => b.value !== null);
+      expect(mixedBuckets.length).toBeGreaterThan(0);
+      for (const bucket of mixedBuckets) {
+        expect(typeof bucket.value).toBe('number');
+        expect(isFinite(bucket.value)).toBe(true);
+      }
+    });
+
     it('Test 24.3: Batch fetch metric summaries', async () => {
       if (!sessionCookie) {
         console.log('   No session - skipping');

@@ -241,12 +241,14 @@ function useChartConfig(
           return;
         }
 
-        // Convert bucketed data to step/value for alignment
-        const yData = data.map((d) => ({
-          step: d.step,
-          time: d.time,
-          value: d.value,
-        }));
+        // Convert bucketed data to step/value for alignment, filtering out null values
+        const yData = data
+          .filter((d) => d.value != null)
+          .map((d) => ({
+            step: d.step,
+            time: d.time,
+            value: d.value as number,
+          }));
 
         const { x, y } = alignAndUnzip(selectLogData, yData);
 
