@@ -20,6 +20,7 @@ import { groupMetrics } from "./~lib/metrics-utils";
 import { MetricsDisplay } from "./~components/metrics-display";
 import { SideBySideView } from "./~components/side-by-side/side-by-side-view";
 import { DataTable } from "./~components/runs-table/data-table";
+import { useChartDataPrefetch } from "./~hooks/use-chart-data-prefetch";
 import { useRefresh } from "./~hooks/use-refresh";
 import { useRunCount } from "./~queries/run-count";
 import { useRunFilters } from "./~hooks/use-run-filters";
@@ -144,6 +145,9 @@ function RouteComponent() {
       .filter((id): id is string => id != null);
     return resolved.length > 0 ? resolved : undefined;
   }, [rawUrlRunIds, prefetchedUrlRuns]);
+
+  // Prefetch chart data for URL-specified runs (fire early, before logs/grouping)
+  useChartDataPrefetch(organizationId, projectName, urlRunIds);
 
   // Persist last selected dashboard view to localStorage per org/project
   const dashboardStorageKey = `run-table-dashboard:${organizationSlug}:${projectName}`;
