@@ -37,6 +37,8 @@ interface TagsEditorPopoverProps {
   align?: "start" | "center" | "end";
   /** Organization ID for Linear integration (optional) */
   organizationId?: string;
+  /** Called when the popover open state changes */
+  onOpenChange?: (open: boolean) => void;
 }
 
 export function TagsEditorPopover({
@@ -48,6 +50,7 @@ export function TagsEditorPopover({
   emptyText = "No tags found.",
   align = "start",
   organizationId,
+  onOpenChange: onOpenChangeProp,
 }: TagsEditorPopoverProps) {
   const [open, setOpen] = useState(false);
   const [inputValue, setInputValue] = useState("");
@@ -132,12 +135,14 @@ export function TagsEditorPopover({
         if (isOpen) {
           appliedRef.current = false;
           setOpen(true);
+          onOpenChangeProp?.(true);
         } else {
           // Auto-save pending changes on close (click-outside, Escape, etc.)
           if (hasChanges && !appliedRef.current) {
             onTagsUpdate(pendingTags);
           }
           setOpen(false);
+          onOpenChangeProp?.(false);
         }
       }}
     >

@@ -23,6 +23,7 @@ const OVERFLOW_BADGE_WIDTH = 36; // approximate "+N" badge width
 
 export function TagsCell({ tags, allTags, onTagsUpdate, organizationId }: TagsCellProps) {
   const [isHovered, setIsHovered] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
   const leaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const outerRef = useRef<HTMLDivElement>(null);
   const measureRef = useRef<HTMLDivElement>(null);
@@ -91,7 +92,7 @@ export function TagsCell({ tags, allTags, onTagsUpdate, organizationId }: TagsCe
         ))}
       </div>
 
-      <Tooltip open={isHovered}>
+      <Tooltip open={isHovered && !isEditing}>
         <TooltipTrigger asChild>
           <div
             className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden cursor-default"
@@ -128,6 +129,7 @@ export function TagsCell({ tags, allTags, onTagsUpdate, organizationId }: TagsCe
         allTags={allTags}
         onTagsUpdate={onTagsUpdate}
         organizationId={organizationId}
+        onOpenChange={setIsEditing}
         stopPropagation
         trigger={
           <Button

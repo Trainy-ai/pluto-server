@@ -61,14 +61,13 @@ describe("filterToSelected", () => {
 // ── computeRowSelection ──────────────────────────────────────────────────
 
 describe("computeRowSelection", () => {
-  it("marks correct indices in the unfiltered array", () => {
+  it("marks correct run IDs as selected", () => {
     const runs = [makeRun("A"), makeRun("B"), makeRun("C"), makeRun("D")];
     const selected = makeSelected([runs[0], runs[2]]); // A, C
 
     const result = computeRowSelection(runs, selected);
 
-    // A is at index 0, C is at index 2
-    expect(result).toEqual({ 0: true, 2: true });
+    expect(result).toEqual({ A: true, C: true });
   });
 
   it("returns empty when nothing is selected", () => {
@@ -80,15 +79,11 @@ describe("computeRowSelection", () => {
     expect(computeRowSelection([], makeSelected([makeRun("A")]))).toEqual({});
   });
 
-  // ── THIS IS THE REGRESSION TEST ──────────────────────────────────────
+  // ── REGRESSION TEST ────────────────────────────────────────────────────
   //
   // When "Display only selected" is ON, displayedRuns is a filtered subset.
-  // The old bug used the unfiltered `runs` array for index computation,
-  // which caused:
-  //   1. Eye icons showing wrong state (wrong row marked selected)
-  //   2. Series emphasis breaking (row.getIsSelected() returning false for
-  //      actually-selected runs, so hover events were not dispatched)
-  //   3. Shift-click range selection targeting wrong runs
+  // Selection keys are run IDs (matching getRowId), so they work correctly
+  // regardless of the subset or ordering.
 
   describe("with showOnlySelected filter active (regression)", () => {
     // Setup: 5 runs, 3 selected (A, C, E)
@@ -102,47 +97,29 @@ describe("computeRowSelection", () => {
     const selected = makeSelected([allRuns[0], allRuns[2], allRuns[4]]); // A, C, E
     const displayedRuns = filterToSelected(allRuns, selected); // [A, C, E]
 
-    it("maps indices to the filtered array, not the original", () => {
+    it("maps run IDs correctly in the filtered array", () => {
       const result = computeRowSelection(displayedRuns, selected);
 
-      // In displayedRuns: A=0, C=1, E=2 — all selected
-      expect(result).toEqual({ 0: true, 1: true, 2: true });
+      expect(result).toEqual({ A: true, C: true, E: true });
     });
 
-    it("OLD BUG: using allRuns would produce wrong indices", () => {
-      // This demonstrates what the old code did — indices from allRuns
-      const wrongResult = computeRowSelection(allRuns, selected);
+    it("produces same keys whether using filtered or full array", () => {
+      // With ID-based keys, both arrays produce the same selection for
+      // the selected runs (unlike the old index-based approach)
+      const filteredResult = computeRowSelection(displayedRuns, selected);
+      const fullResult = computeRowSelection(allRuns, selected);
 
-      // allRuns: A=0, B=1(not selected), C=2, D=3(not selected), E=4
-      expect(wrongResult).toEqual({ 0: true, 2: true, 4: true });
-
-      // When table has only 3 rows (displayedRuns), index 2 maps to E (not C),
-      // and index 4 doesn't exist at all. This causes:
-      // - Row 1 (C) appears unselected → eye icon shows EyeOff
-      // - Hovering row 1 (C) → row.getIsSelected() is false → no hover event
-      //   → chart line for run C doesn't highlight (series emphasis broken)
-      // - Row 2 (E) gets index 2's selection → shows selected
-      //   but hovering it dispatches "E" while the selection record says
-      //   row.getIsSelected() is true (but for wrong run in some edge cases)
+      expect(filteredResult).toEqual({ A: true, C: true, E: true });
+      expect(fullResult).toEqual({ A: true, C: true, E: true });
     });
 
-    it("every displayed row is correctly marked as selected", () => {
+    it("every displayed run is correctly marked as selected", () => {
       const result = computeRowSelection(displayedRuns, selected);
 
-      // Verify each row in the filtered view is marked selected
-      displayedRuns.forEach((run, index) => {
-        expect(result[index]).toBe(true);
-        // This means row.getIsSelected() returns true for this row,
-        // which means the onMouseEnter handler WILL dispatch the
-        // "run-table-hover" event for series emphasis
+      // With getRowId, row.getIsSelected() looks up result[run.id]
+      displayedRuns.forEach((run) => {
+        expect(result[run.id]).toBe(true);
       });
-    });
-
-    it("no indices beyond the displayed row count", () => {
-      const result = computeRowSelection(displayedRuns, selected);
-
-      const maxIndex = Math.max(...Object.keys(result).map(Number));
-      expect(maxIndex).toBeLessThan(displayedRuns.length);
     });
   });
 
@@ -162,18 +139,15 @@ describe("computeRowSelection", () => {
 
       const result = computeRowSelection(displayed, selectedAfterDeselect);
 
-      // A=0, E=1 — both selected in a 2-row table
-      expect(result).toEqual({ 0: true, 1: true });
+      expect(result).toEqual({ A: true, E: true });
       expect(displayed.map((r) => r.id)).toEqual(["A", "E"]);
     });
   });
 
   describe("series emphasis precondition", () => {
     // The table's onMouseEnter handler only dispatches "run-table-hover"
-    // when row.getIsSelected() returns true. row.getIsSelected() reads
-    // from the rowSelection state, which is set to currentRowSelection.
-    // If currentRowSelection has wrong indices, getIsSelected() returns
-    // false for actually-selected runs → no emphasis event dispatched.
+    // when row.getIsSelected() returns true. With getRowId: (row) => row.id,
+    // row.getIsSelected() reads from rowSelection[row.id].
 
     it("all selected runs in filtered view have getIsSelected = true", () => {
       const allRuns = [
@@ -187,15 +161,11 @@ describe("computeRowSelection", () => {
 
       const result = computeRowSelection(displayed, selected);
 
-      // Simulate what TanStack Table does: row at index i is selected
-      // if result[i] === true
-      displayed.forEach((run, i) => {
-        const isSelected = result[i] === true;
+      // Simulate what TanStack Table does with getRowId:
+      // row.getIsSelected() checks result[row.id]
+      displayed.forEach((run) => {
+        const isSelected = result[run.id] === true;
         expect(isSelected).toBe(true);
-        // This means hovering this row would dispatch:
-        //   new CustomEvent("run-table-hover", { detail: run.id })
-        // If this assertion failed, hovering run.id would NOT highlight
-        // its chart line — the exact bug the user reported.
       });
     });
   });
@@ -298,7 +268,7 @@ describe("ensureSelectedRunsIncluded", () => {
     expect(result.map((r) => r.id)).toEqual(["C", "A", "B", "Z", "Y"]);
   });
 
-  it("regression: computeRowSelection produces valid index for every selected run", () => {
+  it("regression: computeRowSelection produces valid key for every selected run", () => {
     // Simulates: user searches for run "X", selects it, clears search.
     // Page now shows [A, B, C] but "X" is selected from a different page.
     const paginatedRuns = [makeRun("A"), makeRun("B"), makeRun("C")];
@@ -308,16 +278,16 @@ describe("ensureSelectedRunsIncluded", () => {
     const displayed = ensureSelectedRunsIncluded(paginatedRuns, selected);
     const rowSelection = computeRowSelection(displayed, selected);
 
-    // X should be appended at index 3 and marked selected
+    // X should be appended and marked selected by ID
     expect(displayed.map((r) => r.id)).toEqual(["A", "B", "C", "X"]);
-    expect(rowSelection[3]).toBe(true);
+    expect(rowSelection["X"]).toBe(true);
 
-    // Every selected run must have a valid row index — this is the precondition
+    // Every selected run must have a valid entry — this is the precondition
     // for row.getIsSelected() to return true, which enables hover emphasis
     const selectedIds = new Set(Object.keys(selected));
-    displayed.forEach((run, index) => {
+    displayed.forEach((run) => {
       if (selectedIds.has(run.id)) {
-        expect(rowSelection[index]).toBe(true);
+        expect(rowSelection[run.id]).toBe(true);
       }
     });
   });

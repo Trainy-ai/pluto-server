@@ -237,6 +237,7 @@ export function useDataTableState({
   const table = useReactTable({
     data: displayedRuns,
     columns: memoizedColumns,
+    getRowId: (row) => row.id,
     getCoreRowModel: getCoreRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
     manualSorting: true,
@@ -264,6 +265,7 @@ export function useDataTableState({
   const pinnedTable = useReactTable({
     data: pinnedRuns,
     columns: memoizedColumns,
+    getRowId: (row) => row.id,
     getCoreRowModel: getCoreRowModel(),
     state: {
       rowSelection: pinnedRowSelection,

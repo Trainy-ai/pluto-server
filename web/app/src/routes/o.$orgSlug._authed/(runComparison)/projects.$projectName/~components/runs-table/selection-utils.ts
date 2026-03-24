@@ -3,26 +3,23 @@ import type { Run } from "../../~queries/list-runs";
 /**
  * Compute the TanStack Table rowSelection record from the displayed runs.
  *
- * IMPORTANT: `displayedRuns` must be the same array passed to the table's
- * `data` prop.  When "Display only selected" is active, `displayedRuns` is a
- * filtered subset of all runs — so the indices here must correspond to that
- * filtered array, NOT the unfiltered `runs` array.  Using the wrong array
- * causes eye-icon state, series emphasis (hover highlighting), and shift-click
- * range selection to break.
+ * Keys are run IDs (matching the table's `getRowId: (row) => row.id`).
+ * This ensures `row.getIsSelected()` works correctly regardless of row
+ * ordering, pagination, or filtering.
  */
 export function computeRowSelection(
   displayedRuns: Run[],
   selectedRunsWithColors: Record<string, { run: Run; color: string }>,
-): Record<number, boolean> {
-  const selection: Record<number, boolean> = {};
+): Record<string, boolean> {
+  const selection: Record<string, boolean> = {};
 
   if (displayedRuns.length > 0) {
     const selectedIds = new Set(Object.keys(selectedRunsWithColors));
 
     if (selectedIds.size > 0) {
-      displayedRuns.forEach((run, index) => {
+      displayedRuns.forEach((run) => {
         if (run?.id && selectedIds.has(run.id)) {
-          selection[index] = true;
+          selection[run.id] = true;
         }
       });
     }

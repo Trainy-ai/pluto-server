@@ -31,13 +31,14 @@ export function NotesCell({ notes, onNotesUpdate }: NotesCellProps) {
   const [draft, setDraft] = useState(notes ?? "");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Sync draft with prop when popover opens
+  // Sync draft with prop only when popover opens — NOT when notes changes
+  // mid-edit, which would overwrite the user's in-progress typing.
+  const prevOpenRef = useRef(false);
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && !prevOpenRef.current) {
       setDraft(notes ?? "");
-      // Focus textarea after popover opens
-      setTimeout(() => textareaRef.current?.focus(), 0);
     }
+    prevOpenRef.current = isOpen;
   }, [isOpen, notes]);
 
   function handleSave() {
@@ -61,7 +62,7 @@ export function NotesCell({ notes, onNotesUpdate }: NotesCellProps) {
   return (
     <div className="flex items-center gap-1">
       {notes ? (
-        <Tooltip open={isHovered}>
+        <Tooltip open={isHovered && !isOpen}>
           <TooltipTrigger asChild>
             <span
               className="flex-1 truncate text-sm text-muted-foreground"
@@ -99,7 +100,6 @@ export function NotesCell({ notes, onNotesUpdate }: NotesCellProps) {
           className="w-72 p-3"
           side="right"
           align="start"
-          onOpenAutoFocus={(e) => e.preventDefault()}
         >
           <div className="flex flex-col gap-2">
             <label className="text-xs font-medium text-muted-foreground">
@@ -113,6 +113,7 @@ export function NotesCell({ notes, onNotesUpdate }: NotesCellProps) {
               placeholder="Add a note about this run..."
               className="min-h-[80px] resize-none text-sm"
               maxLength={1000}
+              autoFocus
             />
             <div className="flex items-center justify-between">
               <span className="text-xs text-muted-foreground">

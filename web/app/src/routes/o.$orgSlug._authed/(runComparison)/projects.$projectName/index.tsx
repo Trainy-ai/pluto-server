@@ -814,30 +814,36 @@ function RouteComponent() {
     return fields;
   }, [columnKeysData, searchKeysData, allTags]);
 
-  // Handler for updating tags on a run
+  // Handler for updating tags on a run — uses a ref so the callback identity
+  // is stable and doesn't trigger column recreation on every mutation state change.
+  const updateTagsMutationRef = useRef(updateTagsMutation);
+  useEffect(() => { updateTagsMutationRef.current = updateTagsMutation; }, [updateTagsMutation]);
   const handleTagsUpdate = useCallback(
     (runId: string, tags: string[]) => {
-      updateTagsMutation.mutate({
+      updateTagsMutationRef.current.mutate({
         organizationId,
         runId,
         projectName,
         tags,
       });
     },
-    [organizationId, projectName, updateTagsMutation]
+    [organizationId, projectName]
   );
 
-  // Handler for updating notes on a run
+  // Handler for updating notes on a run — uses a ref so the callback identity
+  // is stable and doesn't trigger column recreation on every mutation state change.
+  const updateNotesMutationRef = useRef(updateNotesMutation);
+  useEffect(() => { updateNotesMutationRef.current = updateNotesMutation; }, [updateNotesMutation]);
   const handleNotesUpdate = useCallback(
     (runId: string, notes: string | null) => {
-      updateNotesMutation.mutate({
+      updateNotesMutationRef.current.mutate({
         organizationId,
         runId,
         projectName,
         notes,
       });
     },
-    [organizationId, projectName, updateNotesMutation]
+    [organizationId, projectName]
   );
 
   const {
