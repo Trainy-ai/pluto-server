@@ -152,7 +152,7 @@ export const MultiGroupAudio = ({
         })}
       </div>
       {hasMultipleSteps() && (
-        <div className="border-t pt-4">
+        <div className="sticky bottom-0 z-10 border-t bg-background pt-3 pb-1">
           <StepNavigator
             currentStepIndex={currentStepIndex}
             currentStepValue={currentStepValue}

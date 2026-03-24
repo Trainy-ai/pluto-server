@@ -7,6 +7,17 @@ import {
   ZoomOut,
   RotateCcw,
 } from "lucide-react";
+import { StepNavigator } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/shared/step-navigator";
+
+interface ImageCardStepNavigation {
+  currentStepIndex: number;
+  currentStepValue: number;
+  availableSteps: number[];
+  onStepChange: (index: number) => void;
+  isLocked?: boolean;
+  onLockChange?: (locked: boolean) => void;
+  showLock?: boolean;
+}
 
 interface ImageCardProps {
   url: string;
@@ -16,6 +27,8 @@ interface ImageCardProps {
     name: string;
     color: string;
   };
+  /** Optional step navigation to show in fullscreen mode */
+  stepNavigation?: ImageCardStepNavigation;
 }
 
 async function handleDownload(url: string, fileName: string) {
@@ -37,7 +50,7 @@ async function handleDownload(url: string, fileName: string) {
   }
 }
 
-export function ImageCard({ url, fileName, runLabel }: ImageCardProps) {
+export function ImageCard({ url, fileName, runLabel, stepNavigation }: ImageCardProps) {
   const [scale, setScale] = useState(1);
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
@@ -48,6 +61,11 @@ export function ImageCard({ url, fileName, runLabel }: ImageCardProps) {
     setScale(1);
     setPosition({ x: 0, y: 0 });
   };
+
+  // Reset zoom/pan when the image changes (e.g. step change with stable key)
+  useEffect(() => {
+    resetView();
+  }, [url]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
     if (scale > 1) {
@@ -151,11 +169,24 @@ export function ImageCard({ url, fileName, runLabel }: ImageCardProps) {
               </div>
             </div>
             <div className="flex flex-col gap-2 border-t bg-background px-6 py-3">
-              <div className="flex items-center justify-between">
+              {stepNavigation && stepNavigation.availableSteps.length > 1 && (
+                <div className="pb-1">
+                  <StepNavigator
+                    currentStepIndex={stepNavigation.currentStepIndex}
+                    currentStepValue={stepNavigation.currentStepValue}
+                    availableSteps={stepNavigation.availableSteps}
+                    onStepChange={stepNavigation.onStepChange}
+                    isLocked={stepNavigation.isLocked}
+                    onLockChange={stepNavigation.onLockChange}
+                    showLock={stepNavigation.showLock}
+                  />
+                </div>
+              )}
+              <div className="relative flex items-center">
                 <p className="font-mono text-sm text-muted-foreground">
                   {fileName}
                 </p>
-                <div className="flex items-center gap-2">
+                <div className="absolute left-1/2 flex -translate-x-1/2 items-center gap-2">
                   <Button
                     variant="outline"
                     size="icon"
@@ -194,7 +225,7 @@ export function ImageCard({ url, fileName, runLabel }: ImageCardProps) {
                 <Button
                   variant="outline"
                   size="sm"
-                  className="gap-2"
+                  className="ml-auto gap-2"
                   onClick={() => handleDownload(url, fileName)}
                 >
                   <Download className="h-4 w-4" />

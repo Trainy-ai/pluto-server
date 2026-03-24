@@ -7,6 +7,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useSyncedStepNavigation } from "../../~hooks/use-synced-step-navigation";
 import { StepNavigator } from "../shared/step-navigator";
 import { ImageCard } from "@/components/core/image-viewer";
+import { cn } from "@/lib/utils";
 
 interface ImagesViewProps {
   log: LogGroup["logs"][number];
@@ -131,24 +132,30 @@ export const ImagesView = ({
         {log.logName}
       </h3>
 
-      {availableSteps.length > 1 && (
-        <StepNavigator
-          currentStepIndex={currentStepIndex}
-          currentStepValue={currentStepValue}
-          availableSteps={availableSteps}
-          onStepChange={handleStepChange}
-          isLocked={isLocked}
-          onLockChange={setIsLocked}
-          showLock={hasSyncContext}
-        />
-      )}
-
-      <div className="grid flex-1 grid-cols-2 gap-4 overflow-auto">
-        {paginatedImages.map((image: any) => (
+      <div
+        className={cn(
+          "grid flex-1 gap-4 overflow-auto",
+          paginatedImages.length === 1 ? "grid-cols-1" : "grid-cols-2",
+        )}
+      >
+        {paginatedImages.map((image: any, index: number) => (
           <ImageCard
-            key={image.fileName}
+            key={index}
             url={image.url}
             fileName={image.fileName}
+            stepNavigation={
+              availableSteps.length > 1
+                ? {
+                    currentStepIndex,
+                    currentStepValue,
+                    availableSteps,
+                    onStepChange: handleStepChange,
+                    isLocked,
+                    onLockChange: setIsLocked,
+                    showLock: hasSyncContext,
+                  }
+                : undefined
+            }
           />
         ))}
       </div>
@@ -158,6 +165,20 @@ export const ImagesView = ({
         totalPages={totalPages}
         onPageChange={setCurrentPage}
       />
+
+      {availableSteps.length > 1 && (
+        <div className="sticky bottom-0 z-10 border-t bg-background pt-3 pb-1">
+          <StepNavigator
+            currentStepIndex={currentStepIndex}
+            currentStepValue={currentStepValue}
+            availableSteps={availableSteps}
+            onStepChange={handleStepChange}
+            isLocked={isLocked}
+            onLockChange={setIsLocked}
+            showLock={hasSyncContext}
+          />
+        </div>
+      )}
     </div>
   );
 };

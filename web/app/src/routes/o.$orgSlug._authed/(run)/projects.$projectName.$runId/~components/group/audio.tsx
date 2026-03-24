@@ -140,15 +140,6 @@ export const AudioView = ({
         {log.logName}
       </h3>
 
-      {availableSteps.length > 1 && (
-        <StepNavigator
-          currentStepIndex={currentStepIndex}
-          currentStepValue={currentStepValue}
-          availableSteps={availableSteps}
-          onStepChange={handleStepChange}
-        />
-      )}
-
       <div className="grid flex-1 grid-cols-1 gap-4 overflow-auto">
         {paginatedAudios.map((audio) => (
           <AudioPlayer
@@ -165,6 +156,17 @@ export const AudioView = ({
           totalPages={totalPages}
           onPageChange={setCurrentPage}
         />
+      )}
+
+      {availableSteps.length > 1 && (
+        <div className="sticky bottom-0 z-10 border-t bg-background pt-3 pb-1">
+          <StepNavigator
+            currentStepIndex={currentStepIndex}
+            currentStepValue={currentStepValue}
+            availableSteps={availableSteps}
+            onStepChange={handleStepChange}
+          />
+        </div>
       )}
     </div>
   );

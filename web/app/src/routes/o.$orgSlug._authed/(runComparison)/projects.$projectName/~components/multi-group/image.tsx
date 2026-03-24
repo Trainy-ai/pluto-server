@@ -93,6 +93,11 @@ export const MultiGroupImage = ({
     });
   }, [allImages, currentStepValue, runs]);
 
+  const runsWithImages = useMemo(
+    () => imagesByRun.filter(({ images }) => images.length > 0).length,
+    [imagesByRun],
+  );
+
   if (isLoading) {
     return (
       <div className={cn("flex h-full w-full flex-col space-y-4 p-4", className)}>
@@ -135,9 +140,9 @@ export const MultiGroupImage = ({
       <div
         className={cn(
           "grid flex-1 grid-cols-1 gap-4 overflow-auto",
-          imagesByRun.length > 1 && "sm:grid-cols-2",
-          imagesByRun.length === 2 && "lg:grid-cols-2",
-          imagesByRun.length >= 3 && "lg:grid-cols-3",
+          runsWithImages > 1 && "sm:grid-cols-2",
+          runsWithImages === 2 && "lg:grid-cols-2",
+          runsWithImages >= 3 && "lg:grid-cols-3",
         )}
       >
         {imagesByRun.map(({ run, images }) => {
@@ -150,12 +155,25 @@ export const MultiGroupImage = ({
               url={image.url}
               fileName={image.fileName}
               runLabel={{ name: run.runName, color: run.color }}
+              stepNavigation={
+                hasMultipleSteps()
+                  ? {
+                      currentStepIndex,
+                      currentStepValue,
+                      availableSteps,
+                      onStepChange: goToStepIndex,
+                      isLocked,
+                      onLockChange: setIsLocked,
+                      showLock: hasSyncContext,
+                    }
+                  : undefined
+              }
             />
           );
         })}
       </div>
       {hasMultipleSteps() && (
-        <div className="border-t pt-4">
+        <div className="sticky bottom-0 z-10 border-t bg-background pt-3 pb-1">
           <StepNavigator
             currentStepIndex={currentStepIndex}
             currentStepValue={currentStepValue}

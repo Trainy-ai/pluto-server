@@ -234,7 +234,7 @@ export const MultiHistogramView: React.FC<{
         ))}
       </div>
       {maxStepIndex > 0 && (
-        <div className="flex w-full flex-col space-y-2">
+        <div className="sticky bottom-0 z-10 flex w-full flex-col space-y-2 border-t bg-background pt-3 pb-1">
           <StepNavigator
             currentStepIndex={stepIndex}
             currentStepValue={currentStep}

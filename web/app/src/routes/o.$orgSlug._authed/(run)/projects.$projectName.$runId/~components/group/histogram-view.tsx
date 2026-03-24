@@ -313,9 +313,9 @@ export const HistogramView = ({
   }
 
   return (
-    <div className="h-full w-full space-y-4 p-2">
+    <div className="flex h-full w-full flex-col space-y-4 p-2">
       <h3 className="text-center font-mono text-sm font-medium text-muted-foreground">{logName}</h3>
-      <div className="space-y-2">
+      <div className="min-h-0 flex-1">
         <div className="relative">
           {normalizedData[currentStepIndex] && (
             <HistogramCanvas
@@ -337,32 +337,32 @@ export const HistogramView = ({
             </div>
           )}
         </div>
-        {normalizedData.length > 1 && (
-          <>
-            <StepNavigator
-              currentStepIndex={currentStepIndex}
-              currentStepValue={currentStep}
-              availableSteps={normalizedData.map((d) => d.step)}
-              onStepChange={setCurrentStepIndex}
-            />
-            <div className="text-center font-mono text-xs text-muted-foreground">
-              Step {formatNumber(currentStep, true)} of{" "}
-              {formatNumber(maxStep, true)}
-            </div>
-            <AnimationControls
-              currentStep={currentStepIndex}
-              maxStep={maxStepIndex}
-              isPlaying={isPlaying}
-              animationSpeed={animationSpeed}
-              onPlayPause={() => setIsPlaying(!isPlaying)}
-              onStepChange={setCurrentStepIndex}
-              onSpeedChange={setAnimationSpeed}
-              onExport={handleExport}
-              isExporting={isExporting}
-            />
-          </>
-        )}
       </div>
+      {normalizedData.length > 1 && (
+        <div className="sticky bottom-0 z-10 space-y-2 border-t bg-background pt-3 pb-1">
+          <StepNavigator
+            currentStepIndex={currentStepIndex}
+            currentStepValue={currentStep}
+            availableSteps={normalizedData.map((d) => d.step)}
+            onStepChange={setCurrentStepIndex}
+          />
+          <div className="text-center font-mono text-xs text-muted-foreground">
+            Step {formatNumber(currentStep, true)} of{" "}
+            {formatNumber(maxStep, true)}
+          </div>
+          <AnimationControls
+            currentStep={currentStepIndex}
+            maxStep={maxStepIndex}
+            isPlaying={isPlaying}
+            animationSpeed={animationSpeed}
+            onPlayPause={() => setIsPlaying(!isPlaying)}
+            onStepChange={setCurrentStepIndex}
+            onSpeedChange={setAnimationSpeed}
+            onExport={handleExport}
+            isExporting={isExporting}
+          />
+        </div>
+      )}
     </div>
   );
 };
