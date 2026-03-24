@@ -13,6 +13,8 @@ export interface FocusDetectionDeps {
   isActiveChart: () => boolean;
   lastFocusedSeriesRef: { current: number | null };
   highlightedSeriesRef: { current: string | null };
+  highlightedRunIdRef: { current: string | null };
+  highlightedSeriesIdRef: { current: string | null };
   chartLineWidthRef: { current: number };
   chartId: string;
   chartSyncContextRef: {
@@ -116,6 +118,8 @@ export function buildFocusDetectionHook(deps: FocusDetectionDeps): (u: uPlot) =>
         // seriesId is either "runId" (single-metric) or "runId:metricName" (multi-metric)
         const seriesId = deps.processedLines[closestSeriesIdx - 1]?.seriesId;
         const runId = seriesId ? seriesId.split(':')[0] : null;
+        deps.highlightedRunIdRef.current = runId;
+        deps.highlightedSeriesIdRef.current = seriesId ?? null;
         if (runId) {
           deps.chartSyncContextRef.current?.highlightUPlotSeries(deps.chartId, runId);
           deps.chartSyncContextRef.current?.setHighlightedRunId(runId);

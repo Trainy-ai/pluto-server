@@ -62,7 +62,6 @@ export function RunRow({ row, pinnedColumnMap, tableBodyRef, isHidden }: RunRowP
               "px-2 py-2 text-sm",
               colPinned && [
                 "sticky",
-                "before:absolute before:inset-0 before:-z-10 before:bg-background",
                 "group-hover/row:bg-muted/50",
                 "group-data-[state=selected]/row:bg-muted",
               ],
@@ -72,11 +71,13 @@ export function RunRow({ row, pinnedColumnMap, tableBodyRef, isHidden }: RunRowP
                 ? colPinned
                   ? { background: `linear-gradient(${cellBgColor}10, ${cellBgColor}10), hsl(var(--background))` }
                   : { backgroundColor: `${cellBgColor}10` }
-                : undefined),
+                : colPinned
+                  ? { backgroundColor: 'hsl(var(--background))' }
+                  : undefined),
               ...(colPinned && {
                 left: colPinned.left,
                 zIndex: 1,
-                ...(colPinned.isLast && { boxShadow: '3px 0 6px -2px rgba(0,0,0,0.15)' }),
+                ...(colPinned.isLast && { borderRight: '2px solid hsl(var(--border))' }),
               }),
             }}
           >

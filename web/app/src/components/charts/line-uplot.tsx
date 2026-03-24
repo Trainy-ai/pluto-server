@@ -150,6 +150,10 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
     const localTableHighlightRef = useRef<string | null>(null);
     const tableHighlightRef = chartSyncContext?.tableHighlightedSeriesRef ?? localTableHighlightRef;
     const highlightedSeriesRef = useRef<string | null>(null);
+    // Ref for tooltip to access highlighted run ID for row matching
+    const highlightedRunIdRef = useRef<string | null>(null);
+    // Ref for tooltip to access highlighted series ID for exact series matching
+    const highlightedSeriesIdRef = useRef<string | null>(null);
 
     // Stable refs for callbacks
     const chartLineWidthRef = useRef(chartLineWidth);
@@ -364,7 +368,8 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       const drawHook = buildDrawHook(processedLinesRef, lastFocusedSeriesRef, crossChartRunIdRef, tableHighlightRef, chartLineWidthRef, theme);
       const focusDetectionHook = buildFocusDetectionHook({
         processedLines, tooltipInterpolation, spanGaps, isActiveChart,
-        lastFocusedSeriesRef, highlightedSeriesRef, chartLineWidthRef,
+        lastFocusedSeriesRef, highlightedSeriesRef, highlightedRunIdRef,
+        highlightedSeriesIdRef, chartLineWidthRef,
         chartId, chartSyncContextRef: chartSyncContextRef as any,
       });
       const interpolationDotsHook = buildInterpolationDotsHook({ processedLines, tooltipInterpolation, spanGaps, isActiveChart });
@@ -385,10 +390,14 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         bands: bands.length > 0 ? bands : undefined,
         focus: { alpha: 1 },
         plugins: [
+          // Focus detection must run BEFORE tooltip so highlightedSeriesRef is set
+          // when the tooltip reads it to sort/highlight the hovered series
+          { hooks: { setCursor: [focusDetectionHook] } },
           tooltipPlugin({
             theme, isDateTime, timeRange, lines: processedLines,
             hoverStateRef, onHoverChange: handleHoverChange,
-            isActiveChart, highlightedSeriesRef, tooltipInterpolation,
+            isActiveChart, highlightedSeriesRef, highlightedRunIdRef,
+            highlightedSeriesIdRef, tooltipInterpolation,
             spanGaps, xlabel, title, subtitle,
             onSeriesHover: handleTooltipSeriesHover,
           }),
@@ -411,7 +420,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
               (u as any)._interpDots = dots;
             }
           }],
-          setCursor: [focusDetectionHook, interpolationDotsHook],
+          setCursor: [interpolationDotsHook],
           setSeries: [(u, seriesIdx) => {
             if (seriesIdx == null || seriesIdx < 1) return;
             const toggled = processedLinesRef.current[seriesIdx - 1];

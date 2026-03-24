@@ -12,7 +12,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useRef, useMemo, useCallback, useEffect } from "react";
-import { GripVertical } from "lucide-react";
+import { GripVertical, Pin } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { columns } from "./columns";
@@ -20,7 +20,7 @@ import type { Run } from "../../~queries/list-runs";
 import type { ColumnConfig, BaseColumnOverrides } from "../../~hooks/use-column-config";
 import type { RunFilter, FilterableField } from "@/lib/run-filters";
 import type { Header } from "@tanstack/react-table";
-import { computePinnedColumnIds } from "./lib/pinned-columns";
+import { computePinnedColumnIds, BASE_PINNED_IDS } from "./lib/pinned-columns";
 import { MIN_COL_WIDTH } from "./hooks/use-column-resize";
 import { useDataTableState } from "./hooks/use-data-table-state";
 import { TableToolbar } from "./components/table-toolbar";
@@ -183,6 +183,40 @@ export function DataTable({
   useEffect(() => { hiddenRunIdsRef.current = hiddenRunIds; }, [hiddenRunIds]);
   const getIsHidden = useCallback((runId: string) => hiddenRunIdsRef.current.has(runId), []);
 
+  // Listen for chart hover events to highlight the corresponding run row
+  useEffect(() => {
+    let lastHighlightedRow: HTMLElement | null = null;
+
+    const handler = (e: Event) => {
+      const runId = (e as CustomEvent).detail as string | null;
+      const container = mainScrollRef.current;
+      if (!container) return;
+
+      // Clear previous highlight using cached reference (avoids querySelectorAll)
+      if (lastHighlightedRow) {
+        lastHighlightedRow.querySelectorAll("td").forEach((td) => {
+          td.style.boxShadow = "";
+        });
+        lastHighlightedRow.removeAttribute("data-chart-highlight");
+        lastHighlightedRow = null;
+      }
+
+      if (runId) {
+        const row = container.querySelector(`[data-run-id="${runId}"]`) as HTMLElement | null;
+        if (row) {
+          row.setAttribute("data-chart-highlight", "true");
+          row.querySelectorAll("td").forEach((td) => {
+            td.style.boxShadow = "inset 0 0 0 1000px rgba(59, 130, 246, 0.15)";
+          });
+          lastHighlightedRow = row;
+        }
+      }
+    };
+
+    document.addEventListener("chart-hover-run", handler);
+    return () => document.removeEventListener("chart-hover-run", handler);
+  }, []);
+
   const pinnedColumnIds = useMemo(
     () => computePinnedColumnIds(customColumns),
     [customColumns],
@@ -334,7 +368,7 @@ export function DataTable({
           ...(pinned && {
             left: pinned.left,
             zIndex: 20,
-            ...(pinned.isLast && { boxShadow: '3px 0 6px -2px rgba(0,0,0,0.15)' }),
+            ...(pinned.isLast && { borderRight: '2px solid hsl(var(--border))' }),
           }),
         }}
         draggable={isCustom}
@@ -346,6 +380,9 @@ export function DataTable({
         <div className="flex items-center">
           {isCustom && (
             <GripVertical className="h-3.5 w-0 shrink-0 group-hover:w-3.5 group-hover:mr-1 overflow-hidden text-muted-foreground/40 transition-all duration-150" />
+          )}
+          {pinned && !(BASE_PINNED_IDS as readonly string[]).includes(header.column.id) && (
+            <Pin className="mr-1 h-3 w-3 shrink-0 rotate-45 text-muted-foreground/40" />
           )}
           {header.isPlaceholder
             ? null

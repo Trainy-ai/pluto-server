@@ -392,6 +392,9 @@ export function ChartSyncProvider({
         }
         lastHighlightedRef.current = { sourceChartId: srcId, runId: id };
 
+        // Notify the runs table which run is being hovered in the chart
+        document.dispatchEvent(new CustomEvent("chart-hover-run", { detail: id }));
+
         uplotInstancesRef.current.forEach((chart, chartMapId) => {
           if (chartMapId === srcId) return; // Skip source chart
 
@@ -439,6 +442,8 @@ export function ChartSyncProvider({
     if (id === null) {
       highlightedSeriesNameRef.current = null;
       highlightedRunIdRef.current = null;
+      // Clear the runs table highlight when mouse leaves the chart
+      document.dispatchEvent(new CustomEvent("chart-hover-run", { detail: null }));
     }
   }, []);
 
