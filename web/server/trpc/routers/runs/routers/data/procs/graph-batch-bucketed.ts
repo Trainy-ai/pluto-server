@@ -1,10 +1,10 @@
 import { z } from "zod";
 import { protectedOrgProcedure } from "../../../../../../lib/trpc";
-import { sqidDecode } from "../../../../../../lib/sqid";
+import { resolveRunId } from "../../../../../../lib/resolve-run-id";
 import { queryRunMetricsBatchBucketedByLogName } from "../../../../../../lib/queries";
 import type { BucketedMetricDataPoint } from "../../../../../../lib/queries";
 
-// Type for batch bucketed graph data: map of SQID-encoded runId → bucketed data points
+// Type for batch bucketed graph data: map of encoded runId → bucketed data points
 type GraphBatchBucketedData = Record<string, BucketedMetricDataPoint[]>;
 
 export const graphBatchBucketedProcedure = protectedOrgProcedure
@@ -31,13 +31,15 @@ export const graphBatchBucketedProcedure = protectedOrgProcedure
       preview,
     } = input;
 
-    // Decode SQIDs → numeric IDs
-    const numericRunIds = encodedRunIds.map((id) => sqidDecode(id));
+    // Resolve run identifiers (display IDs like "MMP-7" or SQIDs) → numeric IDs
+    const numericRunIds = await Promise.all(
+      encodedRunIds.map((id) => resolveRunId(ctx.prisma, id, organizationId, projectName))
+    );
 
-    // Build reverse map: numeric → SQID
-    const numericToSqid = new Map<number, string>();
-    encodedRunIds.forEach((sqid, i) => {
-      numericToSqid.set(numericRunIds[i], sqid);
+    // Build reverse map: numeric → encoded ID
+    const numericToEncoded = new Map<number, string>();
+    encodedRunIds.forEach((encoded, i) => {
+      numericToEncoded.set(numericRunIds[i], encoded);
     });
 
     const grouped = await queryRunMetricsBatchBucketedByLogName(ctx.clickhouse, {
@@ -51,12 +53,12 @@ export const graphBatchBucketedProcedure = protectedOrgProcedure
       preview,
     });
 
-    // Re-key results by SQID-encoded runId
+    // Re-key results by encoded runId
     const result: GraphBatchBucketedData = {};
     for (const [numericId, points] of Object.entries(grouped)) {
-      const sqid = numericToSqid.get(Number(numericId));
-      if (sqid) {
-        result[sqid] = points;
+      const encoded = numericToEncoded.get(Number(numericId));
+      if (encoded) {
+        result[encoded] = points;
       }
     }
 

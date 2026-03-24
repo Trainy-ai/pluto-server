@@ -5156,4 +5156,192 @@ describe('SDK API Endpoints (with API Key)', () => {
       expect(new Set(allRunIds).size).toBe(allRunIds.length);
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Test Suite 29: Batch Graph Procedures — Display ID Resolution
+  // ---------------------------------------------------------------------------
+  // Regression tests for the bug where graphBatchBucketed and graphBatch used
+  // sqidDecode() which silently fails on display IDs (e.g., "STP-999").
+  // The fix uses resolveRunId() which handles both display IDs and SQIDs.
+  describe('Test Suite 29: Batch Graph Procedures — Display ID Resolution', () => {
+    const TEST_EMAIL = process.env.TEST_USER_EMAIL || 'test-smoke@mlop.local';
+    const TEST_PASSWORD = 'TestPassword123!';
+    let sessionCookie: string | null = null;
+    let serverAvailable = false;
+    let staircaseRunSqid: string | null = null;
+    let staircaseDisplayId: string | null = null;
+
+    beforeAll(async () => {
+      try {
+        const healthCheck = await makeRequest('/api/health');
+        serverAvailable = healthCheck.status === 200;
+      } catch {
+        serverAvailable = false;
+      }
+
+      if (!serverAvailable) return;
+
+      try {
+        const signInResponse = await makeRequest('/api/auth/sign-in/email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: TEST_EMAIL, password: TEST_PASSWORD }),
+        });
+
+        const setCookie = signInResponse.headers.get('set-cookie');
+        if (setCookie) {
+          const match = setCookie.match(/better_auth\.session_token=([^;]+)/);
+          if (match) {
+            sessionCookie = `better_auth.session_token=${match[1]}`;
+          }
+        }
+      } catch (e) {
+        console.log('   Sign in failed:', e);
+      }
+
+      if (!sessionCookie) return;
+
+      // Find the staircase run to get its SQID and display ID
+      const listResponse = await makeTrpcRequest('runs.list', {
+        projectName: TEST_PROJECT_NAME,
+        search: 'staircase-test',
+        limit: 5,
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      if (listResponse.status === 200) {
+        const listData = await listResponse.json();
+        const runs = listData.result?.data?.runs;
+        const staircase = runs?.find((r: any) => r.name === 'staircase-test');
+        if (staircase) {
+          staircaseRunSqid = staircase.id; // SQID-encoded
+          // Display ID = project.runPrefix + "-" + run.number
+          // The setup assigns number=999 and prefix='STP' (if not already set)
+          const prefix = staircase.project?.runPrefix;
+          const num = staircase.number;
+          if (prefix && num != null) {
+            staircaseDisplayId = `${prefix}-${num}`;
+          }
+        }
+      }
+    });
+
+    it('Test 29.1: graphBatchBucketed resolves SQID correctly', async () => {
+      if (!sessionCookie || !staircaseRunSqid) {
+        console.log('   No session or staircase run - skipping');
+        return;
+      }
+
+      const response = await makeTrpcRequest('runs.data.graphBatchBucketed', {
+        runIds: [staircaseRunSqid],
+        projectName: TEST_PROJECT_NAME,
+        logName: 'test/staircase',
+        buckets: 50,
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      const result = data.result?.data;
+      expect(result).toBeDefined();
+
+      // Result should be a map with the SQID as key, containing bucketed data
+      const points = result[staircaseRunSqid!];
+      expect(points).toBeDefined();
+      expect(points.length).toBeGreaterThan(0);
+
+      // Each point should have bucketed fields
+      const firstPoint = points[0];
+      expect(firstPoint).toHaveProperty('step');
+      expect(firstPoint).toHaveProperty('value');
+      expect(firstPoint).toHaveProperty('minY');
+      expect(firstPoint).toHaveProperty('maxY');
+      expect(firstPoint).toHaveProperty('count');
+    });
+
+    it('Test 29.2: graphBatchBucketed resolves display ID correctly', async () => {
+      if (!sessionCookie || !staircaseDisplayId) {
+        console.log('   No session or display ID - skipping');
+        return;
+      }
+
+      // This was the broken path: display IDs like "STP-999" contain a dash,
+      // which sqidDecode() cannot parse, silently returning undefined.
+      // With resolveRunId(), the display ID is resolved via Prisma lookup.
+      const response = await makeTrpcRequest('runs.data.graphBatchBucketed', {
+        runIds: [staircaseDisplayId],
+        projectName: TEST_PROJECT_NAME,
+        logName: 'test/staircase',
+        buckets: 50,
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      const result = data.result?.data;
+      expect(result).toBeDefined();
+
+      // Result should be keyed by the display ID (same identifier that was sent)
+      const points = result[staircaseDisplayId!];
+      expect(points).toBeDefined();
+      expect(points.length).toBeGreaterThan(0);
+      expect(points[0]).toHaveProperty('minY');
+      expect(points[0]).toHaveProperty('maxY');
+    });
+
+    it('Test 29.3: graphBatchBucketed with display ID + stepMin/stepMax (zoom refetch)', async () => {
+      if (!sessionCookie || !staircaseDisplayId) {
+        console.log('   No session or display ID - skipping');
+        return;
+      }
+
+      // Simulate zoom refetch: query a sub-range of the staircase data.
+      // Staircase has 500 steps (0-499). Zoom to steps 100-200.
+      const response = await makeTrpcRequest('runs.data.graphBatchBucketed', {
+        runIds: [staircaseDisplayId],
+        projectName: TEST_PROJECT_NAME,
+        logName: 'test/staircase',
+        buckets: 50,
+        stepMin: 100,
+        stepMax: 200,
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      const result = data.result?.data;
+      expect(result).toBeDefined();
+
+      const points = result[staircaseDisplayId!];
+      expect(points).toBeDefined();
+      expect(points.length).toBeGreaterThan(0);
+
+      // All returned steps should be within the requested range
+      for (const p of points) {
+        expect(p.step).toBeGreaterThanOrEqual(100);
+        expect(p.step).toBeLessThanOrEqual(200);
+      }
+    });
+
+    it('Test 29.4: graphBatch resolves display ID correctly', async () => {
+      if (!sessionCookie || !staircaseDisplayId) {
+        console.log('   No session or display ID - skipping');
+        return;
+      }
+
+      // graphBatch (non-bucketed) had the same sqidDecode bug
+      const response = await makeTrpcRequest('runs.data.graphBatch', {
+        runIds: [staircaseDisplayId],
+        projectName: TEST_PROJECT_NAME,
+        logName: 'test/staircase',
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      const result = data.result?.data;
+      expect(result).toBeDefined();
+
+      const points = result[staircaseDisplayId!];
+      expect(points).toBeDefined();
+      expect(points.length).toBeGreaterThan(0);
+      expect(points[0]).toHaveProperty('step');
+      expect(points[0]).toHaveProperty('value');
+    });
+  });
 });

@@ -1069,6 +1069,22 @@ async function setupTestData(): Promise<TestData> {
     console.log(`   ✓ staircase-test run already exists (ID: ${staircaseRun.id})`);
   }
 
+  // Ensure staircase run has a display ID (idempotent — safe to run on existing runs)
+  if (staircaseRun && staircaseRun.id) {
+    if (!project.runPrefix) {
+      await prisma.projects.update({
+        where: { id: project.id },
+        data: { runPrefix: 'STP' },
+      });
+      (project as any).runPrefix = 'STP';
+    }
+    await prisma.runs.update({
+      where: { id: staircaseRun.id },
+      data: { number: 999 },
+    });
+    console.log(`   ✓ Ensured display ID: ${project.runPrefix}-999`);
+  }
+
   // 6. Create a run in org 2 for org-switching tests
   console.log('\n6️⃣  Creating test run in org 2...');
   const existingOrg2Runs = await prisma.runs.findMany({

@@ -1,9 +1,9 @@
 import { z } from "zod";
 import { protectedOrgProcedure } from "../../../../../../lib/trpc";
-import { sqidDecode, sqidEncode } from "../../../../../../lib/sqid";
+import { resolveRunId } from "../../../../../../lib/resolve-run-id";
 import { queryRunMetricsBatchByLogName } from "../../../../../../lib/queries";
 
-// Type for batch graph data: map of SQID-encoded runId → data points
+// Type for batch graph data: map of encoded runId → data points
 type GraphBatchData = Record<
   string,
   { value: number; valueFlag: string; time: string; step: number }[]
@@ -33,13 +33,15 @@ export const graphBatchProcedure = protectedOrgProcedure
       preview,
     } = input;
 
-    // Decode SQIDs → numeric IDs
-    const numericRunIds = encodedRunIds.map((id) => sqidDecode(id));
+    // Resolve run identifiers (display IDs like "MMP-7" or SQIDs) → numeric IDs
+    const numericRunIds = await Promise.all(
+      encodedRunIds.map((id) => resolveRunId(ctx.prisma, id, organizationId, projectName))
+    );
 
-    // Build reverse map: numeric → SQID
-    const numericToSqid = new Map<number, string>();
-    encodedRunIds.forEach((sqid, i) => {
-      numericToSqid.set(numericRunIds[i], sqid);
+    // Build reverse map: numeric → encoded ID
+    const numericToEncoded = new Map<number, string>();
+    encodedRunIds.forEach((encoded, i) => {
+      numericToEncoded.set(numericRunIds[i], encoded);
     });
 
     const grouped = await queryRunMetricsBatchByLogName(ctx.clickhouse, {
@@ -53,12 +55,12 @@ export const graphBatchProcedure = protectedOrgProcedure
       preview,
     });
 
-    // Re-key results by SQID-encoded runId
+    // Re-key results by encoded runId
     const result: GraphBatchData = {};
     for (const [numericId, points] of Object.entries(grouped)) {
-      const sqid = numericToSqid.get(Number(numericId));
-      if (sqid) {
-        result[sqid] = points;
+      const encoded = numericToEncoded.get(Number(numericId));
+      if (encoded) {
+        result[encoded] = points;
       }
     }
 
