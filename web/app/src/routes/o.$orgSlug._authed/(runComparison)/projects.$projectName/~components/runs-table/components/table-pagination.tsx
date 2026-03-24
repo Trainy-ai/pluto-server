@@ -10,6 +10,44 @@ import {
 import type { Table as TanStackTable } from "@tanstack/react-table";
 import type { Run } from "../../../~queries/list-runs";
 
+/**
+ * Pure decision logic for resolving a typed page number into a navigation action.
+ * Extracted for testability — no React deps.
+ */
+export type PageCommitAction =
+  | { type: "navigate"; relativeIndex: number }
+  | { type: "jump"; absoluteIndex: number }
+  | { type: "fallback"; relativeIndex: number }
+  | { type: "noop" };
+
+export function resolvePageCommit(input: {
+  inputValue: string;
+  totalPages: number;
+  currentPage: number;
+  pageBase: number;
+  runsLength: number;
+  pageSize: number;
+  hasJumpSupport: boolean;
+}): PageCommitAction {
+  const parsed = parseInt(input.inputValue, 10);
+  if (isNaN(parsed)) {
+    return { type: "noop" };
+  }
+
+  const targetPageOneBased = Math.max(1, Math.min(parsed, input.totalPages));
+  const targetAbsoluteIndex = targetPageOneBased - 1;
+  const relativeIndex = targetAbsoluteIndex - input.pageBase;
+  const loadedTablePages = Math.ceil(input.runsLength / input.pageSize);
+
+  if (relativeIndex >= 0 && relativeIndex < loadedTablePages) {
+    return { type: "navigate", relativeIndex };
+  } else if (input.hasJumpSupport) {
+    return { type: "jump", absoluteIndex: targetAbsoluteIndex };
+  } else {
+    return { type: "fallback", relativeIndex: Math.max(0, loadedTablePages - 1) };
+  }
+}
+
 interface TablePaginationProps {
   table: TanStackTable<Run>;
   runCount: number;
@@ -174,35 +212,29 @@ function PageInput({
 
   const commitPage = useCallback(() => {
     setIsEditing(false);
-    const parsed = parseInt(inputValue, 10);
+    const action = resolvePageCommit({
+      inputValue,
+      totalPages,
+      currentPage,
+      pageBase,
+      runsLength,
+      pageSize,
+      hasJumpSupport: !!onJumpToPage,
+    });
 
-    if (isNaN(parsed)) {
-      setInputValue(String(currentPage));
-      return;
-    }
-
-    const targetPageOneBased = Math.max(1, Math.min(parsed, totalPages));
-    const targetAbsoluteIndex = targetPageOneBased - 1; // 0-based absolute page
-
-    // Convert to relative index within currently loaded data
-    const relativeIndex = targetAbsoluteIndex - pageBase;
-    const loadedTablePages = Math.ceil(runsLength / pageSize);
-
-    if (relativeIndex >= 0 && relativeIndex < loadedTablePages) {
-      // Target is within already-loaded data — just navigate
-      table.setPageIndex(relativeIndex);
-    } else if (relativeIndex >= loadedTablePages && relativeIndex < loadedTablePages + 2 && hasNextPage) {
-      // Target is just 1 fetch away — use progressive fetch (keep existing data).
-      // After fetching, the useEffect that syncs pageIndex on data arrival will
-      // advance to the last loaded page. We fetch once and let the user land on
-      // whatever page the new data reaches.
-      onFetchNextPage();
-    } else if (onJumpToPage) {
-      // Target is far away — use offset-based jump (single query)
-      onJumpToPage(targetAbsoluteIndex);
-    } else {
-      // No jump support — go to last available
-      table.setPageIndex(Math.max(0, loadedTablePages - 1));
+    switch (action.type) {
+      case "navigate":
+        table.setPageIndex(action.relativeIndex);
+        break;
+      case "jump":
+        onJumpToPage!(action.absoluteIndex);
+        break;
+      case "fallback":
+        table.setPageIndex(action.relativeIndex);
+        break;
+      case "noop":
+        setInputValue(String(currentPage));
+        break;
     }
   }, [
     inputValue,
@@ -212,8 +244,6 @@ function PageInput({
     pageBase,
     runsLength,
     pageSize,
-    hasNextPage,
-    onFetchNextPage,
     onJumpToPage,
   ]);
 

@@ -193,33 +193,50 @@ async function defaultCursorQuery(
 
   const dateWhere = buildPrismaDateWhere(input.dateFilters, !!searchMatchIds);
 
-  // When offset is provided (and no cursor), use offset-based pagination for page jumping
+  // When offset is provided (and no cursor), use a two-step cursor lookup
+  // instead of raw OFFSET — OFFSET is O(N) because PG scans and discards rows,
+  // while a lightweight cursor lookup + seek is nearly O(1) at any depth.
   const useOffset = input.offset != null && input.offset > 0 && !input.cursor;
 
-  const runs = await ctx.prisma.runs.findMany({
-    where: {
-      project: { name: input.projectName },
-      organizationId: input.organizationId,
-      ...(searchMatchIds ? { id: { in: searchMatchIds } } : {}),
-      ...(!searchMatchIds && input.tags?.length ? { tags: { hasSome: input.tags } } : {}),
-      ...(!searchMatchIds && input.status?.length ? { status: { in: input.status } } : {}),
-      ...dateWhere,
-    },
-    orderBy: { createdAt: input.direction === "forward" ? "desc" : "asc" },
-    select: {
-      id: true, name: true, number: true, status: true, statusUpdated: true,
-      createdAt: true, updatedAt: true, tags: true, notes: true, externalId: true,
-      creator: { select: { name: true, email: true } },
-      project: { select: { runPrefix: true } },
-    },
-    take: input.limit,
-    skip: useOffset ? input.offset! : (input.cursor ? 1 : 0),
-    cursor: useOffset ? undefined : (input.cursor ? { id: input.cursor } : undefined),
-  });
-
-  const enriched = await attachFieldValues(ctx.prisma, runs);
+  const whereClause = {
+    project: { name: input.projectName },
+    organizationId: input.organizationId,
+    ...(searchMatchIds ? { id: { in: searchMatchIds } } : {}),
+    ...(!searchMatchIds && input.tags?.length ? { tags: { hasSome: input.tags } } : {}),
+    ...(!searchMatchIds && input.status?.length ? { status: { in: input.status } } : {}),
+    ...dateWhere,
+  };
+  const orderBy = { createdAt: input.direction === "forward" ? "desc" as const : "asc" as const };
+  const selectClause = {
+    id: true, name: true, number: true, status: true, statusUpdated: true,
+    createdAt: true, updatedAt: true, tags: true, notes: true, externalId: true,
+    creator: { select: { name: true, email: true } },
+    project: { select: { runPrefix: true } },
+  };
 
   if (useOffset) {
+    // Step 1: Lightweight cursor lookup — only fetches id, uses index scan
+    const cursorRow = await ctx.prisma.runs.findFirst({
+      where: whereClause,
+      orderBy,
+      select: { id: true },
+      skip: input.offset!,
+    });
+
+    if (!cursorRow) {
+      return { runs: [], nextCursor: null, nextOffset: null };
+    }
+
+    // Step 2: Fetch full records from cursor position (O(1) seek)
+    const runs = await ctx.prisma.runs.findMany({
+      where: whereClause,
+      orderBy,
+      select: selectClause,
+      take: input.limit,
+      cursor: { id: cursorRow.id },
+    });
+
+    const enriched = await attachFieldValues(ctx.prisma, runs);
     const nextOffset = runs.length === input.limit ? input.offset! + runs.length : null;
     return {
       runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id) })),
@@ -228,6 +245,16 @@ async function defaultCursorQuery(
     };
   }
 
+  const runs = await ctx.prisma.runs.findMany({
+    where: whereClause,
+    orderBy,
+    select: selectClause,
+    take: input.limit,
+    skip: input.cursor ? 1 : 0,
+    cursor: input.cursor ? { id: input.cursor } : undefined,
+  });
+
+  const enriched = await attachFieldValues(ctx.prisma, runs);
   const nextCursor = runs.length === input.limit ? runs[runs.length - 1].id : null;
   return {
     runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id) })),
@@ -325,17 +352,36 @@ async function defaultCursorQueryWithFieldFilters(
     conditions.push(`r.id = ANY($${queryParams.length}::bigint[])`);
   }
 
-  // When offset is provided (and no cursor), use offset-based pagination for page jumping
+  // When offset is provided (and no cursor), use a two-step cursor lookup
+  // instead of raw OFFSET to avoid O(N) row scanning at high offsets.
   const useOffset = input.offset != null && input.offset > 0 && !input.cursor;
 
-  // Cursor pagination (only when not using offset)
   const dir = input.direction === "forward" ? "DESC" : "ASC";
-  if (!useOffset && input.cursor) {
+  const creatorJoin = needsCreatorJoin ? `LEFT JOIN "user" u ON r."createdById" = u.id` : "";
+
+  if (useOffset) {
+    // Step 1: Lightweight cursor lookup — find the id at the target offset
+    const cursorQuery = `
+      SELECT r.id
+      FROM "runs" r
+      JOIN "projects" p ON r."projectId" = p.id
+      ${creatorJoin}
+      WHERE ${conditions.join(" AND ")}
+      ORDER BY r."createdAt" ${dir}
+      OFFSET ${input.offset} LIMIT 1
+    `;
+    const cursorRows: { id: bigint }[] = await ctx.prisma.$queryRawUnsafe(cursorQuery, ...queryParams);
+    if (cursorRows.length === 0) return { runs: [], nextCursor: null, nextOffset: null };
+
+    // Step 2: Fetch from cursor position using id >= / <= for efficient seek
+    const cursorId = cursorRows[0].id;
+    queryParams.push(cursorId as any);
+    conditions.push(`r.id ${input.direction === "forward" ? "<=" : ">="} $${queryParams.length}::bigint`);
+  } else if (input.cursor) {
+    // Normal cursor pagination
     queryParams.push(BigInt(input.cursor) as any);
     conditions.push(`r.id ${input.direction === "forward" ? "<" : ">"} $${queryParams.length}::bigint`);
   }
-
-  const creatorJoin = needsCreatorJoin ? `LEFT JOIN "user" u ON r."createdById" = u.id` : "";
 
   const query = `
     SELECT r.id
@@ -345,7 +391,6 @@ async function defaultCursorQueryWithFieldFilters(
     WHERE ${conditions.join(" AND ")}
     ORDER BY r."createdAt" ${dir}
     LIMIT ${input.limit}
-    ${useOffset ? `OFFSET ${input.offset}` : ""}
   `;
 
   const rows: { id: bigint }[] = await ctx.prisma.$queryRawUnsafe(query, ...queryParams);
@@ -478,11 +523,38 @@ async function systemColumnSortQuery(
     conditions.push(`r.id = ANY($${queryParams.length}::bigint[])`);
   }
 
-  // When offset is provided (and no sortCursor), use offset-based pagination for page jumping
+  // When offset is provided (and no sortCursor), use a two-step cursor lookup
+  // instead of raw OFFSET to avoid O(N) row scanning at high offsets.
   const useOffset = input.offset != null && input.offset > 0 && !input.sortCursor;
 
-  // Keyset pagination: WHERE (sortCol, id) > ($cursorVal, $cursorId)
-  if (!useOffset && input.sortCursor) {
+  const sysCreatorJoin = sysNeedsCreator ? `LEFT JOIN "user" u ON r."createdById" = u.id` : "";
+
+  if (useOffset) {
+    // Step 1: Lightweight cursor lookup — find the sort value + id at target offset
+    const cursorQuery = `
+      SELECT r.id, r.${sqlCol} as sort_val
+      FROM "runs" r
+      JOIN "projects" p ON r."projectId" = p.id
+      ${sysCreatorJoin}
+      WHERE ${conditions.join(" AND ")}
+      ORDER BY r.${sqlCol} ${dir} NULLS LAST, r.id ${dir}
+      OFFSET ${input.offset} LIMIT 1
+    `;
+    const cursorRows: { id: bigint; sort_val: any }[] = await ctx.prisma.$queryRawUnsafe(cursorQuery, ...queryParams);
+    if (cursorRows.length === 0) return { runs: [], nextCursor: null, nextOffset: null, sortCursor: null };
+
+    // Step 2: Fetch from cursor position using keyset condition
+    const cursorVal = cursorRows[0].sort_val;
+    const cursorId = cursorRows[0].id;
+    queryParams.push(cursorVal instanceof Date ? cursorVal.toISOString() : String(cursorVal));
+    const valIdx = queryParams.length;
+    queryParams.push(cursorId as any);
+    const idIdx = queryParams.length;
+    // Use >= / <= (inclusive) since the cursor row itself is the first result
+    const geLe = input.sortDirection === "asc" ? ">=" : "<=";
+    conditions.push(`(r.${sqlCol}, r.id) ${geLe} ($${valIdx}::${getSqlCastType(field)}, $${idIdx}::bigint)`);
+  } else if (input.sortCursor) {
+    // Keyset pagination: WHERE (sortCol, id) > ($cursorVal, $cursorId)
     const parts = input.sortCursor.split("::");
     if (parts.length === 2) {
       const cursorVal = parts[0];
@@ -495,8 +567,6 @@ async function systemColumnSortQuery(
     }
   }
 
-  const sysCreatorJoin = sysNeedsCreator ? `LEFT JOIN "user" u ON r."createdById" = u.id` : "";
-
   const query = `
     SELECT r.id, r.${sqlCol} as sort_val
     FROM "runs" r
@@ -505,7 +575,6 @@ async function systemColumnSortQuery(
     WHERE ${conditions.join(" AND ")}
     ORDER BY r.${sqlCol} ${dir} NULLS LAST, r.id ${dir}
     LIMIT ${input.limit}
-    ${useOffset ? `OFFSET ${input.offset}` : ""}
   `;
 
   const rows: { id: bigint; sort_val: any }[] = await ctx.prisma.$queryRawUnsafe(query, ...queryParams);

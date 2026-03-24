@@ -5028,6 +5028,93 @@ describe('SDK API Endpoints (with API Key)', () => {
       }
     });
 
+    it('Test 28.9a: Offset jump (no sort) — cursor-lookup returns same data as sequential pagination', async () => {
+      if (!sessionCookie) { console.log('   No session - skipping'); return; }
+
+      const limit = 5;
+      // Sequential: paginate through 4 pages using cursors to collect run IDs
+      const sequentialIds: string[] = [];
+      let cursor: number | undefined;
+      for (let page = 0; page < 4; page++) {
+        const response = await makeTrpcRequest('runs.list', {
+          projectName: TEST_PROJECT_NAME,
+          limit,
+          ...(cursor ? { cursor } : {}),
+        }, { 'Cookie': sessionCookie }, 'GET');
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        const result = data.result?.data;
+        for (const run of result.runs) sequentialIds.push(run.id);
+        cursor = result.nextCursor ? Number(result.nextCursor) : undefined;
+        if (!cursor) break;
+      }
+
+      // Offset jump: skip directly to page 4 (offset = 15)
+      const jumpResponse = await makeTrpcRequest('runs.list', {
+        projectName: TEST_PROJECT_NAME,
+        limit,
+        offset: 15,
+      }, { 'Cookie': sessionCookie }, 'GET');
+      expect(jumpResponse.status).toBe(200);
+      const jumpData = await jumpResponse.json();
+      const jumpRuns = jumpData.result?.data?.runs;
+      expect(jumpRuns.length).toBe(limit);
+
+      // The offset-jumped page should match the 4th sequential page
+      const page4Sequential = sequentialIds.slice(15, 20);
+      const page4Jump = jumpRuns.map((r: any) => r.id);
+      expect(page4Jump).toEqual(page4Sequential);
+
+      // nextOffset should allow continuing pagination
+      expect(jumpData.result?.data?.nextOffset).toBe(20);
+    });
+
+    it('Test 28.9b: Offset jump (system sort) — cursor-lookup returns same data as keyset pagination', async () => {
+      if (!sessionCookie) { console.log('   No session - skipping'); return; }
+
+      const limit = 5;
+      const sortParams = {
+        sortField: 'name',
+        sortSource: 'system' as const,
+        sortDirection: 'asc' as const,
+      };
+
+      // Sequential: paginate through 4 pages using sortCursor
+      const sequentialIds: string[] = [];
+      let sortCursor: string | undefined;
+      for (let page = 0; page < 4; page++) {
+        const response = await makeTrpcRequest('runs.list', {
+          projectName: TEST_PROJECT_NAME,
+          limit,
+          ...sortParams,
+          ...(sortCursor ? { sortCursor } : {}),
+        }, { 'Cookie': sessionCookie }, 'GET');
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        const result = data.result?.data;
+        for (const run of result.runs) sequentialIds.push(run.id);
+        sortCursor = result.sortCursor ?? undefined;
+        if (!sortCursor) break;
+      }
+
+      // Offset jump: skip directly to page 4 (offset = 15)
+      const jumpResponse = await makeTrpcRequest('runs.list', {
+        projectName: TEST_PROJECT_NAME,
+        limit,
+        ...sortParams,
+        offset: 15,
+      }, { 'Cookie': sessionCookie }, 'GET');
+      expect(jumpResponse.status).toBe(200);
+      const jumpData = await jumpResponse.json();
+      const jumpRuns = jumpData.result?.data?.runs;
+      expect(jumpRuns.length).toBe(limit);
+
+      // The offset-jumped page should match the 4th sequential page
+      const page4Sequential = sequentialIds.slice(15, 20);
+      const page4Jump = jumpRuns.map((r: any) => r.id);
+      expect(page4Jump).toEqual(page4Sequential);
+    });
+
     it('Test 28.9: Metric sort — stable ordering with tiebreaker across pages', async () => {
       if (!sessionCookie) { console.log('   No session - skipping'); return; }
 
