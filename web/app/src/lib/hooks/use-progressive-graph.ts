@@ -1,8 +1,7 @@
-import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { trpc, trpcClient } from "@/utils/trpc";
 import type { BucketedChartDataPoint } from "@/lib/chart-data-utils";
-import { estimateStandardBuckets, PREVIEW_BUCKETS } from "@/lib/chart-bucket-estimate";
+import { PREVIEW_BUCKETS } from "@/lib/chart-bucket-estimate";
 
 export type ProgressiveTier = "loading" | "preview" | "standard";
 
@@ -20,27 +19,28 @@ interface UseProgressiveGraphResult {
  *
  * Two tiers:
  * 1. Preview (200 buckets) — instant visual feedback
- * 2. Standard (1000 buckets) — full-quality overview with min/max envelopes
+ * 2. Standard (caller-specified buckets) — full-quality overview with min/max envelopes
  *
  * No full-resolution tier needed: bucket envelopes capture the data range,
  * and zoom re-buckets the visible range for higher fidelity.
+ *
+ * @param buckets - Number of buckets for the standard tier. Resolved by the
+ *   caller via `resolveChartBuckets()` based on user settings.
  */
 export function useProgressiveGraph(
   orgId: string,
   projectName: string,
   runId: string,
   logName: string,
+  buckets: number,
 ): UseProgressiveGraphResult {
-  // Compute once on mount — changing bucket count changes query key, so avoid recomputing
-  const standardBuckets = useMemo(() => estimateStandardBuckets(), []);
-
-  // === Tier 2: Standard (screen-aware buckets) ===
+  // === Tier 2: Standard (caller-specified buckets) ===
   const standardOpts = {
     organizationId: orgId,
     projectName,
     runId,
     logName,
-    buckets: standardBuckets,
+    buckets,
   };
 
   const standardQuery = useQuery({

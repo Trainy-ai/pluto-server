@@ -2,7 +2,6 @@ import { useState, useMemo, useCallback } from "react";
 import { useQueries } from "@tanstack/react-query";
 import { trpc, trpcClient } from "@/utils/trpc";
 import type { BucketedChartDataPoint } from "@/lib/chart-data-utils";
-import { estimateStandardBuckets } from "@/lib/chart-bucket-estimate";
 import { translateZoomToStepRange, type TimeStepMapping } from "./zoom-translate";
 
 // Re-export for consumers
@@ -34,6 +33,8 @@ interface UseZoomRefetchOptions {
    * When omitted, relative-time zoom refetch is disabled.
    */
   timeStepMapping?: TimeStepMapping | null;
+  /** Number of buckets for zoom queries. Resolved by the caller via resolveChartBuckets(). */
+  buckets: number;
 }
 
 /** Build a composite key for the zoom data map: "runId\0metricName" */
@@ -74,9 +75,8 @@ export function useZoomRefetch({
   syncedZoomRange,
   sourceStepRange,
   timeStepMapping,
+  buckets: zoomBuckets,
 }: UseZoomRefetchOptions): UseZoomRefetchReturn {
-  // Compute once on mount — changing bucket count changes query key, so avoid recomputing
-  const zoomBuckets = useMemo(() => estimateStandardBuckets(), []);
   const [localZoomRange, setLocalZoomRange] = useState<[number, number] | null>(null);
 
   const isRelativeTime = selectedLog === "Relative Time";

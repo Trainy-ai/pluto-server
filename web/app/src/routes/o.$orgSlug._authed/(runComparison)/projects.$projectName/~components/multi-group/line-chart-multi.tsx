@@ -17,7 +17,7 @@ import {
   applySmoothing,
   bucketedAndSmooth,
 } from "@/lib/chart-data-utils";
-import { estimateStandardBuckets, PREVIEW_BUCKETS } from "@/lib/chart-bucket-estimate";
+import { resolveChartBuckets, PREVIEW_BUCKETS } from "@/lib/chart-bucket-estimate";
 import { parseChTimeMs } from "@/components/charts/lib/format";
 
 // For active runs, refresh every 30 seconds
@@ -145,9 +145,6 @@ const MultiLineChartInner = memo(
     useCheckDatabaseSize(bucketedMetricsCache);
     const chartColors = useChartColors();
 
-    // Compute once on mount — changing bucket count changes query key, so avoid recomputing
-    const standardBuckets = useMemo(() => estimateStandardBuckets(), []);
-
     // Resolve metrics list: use prop if provided, otherwise fall back to [title]
     const metricNames = useMemo(
       () => metricsProp ?? [title],
@@ -158,6 +155,12 @@ const MultiLineChartInner = memo(
 
     // Use run-specific settings when available, otherwise fall back to "full"
     const { settings } = useLineSettings(organizationId, projectName, settingsRunId ?? "full");
+
+    // Resolve bucket count from user settings — auto mode boosts when smoothing is off
+    const standardBuckets = useMemo(
+      () => resolveChartBuckets(settings.chartResolution, settings.smoothing.enabled),
+      [settings.chartResolution, settings.smoothing.enabled],
+    );
 
     // Cross-axis zoom sync (step ↔ relative time) is only enabled in the
     // single-run dashboard view. settingsRunId is a real run ID only there;
@@ -423,6 +426,7 @@ const MultiLineChartInner = memo(
       syncedZoomRange,
       sourceStepRange,
       timeStepMapping,
+      buckets: standardBuckets,
     });
 
     // Check error states and get data

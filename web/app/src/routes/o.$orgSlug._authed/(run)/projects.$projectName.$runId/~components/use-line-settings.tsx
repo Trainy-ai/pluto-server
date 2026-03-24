@@ -9,6 +9,10 @@ export type DisplayLogName =
 
 export type SmoothingAlgorithm = "twema" | "gaussian" | "running" | "ema";
 
+/** Server-side data resolution preset. Controls how many buckets the server returns.
+ *  "auto" adapts to screen size and boosts when smoothing is off. */
+export type ChartResolution = "auto" | "high" | "max" | "ultra";
+
 /** Y-axis scaling mode. "auto" = full data range (default), "outlier-aware" = IQR-based outlier detection */
 export type YAxisScaleMode = "auto" | "outlier-aware";
 
@@ -34,6 +38,9 @@ export interface LineChartSettings {
   /** Maximum number of series (metrics × runs) per chart widget before showing a warning.
    *  0 = no limit. Default 500. */
   maxSeriesCount: number;
+  /** Server-side data resolution. Controls bucket count for downsampled queries.
+   *  "auto" = screen-based (boosted when smoothing off). */
+  chartResolution: ChartResolution;
 }
 
 export const DEFAULT_SETTINGS: LineChartSettings = {
@@ -54,6 +61,7 @@ export const DEFAULT_SETTINGS: LineChartSettings = {
   tooltipInterpolation: "linear",
   skipMissingValues: false,
   maxSeriesCount: 500,
+  chartResolution: "auto",
 };
 
 const lineSettingsDb = new LocalCache<LineChartSettings>(

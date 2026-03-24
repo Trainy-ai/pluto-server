@@ -92,13 +92,16 @@ export const prefetchGetGraph = (
   });
 
 /**
- * Progressive graph loading — 2-tier bucketed: preview (200 buckets) → standard (1000 buckets).
+ * Progressive graph loading — 2-tier bucketed: preview (200 buckets) → standard (caller-specified).
  * Returns BucketedChartDataPoint[] with server-side min/max envelopes.
  * Use this instead of useGetGraph for progressive chart rendering.
+ *
+ * @param buckets - Number of buckets for the standard tier. Resolve via resolveChartBuckets().
  */
 export const useGetGraphProgressive = (
   orgId: string,
   projectName: string,
   runId: string,
   logName: string,
-) => useProgressiveGraph(orgId, projectName, runId, logName);
+  buckets: number,
+) => useProgressiveGraph(orgId, projectName, runId, logName, buckets);

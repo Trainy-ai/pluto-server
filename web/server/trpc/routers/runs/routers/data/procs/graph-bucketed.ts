@@ -12,7 +12,7 @@ export const graphBucketedProcedure = protectedOrgProcedure
       runId: z.string(),
       projectName: z.string(),
       logName: z.string(),
-      buckets: z.number().int().min(10).max(5000).optional(),
+      buckets: z.number().int().min(10).max(20000).optional(),
       stepMin: z.number().int().nonnegative().optional(),
       stepMax: z.number().int().nonnegative().optional(),
       preview: z.boolean().optional(),

@@ -19,6 +19,7 @@ import {
   type ChartSeriesData,
 } from "@/lib/chart-data-utils";
 import { parseChTimeMs } from "@/components/charts/lib/format";
+import { resolveChartBuckets } from "@/lib/chart-bucket-estimate";
 
 interface LineChartWithFetchProps {
   logName: string;
@@ -301,14 +302,20 @@ export const LineChartWithFetch = memo(
   }: LineChartWithFetchProps) => {
     useCheckDatabaseSize(metricsCache);
 
+    const { settings } = useLineSettings(tenantId, projectName, runId);
+
+    const resolvedBuckets = useMemo(
+      () => resolveChartBuckets(settings.chartResolution, settings.smoothing.enabled),
+      [settings.chartResolution, settings.smoothing.enabled],
+    );
+
     const { data, isLoading, isError } = useGetGraphProgressive(
       tenantId,
       projectName,
       runId,
       logName,
+      resolvedBuckets,
     );
-
-    const { settings } = useLineSettings(tenantId, projectName, runId);
 
     // Register step<->time mapping for cross-axis zoom sync (single-run view)
     const chartSync = useChartSyncContext();
@@ -377,6 +384,7 @@ export const LineChartWithFetch = memo(
       syncedZoomRange,
       sourceStepRange,
       timeStepMapping,
+      buckets: resolvedBuckets,
     });
     const zoomData = zoomDataMap?.get(zoomKey(runId, logName));
 
