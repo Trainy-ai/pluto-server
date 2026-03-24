@@ -7,8 +7,8 @@ import type { clickhouse } from "../clickhouse";
 import { getLogGroupName } from "../utilts";
 
 // Maximum number of data points to return per metric series.
-// The frontend does LTTB downsampling with min/max envelope rendering,
-// so 10k points is enough for high-quality charts and zoom-aware re-downsampling.
+// The server does bucketed downsampling with min/max envelope rendering,
+// so 10k points is enough for high-quality charts.
 // This keeps individual metric responses under ~500KB uncompressed.
 const DEFAULT_MAX_POINTS = 10_000;
 
@@ -334,7 +334,7 @@ function sanitizeBucketedRows<T extends BucketedMetricDataPoint>(rows: T[]): T[]
 /**
  * Query metrics for a single logName using server-side bucketed downsampling.
  * Returns N buckets with avg/min/max per bucket — enables envelope rendering
- * without client-side LTTB. ~10x less data transfer than raw point queries.
+ * without client-side downsampling. ~10x less data transfer than raw point queries.
  *
  * When stepMin/stepMax are provided, buckets only the specified range.
  */

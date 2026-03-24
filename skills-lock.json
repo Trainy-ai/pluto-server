@@ -5,6 +5,11 @@
       "source": "stablyai/agent-skills",
       "sourceType": "github",
       "computedHash": "ab79d14e8afe963aaa3853d8bf99210738dd0c4028045426880a9f618edb42fb"
+    },
+    "stably-sdk-rules": {
+      "source": "stablyai/agent-skills",
+      "sourceType": "github",
+      "computedHash": "0aa169d6a30ecc4c869ae707dc18a579a24a61d5023bd6286bdd7611782f0a24"
     }
   }
 }

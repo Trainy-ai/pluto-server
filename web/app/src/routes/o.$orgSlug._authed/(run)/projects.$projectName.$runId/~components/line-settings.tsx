@@ -382,11 +382,7 @@ const LineSettings = ({
                       Max points displayed
                       <InfoTooltip
                         title="Display Resolution"
-                        description="Limits the number of data points drawn per series for faster rendering. The full dataset is still loaded — only the display is thinned using LTTB. Shaded min/max envelope bands preserve anomalies (spikes/dips) even at low point counts."
-                        link={{
-                          url: "https://skemman.is/bitstream/1946/15343/3/SS_MSthesis.pdf",
-                          label: "Learn about LTTB algorithm",
-                        }}
+                        description="Limits the number of data points drawn per series for faster rendering. Server-side bucketing aggregates data into fixed-width buckets with min/max envelope bands that preserve anomalies (spikes/dips) even at low point counts."
                       />
                     </Label>
                   </div>

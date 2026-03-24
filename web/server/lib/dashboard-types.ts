@@ -61,7 +61,7 @@ export const ChartWidgetConfigSchema = BaseWidgetConfigSchema.extend({
   xAxisScale: ScaleTypeSchema.default("linear"),
   aggregation: AggregationTypeSchema.default("LAST"),
   smoothing: SmoothingConfigSchema.optional(),
-  maxPoints: z.number().positive().optional(), // Downsampling with LTTB
+  maxPoints: z.number().positive().optional(), // Server-side bucketed downsampling
   showOriginal: z.boolean().default(false),
   yMin: z.number().optional(), // Manual Y-axis minimum bound
   yMax: z.number().optional(), // Manual Y-axis maximum bound

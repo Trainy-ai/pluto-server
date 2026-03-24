@@ -15,6 +15,7 @@ import { extractAndUpsertColumnKeys } from "../lib/extract-column-keys";
 const prisma = new PrismaClient();
 
 const BATCH_SIZE = 500;
+const CONCURRENCY = 50;
 
 async function backfill() {
   let cursor: bigint | undefined;
@@ -38,14 +39,19 @@ async function backfill() {
 
     if (runs.length === 0) break;
 
-    for (const run of runs) {
-      await extractAndUpsertColumnKeys(
-        prisma,
-        run.organizationId,
-        run.projectId,
-        run.config,
-        run.systemMetadata,
-        run.id,
+    for (let i = 0; i < runs.length; i += CONCURRENCY) {
+      const chunk = runs.slice(i, i + CONCURRENCY);
+      await Promise.all(
+        chunk.map((run) =>
+          extractAndUpsertColumnKeys(
+            prisma,
+            run.organizationId,
+            run.projectId,
+            run.config,
+            run.systemMetadata,
+            run.id,
+          ),
+        ),
       );
     }
 

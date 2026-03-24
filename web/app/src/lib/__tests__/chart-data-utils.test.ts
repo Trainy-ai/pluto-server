@@ -1,14 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
   applySmoothing,
-  downsampleAndSmooth,
   buildValueFlags,
   getTimeUnitForDisplay,
   alignAndUnzip,
-  applyDownsampling,
   applyServerBuckets,
   type ChartSeriesData,
-  type BaseSeriesData,
   type SmoothingSettings,
   type ChartDataPoint,
   type BucketedChartDataPoint,
@@ -56,14 +53,6 @@ function makeLr(n: number): number[] {
       ? 0.001 * (progress / 0.1)
       : 0.001 * Math.exp(-(progress - 0.1));
   });
-}
-
-function makeBaseSeries(
-  x: number[],
-  y: number[],
-  label = "metric",
-): BaseSeriesData {
-  return { x, y, label, color: "#00f" };
 }
 
 function makeChartSeries(
@@ -254,91 +243,6 @@ describe("applySmoothing", () => {
       expect(result[0].y[3]).toBe(0);
       expect(result[0].y[7]).toBe(0);
     });
-  });
-});
-
-describe("downsampleAndSmooth", () => {
-  describe("mean preservation through full pipeline", () => {
-    // The full pipeline (downsample → smooth) should also preserve the mean.
-    // This catches bugs where downsampling + smoothing interact badly.
-    const N = 500;
-    const x = makeX(N);
-    const datasets: Array<{ name: string; y: number[] }> = [
-      { name: "gpu_util", y: makeGpuUtil(N) },
-      { name: "loss", y: makeLoss(N) },
-    ];
-
-    for (const { name: dataName, y } of datasets) {
-      for (const { name: algoName, settings } of SMOOTHING_CONFIGS) {
-        it(`${algoName} on ${dataName} (500 pts → 100)`, () => {
-          const base = makeBaseSeries(x, y);
-          const result = downsampleAndSmooth(base, 100, settings);
-
-          // Find the main smoothed series (not envelope, not original)
-          const mainSeries = result.find(
-            (s) => !s.envelopeOf && !s.hideFromLegend,
-          );
-          expect(mainSeries).toBeDefined();
-
-          const inputMean = mean(y);
-          const outputMean = mean(mainSeries!.y.filter((v): v is number => v !== null));
-          const shift = relDiff(outputMean, inputMean);
-          // Allow slightly more tolerance for the combined pipeline
-          expect(shift).toBeLessThan(0.15);
-        });
-      }
-    }
-  });
-
-  describe("series structure", () => {
-    it("produces main + 2 envelope series without smoothing", () => {
-      const base = makeBaseSeries(makeX(100), makeGpuUtil(100));
-      const noSmoothing: SmoothingSettings = {
-        enabled: false,
-        algorithm: "gaussian",
-        parameter: 2,
-        showOriginalData: false,
-      };
-
-      const result = downsampleAndSmooth(base, 50, noSmoothing);
-      expect(result).toHaveLength(3);
-      // main, env_min, env_max
-      expect(result[0].envelopeOf).toBeUndefined();
-      expect(result[1].envelopeBound).toBe("min");
-      expect(result[2].envelopeBound).toBe("max");
-    });
-
-    it("produces main + 2 envelope + original when showOriginalData", () => {
-      const base = makeBaseSeries(makeX(100), makeGpuUtil(100));
-      const settings: SmoothingSettings = {
-        enabled: true,
-        algorithm: "gaussian",
-        parameter: 2,
-        showOriginalData: true,
-      };
-
-      const result = downsampleAndSmooth(base, 50, settings);
-      // main(smoothed) + original(dimmed) + env_min + env_max = 4
-      expect(result).toHaveLength(4);
-    });
-  });
-});
-
-describe("applyDownsampling", () => {
-  it("always produces exactly 3 series", () => {
-    const base = makeBaseSeries(makeX(100), makeGpuUtil(100));
-    const result = applyDownsampling(base, 20);
-    expect(result).toHaveLength(3);
-  });
-
-  it("envelope min ≤ main ≤ envelope max at each point", () => {
-    const base = makeBaseSeries(makeX(200), makeGpuUtil(200));
-    const result = applyDownsampling(base, 50);
-    const [main, envMin, envMax] = result;
-    for (let i = 0; i < main.x.length; i++) {
-      expect(envMin.y[i]!).toBeLessThanOrEqual(main.y[i]! + 1e-9);
-      expect(envMax.y[i]!).toBeGreaterThanOrEqual(main.y[i]! - 1e-9);
-    }
   });
 });
 

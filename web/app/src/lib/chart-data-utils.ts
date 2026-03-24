@@ -3,7 +3,6 @@
  */
 
 import { smoothData } from "@/lib/math/smoothing";
-import { downsampleWithEnvelope } from "@/lib/math/downsample";
 import type { SmoothingAlgorithm } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/use-line-settings";
 
 // ============================
@@ -24,25 +23,6 @@ export interface SmoothingSettings {
   algorithm: SmoothingAlgorithm;
   parameter: number;
   showOriginalData: boolean;
-}
-
-/** Base chart series data */
-export interface BaseSeriesData {
-  x: number[];
-  y: number[];
-  label: string;
-  color: string;
-  seriesId?: string;
-  /** uPlot dash pattern, e.g. [10, 5]. undefined = solid. */
-  dash?: number[];
-  /** Map from x-value to non-finite flag text ("NaN", "Inf", "-Inf") for tooltip display */
-  valueFlags?: Map<number, string>;
-  /** Human-readable run name (for tooltip column customization) */
-  runName?: string;
-  /** Run ID / external ID (for tooltip column customization) */
-  runId?: string;
-  /** Metric name this series is plotting (for tooltip column customization) */
-  metricName?: string;
 }
 
 /** Set of non-finite value types found in a bucketed aggregation range */
@@ -154,44 +134,6 @@ export function alignAndUnzip(
   }
 
   return { x, y };
-}
-
-/**
- * Apply downsampling with min/max envelope to reduce data points.
- * Always produces 3 series (main + min envelope + max envelope) for consistent series count.
- */
-export function applyDownsampling(
-  chartData: BaseSeriesData,
-  maxPoints: number,
-): ChartSeriesData[] {
-  const envelope = downsampleWithEnvelope(chartData.x, chartData.y, maxPoints);
-  const main: ChartSeriesData = { ...chartData, x: envelope.x, y: envelope.y, valueFlags: chartData.valueFlags };
-
-  return [
-    main,
-    {
-      x: envelope.x,
-      y: envelope.yMin,
-      label: `${chartData.label}_env_min`,
-      seriesId: chartData.seriesId ? `${chartData.seriesId}_env_min` : undefined,
-      color: chartData.color,
-      hideFromLegend: true,
-      envelopeOf: chartData.label,
-      envelopeBound: "min" as const,
-      valueFlags: chartData.valueFlags,
-    },
-    {
-      x: envelope.x,
-      y: envelope.yMax,
-      label: `${chartData.label}_env_max`,
-      seriesId: chartData.seriesId ? `${chartData.seriesId}_env_max` : undefined,
-      color: chartData.color,
-      hideFromLegend: true,
-      envelopeOf: chartData.label,
-      envelopeBound: "max" as const,
-      valueFlags: chartData.valueFlags,
-    },
-  ];
 }
 
 /**
@@ -334,8 +276,7 @@ export interface BucketedChartDataPoint {
 
 /**
  * Convert server-side bucketed data into 3 chart series (main + min/max envelopes).
- * This replaces applyDownsampling() for bucketed data paths — no client-side
- * LTTB needed since the server already aggregated.
+ * Converts server-bucketed data into chart series with min/max envelopes.
  *
  * @param getX - Optional custom x-value mapper. Defaults to step. Use for time-based axes.
  */
@@ -421,16 +362,3 @@ export function bucketedAndSmooth(
   return series.flatMap((s) => applySmoothing(s, smoothingSettings, isMultiMetric));
 }
 
-/**
- * Apply downsampling then smoothing to chart data.
- * Handles the fact that downsampling produces envelope companion series.
- */
-export function downsampleAndSmooth(
-  baseData: BaseSeriesData,
-  maxPoints: number,
-  smoothingSettings: SmoothingSettings,
-  isMultiMetric: boolean = false,
-): ChartSeriesData[] {
-  const downsampledSeries = applyDownsampling(baseData, maxPoints);
-  return downsampledSeries.flatMap((s) => applySmoothing(s, smoothingSettings, isMultiMetric));
-}
