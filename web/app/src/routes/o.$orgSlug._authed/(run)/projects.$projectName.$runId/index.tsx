@@ -9,7 +9,7 @@ import type { LogGroup } from "./~hooks/use-filtered-logs";
 import { prefetchGetRun, useGetRun } from "./~queries/get-run";
 import { Layout, SkeletonLayout } from "./~components/layout";
 import { refreshAllData } from "./~queries/refresh-all-data";
-import LineSettings from "./~components/line-settings";
+import LineSettings from "@/routes/o.$orgSlug._authed/(runComparison)/projects.$projectName/~components/line-settings";
 import { useLineSettings } from "./~components/use-line-settings";
 import { SmoothingSlider } from "@/components/charts/smoothing-slider";
 import {
@@ -248,7 +248,8 @@ function RouteComponent() {
             <LineSettings
               organizationId={organizationId}
               projectName={projectName}
-              runId={runId}
+              logNames={runData?.logs?.filter((l: { logType: string }) => l.logType === "METRIC").map((l: { logName: string }) => l.logName) ?? []}
+              settingsKey={runId}
             />
           </div>
         </div>

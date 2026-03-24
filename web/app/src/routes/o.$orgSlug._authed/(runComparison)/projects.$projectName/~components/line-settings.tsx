@@ -49,12 +49,18 @@ interface LineSettingsProps {
   organizationId: string;
   projectName: string;
   logNames: string[];
+  /** Settings storage key — runId for single-run, "full" for multi-run comparison */
+  settingsKey?: string;
+  /** Show "Max Series per Chart" control (only relevant for multi-run comparison) */
+  showMaxSeriesCount?: boolean;
 }
 
 const LineSettings = ({
   organizationId,
   projectName,
   logNames,
+  settingsKey = "full",
+  showMaxSeriesCount = false,
 }: LineSettingsProps) => {
   const {
     settings,
@@ -63,7 +69,7 @@ const LineSettings = ({
     getSmoothingConfig,
     getSmoothingInfo,
     resetSettings,
-  } = useLineSettings(organizationId, projectName, "full");
+  } = useLineSettings(organizationId, projectName, settingsKey);
 
   const { lineWidth, setLineWidth } = useChartLineWidth();
 
@@ -398,41 +404,43 @@ const LineSettings = ({
               </div>
             </SettingsSection>
 
-            <SettingsSection title="Max Series per Chart">
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1">
-                    <Label className="text-sm">Series Limit</Label>
-                    <InfoTooltip
-                      title="Max Series per Chart"
-                      description="Maximum number of series (metrics × runs) per chart widget. When exceeded, the chart shows a warning instead of rendering. Increase this if you have many metrics but most are sparse/zero."
-                    />
+            {showMaxSeriesCount && (
+              <SettingsSection title="Max Series per Chart">
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1">
+                      <Label className="text-sm">Series Limit</Label>
+                      <InfoTooltip
+                        title="Max Series per Chart"
+                        description="Maximum number of series (metrics × runs) per chart widget. When exceeded, the chart shows a warning instead of rendering. Increase this if you have many metrics but most are sparse/zero."
+                      />
+                    </div>
+                    <span className="rounded bg-muted px-2 py-0.5 text-sm font-medium">
+                      {(settings.maxSeriesCount ?? DEFAULT_SETTINGS.maxSeriesCount) === 0
+                        ? "No limit"
+                        : settings.maxSeriesCount ?? DEFAULT_SETTINGS.maxSeriesCount}
+                    </span>
                   </div>
-                  <span className="rounded bg-muted px-2 py-0.5 text-sm font-medium">
-                    {(settings.maxSeriesCount ?? DEFAULT_SETTINGS.maxSeriesCount) === 0
-                      ? "No limit"
-                      : settings.maxSeriesCount ?? DEFAULT_SETTINGS.maxSeriesCount}
-                  </span>
+                  <Select
+                    value={String(settings.maxSeriesCount ?? DEFAULT_SETTINGS.maxSeriesCount)}
+                    onValueChange={(value) =>
+                      updateSettings("maxSeriesCount", Number(value))
+                    }
+                  >
+                    <SelectTrigger className="h-9 rounded-md border border-input text-sm">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="rounded-md border border-input">
+                      <SelectItem value="200">200 series</SelectItem>
+                      <SelectItem value="500">500 series (default)</SelectItem>
+                      <SelectItem value="1000">1,000 series</SelectItem>
+                      <SelectItem value="2000">2,000 series</SelectItem>
+                      <SelectItem value="0">No limit (may be slow)</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
-                <Select
-                  value={String(settings.maxSeriesCount ?? DEFAULT_SETTINGS.maxSeriesCount)}
-                  onValueChange={(value) =>
-                    updateSettings("maxSeriesCount", Number(value))
-                  }
-                >
-                  <SelectTrigger className="h-9 rounded-md border border-input text-sm">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="rounded-md border border-input">
-                    <SelectItem value="200">200 series</SelectItem>
-                    <SelectItem value="500">500 series (default)</SelectItem>
-                    <SelectItem value="1000">1,000 series</SelectItem>
-                    <SelectItem value="2000">2,000 series</SelectItem>
-                    <SelectItem value="0">No limit (may be slow)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </SettingsSection>
+              </SettingsSection>
+            )}
 
             <SettingsSection title="Line Width">
               <div className="space-y-3">

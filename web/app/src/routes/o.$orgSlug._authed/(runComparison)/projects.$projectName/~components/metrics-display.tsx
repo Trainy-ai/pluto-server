@@ -4,6 +4,7 @@ import { RotateCcwIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { LogSearch } from "./run-comparison/search";
 import { MemoizedMultiGroup } from "./multi-group/multi-group";
+import { VirtualizedGroup } from "@/components/core/virtualized-group";
 import { clearAllChartBounds } from "./multi-group/chart-card-wrapper";
 import { sortGroups } from "@/lib/grouping/index";
 import type { GroupedMetrics } from "@/lib/grouping/types";
@@ -178,6 +179,7 @@ export const MetricsDisplay = memo(function MetricsDisplay({
                 organizationId={organizationId}
                 projectName={projectName}
                 logNames={uniqueLogNames}
+                showMaxSeriesCount
               />
             </div>
           </div>
@@ -240,19 +242,28 @@ export const MetricsDisplay = memo(function MetricsDisplay({
             />
           </div>
         </div>
-        {filteredGroups.map(([group, data]) => (
-          <MemoizedMultiGroup
-            key={group}
-            title={data.groupName}
-            groupId={`${projectName}-${group}`}
-            metrics={filteredMetricsPerGroup.get(group) ?? data.metrics}
-            organizationId={organizationId}
-            projectName={projectName}
-            boundsResetKey={boundsResetKey}
-            globalLogXAxis={settings.xAxisLogScale}
-            globalLogYAxis={settings.yAxisLogScale}
-          />
-        ))}
+        {filteredGroups.map(([group, data]) => {
+          const metrics = filteredMetricsPerGroup.get(group) ?? data.metrics;
+          return (
+            <VirtualizedGroup
+              key={group}
+              groupId={`${projectName}-${group}`}
+              groupTitle={data.groupName}
+              metricCount={metrics.length}
+            >
+              <MemoizedMultiGroup
+                title={data.groupName}
+                groupId={`${projectName}-${group}`}
+                metrics={metrics}
+                organizationId={organizationId}
+                projectName={projectName}
+                boundsResetKey={boundsResetKey}
+                globalLogXAxis={settings.xAxisLogScale}
+                globalLogYAxis={settings.yAxisLogScale}
+              />
+            </VirtualizedGroup>
+          );
+        })}
       </div>
     </ChartSyncProvider>
   );

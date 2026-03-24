@@ -76,7 +76,10 @@ trace: "retain-on-failure",
     },
     {
       name: "chromium",
-      testIgnore: /performance\/.*\.spec\.ts/, // Exclude performance tests from regular E2E
+      testIgnore: [
+        /performance\/.*\.spec\.ts/,       // Perf tests run in dedicated pipeline step
+        /nan-inf-ingest-e2e\.spec\.ts/,    // Requires Rust ingest; runs in "Non-Finite Metrics Ingestion Test" step
+      ],
       use: {
         ...devices["Desktop Chrome"],
         // Use prepared auth state

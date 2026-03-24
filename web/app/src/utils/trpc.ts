@@ -82,7 +82,7 @@ export const trpcClient = createTRPCClient<AppRouter>({
           })
         : httpBatchStreamLink({
             url: trpcUrl,
-            maxItems: env.VITE_IS_DOCKER ? 1 : 30,
+            maxItems: 30,
             maxURLLength: MAX_URL_LENGTH,
             fetch(url, options) {
               return fetch(url, {

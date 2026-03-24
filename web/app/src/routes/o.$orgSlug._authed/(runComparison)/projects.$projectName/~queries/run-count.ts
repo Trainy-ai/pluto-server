@@ -38,5 +38,6 @@ export const useRunCount = (
         metricFilters: metricFilters && metricFilters.length > 0 ? metricFilters : undefined,
         systemFilters: systemFilters && systemFilters.length > 0 ? systemFilters : undefined,
       }),
+    staleTime: 30_000,
   });
 };

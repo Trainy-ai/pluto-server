@@ -22,7 +22,7 @@ import { StepNavigator } from "./~components/shared/step-navigator";
 import { LineChartWithFetch } from "./~components/group/line-chart";
 import { useLineSettings } from "./~components/use-line-settings";
 import { SmoothingSlider } from "@/components/charts/smoothing-slider";
-import LineSettings from "./~components/line-settings";
+import LineSettings from "@/routes/o.$orgSlug._authed/(runComparison)/projects.$projectName/~components/line-settings";
 
 export const Route = createFileRoute(
   "/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/files",
@@ -276,7 +276,8 @@ function RouteComponent() {
                       <LineSettings
                         organizationId={organizationId}
                         projectName={projectName}
-                        runId={runId}
+                        logNames={currentRun?.logs?.filter((l: { logType: string }) => l.logType === "METRIC").map((l: { logName: string }) => l.logName) ?? []}
+                        settingsKey={runId}
                       />
                     </div>
                   </div>

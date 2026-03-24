@@ -71,7 +71,7 @@ export function useChartLifecycle({
 }: UseChartLifecycleParams) {
   const cleanupRef = useRef<(() => void) | null>(null);
   const chartCreatedRef = useRef(false);
-  const zoomStateRef = useRef<{ xMin: number; xMax: number } | null>(null);
+  const zoomStateRef = useRef<{ xMin: number; xMax: number; zoomGroup?: string } | null>(null);
   const prevDataStructureRef = useRef<{ seriesCount: number } | null>(null);
   const prevDataRef = useRef<uPlot.AlignedData | null>(null);
   const prevOptionsRef = useRef<uPlot.Options | null>(null);
@@ -132,10 +132,12 @@ export function useChartLifecycle({
     }
 
     // Save zoom state before destroying chart
+    // Include zoomGroup so we don't apply stale coordinates after an axis switch
+    // (e.g. relative-time seconds applied to a step chart would be wrong)
     if (chartRef.current) {
       const xScale = chartRef.current.scales.x;
       if (xScale.min != null && xScale.max != null) {
-        zoomStateRef.current = { xMin: xScale.min, xMax: xScale.max };
+        zoomStateRef.current = { xMin: xScale.min, xMax: xScale.max, zoomGroup };
       }
       // Clean up mouseleave handler before destroying
       const lh = (chartRef.current as any)._leaveHandler;
@@ -235,14 +237,21 @@ export function useChartLifecycle({
     let isUserZoom = false;
 
     if (zoomStateRef.current) {
-      const { xMin, xMax } = zoomStateRef.current;
-      const xData = uplotData[0] as number[];
-      if (xData.length > 0) {
-        const dataMin = arrayMin(xData);
-        const dataMax = arrayMax(xData);
-        if (xMin < dataMax && xMax > dataMin) {
-          rangeToApply = [xMin, xMax];
-          isUserZoom = true;
+      const { xMin, xMax, zoomGroup: savedGroup } = zoomStateRef.current;
+      // Only apply saved zoom if the axis type hasn't changed.
+      // After an axis switch (step↔relative-time), the saved coordinates are
+      // in the wrong unit system and would produce a bogus zoom range.
+      // Cross-group zoom is handled below via crossGroupZoomRef instead.
+      const groupMatches = !savedGroup || savedGroup === zoomGroup;
+      if (groupMatches) {
+        const xData = uplotData[0] as number[];
+        if (xData.length > 0) {
+          const dataMin = arrayMin(xData);
+          const dataMax = arrayMax(xData);
+          if (xMin < dataMax && xMax > dataMin) {
+            rangeToApply = [xMin, xMax];
+            isUserZoom = true;
+          }
         }
       }
       zoomStateRef.current = null;

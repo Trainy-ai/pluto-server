@@ -9,10 +9,15 @@ const METRIC_AGGS = ["MIN", "MAX", "AVG", "LAST", "VARIANCE"] as const;
  */
 export function useDistinctMetricNames(orgId: string, projectName: string) {
   return useQuery(
-    trpc.runs.distinctMetricNames.queryOptions({
-      organizationId: orgId,
-      projectName,
-    })
+    trpc.runs.distinctMetricNames.queryOptions(
+      {
+        organizationId: orgId,
+        projectName,
+      },
+      {
+        staleTime: 30_000,
+      },
+    )
   );
 }
 
@@ -30,6 +35,7 @@ export function useRunMetricNames(orgId: string, projectName: string, runIds: st
       },
       {
         enabled: runIds.length > 0,
+        staleTime: 30_000,
       },
     )
   );

@@ -238,7 +238,7 @@ async function seedNanInfMetrics(
     'train/auc', 'train/perplexity', 'train/gpu_util', 'train/memory_used',
     'train/throughput', 'train/latency',
   ];
-  const STEPS = 3000;
+  const STEPS = 200;  // 200 steps × 14 metrics = 2,800 rows (enough for NaN/Inf marker tests)
   const baseTime = runCreatedAt.getTime();
   const rows: string[] = [];
 

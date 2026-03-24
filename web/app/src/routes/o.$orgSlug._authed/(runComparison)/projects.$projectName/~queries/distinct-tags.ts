@@ -21,5 +21,6 @@ export const useDistinctTags = (
         organizationId: orgId,
         projectName,
       }),
+    staleTime: 30_000,
   });
 };
