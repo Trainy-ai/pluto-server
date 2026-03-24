@@ -2,6 +2,7 @@
 
 import { useRef, useState, useEffect, type ReactNode } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useFullscreenContext } from "@/components/charts/context/fullscreen-context";
 
 interface VirtualizedChartProps {
   children: ReactNode;
@@ -45,6 +46,7 @@ export function VirtualizedChart({
 }: VirtualizedChartProps) {
   const [isMounted, setIsMounted] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const { isFullscreen } = useFullscreenContext();
 
   useEffect(() => {
     const element = ref.current;
@@ -91,7 +93,11 @@ export function VirtualizedChart({
       ref={ref}
       data-testid="virtualized-chart"
       className={`flex flex-1 flex-col ${className}`}
-      style={{ minHeight, position: "relative" }}
+      style={{
+        minHeight,
+        position: "relative",
+        ...(isFullscreen ? { visibility: "hidden" as const, contentVisibility: "hidden" as const } : {}),
+      }}
     >
       {isMounted ? children : <Skeleton className="h-full w-full" />}
     </div>

@@ -4,6 +4,7 @@ import { useState, useCallback, useRef } from "react";
 import { Maximize2Icon, SlidersHorizontalIcon, TriangleAlertIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ChartFullscreenDialog } from "@/components/charts/chart-fullscreen-dialog";
+import { useFullscreenContext } from "@/components/charts/context/fullscreen-context";
 import { ChartBoundsPopover } from "@/components/charts/chart-bounds-popover";
 import { ChartExportMenu } from "@/components/charts/chart-export-menu";
 import {
@@ -95,6 +96,7 @@ export function ChartCardWrapper({
     loadSettings(groupId, metricName)
   );
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const { setFullscreen } = useFullscreenContext();
   const [dataRange, setDataRange] = useState<{ min: number; max: number } | null>(null);
   // Y zoom range shared between mini and fullscreen chart instances
   const [yZoomRange, setYZoomRange] = useState<[number, number] | null>(null);
@@ -221,7 +223,7 @@ export function ChartCardWrapper({
             size="icon"
             className="size-7 bg-background/80 backdrop-blur-sm hover:bg-background"
             data-testid="chart-fullscreen-btn"
-            onClick={() => setIsFullscreen(true)}
+            onClick={() => { setIsFullscreen(true); setFullscreen(true); }}
           >
             <Maximize2Icon className="size-3.5" />
           </Button>
@@ -245,7 +247,7 @@ export function ChartCardWrapper({
       {/* Fullscreen dialog */}
       <ChartFullscreenDialog
         open={isFullscreen}
-        onOpenChange={setIsFullscreen}
+        onOpenChange={(open) => { setIsFullscreen(open); setFullscreen(open); }}
         title={metricName}
         yMin={settings.yMin}
         yMax={settings.yMax}

@@ -21,6 +21,7 @@ import { DashboardViewSelector, DashboardBuilder } from "./dashboard-builder";
 import { useDashboardView, type DashboardView } from "../~queries/dashboard-views";
 import type { SelectedRunWithColor } from "../~hooks/use-selected-runs";
 import { ChartSyncProvider } from "@/components/charts/context/chart-sync-context";
+import { FullscreenProvider } from "@/components/charts/context/fullscreen-context";
 
 interface MetricsDisplayProps {
   groupedMetrics: GroupedMetrics;
@@ -148,6 +149,7 @@ export const MetricsDisplay = memo(function MetricsDisplay({
   if (selectedViewId && selectedView) {
     return (
       <ChartSyncProvider syncKey={`dashboard-${selectedViewId}`}>
+        <FullscreenProvider>
         <div className="flex-1 space-y-4">
           <div className="sticky top-0 z-20 flex items-center gap-4 bg-background pb-2">
             <DashboardViewSelector
@@ -192,6 +194,7 @@ export const MetricsDisplay = memo(function MetricsDisplay({
             searchState={searchState}
           />
         </div>
+        </FullscreenProvider>
       </ChartSyncProvider>
     );
   }
@@ -199,6 +202,7 @@ export const MetricsDisplay = memo(function MetricsDisplay({
   // Default "All Metrics" view
   return (
     <ChartSyncProvider syncKey={`all-metrics-${projectName}`}>
+      <FullscreenProvider>
       <div className="flex-1 space-y-4">
         <div className="sticky top-0 z-20 flex items-center gap-4 bg-background pb-2">
           <DashboardViewSelector
@@ -265,6 +269,7 @@ export const MetricsDisplay = memo(function MetricsDisplay({
           );
         })}
       </div>
+      </FullscreenProvider>
     </ChartSyncProvider>
   );
 });

@@ -18,6 +18,7 @@ import type { Widget, ChartWidgetConfig } from "../../~types/dashboard-types";
 import type { GroupedMetrics } from "@/lib/grouping/types";
 import type { SelectedRunWithColor } from "../../~hooks/use-selected-runs";
 import { searchUtils, type SearchState } from "../../~lib/search-utils";
+import { useFullscreenContext } from "@/components/charts/context/fullscreen-context";
 
 interface DynamicSectionGridProps {
   sectionId: string;
@@ -73,6 +74,8 @@ export function DynamicSectionGrid({
   }, [dynamicWidgets, searchState]);
 
   const [fullscreenWidget, setFullscreenWidget] = useState<Widget | null>(null);
+  const { setFullscreen } = useFullscreenContext();
+  useEffect(() => { setFullscreen(!!fullscreenWidget); }, [fullscreenWidget, setFullscreen]);
   const [widgetBounds, setWidgetBounds] = useState<Record<string, WidgetBounds>>({});
   const widgetContentRefs = useRef<Record<string, HTMLDivElement | null>>({});
 

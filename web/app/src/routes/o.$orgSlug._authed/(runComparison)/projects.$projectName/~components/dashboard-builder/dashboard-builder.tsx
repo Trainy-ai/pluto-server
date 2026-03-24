@@ -34,6 +34,7 @@ import * as configOps from "./use-dashboard-config";
 import type { GroupedMetrics } from "@/lib/grouping/types";
 import type { SelectedRunWithColor } from "../../~hooks/use-selected-runs";
 import { searchUtils, type SearchState } from "../../~lib/search-utils";
+import { useFullscreenContext } from "@/components/charts/context/fullscreen-context";
 
 /** Total horizontal padding of section containers (px-6 each side = 24px * 2). */
 const SECTION_HORIZONTAL_PADDING = 48;
@@ -70,6 +71,8 @@ export function DashboardBuilder({
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [showDraftRestore, setShowDraftRestore] = useState(false);
   const [fullscreenWidget, setFullscreenWidget] = useState<Widget | null>(null);
+  const { setFullscreen } = useFullscreenContext();
+  useEffect(() => { setFullscreen(!!fullscreenWidget); }, [fullscreenWidget, setFullscreen]);
   // Y zoom ranges keyed by widget ID, shared between mini and fullscreen
   const [widgetYZoomRanges, setWidgetYZoomRanges] = useState<Record<string, [number, number] | null>>({});
   const [coarseMode, setCoarseMode] = useState(true);
