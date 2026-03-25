@@ -4,6 +4,53 @@ import { arrayMin, arrayMax } from "../lib/data-processing";
 import { zoomOverlapsData } from "../lib/scales";
 import type { LineData } from "../lib/types";
 
+/**
+ * Compute the X-axis range considering only visible (non-hidden) series.
+ * Returns null if no visible series have data — caller should fall back to full range.
+ */
+function getVisibleXRange(chart: uPlot, data: uPlot.AlignedData): [number, number] | null {
+  const xVals = data[0] as number[];
+  if (!xVals || xVals.length === 0) return null;
+
+  let minIdx = -1;
+  let maxIdx = -1;
+
+  for (let xi = 0; xi < xVals.length; xi++) {
+    for (let si = 1; si < data.length; si++) {
+      if (!chart.series[si]?.show) continue;
+      const v = (data[si] as (number | null)[])[xi];
+      if (v !== null && v !== undefined) {
+        if (minIdx === -1) minIdx = xi;
+        maxIdx = xi;
+        break; // Found a visible value at this x, no need to check more series
+      }
+    }
+  }
+
+  if (minIdx === -1) return null;
+  return [xVals[minIdx], xVals[maxIdx]];
+}
+
+/**
+ * Reset the X-axis scale, respecting globalXRange if set, otherwise
+ * fitting to visible (non-hidden) series data with a full-range fallback.
+ */
+function resetXScale(chart: uPlot, data: uPlot.AlignedData, globalRange: [number, number] | null): void {
+  if (globalRange) {
+    chart.setScale("x", { min: globalRange[0], max: globalRange[1] });
+  } else {
+    const visibleRange = getVisibleXRange(chart, data);
+    if (visibleRange) {
+      chart.setScale("x", { min: visibleRange[0], max: visibleRange[1] });
+    } else {
+      const xVals = data[0] as number[];
+      if (xVals && xVals.length > 0) {
+        chart.setScale("x", { min: xVals[0], max: xVals[xVals.length - 1] });
+      }
+    }
+  }
+}
+
 interface UseChartLifecycleParams {
   chartContainerRef: React.RefObject<HTMLDivElement | null>;
   chartRef: React.MutableRefObject<uPlot | null>;
@@ -120,6 +167,11 @@ export function useChartLifecycle({
                 chartRef.current.batch(() => {
                   chartRef.current!.setScale("x", { min: crossZoom.range[0], max: crossZoom.range[1] });
                 });
+              } else if (!userHasZoomedRef.current) {
+                // No active zoom — correct X scale to visible data only.
+                // setData() with auto:true uses the full data[0] range which
+                // includes hidden runs' data, so we override it here.
+                resetXScale(chartRef.current, uplotData, chartSyncContextRef.current?.globalXRange ?? null);
               }
             }
           }
@@ -195,6 +247,11 @@ export function useChartLifecycle({
           }
         }
       });
+      // Correct X scale after hiding series — uPlot's auto-range used the full
+      // data extent (including hidden runs) during chart creation.
+      if (!logXAxis && !isDateTime) {
+        resetXScale(chart, uplotData, chartSyncContextRef.current?.globalXRange ?? null);
+      }
     }
 
     // Fix: when mouse leaves the chart during an active chart drag, dispatch a
@@ -378,15 +435,7 @@ export function useChartLifecycle({
       try {
         chart.setData(fullData);
         chart.batch(() => {});
-        const globalRange = chartSyncContextRef.current?.globalXRange;
-        if (globalRange) {
-          chart.setScale("x", { min: globalRange[0], max: globalRange[1] });
-        } else {
-          const xVals = fullData[0] as number[];
-          if (xVals && xVals.length > 0) {
-            chart.setScale("x", { min: xVals[0], max: xVals[xVals.length - 1] });
-          }
-        }
+        resetXScale(chart, fullData, chartSyncContextRef.current?.globalXRange ?? null);
         chart.batch(() => {});
       } finally {
         isProgrammaticScaleRef.current = false;
@@ -463,18 +512,12 @@ export function useChartLifecycle({
         zoomRangeTimerRef.current = null;
       }
       const globalRange = chartSyncContextRef.current?.globalXRange;
+      const currentData = uplotDataRef.current;
       try {
         isProgrammaticScaleRef.current = true;
-        chart.setData(uplotData);
+        chart.setData(currentData);
         chart.batch(() => {});
-        if (globalRange) {
-          chart.setScale("x", { min: globalRange[0], max: globalRange[1] });
-        } else {
-          const xVals = uplotData[0] as number[];
-          if (xVals && xVals.length > 0) {
-            chart.setScale("x", { min: xVals[0], max: xVals[xVals.length - 1] });
-          }
-        }
+        resetXScale(chart, currentData, globalRange);
         chart.batch(() => {});
       } catch {
         // Ignore errors from destroyed charts

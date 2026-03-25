@@ -1085,6 +1085,145 @@ async function setupTestData(): Promise<TestData> {
     console.log(`   ✓ Ensured display ID: ${project.runPrefix}-999`);
   }
 
+  // 5d. Create zoom-visibility test runs (different step counts) for hidden-run zoom reset E2E test
+  console.log('\n5️⃣d Creating zoom-visibility test runs...');
+
+  const zoomVisShort = await prisma.runs.findFirst({
+    where: { projectId: project.id, organizationId: org.id, name: 'zoom-visibility-short' },
+    select: { id: true, name: true, createdAt: true },
+  });
+
+  if (!zoomVisShort) {
+    // Created in the past to avoid auto-select interference
+    const zoomVisCreatedAt = new Date(Date.now() - 364 * 24 * 60 * 60 * 1000);
+
+    const shortRun = await prisma.runs.create({
+      data: {
+        name: 'zoom-visibility-short',
+        organizationId: org.id,
+        projectId: project.id,
+        createdById: user.id,
+        creatorApiKeyId: apiKey.id,
+        status: 'COMPLETED',
+        config: { epochs: 200, lr: 0.001 },
+        systemMetadata: { hostname: 'test-host', python: '3.11' },
+        createdAt: zoomVisCreatedAt,
+        updatedAt: zoomVisCreatedAt,
+      },
+    });
+
+    const longRun = await prisma.runs.create({
+      data: {
+        name: 'zoom-visibility-long',
+        organizationId: org.id,
+        projectId: project.id,
+        createdById: user.id,
+        creatorApiKeyId: apiKey.id,
+        status: 'COMPLETED',
+        config: { epochs: 1000, lr: 0.001 },
+        systemMetadata: { hostname: 'test-host', python: '3.11' },
+        createdAt: new Date(zoomVisCreatedAt.getTime() + 1000),
+        updatedAt: new Date(zoomVisCreatedAt.getTime() + 1000),
+      },
+    });
+
+    // Register metrics in RunLogs
+    const metricName = 'train/loss';
+    await prisma.runLogs.createMany({
+      data: [
+        { runId: shortRun.id, logName: metricName, logGroup: 'train', logType: 'METRIC' as const },
+        { runId: longRun.id, logName: metricName, logGroup: 'train', logType: 'METRIC' as const },
+      ],
+      skipDuplicates: true,
+    });
+
+    // Seed ClickHouse: short run = 200 steps, long run = 1000 steps
+    const clickhouseUrl = process.env.CLICKHOUSE_URL;
+    const clickhouseUser = process.env.CLICKHOUSE_USER || 'default';
+    const clickhousePassword = process.env.CLICKHOUSE_PASSWORD || '';
+
+    if (clickhouseUrl) {
+      const clickhouse = createClient({
+        url: clickhouseUrl,
+        username: clickhouseUser,
+        password: clickhousePassword,
+      });
+
+      const rows: Record<string, unknown>[] = [];
+
+      // Short run: 200 steps
+      const shortBase = shortRun.createdAt.getTime();
+      for (let step = 0; step < 200; step++) {
+        rows.push({
+          tenantId: org.id,
+          projectName: project.name,
+          runId: Number(shortRun.id),
+          logGroup: 'train',
+          logName: metricName,
+          time: new Date(shortBase + step * 1000).toISOString().replace('T', ' ').replace('Z', ''),
+          step,
+          value: Math.exp(-step / 100) * 2 + Math.random() * 0.1,
+        });
+      }
+
+      // Long run: 1000 steps
+      const longBase = longRun.createdAt.getTime();
+      for (let step = 0; step < 1000; step++) {
+        rows.push({
+          tenantId: org.id,
+          projectName: project.name,
+          runId: Number(longRun.id),
+          logGroup: 'train',
+          logName: metricName,
+          time: new Date(longBase + step * 1000).toISOString().replace('T', ' ').replace('Z', ''),
+          step,
+          value: Math.exp(-step / 200) * 2 + Math.random() * 0.1,
+        });
+      }
+
+      await clickhouse.insert({
+        table: 'mlop_metrics',
+        values: rows,
+        format: 'JSONEachRow',
+      });
+      console.log(`   ✓ Seeded ${rows.length} zoom-visibility metric datapoints (200 + 1000)`);
+
+      // Populate metric summaries
+      for (const run of [shortRun, longRun]) {
+        try {
+          await clickhouse.query({
+            query: `
+              INSERT INTO mlop_metric_summaries
+              SELECT
+                tenantId, projectName, runId, logName,
+                min(value), max(value), sum(value),
+                toUInt64(count()), argMaxState(value, step), sum(value * value)
+              FROM mlop_metrics
+              WHERE tenantId = {tenantId: String}
+                AND projectName = {projectName: String}
+                AND runId = {runId: UInt64}
+                AND isFinite(value)
+              GROUP BY tenantId, projectName, runId, logName
+            `,
+            query_params: {
+              tenantId: org.id,
+              projectName: project.name,
+              runId: Number(run.id),
+            },
+          });
+        } catch (err) {
+          console.log(`   ⚠ Could not populate summaries for ${run.name}:`, (err as Error).message);
+        }
+      }
+
+      await clickhouse.close();
+    }
+
+    console.log(`   ✓ Created zoom-visibility-short (ID: ${shortRun.id}) and zoom-visibility-long (ID: ${longRun.id})`);
+  } else {
+    console.log('   ✓ zoom-visibility runs already exist');
+  }
+
   // 6. Create a run in org 2 for org-switching tests
   console.log('\n6️⃣  Creating test run in org 2...');
   const existingOrg2Runs = await prisma.runs.findMany({

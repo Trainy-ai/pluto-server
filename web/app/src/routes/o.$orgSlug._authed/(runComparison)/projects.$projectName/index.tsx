@@ -694,13 +694,29 @@ function RouteComponent() {
     ),
   );
 
-  // Merge pre-fetched selected runs into the loaded runs array
+  // Merge pre-fetched selected runs AND URL-specified runs into the loaded runs array.
+  // Without merging prefetchedUrlRuns, runs specified via ?runs= that aren't on the
+  // current page can't be found by buildSelectionFromUrlParams, causing the URL
+  // selection to silently fail and fall back to default auto-select.
   const allVisibleRuns = useMemo(() => {
-    if (!prefetchedSelectedRuns?.runs?.length) return allLoadedRuns;
     const loadedIds = new Set(allLoadedRuns.map((r) => r.id));
-    const extra = prefetchedSelectedRuns.runs.filter((r: { id: string }) => !loadedIds.has(r.id));
-    return extra.length > 0 ? [...allLoadedRuns, ...extra] : allLoadedRuns;
-  }, [allLoadedRuns, prefetchedSelectedRuns]);
+    const extras: typeof allLoadedRuns = [];
+
+    const mergeExtra = (source?: { runs: typeof allLoadedRuns }) => {
+      if (!source?.runs?.length) return;
+      for (const r of source.runs) {
+        if (!loadedIds.has(r.id)) {
+          loadedIds.add(r.id);
+          extras.push(r);
+        }
+      }
+    };
+
+    mergeExtra(prefetchedSelectedRuns);  // Cache-prefetched (for "Display only selected")
+    mergeExtra(prefetchedUrlRuns);       // URL-prefetched (for ?runs= deep links)
+
+    return extras.length > 0 ? [...allLoadedRuns, ...extras] : allLoadedRuns;
+  }, [allLoadedRuns, prefetchedSelectedRuns, prefetchedUrlRuns]);
 
   // Extract metric column specs for the summaries query
   const metricColumnSpecs = useMemo(() => {
