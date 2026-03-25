@@ -20,7 +20,7 @@ export const distinctFileLogNamesProcedure = protectedOrgProcedure
     z.object({
       projectName: z.string(),
       search: z.string().optional(),
-      regex: z.string().max(200).optional(),
+      regex: z.string().max(500).optional(),
       runIds: z.array(z.string()).optional(),
     })
   )

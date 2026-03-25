@@ -4,6 +4,7 @@
  */
 
 import type { clickhouse } from "../clickhouse";
+import { validateRe2Regex } from "../regex-validation";
 
 export type MetricAggregation = "MIN" | "MAX" | "AVG" | "LAST" | "VARIANCE";
 
@@ -157,10 +158,19 @@ export async function queryDistinctMetrics(
   let searchFilter = "";
   let orderClause = "ORDER BY logName ASC";
 
-  if (regex && regex.trim()) {
-    // ClickHouse match() uses re2 regex engine (ReDoS-safe by design)
+  const trimmedRegex = regex?.trim();
+  if (trimmedRegex) {
+    // ClickHouse match() uses re2 regex engine — validate before sending
+    // to prevent CANNOT_COMPILE_REGEXP errors (Code 427).
+    const re2Check = validateRe2Regex(trimmedRegex);
+    if (!re2Check.valid) {
+      console.warn(
+        `[queryDistinctMetrics] Rejected invalid re2 regex: ${re2Check.reason} — pattern: ${trimmedRegex.slice(0, 100)}`,
+      );
+      return [];
+    }
     searchFilter = `AND match(logName, {regex: String})`;
-    queryParams.regex = regex.trim();
+    queryParams.regex = trimmedRegex;
   } else if (search && search.trim()) {
     const trimmed = search.trim();
     // Fuzzy match with Levenshtein distance: allow 1 edit for short terms (<4 chars),
@@ -199,9 +209,22 @@ export async function queryDistinctMetrics(
     LIMIT {limit: UInt32}
   `;
 
-  const result = await ch.query(query, queryParams);
-  const rows = (await result.json()) as { logName: string }[];
-  return rows.map((r) => r.logName);
+  try {
+    const result = await ch.query(query, queryParams);
+    const rows = (await result.json()) as { logName: string }[];
+    return rows.map((r) => r.logName);
+  } catch (error: unknown) {
+    // Gracefully handle ClickHouse regex compilation errors (Code 427)
+    // instead of propagating 500s to the client.
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("CANNOT_COMPILE_REGEXP") || message.includes("427")) {
+      console.warn(
+        `[queryDistinctMetrics] ClickHouse regex error: ${message.slice(0, 200)}`,
+      );
+      return [];
+    }
+    throw error;
+  }
 }
 
 // ---------------------------------------------------------------------------

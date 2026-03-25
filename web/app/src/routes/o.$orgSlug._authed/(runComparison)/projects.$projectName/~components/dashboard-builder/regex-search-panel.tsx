@@ -6,6 +6,9 @@ import { cn } from "@/lib/utils";
 import { makeRegexValue } from "./glob-utils";
 import { MetricResultsList } from "./metric-results-list";
 
+/** Maximum regex pattern length accepted by the server */
+export const REGEX_MAX_LENGTH = 500;
+
 /** Regex panel — server-side regex search with inline results.
  *  Shared by ChartConfigForm and FilesConfigForm. */
 export function RegexSearchPanel({
@@ -31,19 +34,30 @@ export function RegexSearchPanel({
   onApplyDynamic: () => void;
   itemLabel?: string;
 }) {
+  const isTooLong = regexPattern.length > REGEX_MAX_LENGTH;
+  const isNearLimit = regexPattern.length > REGEX_MAX_LENGTH * 0.8;
+  const hasError = isInvalidRegex || isTooLong;
+
   return (
     <div className="space-y-3">
       <div className="grid gap-2">
-        <Label>Regex Pattern</Label>
+        <div className="flex items-center justify-between">
+          <Label>Regex Pattern</Label>
+          {isNearLimit && (
+            <span className={cn("text-xs", isTooLong ? "text-destructive" : "text-muted-foreground")}>
+              {regexPattern.length}/{REGEX_MAX_LENGTH}
+            </span>
+          )}
+        </div>
         <Input
           placeholder="e.g., (train|eval)/.+, .*loss.*"
           value={regexPattern}
           onChange={(e) => onRegexChange(e.target.value)}
-          className={cn(isInvalidRegex && "border-destructive text-destructive")}
+          className={cn(hasError && "border-destructive text-destructive")}
         />
       </div>
 
-      {regexPattern.trim() && !isInvalidRegex && (
+      {regexPattern.trim() && !hasError && (
         <MetricResultsList
           metrics={regexMetrics}
           selectedValues={selectedValues}
@@ -73,8 +87,16 @@ export function RegexSearchPanel({
         />
       )}
 
-      {isInvalidRegex && regexPattern.trim() && (
-        <p className="text-xs text-destructive">Invalid regex pattern.</p>
+      {isTooLong && (
+        <p className="text-xs text-destructive">
+          Pattern too long ({regexPattern.length}/{REGEX_MAX_LENGTH} characters).
+        </p>
+      )}
+
+      {isInvalidRegex && !isTooLong && regexPattern.trim() && (
+        <p className="text-xs text-destructive">
+          Invalid regex pattern. ClickHouse uses re2 — lookaheads, backreferences, and unbalanced parentheses are not supported.
+        </p>
       )}
     </div>
   );

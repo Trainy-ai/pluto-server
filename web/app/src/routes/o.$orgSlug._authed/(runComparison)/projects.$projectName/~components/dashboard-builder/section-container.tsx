@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { cn } from "@/lib/utils";
 import {
   ChevronDownIcon,
   ChevronRightIcon,
@@ -37,6 +38,8 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { DynamicPatternPreview } from "./dynamic-pattern-preview";
+import { REGEX_MAX_LENGTH } from "./regex-search-panel";
+import { isValidRe2Regex } from "../../~lib/validate-re2-regex";
 import type { Section } from "../../~types/dashboard-types";
 
 interface SectionDragProps {
@@ -362,9 +365,22 @@ function DynamicPatternInput({
   selectedRunIds,
   onEnter,
 }: DynamicPatternInputProps) {
+  const isRegex = mode === "regex";
+  const isTooLong = isRegex && pattern.length > REGEX_MAX_LENGTH;
+  const isNearLimit = isRegex && pattern.length > REGEX_MAX_LENGTH * 0.8;
+  const isInvalidRe2 = isRegex && pattern.trim().length > 0 && !isTooLong && !isValidRe2Regex(pattern.trim());
+  const hasError = isTooLong || isInvalidRe2;
+
   return (
     <div className="grid gap-2">
-      <Label>Pattern</Label>
+      <div className="flex items-center justify-between">
+        <Label>Pattern</Label>
+        {isNearLimit && (
+          <span className={cn("text-xs", isTooLong ? "text-destructive" : "text-muted-foreground")}>
+            {pattern.length}/{REGEX_MAX_LENGTH}
+          </span>
+        )}
+      </div>
       <Tabs
         value={mode}
         onValueChange={(v) => onModeChange(v as "search" | "regex")}
@@ -387,14 +403,27 @@ function DynamicPatternInput({
             onEnter();
           }
         }}
+        className={cn(hasError && "border-destructive text-destructive")}
       />
-      <p className="text-xs text-muted-foreground">
-        {mode === "search"
-          ? "Fuzzy text search. Use * / ? for glob patterns (e.g., train/*)."
-          : "Regex pattern matched against metric and file names."}
-        {" "}Creates one widget per match. Searches selected runs only.
-      </p>
-      {pattern.trim() && (
+      {isTooLong && (
+        <p className="text-xs text-destructive">
+          Pattern too long ({pattern.length}/{REGEX_MAX_LENGTH} characters).
+        </p>
+      )}
+      {isInvalidRe2 && (
+        <p className="text-xs text-destructive">
+          Invalid regex. ClickHouse uses re2 — lookaheads, backreferences, and unbalanced parentheses are not supported.
+        </p>
+      )}
+      {!hasError && (
+        <p className="text-xs text-muted-foreground">
+          {mode === "search"
+            ? "Fuzzy text search. Use * / ? for glob patterns (e.g., train/*)."
+            : "Regex pattern matched against metric and file names."}
+          {" "}Creates one widget per match. Searches selected runs only.
+        </p>
+      )}
+      {pattern.trim() && !hasError && (
         <DynamicPatternPreview
           pattern={pattern.trim()}
           mode={mode}

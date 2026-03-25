@@ -19,6 +19,7 @@ import { MetricResultsList } from "./metric-results-list";
 import { RegexSearchPanel } from "./regex-search-panel";
 import { SelectedBadges } from "./selected-badges";
 import { XAxisSelector } from "./x-axis-selector";
+import { isValidRe2Regex } from "../../~lib/validate-re2-regex";
 
 interface ChartConfigFormProps {
   config: Partial<ChartWidgetConfig>;
@@ -56,12 +57,8 @@ export function ChartConfigForm({
       setIsInvalidRegex(false);
       return;
     }
-    try {
-      new RegExp(regexPattern.trim());
-      setIsInvalidRegex(false);
-    } catch {
-      setIsInvalidRegex(true);
-    }
+    // Validate against re2 (ClickHouse's regex engine), not just JS RegExp
+    setIsInvalidRegex(!isValidRe2Regex(regexPattern.trim()));
   }, [regexPattern]);
 
   const { data: regexResults, isFetching: isRegexSearching } =

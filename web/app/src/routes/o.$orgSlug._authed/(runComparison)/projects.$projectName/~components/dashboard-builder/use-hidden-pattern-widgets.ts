@@ -10,6 +10,7 @@ import {
   getRegexPattern,
   resolveMetrics,
 } from "./glob-utils";
+import { isValidRe2Regex } from "../../~lib/validate-re2-regex";
 import type { Section, ChartWidgetConfig } from "../../~types/dashboard-types";
 
 interface UseHiddenPatternWidgetsParams {
@@ -96,10 +97,16 @@ export function useHiddenPatternWidgets({
   });
 
   // Fetch regex searches scoped to selected runs
+  // Filter out re2-incompatible patterns to prevent ClickHouse CANNOT_COMPILE_REGEXP errors
+  const validRegexPatterns = useMemo(
+    () => regexPatterns.filter((p) => isValidRe2Regex(p)),
+    [regexPatterns],
+  );
+
   const regexSearchResults = useQueries({
     queries:
       patternWidgets.length > 0 && selectedRunIds.length > 0
-        ? regexPatterns.map((pattern) =>
+        ? validRegexPatterns.map((pattern) =>
             trpc.runs.distinctMetricNames.queryOptions({
               organizationId,
               projectName,

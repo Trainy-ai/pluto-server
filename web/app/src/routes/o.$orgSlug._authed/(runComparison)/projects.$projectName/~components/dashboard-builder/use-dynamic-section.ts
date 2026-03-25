@@ -3,6 +3,7 @@ import { trpc } from "@/utils/trpc";
 import { useQuery } from "@tanstack/react-query";
 import { globToRegex } from "./glob-utils";
 import { fuzzyFilter } from "@/lib/fuzzy-search";
+import { isValidRe2Regex } from "../../~lib/validate-re2-regex";
 import type {
   Widget,
   ChartWidgetConfig,
@@ -52,6 +53,9 @@ export function useDynamicSectionWidgets(
   const isGlob =
     patternMode === "search" &&
     (trimmed.includes("*") || trimmed.includes("?"));
+
+  // Validate regex for re2 compatibility before sending to ClickHouse
+  const isRe2Valid = patternMode === "regex" && trimmed ? isValidRe2Regex(trimmed) : true;
 
   // Strip glob chars before sending to backend (backend doesn't understand globs)
   const backendSearch = isGlob ? trimmed.replace(/[*?]/g, "") : trimmed;
@@ -103,11 +107,12 @@ export function useDynamicSectionWidgets(
   );
 
   // --- Regex mode: server-side regex within selected runs ---
+  // Only send if the pattern is re2-compatible to avoid ClickHouse CANNOT_COMPILE_REGEXP errors
   const regexMetrics = useQuery(
     trpc.runs.distinctMetricNames.queryOptions(
       { organizationId, projectName, runIds: selectedRunIds, regex: trimmed },
       {
-        enabled: hasPattern && hasRuns && patternMode === "regex",
+        enabled: hasPattern && hasRuns && patternMode === "regex" && isRe2Valid,
         staleTime: 60_000,
         placeholderData: (prev) => prev,
       },
@@ -118,7 +123,7 @@ export function useDynamicSectionWidgets(
     trpc.runs.distinctFileLogNames.queryOptions(
       { organizationId, projectName, runIds: selectedRunIds, regex: trimmed },
       {
-        enabled: hasPattern && hasRuns && patternMode === "regex",
+        enabled: hasPattern && hasRuns && patternMode === "regex" && isRe2Valid,
         staleTime: 60_000,
         placeholderData: (prev) => prev,
       },
