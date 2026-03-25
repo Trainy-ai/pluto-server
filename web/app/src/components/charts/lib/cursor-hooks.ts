@@ -31,6 +31,12 @@ export interface FocusDetectionDeps {
  * Finds the closest series to cursor Y position and broadcasts emphasis.
  */
 export function buildFocusDetectionHook(deps: FocusDetectionDeps): (u: uPlot) => void {
+  // Hysteresis: distance to the currently focused series at the current cursor position.
+  // Only switch focus when the new closest series is notably closer, preventing rapid
+  // oscillation in regions where multiple series cross at similar Y values.
+  const HYSTERESIS_PX = 5;
+  let currentFocusDistance = Infinity;
+
   return (u: uPlot) => {
     // Manual focus detection - uPlot's built-in focus doesn't work with cursor sync
     // because synced charts receive bad Y coordinates
@@ -47,8 +53,11 @@ export function buildFocusDetectionHook(deps: FocusDetectionDeps): (u: uPlot) =>
     // Find the series closest to the cursor Y position
     let closestSeriesIdx: number | null = null;
     let closestDistance = Infinity;
+    // Also track distance to the currently focused series at this cursor position
+    let focusedDistance = Infinity;
 
     const yScale = u.scales.y;
+    const currentFocused = deps.lastFocusedSeriesRef.current;
 
     for (let si = 1; si < u.series.length; si++) {
       const series = u.series[si];
@@ -80,10 +89,24 @@ export function buildFocusDetectionHook(deps: FocusDetectionDeps): (u: uPlot) =>
         closestDistance = distance;
         closestSeriesIdx = si;
       }
+      // Track how far the cursor is from the currently focused series
+      if (si === currentFocused) {
+        focusedDistance = distance;
+      }
     }
 
+    // Update tracked distance to current focus
+    currentFocusDistance = focusedDistance;
+
     // Skip if no change from last focus
-    if (closestSeriesIdx === deps.lastFocusedSeriesRef.current) return;
+    if (closestSeriesIdx === currentFocused) return;
+
+    // Hysteresis: only switch focus if the new closest series is meaningfully
+    // closer than the current one. This prevents rapid oscillation when series
+    // cross each other and distances are nearly equal.
+    if (currentFocused != null && closestDistance > focusedDistance - HYSTERESIS_PX) {
+      return;
+    }
 
     // Apply emphasis (always pick closest, no threshold)
     if (closestSeriesIdx != null && closestDistance < Infinity) {
@@ -136,11 +159,20 @@ export interface InterpolationDotsDeps {
   isActiveChart: () => boolean;
 }
 
+/** Threshold above which only the focused series gets interpolation dots */
+const HIGH_SERIES_THRESHOLD = 30;
+
 /**
  * Build the interpolation-dots setCursor hook.
  * Shows hollow dots at interpolated values for series with missing data at the cursor position.
+ *
+ * Performance: when series count exceeds HIGH_SERIES_THRESHOLD, only the focused
+ * series gets a dot — the others are invisible behind overlapping data anyway.
  */
 export function buildInterpolationDotsHook(deps: InterpolationDotsDeps): (u: uPlot) => void {
+  let lastDotsIdx: number | null = null;
+  let lastFocused: number | null = null;
+
   return (u: uPlot) => {
     const dots = (u as any)._interpDots as HTMLDivElement[] | undefined;
     if (!dots) return;
@@ -148,9 +180,21 @@ export function buildInterpolationDotsHook(deps: InterpolationDotsDeps): (u: uPl
     const idx = u.cursor.idx;
     // Hide all dots when cursor is off chart or interpolation is disabled
     if (idx == null || deps.tooltipInterpolation === "none" || !deps.isActiveChart()) {
-      for (const dot of dots) dot.style.display = "none";
+      if (lastDotsIdx != null) {
+        for (const dot of dots) dot.style.display = "none";
+        lastDotsIdx = null;
+        lastFocused = null;
+      }
       return;
     }
+
+    const focusedIdx = (u as any)._lastFocusedSeriesIdx as number | null ?? null;
+    // Skip if cursor index and focused series haven't changed
+    if (idx === lastDotsIdx && focusedIdx === lastFocused) return;
+    lastDotsIdx = idx;
+    lastFocused = focusedIdx;
+
+    const highSeriesCount = u.series.length - 1 > HIGH_SERIES_THRESHOLD;
 
     for (let si = 1; si < u.series.length; si++) {
       const dot = dots[si - 1];
@@ -160,6 +204,12 @@ export function buildInterpolationDotsHook(deps: InterpolationDotsDeps): (u: uPl
 
       // Skip hidden series and raw/original companions from smoothing
       if (!u.series[si].show || lineData?.hideFromLegend) {
+        dot.style.display = "none";
+        continue;
+      }
+
+      // For high series counts, only show dot for the focused series
+      if (highSeriesCount && si !== focusedIdx) {
         dot.style.display = "none";
         continue;
       }

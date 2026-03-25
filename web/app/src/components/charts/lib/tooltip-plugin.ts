@@ -76,7 +76,7 @@ function saveTooltipColumns(columns: TooltipColumnConfig[]) {
 const DEFAULT_COL_WIDTHS: Record<string, number> = {
   "run-id": 70,
   "run-name": 110,
-  "metric": 90,
+  "metric": 160,
   "value": 100,
   "name": 130,
 };
@@ -444,6 +444,10 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
   let lastUnpinTime = 0;
   /** True while updateTooltipContent is rebuilding DOM — suppresses ResizeObserver localStorage writes */
   let isRebuilding = false;
+  /** Last cursor index for which tooltip content was built — skip rebuild when unchanged */
+  let lastContentIdx: number | null = null;
+  /** Last highlighted series name when content was built — invalidate on highlight change */
+  let lastContentHighlight: string | null = null;
   /** Shared safety-net entry for the module-level mousemove listener */
   let safetyEntry: TooltipSafetyEntry | null = null;
 
@@ -607,6 +611,8 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
         log("  hide timeout fired - hiding tooltip");
         isHovering = false;
         lastIdx = null;
+        lastContentIdx = null;
+        lastContentHighlight = null;
         lastLeft = null;
         lastTop = null;
         syncHoverState();
@@ -898,7 +904,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
 
     // Gather series values
     const textColor = theme === "dark" ? "#fff" : "#000";
-    const seriesItems: { name: string; value: number; color: string; hidden: boolean; rawValue?: number; isInterpolated: boolean; flagText?: string; rawFlagText?: string; dash?: number[]; runName?: string; runId?: string; sqid?: string; seriesId?: string; metricName?: string; nonFiniteFlags?: Set<"NaN" | "Inf" | "-Inf"> }[] = [];
+    const seriesItems: { name: string; value: number; color: string; hidden: boolean; seriesHidden: boolean; seriesIdx: number; rawValue?: number; isInterpolated: boolean; flagText?: string; rawFlagText?: string; dash?: number[]; runName?: string; runId?: string; sqid?: string; seriesId?: string; metricName?: string; nonFiniteFlags?: Set<"NaN" | "Inf" | "-Inf"> }[] = [];
 
     // First pass: collect raw (original) values and flags from hidden smoothing series
     const rawValues = new Map<string, number>();
@@ -929,15 +935,15 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
 
     for (let i = 1; i < u.series.length; i++) {
       const series = u.series[i];
-      if (series.show === false) continue;
+      const isSeriesHidden = series.show === false;
 
-      let yVal = u.data[i][idx] as number | null | undefined;
+      let yVal = isSeriesHidden ? null : u.data[i][idx] as number | null | undefined;
       let isInterpolated = false;
 
       // Check for non-finite value flag (NaN/Inf/-Inf) before interpolation
       const lineData = lines[i - 1];
       const xAtIdx = xValues[idx];
-      const flag = lineData?.valueFlags?.get(xAtIdx);
+      const flag = isSeriesHidden ? undefined : lineData?.valueFlags?.get(xAtIdx);
 
       if (yVal == null && flag) {
         // This is a known non-finite value — show flag text instead of interpolating
@@ -948,6 +954,8 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
           value: 0,
           color: seriesColor,
           hidden: lineData?.hideFromLegend || false,
+          seriesHidden: isSeriesHidden,
+          seriesIdx: i,
           isInterpolated: false,
           flagText: flag,
           dash: lineData?.dash,
@@ -976,6 +984,8 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
             value: 0,
             color: seriesColor,
             hidden: lineData.hideFromLegend || false,
+            seriesHidden: isSeriesHidden,
+            seriesIdx: i,
             isInterpolated: false,
             flagText: parts.join(", "),
             dash: lineData.dash,
@@ -1031,6 +1041,8 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
           value: yVal,
           color: seriesColor,
           hidden: lineData?.hideFromLegend || false,
+          seriesHidden: isSeriesHidden,
+          seriesIdx: i,
           rawValue: rawValues.get(labelText),
           isInterpolated,
           flagText: bucketFlagText,
@@ -1049,8 +1061,10 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     // Get highlighted series/run IDs for tooltip row matching
     const highlightedRunId = highlightedRunIdRef?.current ?? null;
     const highlightedSId = highlightedSeriesIdRef?.current ?? null;
-    // Sort: exact series match first, then same-run series, then by value descending
+    // Sort: visible series first (highlighted → value desc), hidden series at bottom
     seriesItems.sort((a, b) => {
+      // Hidden-from-chart series always sort to the bottom
+      if (a.seriesHidden !== b.seriesHidden) return a.seriesHidden ? 1 : -1;
       if (highlightedSId) {
         const aExact = a.seriesId === highlightedSId;
         const bExact = b.seriesId === highlightedSId;
@@ -1066,7 +1080,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       return b.value - a.value;
     });
 
-    // Filter out hidden series - show ALL series with scrolling
+    // Filter out hideFromLegend series (smoothing originals etc), keep seriesHidden ones
     const visibleItems = seriesItems.filter((s) => !s.hidden);
 
     // Get current column configuration
@@ -1113,9 +1127,13 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
 
     const countLabel = document.createElement("span");
     countLabel.style.cssText = "opacity: 0.6; font-weight: normal; font-size: 10px; flex-shrink: 0";
+    const shownCount = visibleItems.filter((s) => !s.seriesHidden).length;
+    const hiddenCount = visibleItems.filter((s) => s.seriesHidden).length;
     countLabel.textContent = searchQuery
       ? `${filteredItems.length}/${visibleItems.length} series`
-      : `${visibleItems.length} series`;
+      : hiddenCount > 0
+        ? `${shownCount}/${shownCount + hiddenCount} series`
+        : `${shownCount} series`;
     cachedCountLabel = countLabel;
     topRow.appendChild(countLabel);
 
@@ -1135,13 +1153,13 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     // Search input (pinned only, but filter persists when unpinned)
     if (isPinned) {
       const searchRow = document.createElement("div");
-      searchRow.style.cssText = `padding: 2px 4px; border-bottom: 1px solid ${theme === "dark" ? "#333" : "#eee"}; margin-bottom: 2px`;
+      searchRow.style.cssText = `padding: 2px 4px; border-bottom: 1px solid ${theme === "dark" ? "#333" : "#eee"}; margin-bottom: 2px; display: flex; align-items: center; gap: 4px`;
       const searchInput = document.createElement("input");
       searchInput.setAttribute("data-tooltip-search", "true");
       searchInput.type = "text";
       searchInput.placeholder = "Search series...";
       searchInput.value = searchInputRef?.value ?? "";
-      searchInput.style.cssText = `width: 100%; box-sizing: border-box; font-size: 10px; font-family: inherit; padding: 3px 6px; border: 1px solid ${theme === "dark" ? "#444" : "#ddd"}; border-radius: 3px; background: ${theme === "dark" ? "#222" : "#f5f5f5"}; color: ${textColor}; outline: none`;
+      searchInput.style.cssText = `flex: 1; min-width: 0; box-sizing: border-box; font-size: 10px; font-family: inherit; padding: 3px 6px; border: 1px solid ${theme === "dark" ? "#444" : "#ddd"}; border-radius: 3px; background: ${theme === "dark" ? "#222" : "#f5f5f5"}; color: ${textColor}; outline: none`;
       searchInput.addEventListener("input", () => {
         if (searchInputRef) {
           searchInputRef.value = searchInput.value;
@@ -1167,6 +1185,38 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       searchInput.addEventListener("click", (e) => e.stopPropagation());
       searchInput.addEventListener("keydown", (e) => e.stopPropagation());
       searchRow.appendChild(searchInput);
+
+      // "Hide all" / "Show all" toggle button
+      const allVisible = u.series.slice(1).some((s) => s.show !== false);
+      const toggleBtn = document.createElement("button");
+      toggleBtn.textContent = allVisible ? "Hide all" : "Show all";
+      toggleBtn.title = allVisible ? "Hide all series" : "Show all series";
+      toggleBtn.style.cssText = `flex-shrink: 0; font-size: 9px; font-family: inherit; padding: 2px 6px; border: 1px solid ${theme === "dark" ? "#444" : "#ddd"}; border-radius: 3px; background: ${theme === "dark" ? "#333" : "#eee"}; color: ${textColor}; cursor: pointer; white-space: nowrap`;
+      toggleBtn.addEventListener("mousedown", (e) => e.stopPropagation());
+      toggleBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const showAll = !u.series.slice(1).some((s) => s.show !== false);
+        for (let i = 1; i < u.series.length; i++) {
+          u.setSeries(i, { show: showAll }, false);
+        }
+        u.redraw();
+        // Rebuild tooltip to reflect new state
+        tooltipStructureDirty = true;
+        cachedRows.clear();
+        if (lastIdx != null) {
+          if (tooltipEl) {
+            savedPinnedLeft = tooltipEl.style.left;
+            savedPinnedTop = tooltipEl.style.top;
+          }
+          updateTooltipContent(u, lastIdx);
+          if (tooltipEl) {
+            tooltipEl.style.left = savedPinnedLeft;
+            tooltipEl.style.top = savedPinnedTop;
+          }
+        }
+      });
+      searchRow.appendChild(toggleBtn);
+
       contentContainer.appendChild(searchRow);
 
       if (searchInputRef?.focused) {
@@ -1477,16 +1527,26 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     cachedRows.clear();
 
     // Add ALL rows using safe DOM APIs - scrolling handles overflow
+    let addedSeparator = false;
     for (const s of filteredItems) {
       const isHighlighted = highlightedSId !== null && s.seriesId === highlightedSId;
+
+      // Add a subtle separator before the first hidden series
+      if (s.seriesHidden && !addedSeparator && isPinned) {
+        addedSeparator = true;
+        const sep = document.createElement("div");
+        sep.style.cssText = `border-top: 1px dashed ${theme === "dark" ? "#444" : "#ccc"}; margin: 4px 4px 2px; opacity: 0.5`;
+        content.appendChild(sep);
+      }
+
       const row = createTooltipRow({
         name: s.name,
         value: s.value,
-        color: s.color,
-        isHighlighted,
+        color: s.seriesHidden ? (theme === "dark" ? "#555" : "#bbb") : s.color,
+        isHighlighted: isHighlighted && !s.seriesHidden,
         rawValue: s.rawValue,
         isInterpolated: s.isInterpolated,
-        flagText: s.flagText,
+        flagText: s.seriesHidden ? "hidden" : s.flagText,
         rawFlagText: s.rawFlagText,
         dash: s.dash,
         runName: s.runName,
@@ -1494,6 +1554,11 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
         metricName: s.metricName,
         nonFiniteFlags: s.nonFiniteFlags,
       }, textColor, columns, theme);
+
+      // Grey out hidden series
+      if (s.seriesHidden) {
+        row.style.opacity = "0.4";
+      }
 
       // Cache row element and key spans for incremental updates
       // Row children: [color indicator (index 0), ...enabled columns (index 1+)]
@@ -1515,16 +1580,46 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       if (metricColIdx >= 0) cacheEntry.metricSpan = row.children[metricColIdx + 1] as HTMLSpanElement;
       cachedRows.set(s.name, cacheEntry);
 
-      // Hover emphasis on tooltip rows (pinned only — unpinned has pointer-events: none)
-      if (isPinned && onSeriesHover) {
+      // Hover emphasis and click-to-toggle on tooltip rows (pinned only)
+      if (isPinned) {
         row.style.cursor = "pointer";
-        row.addEventListener("mouseenter", () => {
-          onSeriesHover(s.name, s.runId ?? null);
-          row.style.background = theme === "dark" ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)";
-        });
-        row.addEventListener("mouseleave", () => {
-          onSeriesHover(null, null);
-          row.style.background = isHighlighted ? "rgba(255,255,255,0.05)" : "";
+        if (onSeriesHover && !s.seriesHidden) {
+          row.addEventListener("mouseenter", () => {
+            onSeriesHover(s.name, s.runId ?? null);
+            row.style.background = theme === "dark" ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)";
+          });
+          row.addEventListener("mouseleave", () => {
+            onSeriesHover(null, null);
+            row.style.background = isHighlighted ? "rgba(255,255,255,0.05)" : "";
+          });
+        } else if (s.seriesHidden) {
+          row.addEventListener("mouseenter", () => {
+            row.style.opacity = "0.7";
+          });
+          row.addEventListener("mouseleave", () => {
+            row.style.opacity = "0.4";
+          });
+        }
+
+        // Click toggles series visibility
+        row.addEventListener("click", (e) => {
+          e.stopPropagation();
+          u.setSeries(s.seriesIdx, { show: s.seriesHidden }, false);
+          u.redraw();
+          // Rebuild tooltip to reflect new state
+          tooltipStructureDirty = true;
+          cachedRows.clear();
+          if (lastIdx != null) {
+            if (tooltipEl) {
+              savedPinnedLeft = tooltipEl.style.left;
+              savedPinnedTop = tooltipEl.style.top;
+            }
+            updateTooltipContent(u, lastIdx);
+            if (tooltipEl) {
+              tooltipEl.style.left = savedPinnedLeft;
+              tooltipEl.style.top = savedPinnedTop;
+            }
+          }
         });
       }
 
@@ -1540,6 +1635,16 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
 
     // Apply latest saved size from shared cache (picks up resizes from other pinned tooltips)
     applySavedSize(tooltipEl);
+
+    repositionTooltip(u);
+  }
+
+  /**
+   * Reposition the tooltip element to follow the cursor without rebuilding content.
+   * Extracted so setCursor can reposition cheaply when cursor idx hasn't changed.
+   */
+  function repositionTooltip(u: uPlot) {
+    if (!tooltipEl) return;
 
     // Position tooltip following the cursor with offset to top-right
     // Use viewport coordinates so tooltip can overflow chart boundaries
@@ -1561,9 +1666,10 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     const offsetY = 10; // Offset above
 
     // Set content max-height to fill full viewport (minus header/padding/border overhead)
+    const contentEl = tooltipEl.querySelector<HTMLElement>("[data-tooltip-content]");
     const maxContentHeight = window.innerHeight - 48;
-    if (maxContentHeight > 0) {
-      content.style.maxHeight = `${maxContentHeight}px`;
+    if (maxContentHeight > 0 && contentEl) {
+      contentEl.style.maxHeight = `${maxContentHeight}px`;
     }
 
     // Measure tooltip after content max-height is set

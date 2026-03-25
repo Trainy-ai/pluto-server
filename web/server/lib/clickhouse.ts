@@ -14,11 +14,18 @@ export const clickhouse = {
     query: string,
     query_params: Record<string, unknown> | undefined
   ) {
+    const t0 = performance.now();
     const result = await client.query({
       query,
       format: "JSONEachRow",
       query_params,
     });
+    const ms = performance.now() - t0;
+    if (ms > 1000) {
+      // Log slow queries (>1s) with a snippet of the query for identification
+      const snippet = query.replace(/\s+/g, " ").trim().slice(0, 120);
+      console.warn(`[clickhouse] slow query (${ms.toFixed(0)}ms): ${snippet}...`);
+    }
     return result;
   },
 };

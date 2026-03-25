@@ -76,6 +76,7 @@ trace: "retain-on-failure",
     },
     {
       name: "chromium",
+      timeout: 360_000, // 6 minutes — if a test takes longer, something is wrong
       testIgnore: [
         /performance\/.*\.spec\.ts/,       // Perf tests run in dedicated pipeline step
         /nan-inf-ingest-e2e\.spec\.ts/,    // Requires Rust ingest; runs in "Non-Finite Metrics Ingestion Test" step

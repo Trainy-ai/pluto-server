@@ -60,6 +60,11 @@ const STEP_FREQ_MAX_STEP = 10_000;
 // hide these metrics from the widget config dialog.
 const NAN_INF_RUN_INDEX = 16; // 'nan-inf-metrics' run index
 
+// 95-metric stress test run: one run with 95 distinct metrics to test
+// rendering many series on a single chart via a custom dashboard.
+const MANY_METRICS_RUN_INDEX = 17; // 'stress-95-metrics' run index
+const MANY_METRICS_COUNT = 95;
+
 // Metric groups and names for realistic variety
 const METRIC_GROUPS = ['train', 'eval', 'system', 'custom', 'test'];
 const METRIC_NAMES = [
@@ -360,11 +365,15 @@ async function seedClickHouseMetrics(
     return sum;
   }, 0);
 
+  // The 95-metric stress run has extra metrics beyond METRICS_PER_RUN
+  const hasManyMetricsRun = runs.length > MANY_METRICS_RUN_INDEX;
+  const manyMetricsExtraRows = hasManyMetricsRun ? (MANY_METRICS_COUNT - METRICS_PER_RUN) * STANDARD_DATAPOINTS : 0;
+
   // Standard runs exclude high-fidelity, single-point, and step-frequency runs
   const specialRunCount = HIGH_FIDELITY_RUNS + (hasSinglePointRun ? 1 : 0) + stepFreqRunCount;
   const standardRunCount = Math.max(0, runs.length - specialRunCount);
   const standardRows = standardRunCount * METRICS_PER_RUN * STANDARD_DATAPOINTS;
-  const totalRows = highFidelityRows + standardRows + singlePointRows + stepFreqRows;
+  const totalRows = highFidelityRows + standardRows + singlePointRows + stepFreqRows + manyMetricsExtraRows;
 
   console.log(`   Seeding ClickHouse with ${totalRows.toLocaleString()} metric datapoints...`);
   console.log(`   - ${Math.min(HIGH_FIDELITY_RUNS, runs.length)} high-fidelity runs × ${METRICS_PER_RUN} metrics × ${HIGH_FIDELITY_DATAPOINTS.toLocaleString()} points`);
@@ -427,8 +436,10 @@ async function seedClickHouseMetrics(
           : STANDARD_DATAPOINTS;
       // Anchor metric timestamps to run.createdAt so relative time charts work correctly
       const baseTime = run.createdAt.getTime();
+      // 95-metric stress run gets more metrics than the default
+      const metricsForRun = runIndex === MANY_METRICS_RUN_INDEX ? MANY_METRICS_COUNT : METRICS_PER_RUN;
 
-      for (let m = 0; m < METRICS_PER_RUN; m++) {
+      for (let m = 0; m < metricsForRun; m++) {
         const { group, name } = getMetricName(m);
 
         for (let step = 0; step < datapointsForRun; step++) {
@@ -1595,6 +1606,7 @@ async function main() {
       'freq-every-10',     // Index 14 - Logs every 10 steps (step 0,10,20,...,10000)
       'freq-every-50',     // Index 15 - Logs every 50 steps (step 0,50,100,...,10000)
       'nan-inf-metrics',   // Index 16 - Some metrics are all NaN/Inf (tests summaries MV filtering)
+      'stress-95-metrics', // Index 17 - 95 distinct metrics, custom dashboard plots all in one chart
     ];
 
     // Unique tag per run for stress testing (170 unique tags)
@@ -1726,8 +1738,10 @@ async function main() {
   });
 
   // Register metric names (skipDuplicates handles existing ones)
-  const runLogData = allRuns.flatMap((run) =>
-    Array.from({ length: METRICS_PER_RUN }, (_, i) => {
+  // The 95-metric stress run gets MANY_METRICS_COUNT metrics; all others get METRICS_PER_RUN
+  const runLogData = allRuns.flatMap((run, runIndex) => {
+    const metricCount = runIndex === MANY_METRICS_RUN_INDEX ? MANY_METRICS_COUNT : METRICS_PER_RUN;
+    return Array.from({ length: metricCount }, (_, i) => {
       const { group, name } = getMetricName(i);
       return {
         runId: run.id,
@@ -1735,14 +1749,14 @@ async function main() {
         logGroup: group,
         logType: 'METRIC' as const,
       };
-    })
-  );
+    });
+  });
 
   await prisma.runLogs.createMany({
     data: runLogData,
     skipDuplicates: true,
   });
-  console.log(`   Ensured ${allRuns.length * METRICS_PER_RUN} metric names registered`);
+  console.log(`   Registered metric names (95-metric stress run at index ${MANY_METRICS_RUN_INDEX})`);
 
   // Always seed ClickHouse (check if metrics exist first)
   await seedClickHouseMetrics(allRuns, org.id, project.name);
@@ -1800,6 +1814,61 @@ async function main() {
     orderBy: { id: 'asc' },
   });
   await backfillColumnKeys(runsWithConfig, org.id, project.id);
+
+  // 8. Create custom dashboard with all 95 metrics in one chart
+  console.log('\n8. Creating custom dashboard (95 metrics in one chart)...');
+  const allMetricNames = Array.from({ length: MANY_METRICS_COUNT }, (_, i) => getMetricName(i).name);
+  const dashboardConfig = {
+    version: 1,
+    sections: [
+      {
+        id: 'section-95-metrics',
+        name: 'All 95 Metrics',
+        collapsed: false,
+        widgets: [
+          {
+            id: 'widget-95-chart',
+            type: 'chart' as const,
+            config: {
+              title: '95 Metrics Overlay',
+              metrics: allMetricNames,
+              xAxis: 'step',
+              yAxisScale: 'linear' as const,
+              xAxisScale: 'linear' as const,
+              aggregation: 'LAST' as const,
+              showOriginal: false,
+            },
+            layout: { x: 0, y: 0, w: 12, h: 6 },
+          },
+        ],
+      },
+    ],
+    settings: {
+      gridCols: 12,
+      rowHeight: 80,
+      compactType: 'vertical' as const,
+    },
+  };
+
+  await prisma.dashboardView.upsert({
+    where: {
+      organizationId_projectId_name: {
+        organizationId: org.id,
+        projectId: project.id,
+        name: '95 Metrics Stress Test',
+      },
+    },
+    update: { config: dashboardConfig },
+    create: {
+      name: '95 Metrics Stress Test',
+      organizationId: org.id,
+      projectId: project.id,
+      createdById: user.id,
+      isDefault: false,
+      config: dashboardConfig,
+    },
+  });
+  console.log(`   Created dashboard view: "95 Metrics Stress Test"`);
 
   console.log('\n' + '='.repeat(50));
   console.log('Development data seeded successfully!\n');

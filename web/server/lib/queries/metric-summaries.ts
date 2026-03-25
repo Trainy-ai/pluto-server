@@ -336,8 +336,13 @@ export async function queryMetricSortedRunIds(
     SELECT runId, sort_value AS sortValue FROM sorted
   `;
 
+  const t0 = performance.now();
   const result = await ch.query(query, queryParams);
-  return (await result.json()) as { runId: number; sortValue: number }[];
+  const t1 = performance.now();
+  const rows = (await result.json()) as { runId: number; sortValue: number }[];
+  const t2 = performance.now();
+  console.log(`[queryMetricSortedRunIds] ${params.sortLogName} ${params.sortAggregation} — CH query: ${(t1-t0).toFixed(0)}ms, JSON parse: ${(t2-t1).toFixed(0)}ms, ${rows.length} rows`);
+  return rows;
 }
 
 /**

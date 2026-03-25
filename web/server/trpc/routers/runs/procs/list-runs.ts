@@ -815,6 +815,7 @@ async function metricSortQuery(
     offset?: number;
   },
 ) {
+  const t0 = performance.now();
   const offset = Math.min(input.offset ?? 0, MAX_JSON_SORT_OFFSET);
   const sortLogName = input.sortField!;
   const sortAggregation = (input.sortAggregation ?? "LAST") as MetricAggregation;
@@ -822,6 +823,7 @@ async function metricSortQuery(
 
   // Phase 1: Get candidate run IDs from PostgreSQL (all filters except metric)
   const candidateRunIds = await getCandidateRunIds(ctx, input);
+  const t1 = performance.now();
 
   // Phase 2: Query ClickHouse for sorted run IDs
   const metricFilters: MetricFilterSpec[] | undefined = input.metricFilters?.map((mf) => ({
@@ -842,8 +844,10 @@ async function metricSortQuery(
     candidateRunIds: candidateRunIds ?? undefined,
     metricFilters,
   });
+  const t2 = performance.now();
 
   if (sortedRows.length === 0) {
+    console.log(`[metricSortQuery] ${input.projectName} empty — PG candidates: ${(t1-t0).toFixed(0)}ms, CH sort: ${(t2-t1).toFixed(0)}ms`);
     return { runs: [], nextCursor: null, nextOffset: null };
   }
 
@@ -858,6 +862,7 @@ async function metricSortQuery(
       project: { select: { runPrefix: true } },
     },
   });
+  const t3 = performance.now();
 
   // Re-sort to match ClickHouse order
   const idOrder = new Map(sortedRows.map((r, i) => [BigInt(r.runId), i]));
@@ -868,6 +873,10 @@ async function metricSortQuery(
     : null;
 
   const enriched = await attachFieldValues(ctx.prisma, runs);
+  const t4 = performance.now();
+
+  console.log(`[metricSortQuery] ${input.projectName} sort=${sortLogName} — PG candidates: ${(t1-t0).toFixed(0)}ms, CH sort: ${(t2-t1).toFixed(0)}ms, PG hydrate: ${(t3-t2).toFixed(0)}ms, fieldValues: ${(t4-t3).toFixed(0)}ms, total: ${(t4-t0).toFixed(0)}ms (${sortedRows.length} sorted, ${runs.length} hydrated)`);
+
   return {
     runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id) })),
     nextCursor: null,

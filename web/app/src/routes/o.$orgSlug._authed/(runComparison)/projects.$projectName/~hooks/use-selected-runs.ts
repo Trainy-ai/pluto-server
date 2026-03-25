@@ -130,6 +130,35 @@ function assignSequentialColors(
   return colors;
 }
 
+// ---------------------------------------------------------------------------
+// Selection initialization state machine
+//
+// Three competing sources resolve at different times:
+//   1. URL params  (?runs=id1,id2)  — highest priority, shareable links
+//   2. IndexedDB cache              — persists selection across reloads
+//   3. Default (first 5 runs)       — fallback when nothing else applies
+//
+// Previous bugs arose because ad-hoc ref flags couldn't track ordering
+// reliably. This explicit state machine makes the priority deterministic:
+//
+//   uninit ─┬─ url params present? ──► url-pending ──► url-applied
+//           │                                  (runs arrive with matching IDs)
+//           └─ no url params ──► cache-pending ──► cache-applied
+//                                       │
+//                                       └─ cache empty ──► default
+//
+// Once in "url-applied", "cache-applied", or "default", initialization is
+// complete and further changes are user-driven (clicks, select-all, etc.).
+// ---------------------------------------------------------------------------
+type InitPhase =
+  | "uninit"        // Nothing decided yet
+  | "url-pending"   // URL params exist but target runs haven't loaded yet
+  | "url-applied"   // URL params successfully resolved and applied
+  | "cache-pending" // No URL params; waiting for IndexedDB cache
+  | "cache-applied" // Cache restored successfully
+  | "default"       // Fell back to selecting first N runs
+  | "ready";        // Initialization complete (any source)
+
 /**
  * Custom hook for managing run selection and color assignment
  *
@@ -214,11 +243,9 @@ export function useSelectedRuns(
     paletteInitializedRef.current = true;
   }, [chartColors]);
 
-  // Track whether initial URL params have been applied
-  const urlParamsAppliedRef = useRef(false);
-  // Track whether the initial selection has been set (prevents re-init on effect re-runs)
-  const initializedRef = useRef(false);
-  // Track the previous URL run IDs to detect changes
+  // --- State machine for initialization ---
+  const initPhaseRef = useRef<InitPhase>("uninit");
+  // Track the previous URL run IDs to detect navigation changes
   const prevUrlRunIdsRef = useRef<string[] | undefined>(undefined);
   // Track whether a URL change was triggered by our own selection update
   // (to avoid round-trip overwriting the selection with a filtered subset)
@@ -248,79 +275,10 @@ export function useSelectedRuns(
     [organizationId, projectName],
   );
 
-  // Load cached data on initial render or when org/project changes
-  useEffect(() => {
-    // Reset state and refs to clear stale data from previous project
-    setRunColors({});
-    setSelectedRunsWithColors({});
-    setHiddenRunIds(new Set());
-    urlParamsAppliedRef.current = false;
-    initializedRef.current = false;
-    prevUrlRunIdsRef.current = undefined;
+  // --- Helpers ---
 
-    // If URL specifies runs, skip cache restoration entirely — URL takes priority.
-    // This prevents the async cache load from overwriting URL-driven selection.
-    if (urlRunIds?.length) return;
-
-    const loadCachedData = async () => {
-      try {
-        const cachedData = await runCacheDb.getData(storageKey);
-        // After async load, check again — URL params may have been applied while waiting
-        if (urlParamsAppliedRef.current) return;
-        if (cachedData?.data) {
-          // Only set state if there's meaningful data to restore
-          if (Object.keys(cachedData.data.colors).length > 0) {
-            setRunColors(cachedData.data.colors);
-          }
-          if (Object.keys(cachedData.data.selectedRuns).length > 0) {
-            setSelectedRunsWithColors(cachedData.data.selectedRuns);
-          }
-          // Restore hidden run IDs (backward-compatible: field may not exist)
-          if (cachedData.data.hiddenRunIds?.length) {
-            setHiddenRunIds(new Set(cachedData.data.hiddenRunIds));
-          }
-        }
-      } catch (error) {
-        console.error("Error loading run selections from cache:", error);
-      }
-    };
-
-    loadCachedData();
-    // urlRunIds intentionally read from closure but omitted from deps — we only
-    // check it on mount / project-change to decide whether to restore cache.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [storageKey]);
-
-  // Debounced save to cache - prevents main thread blocking on rapid changes
-  const debouncedSaveToCache = useDebouncedCallback(
-    async (colors: Record<RunId, Color>, selected: Record<RunId, { run: Run; color: Color }>, hidden: Set<RunId>, key: string) => {
-      try {
-        await runCacheDb.setData(key, {
-          colors,
-          selectedRuns: selected,
-          hiddenRunIds: Array.from(hidden),
-        });
-      } catch (error) {
-        console.error("Error saving run selections to cache:", error);
-      }
-    },
-    500, // 500ms debounce
-  );
-
-  // Save to cache whenever state changes (debounced).
-  // Must also save empty state to clear stale entries from IndexedDB —
-  // otherwise deselecting all runs leaves phantom IDs in the cache that
-  // cause prefetchSelectedRuns to inject ghost rows on subsequent loads.
-  // Guard on initializedRef to avoid overwriting the cache before it's restored.
-  useEffect(() => {
-    if (!initializedRef.current) return;
-    debouncedSaveToCache(runColors, selectedRunsWithColors, hiddenRunIds, storageKey);
-  }, [runColors, selectedRunsWithColors, hiddenRunIds, debouncedSaveToCache, storageKey]);
-
-  // Build a selection map from URL run IDs, matching against available runs.
-  // Returns null if urlRunIds is empty or no matching runs are found.
-  // Colors are assigned sequentially from the palette for maximum visual distinction.
-  const buildSelectionFromUrlParams = useCallback(
+  /** Build a selection from URL run IDs, matching against available runs. */
+  const buildSelectionFromUrl = useCallback(
     (availableRuns: Run[]): Record<RunId, { run: Run; color: Color }> | null => {
       if (!urlRunIds?.length) return null;
 
@@ -341,117 +299,189 @@ export function useSelectedRuns(
     [urlRunIds],
   );
 
-  // Apply URL-driven selection + hidden state.
-  // Shared by the URL-change effect and the initialization effect.
-  const applyUrlSelection = useCallback(
-    (availableRuns: Run[]) => {
-      urlParamsAppliedRef.current = true;
-      const newSelection = buildSelectionFromUrlParams(availableRuns);
-      if (newSelection) {
-        const newColors: Record<RunId, Color> = {};
-        for (const [id, entry] of Object.entries(newSelection)) {
-          newColors[id] = entry.color;
-        }
-        setRunColors(newColors);
-        setSelectedRunsWithColors(newSelection);
-        // Apply hidden IDs from URL (must be subset of selected)
-        if (urlHiddenIds?.length) {
-          const selectedSet = new Set(Object.keys(newSelection));
-          setHiddenRunIds(new Set(urlHiddenIds.filter((id) => selectedSet.has(id))));
-        } else {
-          setHiddenRunIds(new Set());
-        }
-        return true;
-      }
-      return false;
-    },
-    [buildSelectionFromUrlParams, urlHiddenIds],
-  );
-
-  // Handle URL param changes (when navigating with different ?runs= param)
-  useEffect(() => {
-    // Check if URL params actually changed
-    const prevIds = prevUrlRunIdsRef.current;
-    const prevIdsStr = prevIds?.join(",") ?? "";
-    const newIdsStr = urlRunIds?.join(",") ?? "";
-
-    if (prevIdsStr === newIdsStr) {
-      return; // No change
-    }
-
-    // Don't mark URL params as "seen" until runs are loaded so we can actually
-    // apply them. Otherwise the first render (before data arrives) consumes
-    // the change and when runs finally load, the effect sees no diff.
-    if (!runs?.length) {
-      return;
-    }
-
-    // Update ref to track current value — only after we know runs are loaded
-    prevUrlRunIdsRef.current = urlRunIds;
-
-    // Skip if this URL change was triggered by our own selection update.
-    // The round-trip (selection → URL → back here) would overwrite the full
-    // selection with only the runs present in the current filtered `runs`
-    // array, losing selections for runs filtered out by view presets.
-    if (isLocalSelectionUpdateRef.current) {
-      isLocalSelectionUpdateRef.current = false;
-      return;
-    }
-
-    // If we have runs loaded and URL params changed, apply the new selection
-    applyUrlSelection(runs);
-  }, [urlRunIds, runs, applyUrlSelection]);
-
-  // Initialize or update selections when runs change.
-  // Colors are only assigned to SELECTED runs (sequential from palette)
-  // so that a small selection always gets maximally distinct colors.
-  // Uses refs for runColors/selectedRunsWithColors to avoid circular re-runs.
-  useEffect(() => {
-    if (!runs?.length) return;
-
-    const currentSelectedRuns = selectedRunsRef.current;
-
-    // Helper to select first N runs with sequential palette colors
-    const selectDefaultRuns = (n: number) => {
-      const runsToSelect = runs.slice(0, n);
+  /** Select first N runs with sequential palette colors. */
+  const buildDefaultSelection = useCallback(
+    (availableRuns: Run[], n: number) => {
+      const runsToSelect = availableRuns.slice(0, n);
       const colorMap = assignSequentialColors(runsToSelect, chartColorsRef.current);
       const selected: Record<RunId, { run: Run; color: Color }> = {};
       for (const run of runsToSelect) {
         selected[run.id] = { run, color: colorMap[run.id] };
       }
       return { selected, colors: colorMap };
-    };
+    },
+    [],
+  );
 
-    // Initialize selected runs only if not already initialized and no cache restored.
-    // Use a dedicated ref flag (not selectedRunsRef) since the ref lags behind state.
-    if (!initializedRef.current && Object.keys(currentSelectedRuns).length === 0) {
-      initializedRef.current = true;
-      if (urlRunIds && urlRunIds.length > 0 && !urlParamsAppliedRef.current) {
-        if (!applyUrlSelection(runs)) {
-          const { selected, colors } = selectDefaultRuns(5);
-          setRunColors(colors);
-          setSelectedRunsWithColors(selected);
-        }
-      } else if (!urlParamsAppliedRef.current || !urlRunIds?.length) {
-        const { selected, colors } = selectDefaultRuns(5);
-        setRunColors(colors);
-        setSelectedRunsWithColors(selected);
+  /** Apply a selection map to state (colors + selected runs + hidden). */
+  const applySelection = useCallback(
+    (
+      selection: Record<RunId, { run: Run; color: Color }>,
+      hidden?: string[],
+    ) => {
+      const newColors: Record<RunId, Color> = {};
+      for (const [id, entry] of Object.entries(selection)) {
+        newColors[id] = entry.color;
       }
+      setRunColors(newColors);
+      setSelectedRunsWithColors(selection);
+      if (hidden?.length) {
+        const selectedSet = new Set(Object.keys(selection));
+        setHiddenRunIds(new Set(hidden.filter((id) => selectedSet.has(id))));
+      } else {
+        setHiddenRunIds(new Set());
+      }
+    },
+    [],
+  );
+
+  // --- Initialization: reset on org/project change ---
+  useEffect(() => {
+    setRunColors({});
+    setSelectedRunsWithColors({});
+    setHiddenRunIds(new Set());
+    prevUrlRunIdsRef.current = undefined;
+
+    if (urlRunIds?.length) {
+      // URL params present — skip cache, wait for runs to resolve
+      initPhaseRef.current = "url-pending";
     } else {
-      initializedRef.current = true;
-      // Cache was restored before runs arrived — check for URL override
-      if (urlRunIds && urlRunIds.length > 0 && !urlParamsAppliedRef.current) {
-        applyUrlSelection(runs);
-      }
-      // No need to assign colors to unselected runs — colors are only for selected runs
-    }
-  }, [runs, urlRunIds, applyUrlSelection]);
+      // No URL params — try loading from cache
+      initPhaseRef.current = "cache-pending";
 
-  // Keep stored run objects in sync when the upstream `runs` array is enriched
-  // (e.g., when fieldValuesData loads and merges _flatConfig/_flatSystemMetadata).
-  // Without this, selectedRunsWithColors holds stale run objects that lack these fields.
-  // Uses functional update to read the latest state (not the stale ref), which avoids
-  // overriding URL-param-driven selection that was set in the same render cycle.
+      let cancelled = false;
+      const loadCache = async () => {
+        try {
+          const cachedData = await runCacheDb.getData(storageKey);
+          if (cancelled) return;
+          // If URL params arrived while cache was loading, abort
+          if (initPhaseRef.current !== "cache-pending") return;
+
+          if (cachedData?.data) {
+            const hasColors = Object.keys(cachedData.data.colors).length > 0;
+            const hasSelection = Object.keys(cachedData.data.selectedRuns).length > 0;
+            if (hasColors || hasSelection) {
+              if (hasColors) setRunColors(cachedData.data.colors);
+              if (hasSelection) setSelectedRunsWithColors(cachedData.data.selectedRuns);
+              if (cachedData.data.hiddenRunIds?.length) {
+                setHiddenRunIds(new Set(cachedData.data.hiddenRunIds));
+              }
+              initPhaseRef.current = "cache-applied";
+              return;
+            }
+          }
+          // Cache empty or missing — will fall through to default when runs arrive
+          initPhaseRef.current = "uninit";
+        } catch {
+          if (!cancelled) {
+            initPhaseRef.current = "uninit";
+          }
+        }
+      };
+
+      loadCache();
+      return () => { cancelled = true; };
+    }
+    // urlRunIds intentionally read from closure but omitted from deps — we only
+    // check it on mount / project-change to decide the init path.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storageKey]);
+
+  // --- Main initialization effect: runs arrive or update ---
+  useEffect(() => {
+    if (!runs?.length) return;
+
+    const phase = initPhaseRef.current;
+
+    // Already fully initialized — nothing to do
+    if (phase === "ready") return;
+
+    if (phase === "url-pending") {
+      // Try to resolve URL params against the current runs
+      const selection = buildSelectionFromUrl(runs);
+      if (selection) {
+        applySelection(selection, urlHiddenIds);
+        initPhaseRef.current = "ready";
+        prevUrlRunIdsRef.current = urlRunIds;
+      }
+      // If selection is null, the target runs haven't loaded yet (e.g.,
+      // getByIds prefetch is still in flight). Stay in url-pending — this
+      // effect will re-run when `runs` updates with the prefetched data.
+      return;
+    }
+
+    if (phase === "cache-applied") {
+      // Cache was restored — we're done initializing
+      initPhaseRef.current = "ready";
+      return;
+    }
+
+    if (phase === "cache-pending") {
+      // Cache is still loading — don't race it with defaults.
+      // The cache effect will transition to cache-applied or uninit.
+      return;
+    }
+
+    // phase === "uninit" or "default" — no URL, no cache (or cache was empty)
+    const { selected, colors } = buildDefaultSelection(runs, 5);
+    setRunColors(colors);
+    setSelectedRunsWithColors(selected);
+    initPhaseRef.current = "ready";
+  }, [runs, urlRunIds, urlHiddenIds, buildSelectionFromUrl, buildDefaultSelection, applySelection]);
+
+  // --- Handle URL param changes AFTER initialization (navigation) ---
+  useEffect(() => {
+    // Only handle post-init URL changes
+    if (initPhaseRef.current !== "ready") return;
+
+    const prevIdsStr = prevUrlRunIdsRef.current?.join(",") ?? "";
+    const newIdsStr = urlRunIds?.join(",") ?? "";
+    if (prevIdsStr === newIdsStr) return;
+
+    // Don't update ref until runs are loaded so we can actually apply
+    if (!runs?.length) return;
+
+    prevUrlRunIdsRef.current = urlRunIds;
+
+    // Skip if this URL change was triggered by our own selection update
+    if (isLocalSelectionUpdateRef.current) {
+      isLocalSelectionUpdateRef.current = false;
+      return;
+    }
+
+    // Apply new URL selection
+    if (urlRunIds?.length) {
+      const selection = buildSelectionFromUrl(runs);
+      if (selection) {
+        applySelection(selection, urlHiddenIds);
+      }
+    }
+  }, [urlRunIds, urlHiddenIds, runs, buildSelectionFromUrl, applySelection]);
+
+  // --- Debounced save to cache ---
+  const debouncedSaveToCache = useDebouncedCallback(
+    async (colors: Record<RunId, Color>, selected: Record<RunId, { run: Run; color: Color }>, hidden: Set<RunId>, key: string) => {
+      try {
+        await runCacheDb.setData(key, {
+          colors,
+          selectedRuns: selected,
+          hiddenRunIds: Array.from(hidden),
+        });
+      } catch (error) {
+        console.error("Error saving run selections to cache:", error);
+      }
+    },
+    500,
+  );
+
+  // Save to cache whenever state changes (debounced).
+  // Guard on ready phase to avoid overwriting cache before it's restored.
+  useEffect(() => {
+    if (initPhaseRef.current !== "ready") return;
+    debouncedSaveToCache(runColors, selectedRunsWithColors, hiddenRunIds, storageKey);
+  }, [runColors, selectedRunsWithColors, hiddenRunIds, debouncedSaveToCache, storageKey]);
+
+  // --- Keep stored run objects fresh when upstream `runs` is enriched ---
   useEffect(() => {
     if (!runs?.length) return;
 
@@ -476,46 +506,33 @@ export function useSelectedRuns(
     });
   }, [runs]);
 
-  // Notify parent when selection changes (for URL sync)
+  // --- Notify parent when selection changes (for URL sync) ---
   useEffect(() => {
     if (onSelectionChange) {
-      // Don't sync selection to URL if we have URL params that haven't been
-      // applied yet. This prevents the IndexedDB cache (which loads before API
-      // data) from overwriting the URL with stale cached selections.
-      if (urlRunIds && urlRunIds.length > 0 && !urlParamsAppliedRef.current) {
-        return;
-      }
-      // Mark that the upcoming URL change was triggered locally so the URL
-      // effect doesn't round-trip and overwrite the selection.
+      // Don't sync to URL before initialization is complete
+      if (initPhaseRef.current !== "ready") return;
+      // Mark that the upcoming URL change was triggered locally
       isLocalSelectionUpdateRef.current = true;
       const selectedIds = Object.keys(selectedRunsWithColors);
       onSelectionChange(selectedIds);
     }
   }, [selectedRunsWithColors, onSelectionChange]);
 
-  // Memoize handlers to prevent unnecessary rerenders
-  // Uses refs to avoid dependency on runs/runColors which change frequently
+  // --- User action handlers ---
+
   const handleRunSelection = useCallback(
     (runId: RunId, isSelected: boolean) => {
       const currentRuns = runsRef.current;
       if (!currentRuns) return;
 
-      // Use functional update to ensure we're working with latest state
-      // Note: State updates are synchronous to keep checkbox feedback instant
-      // Downstream metrics computation is deferred via useDeferredValue in parent
       setSelectedRunsWithColors((prev) => {
-        // If already in desired state, don't update
         const isCurrentlySelected = !!prev[runId];
-        if (isSelected === isCurrentlySelected) {
-          return prev;
-        }
+        if (isSelected === isCurrentlySelected) return prev;
 
         if (isSelected) {
-          // Find the run from the runs array
           const run = currentRuns.find((r) => r.id === runId);
           if (!run) return prev;
 
-          // Assign the next available palette color (not used by other selected runs)
           const usedColors = new Set(Object.values(prev).map((e) => e.color));
           const color = getNextAvailableColor(usedColors, chartColorsRef.current);
 
@@ -530,13 +547,12 @@ export function useSelectedRuns(
           };
         }
 
-        // Deselection - remove from selected runs, runColors, and hiddenRunIds
+        // Deselection
         const { [runId]: _, ...rest } = prev;
         setRunColors((prevColors) => {
           const { [runId]: _, ...restColors } = prevColors;
           return restColors;
         });
-        // Clean up hidden state
         setHiddenRunIds((prevHidden) => {
           if (!prevHidden.has(runId)) return prevHidden;
           const next = new Set(prevHidden);
@@ -546,14 +562,13 @@ export function useSelectedRuns(
         return rest;
       });
     },
-    [], // Stable - uses refs instead of direct dependencies
+    [],
   );
 
   const handleColorChange = useCallback(
     (runId: RunId, color: Color) => {
       const currentRuns = runsRef.current;
 
-      // Update both states atomically
       setRunColors((prev) => ({
         ...prev,
         [runId]: color,
@@ -572,10 +587,9 @@ export function useSelectedRuns(
         };
       });
     },
-    [], // Stable - uses refs instead of direct dependencies
+    [],
   );
 
-  // Select the first N runs with sequential palette colors
   const selectFirstN = useCallback(
     (n: number) => {
       if (!runs?.length) return;
@@ -595,7 +609,6 @@ export function useSelectedRuns(
     [runs],
   );
 
-  // Select all runs with given IDs, assigning next available palette colors
   const selectAllByIds = useCallback(
     (runIds: RunId[]) => {
       if (!runs?.length) return;
@@ -627,19 +640,16 @@ export function useSelectedRuns(
     [runs],
   );
 
-  // Deselect all runs and clear their color assignments
   const deselectAll = useCallback(() => {
     setSelectedRunsWithColors({});
     setRunColors({});
     setHiddenRunIds(new Set());
   }, []);
 
-  // Shuffle colors for all selected runs
   const shuffleColors = useCallback(() => {
     const selectedIds = Object.keys(selectedRunsWithColors);
     if (selectedIds.length === 0) return;
 
-    // Get current colors and shuffle them
     const currentColors = selectedIds.map(
       (id) => selectedRunsWithColors[id].color,
     );
@@ -654,7 +664,6 @@ export function useSelectedRuns(
       ];
     }
 
-    // Apply shuffled colors — runColors mirrors selectedRunsWithColors
     const newRunColors: Record<RunId, Color> = {};
     const newSelectedRuns = { ...selectedRunsWithColors };
 
@@ -670,8 +679,6 @@ export function useSelectedRuns(
     setSelectedRunsWithColors(newSelectedRuns);
   }, [selectedRunsWithColors]);
 
-  // Reassign sequential palette colors to all selected runs from the current palette.
-  // Called when the user switches palette type so all curves update at once.
   const reassignAllColors = useCallback(() => {
     const selectedIds = Object.keys(selectedRunsWithColors);
     if (selectedIds.length === 0) return;
@@ -691,7 +698,6 @@ export function useSelectedRuns(
     setSelectedRunsWithColors(newSelectedRuns);
   }, [selectedRunsWithColors]);
 
-  // Toggle a run's chart visibility (hidden/shown)
   const toggleRunVisibility = useCallback((runId: RunId) => {
     setHiddenRunIds((prev) => {
       const next = new Set(prev);
@@ -704,12 +710,10 @@ export function useSelectedRuns(
     });
   }, []);
 
-  // Show all hidden runs on charts
   const showAllRuns = useCallback(() => {
     setHiddenRunIds(new Set());
   }, []);
 
-  // Hide all selected runs from charts
   const hideAllRuns = useCallback(() => {
     setHiddenRunIds(new Set(Object.keys(selectedRunsWithColors)));
   }, [selectedRunsWithColors]);
@@ -717,9 +721,7 @@ export function useSelectedRuns(
   // Notify parent when hidden runs change (for URL sync)
   useEffect(() => {
     if (onHiddenChange) {
-      if (urlRunIds && urlRunIds.length > 0 && !urlParamsAppliedRef.current) {
-        return;
-      }
+      if (initPhaseRef.current !== "ready") return;
       isLocalSelectionUpdateRef.current = true;
       onHiddenChange(Array.from(hiddenRunIds));
     }
