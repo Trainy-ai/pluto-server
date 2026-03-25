@@ -201,9 +201,10 @@ export const MultiGroup = ({
     ],
   );
 
-  // Only wrap in ImageStepSyncProvider if the group contains image logs
-  const hasImageLogs = useMemo(
-    () => metrics.some((m) => m.type === "IMAGE"),
+  // Wrap in ImageStepSyncProvider if the group contains any file types with step navigation
+  const STEP_NAV_TYPES = new Set(["IMAGE", "VIDEO", "AUDIO", "HISTOGRAM"]);
+  const hasStepNavLogs = useMemo(
+    () => metrics.some((m) => STEP_NAV_TYPES.has(m.type)),
     [metrics],
   );
 
@@ -211,7 +212,7 @@ export const MultiGroup = ({
     <DropdownRegion title={title} components={components} groupId={groupId} />
   );
 
-  if (hasImageLogs) {
+  if (hasStepNavLogs) {
     return <ImageStepSyncProvider>{content}</ImageStepSyncProvider>;
   }
 

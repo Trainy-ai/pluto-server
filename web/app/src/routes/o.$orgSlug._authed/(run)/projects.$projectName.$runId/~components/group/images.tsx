@@ -8,6 +8,8 @@ import { useSyncedStepNavigation } from "../../~hooks/use-synced-step-navigation
 import { StepNavigator } from "../shared/step-navigator";
 import { ImageCard } from "@/components/core/image-viewer";
 import { cn } from "@/lib/utils";
+import { MediaCardWrapper } from "@/components/core/media-card-wrapper";
+import { ImageSettingsPopover } from "@/components/core/image-viewer/image-settings-popover";
 
 interface ImagesViewProps {
   log: LogGroup["logs"][number];
@@ -69,6 +71,8 @@ export const ImagesView = ({
 
   const [currentPage, setCurrentPage] = useState(0);
   const imagesPerPage = 4;
+  const [syncZoom, setSyncZoom] = useState(false);
+  const [sharedScale, setSharedScale] = useState(1);
 
   const {
     currentStepIndex,
@@ -127,6 +131,16 @@ export const ImagesView = ({
   }
 
   return (
+    <MediaCardWrapper
+      title={log.logName}
+      className="h-full w-full"
+      toolbarExtra={
+        <ImageSettingsPopover
+          syncZoom={syncZoom}
+          onSyncZoomChange={setSyncZoom}
+        />
+      }
+    >
     <div className="flex h-full w-full flex-col space-y-4 p-4">
       <h3 className="text-center font-mono text-sm font-medium text-muted-foreground">
         {log.logName}
@@ -156,6 +170,8 @@ export const ImagesView = ({
                   }
                 : undefined
             }
+            sharedScale={syncZoom ? sharedScale : undefined}
+            onScaleChange={syncZoom ? setSharedScale : undefined}
           />
         ))}
       </div>
@@ -180,5 +196,6 @@ export const ImagesView = ({
         </div>
       )}
     </div>
+    </MediaCardWrapper>
   );
 };

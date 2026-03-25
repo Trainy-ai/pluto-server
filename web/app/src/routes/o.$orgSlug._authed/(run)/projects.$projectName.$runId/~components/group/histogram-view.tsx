@@ -5,8 +5,10 @@ import GIF from "gif.js";
 import { toast } from "@/components/ui/sonner";
 import { useGetHistogram } from "../../~queries/get-histogram";
 import { StepNavigator } from "../shared/step-navigator";
+import { useSyncedStepNavigation } from "../../~hooks/use-synced-step-navigation";
 import { useHistogramCanvas } from "@/routes/o.$orgSlug._authed/(runComparison)/projects.$projectName/~components/multi-group/hooks/use-histogram-canvas";
 import { AnimationControls } from "@/routes/o.$orgSlug._authed/(runComparison)/projects.$projectName/~components/multi-group/components/animation-controls";
+import { MediaCardWrapper } from "@/components/core/media-card-wrapper";
 
 // Default color for single-run histograms
 const DEFAULT_HISTOGRAM_COLOR = "hsl(216, 66%, 60%)";
@@ -112,7 +114,6 @@ export const HistogramView = ({
   projectName,
   runId,
 }: HistogramViewProps) => {
-  const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
@@ -218,9 +219,31 @@ export const HistogramView = ({
     };
   }, [sortedData]);
 
-  const maxStepIndex = normalizedData.length - 1;
-  const currentStep = normalizedData[currentStepIndex]?.step ?? 0;
+  const {
+    currentStepIndex,
+    currentStepValue: currentStep,
+    availableSteps: stepValues,
+    goToStepIndex,
+    isLocked,
+    setIsLocked,
+    hasSyncContext,
+  } = useSyncedStepNavigation(normalizedData);
+
+  const maxStepIndex = Math.max(0, stepValues.length - 1);
   const maxStep = normalizedData[maxStepIndex]?.step ?? 0;
+
+  // Wrap goToStepIndex for animation (uses setter callback pattern)
+  const setCurrentStepIndex = useCallback(
+    (valueOrUpdater: number | ((prev: number) => number)) => {
+      if (typeof valueOrUpdater === "function") {
+        const newIndex = valueOrUpdater(currentStepIndex);
+        goToStepIndex(newIndex);
+      } else {
+        goToStepIndex(valueOrUpdater);
+      }
+    },
+    [goToStepIndex, currentStepIndex],
+  );
 
   useEffect(() => {
     const animate = (timestamp: number) => {
@@ -239,7 +262,7 @@ export const HistogramView = ({
     };
     if (isPlaying) animationFrameRef.current = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(animationFrameRef.current);
-  }, [isPlaying, animationSpeed, maxStepIndex]);
+  }, [isPlaying, animationSpeed, maxStepIndex, setCurrentStepIndex]);
 
   const handleExport = useCallback(
     async (exportType: "snapshot" | "gif") => {
@@ -313,6 +336,7 @@ export const HistogramView = ({
   }
 
   return (
+    <MediaCardWrapper title={logName} className="h-full w-full">
     <div className="flex h-full w-full flex-col space-y-4 p-2">
       <h3 className="text-center font-mono text-sm font-medium text-muted-foreground">{logName}</h3>
       <div className="min-h-0 flex-1">
@@ -343,8 +367,11 @@ export const HistogramView = ({
           <StepNavigator
             currentStepIndex={currentStepIndex}
             currentStepValue={currentStep}
-            availableSteps={normalizedData.map((d) => d.step)}
-            onStepChange={setCurrentStepIndex}
+            availableSteps={stepValues}
+            onStepChange={goToStepIndex}
+            isLocked={isLocked}
+            onLockChange={setIsLocked}
+            showLock={hasSyncContext}
           />
           <div className="text-center font-mono text-xs text-muted-foreground">
             Step {formatNumber(currentStep, true)} of{" "}
@@ -364,6 +391,7 @@ export const HistogramView = ({
         </div>
       )}
     </div>
+    </MediaCardWrapper>
   );
 };
 

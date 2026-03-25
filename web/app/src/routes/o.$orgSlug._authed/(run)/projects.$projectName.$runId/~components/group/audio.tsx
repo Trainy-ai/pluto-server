@@ -5,9 +5,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useState, useMemo } from "react";
-import { useStepNavigation } from "../../~hooks/use-step-navigation";
+import { useSyncedStepNavigation } from "../../~hooks/use-synced-step-navigation";
 import { StepNavigator } from "../shared/step-navigator";
 import { AudioPlayer } from "@/components/core/audio-player";
+import { MediaCardWrapper } from "@/components/core/media-card-wrapper";
 
 interface AudioViewProps {
   log: LogGroup["logs"][number];
@@ -74,13 +75,16 @@ export const AudioView = ({
   const [currentPage, setCurrentPage] = useState(0);
   const audiosPerPage = 4;
 
-  // Use step navigation hook
+  // Use synced step navigation hook
   const {
     currentStepIndex,
     currentStepValue,
     availableSteps,
     goToStepIndex,
-  } = useStepNavigation(data || []);
+    isLocked,
+    setIsLocked,
+    hasSyncContext,
+  } = useSyncedStepNavigation(data || []);
 
   const currentStepAudios = useMemo(() => {
     if (!data) return [];
@@ -135,6 +139,7 @@ export const AudioView = ({
   }
 
   return (
+    <MediaCardWrapper title={log.logName} className="h-full w-full">
     <div className="flex h-full w-full flex-col space-y-4 p-4">
       <h3 className="text-center font-mono text-sm font-medium text-muted-foreground">
         {log.logName}
@@ -165,9 +170,13 @@ export const AudioView = ({
             currentStepValue={currentStepValue}
             availableSteps={availableSteps}
             onStepChange={handleStepChange}
+            isLocked={isLocked}
+            onLockChange={setIsLocked}
+            showLock={hasSyncContext}
           />
         </div>
       )}
     </div>
+    </MediaCardWrapper>
   );
 };

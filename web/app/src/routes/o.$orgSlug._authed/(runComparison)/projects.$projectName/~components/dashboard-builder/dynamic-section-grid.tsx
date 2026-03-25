@@ -230,74 +230,38 @@ export function DynamicSectionGrid({
         })}
       </div>
 
-      {fullscreenWidget && (
+      {fullscreenWidget && fullscreenWidget.type === "chart" && (
         <ChartFullscreenDialog
-          open={!!fullscreenWidget}
-          onOpenChange={(open) => {
-            if (!open) setFullscreenWidget(null);
+          open={true}
+          onOpenChange={(open) => { if (!open) setFullscreenWidget(null); }}
+          title={fullscreenWidget.config.title || (fullscreenWidget.config as ChartWidgetConfig).metrics[0] || "Chart"}
+          yMin={(fullscreenWidget.config as ChartWidgetConfig).yMin}
+          yMax={(fullscreenWidget.config as ChartWidgetConfig).yMax}
+          onBoundsChange={(yMin, yMax) => {
+            updateBounds(fullscreenWidget.id, yMin, yMax);
+            setFullscreenWidget((prev) =>
+              prev ? { ...prev, config: { ...prev.config, yMin, yMax } as ChartWidgetConfig } as Widget : null
+            );
           }}
-          title={
-            fullscreenWidget.config.title ||
-            (fullscreenWidget.type === "chart"
-              ? (fullscreenWidget.config as ChartWidgetConfig).metrics[0] || "Chart"
-              : fullscreenWidget.type === "file-group"
-                ? `${(fullscreenWidget.config as { files?: string[] }).files?.length ?? 0} files`
-                : "Widget")
-          }
-          yMin={fullscreenWidget.type === "chart" ? (fullscreenWidget.config as ChartWidgetConfig).yMin : undefined}
-          yMax={fullscreenWidget.type === "chart" ? (fullscreenWidget.config as ChartWidgetConfig).yMax : undefined}
-          onBoundsChange={
-            fullscreenWidget.type === "chart"
-              ? (yMin, yMax) => {
-                  updateBounds(fullscreenWidget.id, yMin, yMax);
-                  setFullscreenWidget((prev) =>
-                    prev ? { ...prev, config: { ...prev.config, yMin, yMax } as ChartWidgetConfig } as Widget : null
-                  );
-                }
-              : undefined
-          }
-          logXAxis={fullscreenWidget.type === "chart" ? (fullscreenWidget.config as ChartWidgetConfig).xAxisScale === "log" : undefined}
-          logYAxis={fullscreenWidget.type === "chart" ? (fullscreenWidget.config as ChartWidgetConfig).yAxisScale === "log" : undefined}
-          onLogScaleChange={
-            fullscreenWidget.type === "chart"
-              ? (axis, value) => {
-                  updateScale(fullscreenWidget.id, axis, value);
-                  const scaleValue = value ? "log" : "linear";
-                  setFullscreenWidget((prev) =>
-                    prev
-                      ? {
-                          ...prev,
-                          config: {
-                            ...prev.config,
-                            ...(axis === "x" ? { xAxisScale: scaleValue } : { yAxisScale: scaleValue }),
-                          } as ChartWidgetConfig,
-                        } as Widget
-                      : null
-                  );
-                }
-              : undefined
-          }
-          onResetAll={
-            fullscreenWidget.type === "chart"
-              ? () => {
-                  resetAll(fullscreenWidget.id);
-                  setFullscreenWidget((prev) => {
-                    if (!prev) return null;
-                    const originalConfig = prev.config as ChartWidgetConfig;
-                    return {
-                      ...prev,
-                      config: {
-                        ...originalConfig,
-                        yMin: undefined,
-                        yMax: undefined,
-                        xAxisScale: originalConfig.xAxisScale,
-                        yAxisScale: originalConfig.yAxisScale,
-                      } as ChartWidgetConfig,
-                    } as Widget;
-                  });
-                }
-              : undefined
-          }
+          logXAxis={(fullscreenWidget.config as ChartWidgetConfig).xAxisScale === "log"}
+          logYAxis={(fullscreenWidget.config as ChartWidgetConfig).yAxisScale === "log"}
+          onLogScaleChange={(axis, value) => {
+            updateScale(fullscreenWidget.id, axis, value);
+            const scaleValue = value ? "log" : "linear";
+            setFullscreenWidget((prev) =>
+              prev
+                ? { ...prev, config: { ...prev.config, ...(axis === "x" ? { xAxisScale: scaleValue } : { yAxisScale: scaleValue }) } as ChartWidgetConfig } as Widget
+                : null
+            );
+          }}
+          onResetAll={() => {
+            resetAll(fullscreenWidget.id);
+            setFullscreenWidget((prev) => {
+              if (!prev) return null;
+              const originalConfig = prev.config as ChartWidgetConfig;
+              return { ...prev, config: { ...originalConfig, yMin: undefined, yMax: undefined } as ChartWidgetConfig } as Widget;
+            });
+          }}
         >
           <WidgetRenderer
             widget={fullscreenWidget}

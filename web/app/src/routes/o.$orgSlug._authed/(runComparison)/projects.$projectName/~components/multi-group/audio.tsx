@@ -4,8 +4,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { useMemo } from "react";
 import { StepNavigator } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/shared/step-navigator";
-import { useStepNavigation } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~hooks/use-step-navigation";
+import { useSyncedStepNavigation } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~hooks/use-synced-step-navigation";
 import { AudioPlayer } from "@/components/core/audio-player";
+import { MediaCardWrapper } from "@/components/core/media-card-wrapper";
 
 interface MultiGroupAudioProps {
   logName: string;
@@ -69,14 +70,17 @@ export const MultiGroupAudio = ({
     [queriesWithRuns],
   );
 
-  // Use step navigation hook
+  // Use synced step navigation hook
   const {
     currentStepIndex,
     currentStepValue,
     availableSteps,
     goToStepIndex,
     hasMultipleSteps,
-  } = useStepNavigation(allAudio);
+    isLocked,
+    setIsLocked,
+    hasSyncContext,
+  } = useSyncedStepNavigation(allAudio);
 
   // Filter audio for current step and group by run
   const audioByRun = useMemo(() => {
@@ -132,35 +136,40 @@ export const MultiGroupAudio = ({
   }
 
   return (
-    <div className={cn("flex h-full w-full flex-col space-y-4 p-4", className)}>
-      <h3 className="text-center font-mono text-sm font-medium text-muted-foreground">
-        {logName}
-      </h3>
-      <div className="grid flex-1 grid-cols-1 gap-4 overflow-auto">
-        {audioByRun.map(({ run, audio }) => {
-          const audioFile = audio[0]; // Take the first audio for each run at current step
-          if (!audioFile) return null;
+    <MediaCardWrapper title={logName} className="h-full w-full">
+      <div className={cn("flex h-full w-full flex-col space-y-4 p-4", className)}>
+        <h3 className="text-center font-mono text-sm font-medium text-muted-foreground">
+          {logName}
+        </h3>
+        <div className="grid flex-1 grid-cols-1 gap-4 overflow-auto">
+          {audioByRun.map(({ run, audio }) => {
+            const audioFile = audio[0];
+            if (!audioFile) return null;
 
-          return (
-            <AudioPlayer
-              key={run.runId}
-              url={audioFile.url}
-              fileName={audioFile.fileName}
-              runLabel={{ name: run.runName, color: run.color }}
-            />
-          );
-        })}
-      </div>
-      {hasMultipleSteps() && (
-        <div className="sticky bottom-0 z-10 border-t bg-background pt-3 pb-1">
-          <StepNavigator
-            currentStepIndex={currentStepIndex}
-            currentStepValue={currentStepValue}
-            availableSteps={availableSteps}
-            onStepChange={goToStepIndex}
-          />
+            return (
+              <AudioPlayer
+                key={run.runId}
+                url={audioFile.url}
+                fileName={audioFile.fileName}
+                runLabel={{ name: run.runName, color: run.color }}
+              />
+            );
+          })}
         </div>
-      )}
-    </div>
+        {hasMultipleSteps() && (
+          <div className="sticky bottom-0 z-10 border-t bg-background pt-3 pb-1">
+            <StepNavigator
+              currentStepIndex={currentStepIndex}
+              currentStepValue={currentStepValue}
+              availableSteps={availableSteps}
+              onStepChange={goToStepIndex}
+              isLocked={isLocked}
+              onLockChange={setIsLocked}
+              showLock={hasSyncContext}
+            />
+          </div>
+        )}
+      </div>
+    </MediaCardWrapper>
   );
 };

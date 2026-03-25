@@ -27,8 +27,9 @@ import {
   DropdownMenuContent,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useStepNavigation } from "../../~hooks/use-step-navigation";
+import { useSyncedStepNavigation } from "../../~hooks/use-synced-step-navigation";
 import { StepNavigator } from "../shared/step-navigator";
+import { MediaCardWrapper } from "@/components/core/media-card-wrapper";
 
 const VIDEOS_PER_PAGE = 2;
 
@@ -420,13 +421,16 @@ export const VideoView: React.FC<VideoViewProps> = ({
   );
   const [page, setPage] = useState(0);
 
-  // Use step navigation hook
+  // Use synced step navigation hook
   const {
     currentStepIndex,
     currentStepValue,
     availableSteps,
     goToStepIndex,
-  } = useStepNavigation((data as Video[]) || []);
+    isLocked,
+    setIsLocked,
+    hasSyncContext,
+  } = useSyncedStepNavigation((data as Video[]) || []);
 
   const currentStepVideos = useMemo(() => {
     if (!data || !Array.isArray(data)) return [];
@@ -474,6 +478,7 @@ export const VideoView: React.FC<VideoViewProps> = ({
   );
 
   return (
+    <MediaCardWrapper title={log.logName} className="h-full w-full">
     <div className="flex h-full w-full flex-col space-y-4 p-4">
       <h2 className="text-center font-mono text-sm font-medium text-muted-foreground">{log.logName}</h2>
 
@@ -546,9 +551,13 @@ export const VideoView: React.FC<VideoViewProps> = ({
             currentStepValue={currentStepValue}
             availableSteps={availableSteps}
             onStepChange={handleStepChange}
+            isLocked={isLocked}
+            onLockChange={setIsLocked}
+            showLock={hasSyncContext}
           />
         </div>
       )}
     </div>
+    </MediaCardWrapper>
   );
 };

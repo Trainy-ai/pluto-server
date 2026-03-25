@@ -127,6 +127,7 @@ interface TooltipSafetyEntry {
   overEl: HTMLElement;
   tooltipEl: HTMLDivElement;
   isPinned: () => boolean;
+  isHovering: () => boolean;
   hide: () => void;
 }
 const tooltipSafetyEntries = new Set<TooltipSafetyEntry>();
@@ -135,6 +136,10 @@ function sharedMouseMoveHandler(e: MouseEvent) {
   for (const entry of tooltipSafetyEntries) {
     if (entry.isPinned()) continue;
     if (entry.tooltipEl.style.display === "none") continue;
+    // Skip if mouseenter has already set isHovering — the tooltip plugin's own
+    // mouseenter/mouseleave handlers are authoritative. This safety net should
+    // only catch cases where mouseleave was missed, not override active hover.
+    if (entry.isHovering()) continue;
     const rect = entry.overEl.getBoundingClientRect();
     if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) {
       entry.hide();
@@ -553,6 +558,8 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       display: none;
       pointer-events: none;
       z-index: 9999;
+      left: -9999px;
+      top: -9999px;
       font-family: ui-monospace, monospace;
       font-size: 11px;
       background: ${theme === "dark" ? "#161619" : "#fff"};
@@ -634,6 +641,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       overEl: overEl!,
       tooltipEl,
       isPinned: () => isPinned,
+      isHovering: () => isHovering,
       hide: () => {
         if (hideTimeoutId !== null) {
           clearTimeout(hideTimeoutId);

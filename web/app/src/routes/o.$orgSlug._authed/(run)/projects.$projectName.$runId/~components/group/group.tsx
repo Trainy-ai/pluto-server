@@ -56,9 +56,10 @@ const DataGroupBase = ({
     ));
   }, [sortedLogs, tenantId, projectName, runId, boundsResetKey, runCreatedAt, runName]);
 
-  // Only wrap in ImageStepSyncProvider if the group contains image logs
-  const hasImageLogs = useMemo(
-    () => group.logs.some((log) => log.logType === "IMAGE"),
+  // Wrap in ImageStepSyncProvider if the group contains any logs with step navigation
+  const STEP_NAV_TYPES = new Set(["IMAGE", "VIDEO", "AUDIO", "HISTOGRAM"]);
+  const hasStepNavLogs = useMemo(
+    () => group.logs.some((log) => STEP_NAV_TYPES.has(log.logType)),
     [group.logs],
   );
 
@@ -70,7 +71,7 @@ const DataGroupBase = ({
     />
   );
 
-  if (hasImageLogs) {
+  if (hasStepNavLogs) {
     return <ImageStepSyncProvider>{content}</ImageStepSyncProvider>;
   }
 

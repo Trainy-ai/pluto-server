@@ -3,6 +3,7 @@ import React, {
   useRef,
   useState,
   useMemo,
+  useCallback,
 } from "react";
 import { useTheme } from "@/lib/hooks/use-theme";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -19,6 +20,8 @@ import {
   type AxisBounds,
 } from "./components/histogram-axis-controls";
 import { StepNavigator } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/shared/step-navigator";
+import { useSyncedStepNavigation } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~hooks/use-synced-step-navigation";
+import { MediaCardWrapper } from "@/components/core/media-card-wrapper";
 
 const ANIMATION_CONFIG = {
   MIN_SPEED: 1,
@@ -97,7 +100,6 @@ export const MultiHistogramView: React.FC<{
     logName,
   });
 
-  const [stepIndex, setStepIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [animationSpeed, setAnimationSpeed] = useState<number>(
     ANIMATION_CONFIG.DEFAULT_SPEED,
@@ -111,17 +113,42 @@ export const MultiHistogramView: React.FC<{
     );
   }, [data.normalizedData]);
 
-  const stepValues = useMemo(() => {
+  // Build a synthetic step data array for the sync hook
+  const syntheticStepData = useMemo(() => {
     if (!runsWithData.length) return [];
     const allSteps = new Set<number>();
     runsWithData.forEach((run: any) => {
       run.data.forEach((d: any) => allSteps.add(d.step));
     });
-    return Array.from(allSteps).sort((a, b) => a - b);
+    return Array.from(allSteps).sort((a, b) => a - b).map((step) => ({ step }));
   }, [runsWithData]);
 
-  const currentStep = stepValues[stepIndex] ?? 0;
+  const {
+    currentStepIndex: stepIndex,
+    currentStepValue: currentStep,
+    availableSteps: stepValues,
+    goToStepIndex,
+    hasMultipleSteps,
+    isLocked,
+    setIsLocked,
+    hasSyncContext,
+  } = useSyncedStepNavigation(syntheticStepData);
+
   const maxStepIndex = Math.max(0, stepValues.length - 1);
+
+  // Wrap goToStepIndex for animation controls (they use a setter callback pattern)
+  const setStepIndex = useCallback(
+    (valueOrUpdater: number | ((prev: number) => number)) => {
+      if (typeof valueOrUpdater === "function") {
+        // Animation controls pass a callback like (prev) => prev + 1
+        const newIndex = valueOrUpdater(stepIndex);
+        goToStepIndex(newIndex);
+      } else {
+        goToStepIndex(valueOrUpdater);
+      }
+    },
+    [goToStepIndex, stepIndex],
+  );
 
   const { resolvedTheme: theme } = useTheme();
 
@@ -195,6 +222,7 @@ export const MultiHistogramView: React.FC<{
   }
 
   return (
+    <MediaCardWrapper title={logName} className="h-full w-full">
     <div className={cn("flex h-full w-full flex-col space-y-4 p-4", className)}>
       <h3 className="text-center font-mono text-sm font-medium text-muted-foreground">
         {logName}
@@ -233,13 +261,16 @@ export const MultiHistogramView: React.FC<{
           </div>
         ))}
       </div>
-      {maxStepIndex > 0 && (
+      {hasMultipleSteps() && (
         <div className="sticky bottom-0 z-10 flex w-full flex-col space-y-2 border-t bg-background pt-3 pb-1">
           <StepNavigator
             currentStepIndex={stepIndex}
             currentStepValue={currentStep}
             availableSteps={stepValues}
-            onStepChange={setStepIndex}
+            onStepChange={goToStepIndex}
+            isLocked={isLocked}
+            onLockChange={setIsLocked}
+            showLock={hasSyncContext}
           />
           <AnimationControls
             currentStep={stepIndex}
@@ -253,5 +284,6 @@ export const MultiHistogramView: React.FC<{
         </div>
       )}
     </div>
+    </MediaCardWrapper>
   );
 };

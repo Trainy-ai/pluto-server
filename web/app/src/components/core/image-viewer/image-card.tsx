@@ -29,6 +29,10 @@ interface ImageCardProps {
   };
   /** Optional step navigation to show in fullscreen mode */
   stepNavigation?: ImageCardStepNavigation;
+  /** When provided, uses this as the zoom scale (controlled mode) */
+  sharedScale?: number;
+  /** Called when zoom changes in controlled mode */
+  onScaleChange?: (scale: number) => void;
 }
 
 async function handleDownload(url: string, fileName: string) {
@@ -50,8 +54,14 @@ async function handleDownload(url: string, fileName: string) {
   }
 }
 
-export function ImageCard({ url, fileName, runLabel, stepNavigation }: ImageCardProps) {
-  const [scale, setScale] = useState(1);
+export function ImageCard({ url, fileName, runLabel, stepNavigation, sharedScale, onScaleChange }: ImageCardProps) {
+  const [localScale, setLocalScale] = useState(1);
+  const scale = sharedScale ?? localScale;
+  const setScale = (v: number | ((prev: number) => number)) => {
+    const next = typeof v === "function" ? v(scale) : v;
+    setLocalScale(next);
+    onScaleChange?.(next);
+  };
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
@@ -62,9 +72,9 @@ export function ImageCard({ url, fileName, runLabel, stepNavigation }: ImageCard
     setPosition({ x: 0, y: 0 });
   };
 
-  // Reset zoom/pan when the image changes (e.g. step change with stable key)
+  // Reset pan position (but preserve zoom) when the image changes (e.g. step change)
   useEffect(() => {
-    resetView();
+    setPosition({ x: 0, y: 0 });
   }, [url]);
 
   const handleMouseDown = (e: React.MouseEvent) => {

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { trpc } from "@/utils/trpc";
 import { useQueries } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -6,6 +6,8 @@ import { cn } from "@/lib/utils";
 import { StepNavigator } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/shared/step-navigator";
 import { useSyncedStepNavigation } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~hooks/use-synced-step-navigation";
 import { ImageCard } from "@/components/core/image-viewer";
+import { MediaCardWrapper } from "@/components/core/media-card-wrapper";
+import { ImageSettingsPopover } from "@/components/core/image-viewer/image-settings-popover";
 
 interface MultiGroupImageProps {
   logName: string;
@@ -98,6 +100,9 @@ export const MultiGroupImage = ({
     [imagesByRun],
   );
 
+  const [syncZoom, setSyncZoom] = useState(false);
+  const [sharedScale, setSharedScale] = useState(1);
+
   if (isLoading) {
     return (
       <div className={cn("flex h-full w-full flex-col space-y-4 p-4", className)}>
@@ -133,58 +138,71 @@ export const MultiGroupImage = ({
   }
 
   return (
-    <div className={cn("flex h-full w-full flex-col space-y-4 p-4", className)}>
-      <h3 className="text-center font-mono text-sm font-medium text-muted-foreground">
-        {logName}
-      </h3>
-      <div
-        className={cn(
-          "grid flex-1 grid-cols-1 gap-4 overflow-auto",
-          runsWithImages > 1 && "sm:grid-cols-2",
-          runsWithImages === 2 && "lg:grid-cols-2",
-          runsWithImages >= 3 && "lg:grid-cols-3",
-        )}
-      >
-        {imagesByRun.map(({ run, images }) => {
-          const image = images[0];
-          if (!image) return null;
+    <MediaCardWrapper
+      title={logName}
+      className="h-full w-full"
+      toolbarExtra={
+        <ImageSettingsPopover
+          syncZoom={syncZoom}
+          onSyncZoomChange={setSyncZoom}
+        />
+      }
+    >
+      <div className={cn("flex h-full w-full flex-col space-y-4 p-4", className)}>
+        <h3 className="text-center font-mono text-sm font-medium text-muted-foreground">
+          {logName}
+        </h3>
+        <div
+          className={cn(
+            "grid flex-1 grid-cols-1 gap-4 overflow-auto",
+            runsWithImages > 1 && "sm:grid-cols-2",
+            runsWithImages === 2 && "lg:grid-cols-2",
+            runsWithImages >= 3 && "lg:grid-cols-3",
+          )}
+        >
+          {imagesByRun.map(({ run, images }) => {
+            const image = images[0];
+            if (!image) return null;
 
-          return (
-            <ImageCard
-              key={run.runId}
-              url={image.url}
-              fileName={image.fileName}
-              runLabel={{ name: run.runName, color: run.color }}
-              stepNavigation={
-                hasMultipleSteps()
-                  ? {
-                      currentStepIndex,
-                      currentStepValue,
-                      availableSteps,
-                      onStepChange: goToStepIndex,
-                      isLocked,
-                      onLockChange: setIsLocked,
-                      showLock: hasSyncContext,
-                    }
-                  : undefined
-              }
-            />
-          );
-        })}
-      </div>
-      {hasMultipleSteps() && (
-        <div className="sticky bottom-0 z-10 border-t bg-background pt-3 pb-1">
-          <StepNavigator
-            currentStepIndex={currentStepIndex}
-            currentStepValue={currentStepValue}
-            availableSteps={availableSteps}
-            onStepChange={goToStepIndex}
-            isLocked={isLocked}
-            onLockChange={setIsLocked}
-            showLock={hasSyncContext}
-          />
+            return (
+              <ImageCard
+                key={run.runId}
+                url={image.url}
+                fileName={image.fileName}
+                runLabel={{ name: run.runName, color: run.color }}
+                stepNavigation={
+                  hasMultipleSteps()
+                    ? {
+                        currentStepIndex,
+                        currentStepValue,
+                        availableSteps,
+                        onStepChange: goToStepIndex,
+                        isLocked,
+                        onLockChange: setIsLocked,
+                        showLock: hasSyncContext,
+                      }
+                    : undefined
+                }
+                sharedScale={syncZoom ? sharedScale : undefined}
+                onScaleChange={syncZoom ? setSharedScale : undefined}
+              />
+            );
+          })}
         </div>
-      )}
-    </div>
+        {hasMultipleSteps() && (
+          <div className="sticky bottom-0 z-10 border-t bg-background pt-3 pb-1">
+            <StepNavigator
+              currentStepIndex={currentStepIndex}
+              currentStepValue={currentStepValue}
+              availableSteps={availableSteps}
+              onStepChange={goToStepIndex}
+              isLocked={isLocked}
+              onLockChange={setIsLocked}
+              showLock={hasSyncContext}
+            />
+          </div>
+        )}
+      </div>
+    </MediaCardWrapper>
   );
 };

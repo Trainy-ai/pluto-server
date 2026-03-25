@@ -1,10 +1,12 @@
-import React, { useState, useMemo } from "react";
+import React, { useMemo } from "react";
 import { trpc } from "@/utils/trpc";
 import { useQueries } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { VideoPlayer } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/group/video";
 import { StepNavigator } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/shared/step-navigator";
+import { useSyncedStepNavigation } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~hooks/use-synced-step-navigation";
+import { MediaCardWrapper } from "@/components/core/media-card-wrapper";
 
 interface Video {
   url: string;
@@ -34,8 +36,6 @@ export const MultiGroupVideo = ({
   runs,
   className,
 }: MultiGroupVideoProps) => {
-  const [currentStep, setCurrentStep] = useState(0);
-
   // Use useQueries at the top level to fetch videos for each run
   const videoQueries = useQueries({
     queries: runs.map((run) => ({
@@ -63,55 +63,38 @@ export const MultiGroupVideo = ({
     [queriesWithRuns],
   );
 
-  // Memoize the steps array and current step value
-  const { steps, currentStepValue, totalStepValue, currentStepVideos } =
-    useMemo(() => {
-      const allVideos = queriesWithRuns
+  // Flatten all videos with runId
+  const allVideos = useMemo(
+    () =>
+      queriesWithRuns
         .map((query) => {
           const videos = query.data || [];
-          // Add runId to each video
           return videos.map((video) => ({
             ...video,
             runId: query.run.runId,
           }));
         })
         .flat()
-        .filter(Boolean);
+        .filter(Boolean),
+    [queriesWithRuns],
+  );
 
-      if (allVideos.length === 0) {
-        return {
-          steps: [],
-          currentStepValue: 0,
-          totalStepValue: 0,
-          currentStepVideos: [],
-        };
-      }
+  const {
+    currentStepIndex,
+    currentStepValue,
+    availableSteps,
+    goToStepIndex,
+    hasMultipleSteps,
+    isLocked,
+    setIsLocked,
+    hasSyncContext,
+  } = useSyncedStepNavigation(allVideos);
 
-      const videosByStep = allVideos.reduce(
-        (acc, video) => {
-          const step = video.step || 0;
-          if (!acc[step]) {
-            acc[step] = [];
-          }
-          acc[step].push(video);
-          return acc;
-        },
-        {} as Record<number, typeof allVideos>,
-      );
-
-      const sortedSteps = Object.keys(videosByStep)
-        .map(Number)
-        .sort((a, b) => a - b);
-
-      const result = {
-        steps: sortedSteps,
-        currentStepValue: sortedSteps[currentStep] || 0,
-        totalStepValue: sortedSteps[sortedSteps.length - 1] || 0,
-        currentStepVideos: videosByStep[sortedSteps[currentStep] || 0] || [],
-      };
-
-      return result;
-    }, [queriesWithRuns, currentStep]);
+  // Filter videos for current step
+  const currentStepVideos = useMemo(
+    () => allVideos.filter((video) => video.step === currentStepValue),
+    [allVideos, currentStepValue],
+  );
 
   // Group videos by run
   const videosByRun = useMemo(() => {
@@ -147,6 +130,7 @@ export const MultiGroupVideo = ({
   }
 
   return (
+    <MediaCardWrapper title={logName} className="h-full w-full">
     <div
       className={cn(
         "flex h-full w-full flex-col space-y-4 p-4",
@@ -206,16 +190,20 @@ export const MultiGroupVideo = ({
         })}
       </div>
 
-      {steps.length > 1 && (
+      {hasMultipleSteps() && (
         <div className="sticky bottom-0 z-10 border-t bg-background pt-3 pb-1">
           <StepNavigator
-            currentStepIndex={currentStep}
+            currentStepIndex={currentStepIndex}
             currentStepValue={currentStepValue}
-            availableSteps={steps}
-            onStepChange={setCurrentStep}
+            availableSteps={availableSteps}
+            onStepChange={goToStepIndex}
+            isLocked={isLocked}
+            onLockChange={setIsLocked}
+            showLock={hasSyncContext}
           />
         </div>
       )}
     </div>
+    </MediaCardWrapper>
   );
 };

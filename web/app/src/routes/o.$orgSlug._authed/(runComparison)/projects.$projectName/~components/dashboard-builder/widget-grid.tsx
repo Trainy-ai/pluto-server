@@ -5,6 +5,7 @@ import "react-resizable/css/styles.css";
 import "./widget-grid.css";
 import { cn } from "@/lib/utils";
 import { VirtualizedChart } from "@/components/core/virtualized-chart";
+import { ImageStepSyncProvider } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~context/image-step-sync-context";
 import type { Widget, ChartWidgetConfig } from "../../~types/dashboard-types";
 import { WidgetCard } from "./widget-card";
 
@@ -189,6 +190,11 @@ export function WidgetGrid({
     [coarseMode, cols, uniformW, uniformH]
   );
 
+  const hasFileWidgets = useMemo(
+    () => widgets.some((w) => w.type === "file-group"),
+    [widgets],
+  );
+
   if (widgets.length === 0) {
     return null;
   }
@@ -197,7 +203,7 @@ export function WidgetGrid({
   const colWidth = (containerWidth - (cols - 1) * margin) / cols + margin;
   const rowHeightWithMargin = rowHeight + margin;
 
-  return (
+  const grid = (
     <GridLayout
       className={cn("widget-grid", isEditing && "widget-grid-editing")}
       style={
@@ -263,6 +269,12 @@ export function WidgetGrid({
       })}
     </GridLayout>
   );
+
+  if (hasFileWidgets) {
+    return <ImageStepSyncProvider>{grid}</ImageStepSyncProvider>;
+  }
+
+  return grid;
 }
 
 function computeClippingInfo(
