@@ -8,7 +8,7 @@ import type { LineData } from "../line-uplot";
 // Draws visual markers on the chart for non-finite values:
 //   △ Red upward triangle at chart top    — +Infinity
 //   ▽ Green downward triangle at chart bottom — -Infinity
-//   ⊗ Gold circle-cross on the line       — NaN in aggregation bucket
+//   ⊗ Circle-cross on the line (series color) — NaN in aggregation bucket
 
 export interface NonFiniteMarkersOpts {
   /** All chart series including envelopes/hidden */
@@ -110,7 +110,7 @@ function drawCircleCross(
  * For each visible (non-hidden) series that has `nonFiniteMarkers` or `valueFlags`:
  *   - +Inf: red △ pinned near the top of the chart
  *   - -Inf: green ▽ pinned near the bottom of the chart
- *   - NaN:  gold ⊗ on the line at the bucket's x position
+ *   - NaN:  ⊗ on the line at the bucket's x position (series color)
  *
  * The markers use the series' color for better visual association.
  */
@@ -145,11 +145,6 @@ export function nonFiniteMarkersPlugin(opts: NonFiniteMarkersOpts): uPlot.Plugin
       // Determine color: use series color, fallback to default
       const seriesColor = lineData.color || "#888";
 
-      // Colors for different marker types — use series color for Inf markers
-      const infColor = seriesColor;
-      const negInfColor = seriesColor;
-      const nanColor = "#d4a017"; // gold for NaN
-
       // --- Handle bucketed non-finite markers ---
       if (lineData.nonFiniteMarkers && lineData.nonFiniteMarkers.size > 0) {
         for (const [xVal, flags] of lineData.nonFiniteMarkers) {
@@ -161,14 +156,14 @@ export function nonFiniteMarkersPlugin(opts: NonFiniteMarkersOpts): uPlot.Plugin
           if (cx < left || cx > left + width) continue;
 
           if (flags.has("Inf")) {
-            drawUpTriangle(ctx, cx, top + edgeOffset, markerSize, infColor);
+            drawUpTriangle(ctx, cx, top + edgeOffset, markerSize, seriesColor);
           }
           if (flags.has("-Inf")) {
-            drawDownTriangle(ctx, cx, top + height - edgeOffset, markerSize, negInfColor);
+            drawDownTriangle(ctx, cx, top + height - edgeOffset, markerSize, seriesColor);
           }
           if (flags.has("NaN")) {
             // Pin NaN markers near the bottom to avoid visual noise on the curve
-            drawCircleCross(ctx, cx, top + height - edgeOffset, markerSize, nanColor);
+            drawCircleCross(ctx, cx, top + height - edgeOffset, markerSize, seriesColor);
           }
         }
       }
@@ -180,12 +175,12 @@ export function nonFiniteMarkersPlugin(opts: NonFiniteMarkersOpts): uPlot.Plugin
           if (cx < left || cx > left + width) continue;
 
           if (flag === "Inf") {
-            drawUpTriangle(ctx, cx, top + edgeOffset, markerSize, infColor);
+            drawUpTriangle(ctx, cx, top + edgeOffset, markerSize, seriesColor);
           } else if (flag === "-Inf") {
-            drawDownTriangle(ctx, cx, top + height - edgeOffset, markerSize, negInfColor);
+            drawDownTriangle(ctx, cx, top + height - edgeOffset, markerSize, seriesColor);
           } else if (flag === "NaN") {
             // Pin NaN markers near the bottom to avoid visual noise on the curve
-            drawCircleCross(ctx, cx, top + height - edgeOffset, markerSize, nanColor);
+            drawCircleCross(ctx, cx, top + height - edgeOffset, markerSize, seriesColor);
           }
         }
       }

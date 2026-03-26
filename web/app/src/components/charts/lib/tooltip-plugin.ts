@@ -230,6 +230,8 @@ interface TooltipRowData {
   nonFiniteFlags?: Set<"NaN" | "Inf" | "-Inf">;
 }
 
+const ICON_STYLE = "margin-left: 3px; font-size: 10px; opacity: 0.85";
+
 /** Append non-finite marker icons (△ ▽ ⊗) after the value text */
 function appendNonFiniteIcons(
   parent: HTMLSpanElement,
@@ -237,21 +239,21 @@ function appendNonFiniteIcons(
 ) {
   if (flags.has("Inf")) {
     const icon = document.createElement("span");
-    icon.style.cssText = "margin-left: 3px; font-size: 10px; opacity: 0.85";
+    icon.style.cssText = ICON_STYLE;
     icon.title = "+Infinity in this range";
     icon.textContent = "\u25b3"; // △
     parent.appendChild(icon);
   }
   if (flags.has("-Inf")) {
     const icon = document.createElement("span");
-    icon.style.cssText = "margin-left: 3px; font-size: 10px; opacity: 0.85";
+    icon.style.cssText = ICON_STYLE;
     icon.title = "-Infinity in this range";
     icon.textContent = "\u25bd"; // ▽
     parent.appendChild(icon);
   }
   if (flags.has("NaN")) {
     const icon = document.createElement("span");
-    icon.style.cssText = "margin-left: 3px; color: #d4a017; font-size: 10px";
+    icon.style.cssText = ICON_STYLE;
     icon.title = "NaN in this range";
     icon.textContent = "\u2297"; // ⊗
     parent.appendChild(icon);
