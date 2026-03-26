@@ -16,8 +16,10 @@ import {
   alignAndUnzip,
   applySmoothing,
   bucketedAndSmooth,
+  MULTI_METRIC_CHUNK,
+  chunkArray,
 } from "@/lib/chart-data-utils";
-import { resolveChartBuckets, PREVIEW_BUCKETS } from "@/lib/chart-bucket-estimate";
+import { resolveChartBuckets } from "@/lib/chart-bucket-estimate";
 import { parseChTimeMs } from "@/components/charts/lib/format";
 
 // For active runs, refresh every 30 seconds
@@ -220,11 +222,42 @@ const MultiLineChartInner = memo(
 
     const runIds = useMemo(() => lines.map((l) => l.runId), [lines]);
 
-    // === Standard tier: 1 batch query per metric for all runs (globally aligned buckets) ===
-    const standardBatchQueries = useQueries({
-      queries: tooManySeries
-        ? []
-        : metricNames.map((metric) => {
+    // === Standard + Preview tiers: multi-metric batch with URL-safe chunking ===
+    // Chunk metrics into groups to stay within tRPC URL length limits.
+    const isMultiMetricQuery = metricNames.length > 1;
+
+    const metricChunks = useMemo(
+      () => (isMultiMetricQuery ? chunkArray(metricNames, MULTI_METRIC_CHUNK) : []),
+      [isMultiMetricQuery, metricNames],
+    );
+
+    // Multi-metric path: one query per chunk
+    const standardMultiQueries = useQueries({
+      queries: (isMultiMetricQuery && !tooManySeries)
+        ? metricChunks.map((chunk) => {
+            const opts = {
+              organizationId,
+              projectName,
+              logNames: chunk,
+              runIds,
+              buckets: standardBuckets,
+            };
+            return {
+              queryKey: trpc.runs.data.graphMultiMetricBatchBucketed.queryOptions(opts).queryKey,
+              queryFn: ({ signal }: { signal: AbortSignal }) => trpcClient.runs.data.graphMultiMetricBatchBucketed.query(opts, { signal }),
+              staleTime,
+              gcTime: GC_TIME,
+              placeholderData: keepPreviousData,
+              enabled: runIds.length > 0,
+            };
+          })
+        : [],
+    });
+
+    // Single-metric fallback: use existing endpoint (avoids unnecessary nesting)
+    const standardSingleQueries = useQueries({
+      queries: (!isMultiMetricQuery && !tooManySeries)
+        ? metricNames.map((metric) => {
             const opts = {
               organizationId,
               projectName,
@@ -240,68 +273,40 @@ const MultiLineChartInner = memo(
               placeholderData: keepPreviousData,
               enabled: runIds.length > 0,
             };
-          }),
+          })
+        : [],
     });
 
     // Build a lookup: metric → runId → standard bucketed points
     const standardDataMap = useMemo(() => {
       const map = new Map<string, Record<string, BucketedChartDataPoint[]>>();
-      metricNames.forEach((metric, i) => {
-        const data = standardBatchQueries[i]?.data as
-          | Record<string, BucketedChartDataPoint[]>
-          | undefined;
-        if (data) {
-          map.set(metric, data);
+      if (isMultiMetricQuery) {
+        // Multi-metric: merge all chunk responses
+        for (const q of standardMultiQueries) {
+          const data = q.data as Record<string, Record<string, BucketedChartDataPoint[]>> | undefined;
+          if (data) {
+            for (const [logName, runData] of Object.entries(data)) {
+              map.set(logName, runData);
+            }
+          }
         }
-      });
+      } else {
+        // Single-metric fallback
+        metricNames.forEach((metric, i) => {
+          const data = standardSingleQueries[i]?.data as
+            | Record<string, BucketedChartDataPoint[]>
+            | undefined;
+          if (data) {
+            map.set(metric, data);
+          }
+        });
+      }
       return map;
-    }, [metricNames, standardBatchQueries]);
+    }, [isMultiMetricQuery, metricNames, ...standardMultiQueries.map(q => q.data), standardSingleQueries]);
 
-    // === Batch preview tier: 1 query per metric for all runs (fast bucketed) ===
-    // Provides instant chart shapes while individual standard queries load.
-    // Disabled once any standard data arrives (preview is lower resolution).
-    const hasAnyStandard = standardBatchQueries.some(
-      (q) => q.data !== undefined && Object.keys(q.data as Record<string, unknown>).length > 0,
-    );
-
-    const previewQueries = useQueries({
-      queries: tooManySeries
-        ? []
-        : metricNames.map((metric) => {
-            const opts = {
-              organizationId,
-              projectName,
-              logName: metric,
-              runIds,
-              buckets: PREVIEW_BUCKETS,
-              preview: true,
-            };
-            return {
-              queryKey: [
-                ...trpc.runs.data.graphBatchBucketed.queryOptions(opts).queryKey,
-                "preview",
-              ],
-              queryFn: ({ signal }: { signal: AbortSignal }) => trpcClient.runs.data.graphBatchBucketed.query(opts, { signal }),
-              staleTime: Infinity,
-              gcTime: 0,
-              enabled: runIds.length > 0 && !hasAnyStandard,
-            };
-          }),
-    });
-
-    // Build a lookup: metric → runId → preview points
-    const previewDataMap = useMemo(() => {
-      const map = new Map<string, Record<string, BucketedChartDataPoint[]>>();
-      metricNames.forEach((metric, i) => {
-        const data = previewQueries[i]?.data as
-          | Record<string, BucketedChartDataPoint[]>
-          | undefined;
-        if (data) {
-          map.set(metric, data);
-        }
-      });
-      return map;
-    }, [metricNames, previewQueries]);
+    // Preview tier removed — with the optimized ClickHouse query (inline bucket
+    // width, no bounds CTE) the standard tier responds in <20ms server-side,
+    // making a separate low-res preview unnecessary overhead.
 
     // If the effective x-axis is not a standard one, fetch that data for each run
     // to use as x-axis values (only need one per run, not per metric)
@@ -430,7 +435,9 @@ const MultiLineChartInner = memo(
     });
 
     // Check error states and get data
-    const isError = standardBatchQueries.some((query) => query.isError);
+    const isError = isMultiMetricQuery
+      ? standardMultiQueries.some((q) => q.isError)
+      : standardSingleQueries.some((query) => query.isError);
 
     // Build series label based on multi-metric / multi-run context
     const getSeriesLabel = useMemo(() => {
@@ -446,7 +453,6 @@ const MultiLineChartInner = memo(
     }, [isMultiMetric, isMultiRun]);
 
     // Memoize allData to prevent chart recreations on every render
-    // For each metric×run pair: prefer standard data, fall back to preview
     const allData = useMemo(() => {
       return queryPairs
         .map((pair) => {
@@ -454,16 +460,10 @@ const MultiLineChartInner = memo(
           if (stdPoints && stdPoints.length > 0) {
             return { data: stdPoints, isLoading: false, pair };
           }
-          // Fall back to batch preview data for this metric×run
-          const previewPoints =
-            previewDataMap.get(pair.metric)?.[pair.line.runId];
-          if (previewPoints && previewPoints.length > 0) {
-            return { data: previewPoints, isLoading: !hasAnyStandard, pair };
-          }
-          return { data: [] as BucketedChartDataPoint[], isLoading: !hasAnyStandard, pair };
+          return { data: [] as BucketedChartDataPoint[], isLoading: true, pair };
         })
         .filter((item) => item.data.length > 0);
-    }, [standardDataMap, queryPairs, previewDataMap, hasAnyStandard]);
+    }, [standardDataMap, queryPairs]);
 
     // Also get custom log data if applicable - memoized
     const customLogData = useMemo(() => {
@@ -474,17 +474,18 @@ const MultiLineChartInner = memo(
     }, [customLogQueries, lines]);
 
     const hasAnyData = allData.some((item) => item.data?.length > 0);
-    const allQueriesDone = standardBatchQueries.every((query) => !query.isLoading);
-    const allPreviewsDone = previewQueries.every((q) => !q.isLoading);
+    const allQueriesDone = isMultiMetricQuery
+      ? standardMultiQueries.every((q) => !q.isLoading)
+      : standardSingleQueries.every((query) => !query.isLoading);
 
     // We're also loading if we're fetching custom log data
     const isLoadingCustomLogData =
       customLogQueries.length > 0 &&
       !customLogQueries.every((q) => q.data !== undefined);
 
-    // Show loading spinner only if we have no data from either tier
+    // Show loading spinner only if we have no data yet
     const isInitialLoading =
-      !hasAnyData && ((!allQueriesDone && !allPreviewsDone) || isLoadingCustomLogData);
+      !hasAnyData && (!allQueriesDone || isLoadingCustomLogData);
 
     // Memoize all chart data computations to prevent chart recreation on every render
     // IMPORTANT: This useMemo must be called BEFORE any early returns to maintain hook order
@@ -802,8 +803,8 @@ const MultiLineChartInner = memo(
       );
     }
 
-    // Empty state - only if we have no data and all queries (standard + preview) are done
-    if (allQueriesDone && allPreviewsDone && !hasAnyData) {
+    // Empty state - only if we have no data and all queries are done
+    if (allQueriesDone && !hasAnyData) {
       return (
         <div className="flex h-full w-full flex-grow flex-col items-center justify-center bg-accent">
           <h2 className="text-2xl font-bold">{title}</h2>

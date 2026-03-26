@@ -65,6 +65,13 @@ const NAN_INF_RUN_INDEX = 16; // 'nan-inf-metrics' run index
 const MANY_METRICS_RUN_INDEX = 17; // 'stress-95-metrics' run index
 const MANY_METRICS_COUNT = 95;
 
+// Sine-wave stress test: 95 metrics × 100k points, all sine waves at different
+// phases so curves cross each other constantly. Stresses tooltip sort/emphasis
+// when the highlighted series changes on every cursor step.
+const SINE_STRESS_RUN_INDEX = 18; // 'stress-sine-crossing' run index
+const SINE_STRESS_METRICS = 95;
+const SINE_STRESS_DATAPOINTS = 100_000;
+
 // Metric groups and names for realistic variety
 const METRIC_GROUPS = ['train', 'eval', 'system', 'custom', 'test'];
 const METRIC_NAMES = [
@@ -369,11 +376,15 @@ async function seedClickHouseMetrics(
   const hasManyMetricsRun = runs.length > MANY_METRICS_RUN_INDEX;
   const manyMetricsExtraRows = hasManyMetricsRun ? (MANY_METRICS_COUNT - METRICS_PER_RUN) * STANDARD_DATAPOINTS : 0;
 
+  // Sine-wave crossing stress test: 95 metrics × 100k points
+  const hasSineStressRun = runs.length > SINE_STRESS_RUN_INDEX;
+  const sineStressRows = hasSineStressRun ? SINE_STRESS_METRICS * SINE_STRESS_DATAPOINTS : 0;
+
   // Standard runs exclude high-fidelity, single-point, and step-frequency runs
   const specialRunCount = HIGH_FIDELITY_RUNS + (hasSinglePointRun ? 1 : 0) + stepFreqRunCount;
   const standardRunCount = Math.max(0, runs.length - specialRunCount);
   const standardRows = standardRunCount * METRICS_PER_RUN * STANDARD_DATAPOINTS;
-  const totalRows = highFidelityRows + standardRows + singlePointRows + stepFreqRows + manyMetricsExtraRows;
+  const totalRows = highFidelityRows + standardRows + singlePointRows + stepFreqRows + manyMetricsExtraRows + sineStressRows;
 
   console.log(`   Seeding ClickHouse with ${totalRows.toLocaleString()} metric datapoints...`);
   console.log(`   - ${Math.min(HIGH_FIDELITY_RUNS, runs.length)} high-fidelity runs × ${METRICS_PER_RUN} metrics × ${HIGH_FIDELITY_DATAPOINTS.toLocaleString()} points`);
@@ -436,13 +447,23 @@ async function seedClickHouseMetrics(
           : STANDARD_DATAPOINTS;
       // Anchor metric timestamps to run.createdAt so relative time charts work correctly
       const baseTime = run.createdAt.getTime();
-      // 95-metric stress run gets more metrics than the default
-      const metricsForRun = runIndex === MANY_METRICS_RUN_INDEX ? MANY_METRICS_COUNT : METRICS_PER_RUN;
+      // Special runs get more metrics and/or different value functions
+      const isSineStress = runIndex === SINE_STRESS_RUN_INDEX;
+      const metricsForRun = isSineStress ? SINE_STRESS_METRICS
+        : runIndex === MANY_METRICS_RUN_INDEX ? MANY_METRICS_COUNT
+        : METRICS_PER_RUN;
+      const dpForRun = isSineStress ? SINE_STRESS_DATAPOINTS : datapointsForRun;
 
       for (let m = 0; m < metricsForRun; m++) {
         const { group, name } = getMetricName(m);
 
-        for (let step = 0; step < datapointsForRun; step++) {
+        for (let step = 0; step < dpForRun; step++) {
+          // Sine-wave stress: each metric is sin(step/period + phase) with different
+          // periods and phases so all 95 curves cross each other constantly.
+          const value = isSineStress
+            ? Math.sin(step / (200 + m * 7) + (m * 2 * Math.PI / SINE_STRESS_METRICS)) * (1 + m * 0.01)
+            : getMetricValue(m, step, datapointsForRun, runIndex);
+
           batch.push({
             tenantId,
             projectName,
@@ -451,7 +472,7 @@ async function seedClickHouseMetrics(
             logName: name,
             time: new Date(baseTime + step * 1000).toISOString().replace('T', ' ').replace('Z', ''),
             step,
-            value: getMetricValue(m, step, datapointsForRun, runIndex),
+            value,
           });
 
           if (batch.length >= BATCH_SIZE) {
@@ -1607,6 +1628,7 @@ async function main() {
       'freq-every-50',     // Index 15 - Logs every 50 steps (step 0,50,100,...,10000)
       'nan-inf-metrics',   // Index 16 - Some metrics are all NaN/Inf (tests summaries MV filtering)
       'stress-95-metrics', // Index 17 - 95 distinct metrics, custom dashboard plots all in one chart
+      'stress-sine-crossing', // Index 18 - 95 sine waves at different phases, 100k pts, curves cross constantly
     ];
 
     // Unique tag per run for stress testing (170 unique tags)
@@ -1738,9 +1760,11 @@ async function main() {
   });
 
   // Register metric names (skipDuplicates handles existing ones)
-  // The 95-metric stress run gets MANY_METRICS_COUNT metrics; all others get METRICS_PER_RUN
+  // Special runs get more metrics than the default METRICS_PER_RUN
   const runLogData = allRuns.flatMap((run, runIndex) => {
-    const metricCount = runIndex === MANY_METRICS_RUN_INDEX ? MANY_METRICS_COUNT : METRICS_PER_RUN;
+    const metricCount = runIndex === SINE_STRESS_RUN_INDEX ? SINE_STRESS_METRICS
+      : runIndex === MANY_METRICS_RUN_INDEX ? MANY_METRICS_COUNT
+      : METRICS_PER_RUN;
     return Array.from({ length: metricCount }, (_, i) => {
       const { group, name } = getMetricName(i);
       return {
@@ -1869,6 +1893,61 @@ async function main() {
     },
   });
   console.log(`   Created dashboard view: "95 Metrics Stress Test"`);
+
+  // 9. Create custom dashboard for sine-wave crossing stress test
+  console.log('\n9. Creating dashboard (95 sine-wave crossing metrics)...');
+  const sineMetricNames = Array.from({ length: SINE_STRESS_METRICS }, (_, i) => getMetricName(i).name);
+  const sineDashboardConfig = {
+    version: 1,
+    sections: [
+      {
+        id: 'section-sine-crossing',
+        name: 'Sine Crossing Stress',
+        collapsed: false,
+        widgets: [
+          {
+            id: 'widget-sine-chart',
+            type: 'chart' as const,
+            config: {
+              title: '95 Sine Waves (constant crossings)',
+              metrics: sineMetricNames,
+              xAxis: 'step',
+              yAxisScale: 'linear' as const,
+              xAxisScale: 'linear' as const,
+              aggregation: 'LAST' as const,
+              showOriginal: false,
+            },
+            layout: { x: 0, y: 0, w: 12, h: 6 },
+          },
+        ],
+      },
+    ],
+    settings: {
+      gridCols: 12,
+      rowHeight: 80,
+      compactType: 'vertical' as const,
+    },
+  };
+
+  await prisma.dashboardView.upsert({
+    where: {
+      organizationId_projectId_name: {
+        organizationId: org.id,
+        projectId: project.id,
+        name: 'Sine Crossing Stress',
+      },
+    },
+    update: { config: sineDashboardConfig },
+    create: {
+      name: 'Sine Crossing Stress',
+      organizationId: org.id,
+      projectId: project.id,
+      createdById: user.id,
+      isDefault: false,
+      config: sineDashboardConfig,
+    },
+  });
+  console.log(`   Created dashboard view: "Sine Crossing Stress"`);
 
   console.log('\n' + '='.repeat(50));
   console.log('Development data seeded successfully!\n');

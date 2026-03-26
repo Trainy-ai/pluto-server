@@ -2,19 +2,16 @@ import { useEffect, useMemo, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { trpc, trpcClient } from "@/utils/trpc";
 import { PREVIEW_BUCKETS } from "@/lib/chart-bucket-estimate";
-
-// Cap prefetch to avoid overwhelming the network when runs have many metrics.
-// 50 covers the typical "All Metrics" view (9-20 charts) with headroom.
-const MAX_PREFETCH_METRICS = 50;
+import { MULTI_METRIC_CHUNK, chunkArray } from "@/lib/chart-data-utils";
 
 /**
  * Prefetch chart data for URL-specified runs.
  *
  * When the URL contains `?runs=id1,id2`, we know which runs to chart before
  * the full getLogsByRunIds → groupMetrics chain completes. This hook fires
- * `distinctMetricNames` immediately, then prefetches `graphBatchBucketed`
- * (preview tier) for each metric. By the time charts mount, the TanStack
- * Query cache already has data → instant render.
+ * `distinctMetricNames` immediately, then prefetches chart data using the
+ * same multi-metric batch endpoint and query keys as the chart component.
+ * TanStack Query deduplicates: charts mount → cache hit → no redundant fetch.
  */
 export function useChartDataPrefetch(
   organizationId: string,
@@ -47,20 +44,19 @@ export function useChartDataPrefetch(
 
   const metricNames = metricNamesData?.metricNames;
 
-  // Once metric names arrive, prefetch graphBatchBucketed (preview tier) for each.
-  // Uses the exact same query key as MultiLineChart's preview queries so TanStack
-  // Query deduplicates: charts mount → cache hit → no redundant fetch.
+  // Once metric names arrive, prefetch using the same multi-metric batch
+  // endpoint and chunking as line-chart-multi.tsx so query keys match.
   useEffect(() => {
     if (!metricNames?.length || !rawUrlRunIds?.length) return;
-    // Only prefetch once per set of run IDs
     if (prefetchedRef.current === runIdsKey) return;
     prefetchedRef.current = runIdsKey;
 
-    for (const metric of metricNames.slice(0, MAX_PREFETCH_METRICS)) {
+    const chunks = chunkArray(metricNames, MULTI_METRIC_CHUNK);
+    for (const chunk of chunks) {
       const opts = {
         organizationId,
         projectName,
-        logName: metric,
+        logNames: chunk,
         runIds: rawUrlRunIds,
         buckets: PREVIEW_BUCKETS,
         preview: true as const,
@@ -68,11 +64,11 @@ export function useChartDataPrefetch(
 
       queryClient.prefetchQuery({
         queryKey: [
-          ...trpc.runs.data.graphBatchBucketed.queryOptions(opts).queryKey,
+          ...trpc.runs.data.graphMultiMetricBatchBucketed.queryOptions(opts).queryKey,
           "preview",
         ],
         queryFn: ({ signal }) =>
-          trpcClient.runs.data.graphBatchBucketed.query(opts, { signal }),
+          trpcClient.runs.data.graphMultiMetricBatchBucketed.query(opts, { signal }),
         staleTime: Infinity,
       });
     }

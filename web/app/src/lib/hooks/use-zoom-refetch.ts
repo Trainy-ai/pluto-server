@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback } from "react";
 import { useQueries } from "@tanstack/react-query";
 import { trpc, trpcClient } from "@/utils/trpc";
-import type { BucketedChartDataPoint } from "@/lib/chart-data-utils";
+import { MULTI_METRIC_CHUNK, chunkArray, type BucketedChartDataPoint } from "@/lib/chart-data-utils";
 import { translateZoomToStepRange, type TimeStepMapping } from "./zoom-translate";
 
 // Re-export for consumers
@@ -101,11 +101,42 @@ export function useZoomRefetch({
 
   const isZooming = enabled && zoomStepRange !== null && supportsZoom;
   const useBatch = runIds.length >= BATCH_THRESHOLD;
+  const isMultiMetric = logNames.length > 1;
 
-  // === Batch path: one batch query per metric (multi-run) ===
+  // Chunk metrics into groups to stay within tRPC URL length limits
+  const metricChunks = useMemo(
+    () => (isMultiMetric ? chunkArray(logNames, MULTI_METRIC_CHUNK) : []),
+    [isMultiMetric, logNames],
+  );
+
+  // === Multi-metric batch path: chunked queries for all metrics ===
+  const zoomMultiQueries = useQueries({
+    queries:
+      isZooming && useBatch && isMultiMetric && zoomStepRange
+        ? metricChunks.map((chunk) => {
+            const opts = {
+              organizationId,
+              projectName,
+              logNames: chunk,
+              runIds,
+              buckets: zoomBuckets,
+              stepMin: zoomStepRange[0],
+              stepMax: zoomStepRange[1],
+            };
+            return {
+              queryKey: [...trpc.runs.data.graphMultiMetricBatchBucketed.queryOptions(opts).queryKey, "zoom"],
+              queryFn: ({ signal }: { signal: AbortSignal }) => trpcClient.runs.data.graphMultiMetricBatchBucketed.query(opts, { signal }),
+              staleTime,
+              gcTime: 60_000,
+            };
+          })
+        : [],
+  });
+
+  // === Single-metric batch fallback ===
   const batchQueries = useQueries({
     queries:
-      isZooming && useBatch && zoomStepRange
+      isZooming && useBatch && !isMultiMetric && zoomStepRange
         ? logNames.map((metric) => {
             const opts = {
               organizationId,
@@ -158,7 +189,22 @@ export function useZoomRefetch({
 
     const map = new Map<string, BucketedChartDataPoint[]>();
 
-    if (useBatch) {
+    if (useBatch && isMultiMetric) {
+      // Multi-metric path: merge all chunk responses
+      for (const q of zoomMultiQueries) {
+        const data = q.data as Record<string, Record<string, BucketedChartDataPoint[]>> | undefined;
+        if (data) {
+          for (const [metric, byRun] of Object.entries(data)) {
+            for (const runId of runIds) {
+              const points = byRun[runId];
+              if (points && points.length > 0) {
+                map.set(zoomKey(runId, metric), points);
+              }
+            }
+          }
+        }
+      }
+    } else if (useBatch) {
       logNames.forEach((metric, metricIdx) => {
         const data = batchQueries[metricIdx]?.data as Record<string, BucketedChartDataPoint[]> | undefined;
         for (const runId of runIds) {
@@ -181,7 +227,7 @@ export function useZoomRefetch({
     }
 
     return map.size > 0 ? map : null;
-  }, [isZooming, zoomStepRange, useBatch, logNames, runIds, batchQueries, individualQueries]);
+  }, [isZooming, zoomStepRange, useBatch, isMultiMetric, logNames, runIds, ...zoomMultiQueries.map(q => q.data), batchQueries, individualQueries]);
 
   const onZoomRangeChange = useCallback(
     (range: [number, number] | null) => {
@@ -201,9 +247,11 @@ export function useZoomRefetch({
   );
 
   const isZoomFetching = isZooming && (
-    useBatch
-      ? batchQueries.some((q) => q.isFetching)
-      : individualQueries.some((q) => q.isFetching)
+    useBatch && isMultiMetric
+      ? zoomMultiQueries.some((q) => q.isFetching)
+      : useBatch
+        ? batchQueries.some((q) => q.isFetching)
+        : individualQueries.some((q) => q.isFetching)
   );
 
   return { zoomDataMap, onZoomRangeChange, isZoomFetching };

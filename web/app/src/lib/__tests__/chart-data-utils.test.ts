@@ -426,7 +426,7 @@ describe("applyServerBuckets", () => {
   it("emits null for all-NaN buckets", () => {
     const data: BucketedChartDataPoint[] = [
       { step: 0, time: "t0", value: 1.5, minY: 1.0, maxY: 2.0, count: 10 },
-      { step: 1, time: "t1", value: null, minY: null, maxY: null, count: 10, hasNaN: true },
+      { step: 1, time: "t1", value: null, minY: null, maxY: null, count: 10, nonFiniteFlags: 1 },
       { step: 2, time: "t2", value: 2.0, minY: 1.5, maxY: 2.5, count: 10 },
     ];
 
@@ -438,8 +438,8 @@ describe("applyServerBuckets", () => {
 
   it("preserves finite average for mixed buckets", () => {
     const data: BucketedChartDataPoint[] = [
-      { step: 0, time: "t0", value: 1.5, minY: 1.0, maxY: 2.0, count: 10, hasNaN: true },
-      { step: 1, time: "t1", value: 3.0, minY: 2.5, maxY: 3.5, count: 10, hasInf: true },
+      { step: 0, time: "t0", value: 1.5, minY: 1.0, maxY: 2.0, count: 10, nonFiniteFlags: 1 },
+      { step: 1, time: "t1", value: 3.0, minY: 2.5, maxY: 3.5, count: 10, nonFiniteFlags: 2 },
     ];
 
     const [main] = applyServerBuckets(data, "test", "#00f");
@@ -451,8 +451,8 @@ describe("applyServerBuckets", () => {
   it("builds nonFiniteMarkers map", () => {
     const data: BucketedChartDataPoint[] = [
       { step: 0, time: "t0", value: 1.5, minY: 1.0, maxY: 2.0, count: 10 },
-      { step: 1, time: "t1", value: null, minY: null, maxY: null, count: 10, hasNaN: true },
-      { step: 2, time: "t2", value: 2.0, minY: 1.5, maxY: 2.5, count: 10, hasInf: true, hasNegInf: true },
+      { step: 1, time: "t1", value: null, minY: null, maxY: null, count: 10, nonFiniteFlags: 1 },
+      { step: 2, time: "t2", value: 2.0, minY: 1.5, maxY: 2.5, count: 10, nonFiniteFlags: 6 },
       { step: 3, time: "t3", value: 3.0, minY: 2.5, maxY: 3.5, count: 10 },
     ];
 

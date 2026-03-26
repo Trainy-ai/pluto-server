@@ -1085,8 +1085,133 @@ async function setupTestData(): Promise<TestData> {
     console.log(`   ✓ Ensured display ID: ${project.runPrefix}-999`);
   }
 
-  // 5d. Create zoom-visibility test runs (different step counts) for hidden-run zoom reset E2E test
-  console.log('\n5️⃣d Creating zoom-visibility test runs...');
+  // 5d. Create multi-metric-test run for single-run multi-metric tooltip E2E tests
+  console.log('\n5️⃣d Creating multi-metric-test run...');
+
+  const MULTI_METRIC_COUNT = 10;
+  const MULTI_METRIC_STEPS = 100;
+
+  let multiMetricRun = await prisma.runs.findFirst({
+    where: {
+      projectId: project.id,
+      organizationId: org.id,
+      name: 'multi-metric-test',
+    },
+    select: { id: true, name: true, createdAt: true },
+  });
+
+  if (!multiMetricRun) {
+    const multiMetricCreatedAt = new Date(Date.now() - 363 * 24 * 60 * 60 * 1000); // ~1 year ago
+    multiMetricRun = await prisma.runs.create({
+      data: {
+        name: 'multi-metric-test',
+        organizationId: org.id,
+        projectId: project.id,
+        createdById: user.id,
+        creatorApiKeyId: apiKey.id,
+        status: 'COMPLETED',
+        config: { metrics: MULTI_METRIC_COUNT, steps: MULTI_METRIC_STEPS },
+        systemMetadata: { hostname: 'test-host', python: '3.11' },
+        createdAt: multiMetricCreatedAt,
+        updatedAt: multiMetricCreatedAt,
+      },
+    });
+    console.log(`   ✓ Created multi-metric-test run (ID: ${multiMetricRun.id})`);
+
+    // Register metrics in runLogs: stress/sine_0 .. stress/sine_9
+    const multiMetricLogData = Array.from({ length: MULTI_METRIC_COUNT }, (_, i) => ({
+      runId: multiMetricRun!.id,
+      logName: `stress/sine_${i}`,
+      logGroup: 'stress',
+      logType: 'METRIC' as const,
+    }));
+    await prisma.runLogs.createMany({
+      data: multiMetricLogData,
+      skipDuplicates: true,
+    });
+    console.log(`   ✓ Registered ${MULTI_METRIC_COUNT} stress/sine_* metrics in run_logs`);
+
+    // Seed ClickHouse with sine waves: value = sin(step/20 + idx * 2π/10)
+    const clickhouseUrl = process.env.CLICKHOUSE_URL;
+    const clickhouseUser = process.env.CLICKHOUSE_USER || 'default';
+    const clickhousePassword = process.env.CLICKHOUSE_PASSWORD || '';
+
+    if (clickhouseUrl) {
+      const clickhouse = createClient({
+        url: clickhouseUrl,
+        username: clickhouseUser,
+        password: clickhousePassword,
+      });
+
+      const baseTime = multiMetricRun.createdAt.getTime();
+      const multiMetricRows: Record<string, unknown>[] = [];
+
+      for (let metricIdx = 0; metricIdx < MULTI_METRIC_COUNT; metricIdx++) {
+        for (let step = 0; step < MULTI_METRIC_STEPS; step++) {
+          multiMetricRows.push({
+            tenantId: org.id,
+            projectName: project.name,
+            runId: Number(multiMetricRun.id),
+            logGroup: 'stress',
+            logName: `stress/sine_${metricIdx}`,
+            time: new Date(baseTime + step * 1000).toISOString().replace('T', ' ').replace('Z', ''),
+            step,
+            value: Math.sin(step / 20 + metricIdx * 2 * Math.PI / MULTI_METRIC_COUNT),
+          });
+        }
+      }
+
+      await clickhouse.insert({
+        table: 'mlop_metrics',
+        values: multiMetricRows,
+        format: 'JSONEachRow',
+      });
+      console.log(`   ✓ Seeded ${multiMetricRows.length} multi-metric datapoints (${MULTI_METRIC_COUNT} metrics × ${MULTI_METRIC_STEPS} steps)`);
+
+      // Populate metric summaries for the multi-metric run
+      try {
+        await clickhouse.query({
+          query: `
+            INSERT INTO mlop_metric_summaries
+            SELECT
+              tenantId,
+              projectName,
+              runId,
+              logName,
+              min(value)               AS min_value,
+              max(value)               AS max_value,
+              sum(value)               AS sum_value,
+              toUInt64(count())        AS count_value,
+              argMaxState(value, step) AS last_value,
+              sum(value * value)       AS sum_sq_value
+            FROM mlop_metrics
+            WHERE tenantId = {tenantId: String}
+              AND projectName = {projectName: String}
+              AND runId = {runId: UInt64}
+              AND isFinite(value)
+            GROUP BY tenantId, projectName, runId, logName
+          `,
+          query_params: {
+            tenantId: org.id,
+            projectName: project.name,
+            runId: Number(multiMetricRun.id),
+          },
+        });
+        console.log('   ✓ Populated metric summaries for multi-metric run');
+      } catch (err) {
+        console.log('   ⚠ Could not populate multi-metric metric summaries:', (err as Error).message);
+      }
+
+      await clickhouse.close();
+    } else {
+      console.log('   ⚠ CLICKHOUSE_URL not set, skipping multi-metric ClickHouse seeding');
+    }
+  } else {
+    console.log(`   ✓ multi-metric-test run already exists (ID: ${multiMetricRun.id})`);
+  }
+
+  // 5e. Create zoom-visibility test runs (different step counts) for hidden-run zoom reset E2E test
+  console.log('\n5️⃣e Creating zoom-visibility test runs...');
 
   const zoomVisShort = await prisma.runs.findFirst({
     where: { projectId: project.id, organizationId: org.id, name: 'zoom-visibility-short' },

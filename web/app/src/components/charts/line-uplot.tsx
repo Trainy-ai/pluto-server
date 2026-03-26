@@ -301,12 +301,13 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
 
     // Tooltip row hover emphasis
     const handleTooltipSeriesHover = useMemo(() => {
-      return (seriesLabel: string | null, runId: string | null) => {
+      return (seriesLabel: string | null, runId: string | null, directSeriesIdx?: number) => {
         const u = chartInstanceRef.current;
         const ctx = chartSyncContextRef.current;
         if (!u) return;
         if (seriesLabel) {
-          const seriesIdx = u.series.findIndex((s, i) => {
+          // Use direct series index when available (avoids ambiguity when multiple series share a label)
+          const seriesIdx = directSeriesIdx ?? u.series.findIndex((s, i) => {
             if (i === 0) return false;
             if (typeof s.label === "string" && s.label === seriesLabel) return true;
             return processedLinesRef.current[i - 1]?.label === seriesLabel;

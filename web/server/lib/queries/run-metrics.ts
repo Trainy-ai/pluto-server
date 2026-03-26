@@ -299,9 +299,7 @@ export interface BucketedMetricDataPoint {
   minY: number | null;  // min(finite values) — envelope bottom (null if all non-finite)
   maxY: number | null;  // max(finite values) — envelope top (null if all non-finite)
   count: number;      // points in bucket
-  hasNaN: boolean;    // bucket contained NaN value(s)
-  hasInf: boolean;    // bucket contained +Infinity value(s)
-  hasNegInf: boolean; // bucket contained -Infinity value(s)
+  nonFiniteFlags: number; // bitmask: bit0=hasNaN, bit1=hasInf(+), bit2=hasNegInf(-)
 }
 
 const DEFAULT_BUCKETS = 1000;
@@ -309,18 +307,16 @@ const PREVIEW_BUCKETS = 200;
 
 /**
  * Sanitize bucketed metric rows: null values (from ClickHouse JSON serialization
- * of NaN/Inf/-Inf) become 0 for value/minY/maxY. Boolean flags are coerced from
- * ClickHouse UInt8 (0/1) to proper booleans.
+ * of NaN/Inf/-Inf) become 0 for value/minY/maxY. nonFiniteFlags is already a
+ * UInt8 bitmask from ClickHouse (bit0=NaN, bit1=+Inf, bit2=-Inf).
  */
 function sanitizeBucketedRows<T extends BucketedMetricDataPoint>(rows: T[]): T[] {
   for (const row of rows) {
-    // ClickHouse returns booleans as 0/1 integers in JSON
-    row.hasNaN = !!row.hasNaN;
-    row.hasInf = !!row.hasInf;
-    row.hasNegInf = !!row.hasNegInf;
+    // Ensure nonFiniteFlags is a number (ClickHouse returns UInt8 as number in JSON)
+    row.nonFiniteFlags = Number(row.nonFiniteFlags) || 0;
     // If value is null AND the bucket has non-finite flags, the bucket is all
     // non-finite — preserve null so the frontend can show flag text instead of "0".
-    if (row.value == null && (row.hasNaN || row.hasInf || row.hasNegInf)) {
+    if (row.value == null && row.nonFiniteFlags !== 0) {
       // leave value/minY/maxY as null
     } else {
       row.value = row.value ?? 0;
@@ -399,9 +395,7 @@ export async function queryRunMetricsBucketedByLogName(
       minIf(m.value, isFinite(m.value)) AS minY,
       maxIf(m.value, isFinite(m.value)) AS maxY,
       toUInt64(count()) AS count,
-      countIf(isNaN(m.value)) > 0 AS hasNaN,
-      countIf(isInfinite(m.value) AND m.value > 0) > 0 AS hasInf,
-      countIf(isInfinite(m.value) AND m.value < 0) > 0 AS hasNegInf
+      toUInt8((countIf(isNaN(m.value)) > 0) + (countIf(isInfinite(m.value) AND m.value > 0) > 0) * 2 + (countIf(isInfinite(m.value) AND m.value < 0) > 0) * 4) AS nonFiniteFlags
     FROM mlop_metrics m
     CROSS JOIN bounds b
     WHERE ${whereClause}${mainStepRange}
@@ -486,9 +480,7 @@ export async function queryRunMetricsBatchBucketedByLogName(
       minIf(m.value, isFinite(m.value)) AS minY,
       maxIf(m.value, isFinite(m.value)) AS maxY,
       toUInt64(count()) AS count,
-      countIf(isNaN(m.value)) > 0 AS hasNaN,
-      countIf(isInfinite(m.value) AND m.value > 0) > 0 AS hasInf,
-      countIf(isInfinite(m.value) AND m.value < 0) > 0 AS hasNegInf
+      toUInt8((countIf(isNaN(m.value)) > 0) + (countIf(isInfinite(m.value) AND m.value > 0) > 0) * 2 + (countIf(isInfinite(m.value) AND m.value < 0) > 0) * 4) AS nonFiniteFlags
     FROM mlop_metrics m
     CROSS JOIN params p
     WHERE ${whereClause}${mainStepRange}
@@ -505,7 +497,126 @@ export async function queryRunMetricsBatchBucketedByLogName(
   const grouped: Record<number, BucketedMetricDataPoint[]> = {};
   for (const row of rows) {
     const arr = grouped[row.runId] ?? (grouped[row.runId] = []);
-    arr.push({ step: row.step, time: row.time, value: row.value, minY: row.minY, maxY: row.maxY, count: row.count, hasNaN: row.hasNaN, hasInf: row.hasInf, hasNegInf: row.hasNegInf });
+    arr.push({ step: row.step, time: row.time, value: row.value, minY: row.minY, maxY: row.maxY, count: row.count, nonFiniteFlags: row.nonFiniteFlags });
+  }
+
+  return grouped;
+}
+
+/**
+ * Multi-metric batch bucketed query: fetches bucketed data for MULTIPLE metrics
+ * across multiple runs in a SINGLE ClickHouse query.
+ *
+ * Uses per-metric bucket boundaries so each metric's step range is independently
+ * bucketed. Returns a nested map: logName → runId → bucketed data points.
+ */
+export async function queryRunMetricsMultiMetricBatchBucketed(
+  ch: typeof clickhouse,
+  params: {
+    organizationId: string;
+    projectName: string;
+    runIds: number[];
+    logNames: string[];
+    buckets?: number;
+    stepMin?: number;
+    stepMax?: number;
+    preview?: boolean;
+  }
+): Promise<Record<string, Record<number, BucketedMetricDataPoint[]>>> {
+  const { organizationId, projectName, runIds, logNames, stepMin, stepMax, preview } = params;
+
+  if (runIds.length === 0 || logNames.length === 0) return {};
+
+  const numBuckets = params.buckets ?? (preview ? PREVIEW_BUCKETS : DEFAULT_BUCKETS);
+
+  const queryParams: Record<string, unknown> = {
+    tenantId: organizationId,
+    projectName,
+    runIds,
+    logNames,
+    numBuckets,
+  };
+
+  let whereClause = `
+    tenantId = {tenantId: String}
+    AND projectName = {projectName: String}
+    AND runId IN ({runIds: Array(UInt64)})
+    AND logName IN ({logNames: Array(String)})
+  `;
+
+  let mainStepRange = "";
+  const hasStepRange = stepMin !== undefined && stepMax !== undefined;
+  if (hasStepRange) {
+    mainStepRange = ` AND m.step >= {stepMin: UInt64} AND m.step <= {stepMax: UInt64}`;
+    queryParams.stepMin = stepMin;
+    queryParams.stepMax = stepMax;
+  }
+
+  // When stepMin/stepMax are provided (zoom queries), skip the bounds CTE entirely —
+  // compute bucketWidth directly from the provided range, avoiding a full table scan.
+  let query: string;
+  if (hasStepRange) {
+    query = `
+      SELECT
+        m.logName AS logName,
+        m.runId AS runId,
+        intDiv(m.step - {stepMin: UInt64}, greatest(toUInt64(1), intDiv({stepMax: UInt64} - {stepMin: UInt64} + 1, toUInt64({numBuckets: UInt32})))) AS bucket,
+        any(toUInt64({stepMin: UInt64} + intDiv(m.step - {stepMin: UInt64}, greatest(toUInt64(1), intDiv({stepMax: UInt64} - {stepMin: UInt64} + 1, toUInt64({numBuckets: UInt32})))) * greatest(toUInt64(1), intDiv({stepMax: UInt64} - {stepMin: UInt64} + 1, toUInt64({numBuckets: UInt32}))))) AS step,
+        argMin(m.time, m.step) AS time,
+        avgIf(m.value, isFinite(m.value)) AS value,
+        minIf(m.value, isFinite(m.value)) AS minY,
+        maxIf(m.value, isFinite(m.value)) AS maxY,
+        toUInt64(count()) AS count,
+        toUInt8((countIf(isNaN(m.value)) > 0) + (countIf(isInfinite(m.value) AND m.value > 0) > 0) * 2 + (countIf(isInfinite(m.value) AND m.value < 0) > 0) * 4) AS nonFiniteFlags
+      FROM mlop_metrics m
+      WHERE ${whereClause}${mainStepRange}
+      GROUP BY m.logName, m.runId, bucket
+      ORDER BY m.logName, m.runId, bucket ASC
+    `;
+  } else {
+    query = `
+      WITH
+        bounds AS (
+          SELECT logName, min(step) AS minStep, max(step) AS maxStep
+          FROM mlop_metrics
+          WHERE ${whereClause}
+          GROUP BY logName
+        ),
+        params AS (
+          SELECT logName, minStep,
+            greatest(toUInt64(1), intDiv(maxStep - minStep + 1, toUInt64({numBuckets: UInt32}))) AS bucketWidth
+          FROM bounds
+        )
+      SELECT
+        m.logName AS logName,
+        m.runId AS runId,
+        intDiv(m.step - p.minStep, p.bucketWidth) AS bucket,
+        any(toUInt64(p.minStep + intDiv(m.step - p.minStep, p.bucketWidth) * p.bucketWidth)) AS step,
+        argMin(m.time, m.step) AS time,
+        avgIf(m.value, isFinite(m.value)) AS value,
+        minIf(m.value, isFinite(m.value)) AS minY,
+        maxIf(m.value, isFinite(m.value)) AS maxY,
+        toUInt64(count()) AS count,
+        toUInt8((countIf(isNaN(m.value)) > 0) + (countIf(isInfinite(m.value) AND m.value > 0) > 0) * 2 + (countIf(isInfinite(m.value) AND m.value < 0) > 0) * 4) AS nonFiniteFlags
+      FROM mlop_metrics m
+      INNER JOIN params p ON m.logName = p.logName
+      WHERE ${whereClause}
+      GROUP BY m.logName, m.runId, bucket
+      ORDER BY m.logName, m.runId, bucket ASC
+    `;
+  }
+
+  const result = await ch.query(query, queryParams);
+  const rows = sanitizeBucketedRows(
+    (await result.json()) as (BucketedMetricDataPoint & { logName: string; runId: number })[]
+  );
+
+  // Group by logName → runId
+  const grouped: Record<string, Record<number, BucketedMetricDataPoint[]>> = {};
+  for (const row of rows) {
+    const byRun = grouped[row.logName] ?? (grouped[row.logName] = {});
+    const arr = byRun[row.runId] ?? (byRun[row.runId] = []);
+    arr.push({ step: row.step, time: row.time, value: row.value, minY: row.minY, maxY: row.maxY, count: row.count, nonFiniteFlags: row.nonFiniteFlags });
   }
 
   return grouped;

@@ -200,10 +200,8 @@ function saveTooltipSize(width: string, height: string) {
 /** Apply saved tooltip size to a tooltip element (if any saved) */
 function applySavedSize(el: HTMLDivElement) {
   if (cachedTooltipSize) {
-    el.style.width = cachedTooltipSize.width;
+    // Width handled by fit-content
     el.style.height = cachedTooltipSize.height;
-    el.style.maxWidth = "none";
-    el.style.overflow = "auto";
   }
 }
 
@@ -420,8 +418,9 @@ export interface TooltipPluginOpts {
   title?: string;
   /** Additional subtitle (e.g. chip/pattern names) shown below title in tooltip header */
   subtitle?: string;
-  /** Callback when user hovers over a series row in the pinned tooltip */
-  onSeriesHover?: (seriesLabel: string | null, runId: string | null) => void;
+  /** Callback when user hovers over a series row in the pinned tooltip.
+   *  seriesIdx is the uPlot series index — use it directly instead of searching by label. */
+  onSeriesHover?: (seriesLabel: string | null, runId: string | null, seriesIdx?: number) => void;
 }
 
 export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
@@ -466,6 +465,9 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     runNameSpan?: HTMLSpanElement;
     runIdSpan?: HTMLSpanElement;
     metricSpan?: HTMLSpanElement;
+    lastValueKey?: string;
+    lastHighlight?: boolean;
+    lastOrder?: number;
   }> = new Map();
   /** Track the column config that rows were built with */
   let cachedColumnConfig: string = "";
@@ -477,6 +479,10 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
   let cachedCountLabel: HTMLSpanElement | null = null;
   /** The scrollable body container for rows */
   let cachedRowContainer: HTMLDivElement | null = null;
+  /** Cached tooltip dimensions — avoids forced reflow on every cursor move */
+  let cachedTipW = 200;
+  let cachedTipH = 100;
+  let cachedMaxH = 0;
   /** rAF id for coalesced tooltip updates */
   let tooltipRafId: number | null = null;
   /** Last cursor index that was actually rendered */
@@ -490,6 +496,8 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
   /** Saved pinned position for re-renders */
   let savedPinnedLeft = "0px";
   let savedPinnedTop = "0px";
+  /** Saved series visibility before "Hide all" so "Show all" can restore it */
+  let preHideAllState: boolean[] | null = null;
   /** Drag state for pinned tooltip */
   let isDragging = false;
   let dragStartX = 0;
@@ -568,12 +576,13 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       border: 1px solid ${theme === "dark" ? "#333" : "#e0e0e0"};
       border-radius: 4px;
       padding: 4px;
-      max-width: 340px;
+      width: fit-content;
       box-shadow: 0 2px 8px rgba(0,0,0,0.15);
     `;
     applySavedSize(tooltipEl);
-    // Content container — only this gets cleared on rebuild, close button stays on tooltipEl
+    // Flex column: header stays pinned, only rows scroll
     contentContainer = document.createElement("div");
+    contentContainer.style.cssText = "display: flex; flex-direction: column; height: 100%; overflow: hidden";
     tooltipEl.appendChild(contentContainer);
     // Append tooltip to the nearest dialog content (if chart is inside a fullscreen dialog)
     // so pinned tooltip stays within Radix's focus scope and search input can receive keystrokes.
@@ -671,9 +680,8 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       tooltipEl.style.pointerEvents = "auto";
       tooltipEl.style.border = borderPinned;
       tooltipEl.style.resize = "both";
-      tooltipEl.style.overflow = "auto";
+      tooltipEl.style.overflow = "hidden";
       tooltipEl.style.cursor = "default";
-      tooltipEl.style.maxWidth = "none";
 
       // Enable dragging (header only)
       tooltipEl.addEventListener("mousedown", handleDragMouseDown);
@@ -778,13 +786,12 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       tooltipEl.style.border = borderDefault;
       tooltipEl.style.resize = "none";
       tooltipEl.style.cursor = "";
-      // Apply saved size or reset to defaults
+      // Apply saved size (keeps the pinned dimensions) or let content determine size
       if (cachedTooltipSize) {
         applySavedSize(tooltipEl);
       } else {
         tooltipEl.style.width = "";
         tooltipEl.style.height = "";
-        tooltipEl.style.maxWidth = "340px";
         tooltipEl.style.overflow = "";
       }
       // Remove close button
@@ -1117,7 +1124,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     // Header doubles as drag handle when pinned
     const header = document.createElement("div");
     header.setAttribute("data-tooltip-header", "true");
-    header.style.cssText = `font-weight: bold; color: ${textColor}; padding: 3px 4px; border-bottom: 1px solid ${theme === "dark" ? "#333" : "#eee"}; margin-bottom: 2px; font-size: 12px; cursor: ${isPinned ? "grab" : "default"}; user-select: none`;
+    header.style.cssText = `font-weight: bold; color: ${textColor}; padding: 3px 4px; border-bottom: 1px solid ${theme === "dark" ? "#333" : "#eee"}; margin-bottom: 2px; font-size: 12px; cursor: ${isPinned ? "grab" : "default"}; user-select: none; flex-shrink: 0`;
 
     // First row: step/time label + series count + settings button
     const topRow = document.createElement("div");
@@ -1137,8 +1144,9 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
 
     const countLabel = document.createElement("span");
     countLabel.style.cssText = "opacity: 0.6; font-weight: normal; font-size: 10px; flex-shrink: 0";
-    const shownCount = visibleItems.filter((s) => !s.seriesHidden).length;
-    const hiddenCount = visibleItems.filter((s) => s.seriesHidden).length;
+    let shownCount = 0;
+    let hiddenCount = 0;
+    for (const s of visibleItems) { if (s.seriesHidden) hiddenCount++; else shownCount++; }
     countLabel.textContent = searchQuery
       ? `${filteredItems.length}/${visibleItems.length} series`
       : hiddenCount > 0
@@ -1160,10 +1168,12 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
 
     contentContainer.appendChild(header);
 
-    // Search input (pinned only, but filter persists when unpinned)
-    if (isPinned) {
+    // Search input and Hide all button
+    // Shown in both pinned and unpinned for visual consistency.
+    // In unpinned mode, pointer-events:none on tooltip prevents interaction.
+    {
       const searchRow = document.createElement("div");
-      searchRow.style.cssText = `padding: 2px 4px; border-bottom: 1px solid ${theme === "dark" ? "#333" : "#eee"}; margin-bottom: 2px; display: flex; align-items: center; gap: 4px`;
+      searchRow.style.cssText = `padding: 2px 4px; border-bottom: 1px solid ${theme === "dark" ? "#333" : "#eee"}; margin-bottom: 2px; display: flex; align-items: center; gap: 4px; flex-shrink: 0`;
       const searchInput = document.createElement("input");
       searchInput.setAttribute("data-tooltip-search", "true");
       searchInput.type = "text";
@@ -1180,14 +1190,23 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
           savedPinnedLeft = tooltipEl.style.left;
           savedPinnedTop = tooltipEl.style.top;
         }
-        // Search changes visible rows — need full rebuild
-        tooltipStructureDirty = true;
-        cachedRows.clear();
-        if (lastIdx != null) {
-          updateTooltipContent(u, lastIdx);
-          if (tooltipEl) {
-            tooltipEl.style.left = savedPinnedLeft;
-            tooltipEl.style.top = savedPinnedTop;
+        // Search changes visible rows — filter incrementally via row visibility
+        if (lastIdx != null && cachedRows.size > 0) {
+          const query = searchInput.value.toLowerCase();
+          let visibleCount = 0;
+          for (const [, entry] of cachedRows) {
+            const matchesSearch = !query ||
+              (entry.nameSpan?.textContent?.toLowerCase().includes(query)) ||
+              (entry.runNameSpan?.textContent?.toLowerCase().includes(query)) ||
+              (entry.runIdSpan?.textContent?.toLowerCase().includes(query)) ||
+              (entry.metricSpan?.textContent?.toLowerCase().includes(query));
+            entry.row.style.display = matchesSearch ? "" : "none";
+            if (matchesSearch) visibleCount++;
+          }
+          if (cachedCountLabel) {
+            cachedCountLabel.textContent = query
+              ? `${visibleCount}/${cachedRows.size} series`
+              : `${visibleCount} series`;
           }
         }
       });
@@ -1205,11 +1224,27 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       toggleBtn.addEventListener("mousedown", (e) => e.stopPropagation());
       toggleBtn.addEventListener("click", (e) => {
         e.stopPropagation();
-        const showAll = !u.series.slice(1).some((s) => s.show !== false);
-        for (let i = 1; i < u.series.length; i++) {
-          u.setSeries(i, { show: showAll }, false);
-        }
-        u.redraw();
+        const anyVisible = u.series.slice(1).some((s) => s.show !== false);
+        u.batch(() => {
+          if (anyVisible) {
+            // "Hide all" — save current state first so "Show all" can restore it
+            preHideAllState = u.series.map((s) => s.show !== false);
+            for (let i = 1; i < u.series.length; i++) {
+              u.setSeries(i, { show: false }, false);
+            }
+          } else if (preHideAllState) {
+            // "Show all" — restore the pre-Hide-All state
+            for (let i = 1; i < u.series.length; i++) {
+              u.setSeries(i, { show: preHideAllState[i] ?? true }, false);
+            }
+            preHideAllState = null;
+          } else {
+            // No saved state — just show everything
+            for (let i = 1; i < u.series.length; i++) {
+              u.setSeries(i, { show: true }, false);
+            }
+          }
+        });
         // Rebuild tooltip to reflect new state
         tooltipStructureDirty = true;
         cachedRows.clear();
@@ -1236,12 +1271,6 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
           searchInput.setSelectionRange(pos, pos);
         });
       }
-    } else if (searchQuery) {
-      // When unpinned but a search filter is active, show a compact indicator
-      const filterRow = document.createElement("div");
-      filterRow.style.cssText = `padding: 2px 4px; font-size: 9px; color: ${textColor}; opacity: 0.6; border-bottom: 1px solid ${theme === "dark" ? "#333" : "#eee"}; margin-bottom: 1px; display: flex; align-items: center; gap: 4px`;
-      filterRow.textContent = `\u{1F50D} "${searchInputRef?.value}" — ${filteredItems.length}/${visibleItems.length}`;
-      contentContainer.appendChild(filterRow);
     }
 
     // Neptune-style column header row with resize handles and +Add (when pinned)
@@ -1252,7 +1281,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     // Wrapper holds the grid header + the +Add button in a flex row
     const columnHeaderWrapper = document.createElement("div");
     columnHeaderWrapper.setAttribute("data-tooltip-column-headers", "true");
-    columnHeaderWrapper.style.cssText = `display: flex; align-items: center; border-bottom: 1px solid ${theme === "dark" ? "#333" : "#eee"}; margin-bottom: 1px`;
+    columnHeaderWrapper.style.cssText = `display: flex; align-items: center; border-bottom: 1px solid ${theme === "dark" ? "#333" : "#eee"}; margin-bottom: 1px; flex-shrink: 0`;
 
     // Grid row for column labels (matches data row grid)
     const columnHeaderRow = document.createElement("div");
@@ -1270,50 +1299,10 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       const cellWrapper = document.createElement("span");
       cellWrapper.style.cssText = `display: inline-flex; align-items: center; gap: 2px; position: relative; overflow: hidden${dividerStyle}`;
 
-      // Drag grip icon (pinned only, when >1 enabled column)
-      if (isPinned && enabledColumns.length > 1) {
-        const grip = document.createElement("span");
-        grip.textContent = "\u2261"; // ≡ hamburger icon
-        grip.style.cssText = `color: ${textColor}; opacity: 0.25; font-size: 10px; cursor: grab; flex-shrink: 0; line-height: 1`;
-        grip.addEventListener("mouseenter", () => { grip.style.opacity = "0.7"; });
-        grip.addEventListener("mouseleave", () => { grip.style.opacity = "0.25"; });
-        cellWrapper.appendChild(grip);
-      }
-
       const labelSpan = document.createElement("span");
       labelSpan.textContent = col.label;
       labelSpan.style.cssText = `color: ${textColor}; opacity: 0.6; font-size: 9px; font-weight: 600; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis`;
       cellWrapper.appendChild(labelSpan);
-
-      // "x" remove button — only when pinned and more than 1 column enabled
-      if (isPinned && enabledColumns.length > 1) {
-        const removeBtn = document.createElement("button");
-        removeBtn.style.cssText = `border: none; background: transparent; color: ${theme === "dark" ? "#666" : "#999"}; cursor: pointer; font-size: 10px; padding: 0; line-height: 1; flex-shrink: 0; opacity: 0.5`;
-        removeBtn.textContent = "\u00d7";
-        removeBtn.title = `Remove ${col.label}`;
-        removeBtn.addEventListener("mouseenter", () => { removeBtn.style.opacity = "1"; });
-        removeBtn.addEventListener("mouseleave", () => { removeBtn.style.opacity = "0.5"; });
-        removeBtn.addEventListener("click", (e) => {
-          e.stopPropagation();
-          const updated = getTooltipColumns().map((c) =>
-            c.id === col.id ? { ...c, enabled: false } : c,
-          );
-          saveTooltipColumns(updated);
-          if (tooltipEl) {
-            savedPinnedLeft = tooltipEl.style.left;
-            savedPinnedTop = tooltipEl.style.top;
-          }
-          if (lastIdx != null) {
-            updateTooltipContent(u, lastIdx);
-            if (tooltipEl) {
-              tooltipEl.style.left = savedPinnedLeft;
-              tooltipEl.style.top = savedPinnedTop;
-            }
-          }
-        });
-        removeBtn.addEventListener("mousedown", (e) => e.stopPropagation());
-        cellWrapper.appendChild(removeBtn);
-      }
 
       // Drag-to-reorder (pinned only, when >1 column)
       if (isPinned && enabledColumns.length > 1) {
@@ -1433,97 +1422,12 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
 
     columnHeaderWrapper.appendChild(columnHeaderRow);
 
-    // "+Add" button (pinned only, when there are disabled columns to add)
-    if (isPinned && disabledColumns.length > 0) {
-      const addBtn = document.createElement("button");
-      addBtn.setAttribute("data-tooltip-add-col", "true");
-      addBtn.style.cssText = `border: 1px solid ${theme === "dark" ? "#444" : "#ddd"}; background: transparent; color: ${theme === "dark" ? "#888" : "#666"}; cursor: pointer; font-size: 9px; padding: 2px 6px; line-height: 1; border-radius: 3px; flex-shrink: 0; white-space: nowrap`;
-      addBtn.textContent = "+ Add";
-      addBtn.addEventListener("mouseenter", () => {
-        addBtn.style.borderColor = theme === "dark" ? "#666" : "#bbb";
-        addBtn.style.color = theme === "dark" ? "#fff" : "#000";
-      });
-      addBtn.addEventListener("mouseleave", () => {
-        addBtn.style.borderColor = theme === "dark" ? "#444" : "#ddd";
-        addBtn.style.color = theme === "dark" ? "#888" : "#666";
-      });
-      addBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        // Toggle dropdown (lives on document.body)
-        const existingDropdown = document.querySelector("[data-tooltip-add-dropdown]");
-        if (existingDropdown) {
-          existingDropdown.remove();
-          addColumnDropdownOpen = false;
-          return;
-        }
-        addColumnDropdownOpen = true;
-        const dropdown = document.createElement("div");
-        dropdown.setAttribute("data-tooltip-add-dropdown", "true");
-        dropdown.setAttribute("data-tooltip-settings", "true");
-        dropdown.style.cssText = `position: absolute; z-index: 10000; background: ${theme === "dark" ? "#1e1e22" : "#fff"}; border: 1px solid ${theme === "dark" ? "#444" : "#ddd"}; border-radius: 4px; padding: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); min-width: 120px`;
-
-        for (const col of disabledColumns) {
-          const item = document.createElement("div");
-          item.style.cssText = `padding: 4px 8px; font-size: 10px; color: ${textColor}; cursor: pointer; border-radius: 2px; white-space: nowrap`;
-          item.textContent = `+ ${col.label}`;
-          item.addEventListener("mouseenter", () => {
-            item.style.background = theme === "dark" ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)";
-          });
-          item.addEventListener("mouseleave", () => {
-            item.style.background = "";
-          });
-          item.addEventListener("click", (ev) => {
-            ev.stopPropagation();
-            const updated = getTooltipColumns().map((c) =>
-              c.id === col.id ? { ...c, enabled: true } : c,
-            );
-            saveTooltipColumns(updated);
-            addColumnDropdownOpen = false;
-            if (tooltipEl) {
-              savedPinnedLeft = tooltipEl.style.left;
-              savedPinnedTop = tooltipEl.style.top;
-            }
-            if (lastIdx != null) {
-              updateTooltipContent(u, lastIdx);
-              if (tooltipEl) {
-                tooltipEl.style.left = savedPinnedLeft;
-                tooltipEl.style.top = savedPinnedTop;
-              }
-            }
-          });
-          item.addEventListener("mousedown", (ev) => ev.stopPropagation());
-          dropdown.appendChild(item);
-        }
-
-        // Position dropdown below the +Add button using fixed positioning on body
-        // (avoids clipping from tooltip overflow: auto)
-        const btnRect = addBtn.getBoundingClientRect();
-        dropdown.style.position = "fixed";
-        dropdown.style.left = `${btnRect.left}px`;
-        dropdown.style.top = `${btnRect.bottom + 2}px`;
-
-        // Close dropdown on click outside
-        const closeDropdown = (ev: MouseEvent) => {
-          if (!dropdown.contains(ev.target as Node) && ev.target !== addBtn) {
-            dropdown.remove();
-            addColumnDropdownOpen = false;
-            document.removeEventListener("mousedown", closeDropdown, true);
-          }
-        };
-        document.addEventListener("mousedown", closeDropdown, true);
-
-        document.body.appendChild(dropdown);
-      });
-      addBtn.addEventListener("mousedown", (e) => e.stopPropagation());
-      columnHeaderWrapper.appendChild(addBtn);
-    }
-
     contentContainer.appendChild(columnHeaderWrapper);
 
     // Create scrollable content area for all series
     const content = document.createElement("div");
     content.setAttribute("data-tooltip-content", "true");
-    content.style.cssText = "overflow-y: auto; scrollbar-width: thin";
+    content.style.cssText = "overflow-y: auto; scrollbar-width: thin; display: flex; flex-direction: column; flex: 1; min-height: 0";
     cachedRowContainer = content;
 
     // Determine column span indices for caching (child 0 = color indicator, then enabled columns)
@@ -1579,6 +1483,9 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
         runNameSpan?: HTMLSpanElement;
         runIdSpan?: HTMLSpanElement;
         metricSpan?: HTMLSpanElement;
+        lastValueKey?: string; // cached key to skip redundant DOM writes
+        lastHighlight?: boolean;
+        lastOrder?: number;
       } = {
         row,
         // valueSpan is always present (value column is always enabled by default)
@@ -1588,19 +1495,23 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       if (runNameColIdx >= 0) cacheEntry.runNameSpan = row.children[runNameColIdx + 1] as HTMLSpanElement;
       if (runIdColIdx >= 0) cacheEntry.runIdSpan = row.children[runIdColIdx + 1] as HTMLSpanElement;
       if (metricColIdx >= 0) cacheEntry.metricSpan = row.children[metricColIdx + 1] as HTMLSpanElement;
-      cachedRows.set(s.name, cacheEntry);
+      cachedRows.set(String(s.seriesIdx), cacheEntry);
+      // Set initial CSS order for flex-based sorting in fast path
+      row.style.order = String(filteredItems.indexOf(s));
 
       // Hover emphasis and click-to-toggle on tooltip rows (pinned only)
       if (isPinned) {
         row.style.cursor = "pointer";
         if (onSeriesHover && !s.seriesHidden) {
           row.addEventListener("mouseenter", () => {
-            onSeriesHover(s.name, s.runId ?? null);
+            onSeriesHover(s.name, s.runId ?? null, s.seriesIdx);
             row.style.background = theme === "dark" ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)";
           });
           row.addEventListener("mouseleave", () => {
-            onSeriesHover(null, null);
-            row.style.background = isHighlighted ? "rgba(255,255,255,0.05)" : "";
+            onSeriesHover(null, null, undefined);
+            // Read current highlight state (not stale closure)
+            const curHighlight = highlightedSeriesIdRef?.current === s.seriesId;
+            row.style.background = curHighlight ? "rgba(59, 130, 246, 0.15)" : "";
           });
         } else if (s.seriesHidden) {
           row.addEventListener("mouseenter", () => {
@@ -1611,12 +1522,13 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
           });
         }
 
-        // Click toggles series visibility
+        // Click toggles series visibility — full rebuild to get correct event listeners
         row.addEventListener("click", (e) => {
           e.stopPropagation();
-          u.setSeries(s.seriesIdx, { show: s.seriesHidden }, false);
+          const currentlyShown = u.series[s.seriesIdx].show !== false;
+          u.setSeries(s.seriesIdx, { show: !currentlyShown }, false);
           u.redraw();
-          // Rebuild tooltip to reflect new state
+          // Full rebuild so toggled row gets correct hover/click handlers
           tooltipStructureDirty = true;
           cachedRows.clear();
           if (lastIdx != null) {
@@ -1641,11 +1553,17 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     cachedColumnConfig = JSON.stringify(columns);
     tooltipStructureDirty = false;
     lastRenderedIdx = idx;
+    lastContentHighlight = highlightedSId;
     isRebuilding = false;
 
     // Apply latest saved size from shared cache (picks up resizes from other pinned tooltips)
     applySavedSize(tooltipEl);
 
+    // Re-measure dimensions after full rebuild (the only time we read layout)
+    cachedTipW = tooltipEl.offsetWidth || 200;
+    cachedTipH = tooltipEl.offsetHeight || 100;
+    // Reset cached maxHeight so repositionTooltip re-applies it to the new content element
+    cachedMaxH = 0;
     repositionTooltip(u);
   }
 
@@ -1656,9 +1574,9 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
   function repositionTooltip(u: uPlot) {
     if (!tooltipEl) return;
 
-    // Position tooltip following the cursor with offset to top-right
-    // Use viewport coordinates so tooltip can overflow chart boundaries
-    const tooltipWidth = tooltipEl.offsetWidth || 200;
+    // Use cached dimensions — avoids forced reflow on every cursor move.
+    // Dimensions are re-measured after full rebuilds via measureTooltipSize().
+    const tooltipWidth = cachedTipW;
 
     // Get cursor position from uPlot (relative to chart area)
     // uPlot sets cursor.left/top to -10 when cursor is outside chart
@@ -1675,15 +1593,17 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     const offsetX = 15; // Offset to the right
     const offsetY = 10; // Offset above
 
-    // Set content max-height to fill full viewport (minus header/padding/border overhead)
-    const contentEl = tooltipEl.querySelector<HTMLElement>("[data-tooltip-content]");
+    // Set content max-height only when viewport size changes (avoids write→read thrashing)
     const maxContentHeight = window.innerHeight - 48;
-    if (maxContentHeight > 0 && contentEl) {
-      contentEl.style.maxHeight = `${maxContentHeight}px`;
+    if (maxContentHeight > 0 && maxContentHeight !== cachedMaxH) {
+      cachedMaxH = maxContentHeight;
+      const contentEl = tooltipEl.querySelector<HTMLElement>("[data-tooltip-content]");
+      if (contentEl) {
+        contentEl.style.maxHeight = `${maxContentHeight}px`;
+      }
     }
 
-    // Measure tooltip after content max-height is set
-    const tooltipHeight = tooltipEl.offsetHeight || 100;
+    const tooltipHeight = cachedTipH;
 
     // Default position: to the right and above cursor (in viewport coords)
     let left = viewportX + offsetX;
@@ -1711,7 +1631,12 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
   /** Fast-path: update only the values in cached tooltip rows without recreating DOM */
   function updateTooltipValues(u: uPlot, idx: number) {
     if (!tooltipEl || !contentContainer || !cachedRowContainer) return;
-    if (idx === lastRenderedIdx) return;
+
+    const highlightedSId = highlightedSeriesIdRef?.current ?? null;
+    const highlightedRunId = highlightedRunIdRef?.current ?? null;
+
+    // Skip if nothing changed (same index AND same highlight)
+    if (idx === lastRenderedIdx && highlightedSId === lastContentHighlight) return;
 
     const xVal = u.data[0][idx];
     if (xVal == null) return;
@@ -1761,50 +1686,130 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     }
 
     const xValues = u.data[0] as number[];
-    const highlightedSId = highlightedSeriesIdRef?.current ?? null;
     const searchQuery = searchInputRef?.value?.toLowerCase() ?? "";
 
     // Track which cached rows got updated (to hide stale ones and count visible)
     const updatedKeys = new Set<string>();
-    // Collect items for sorting
-    const sortItems: { name: string; value: number; isHighlighted: boolean }[] = [];
+    // Collect items for sorting — matches full-rebuild sort fields
+    const sortItems: { name: string; idx: number; value: number; isHighlighted: boolean; seriesHidden: boolean; seriesId?: string; sqid?: string }[] = [];
 
     for (let i = 1; i < u.series.length; i++) {
       const series = u.series[i];
-      if (series.show === false) continue;
-
-      let yVal = u.data[i][idx] as number | null | undefined;
-      let isInterpolated = false;
-
+      const isSeriesHidden = series.show === false;
       const lineData = lines[i - 1];
-      const xAtIdx = xValues[idx];
-      const flag = lineData?.valueFlags?.get(xAtIdx);
 
-      if (yVal == null && flag) {
-        const labelText = typeof series.label === "string" ? series.label : `Series ${i}`;
-        const cached = cachedRows.get(labelText);
-        if (cached) {
-          // Update value span with flag text
+      // Skip series with no line data (bands, envelopes) and hideFromLegend (smoothing originals)
+      if (!lineData || lineData.hideFromLegend) continue;
+
+      const labelText = typeof series.label === "string" ? series.label : `Series ${i}`;
+
+      // Apply search filter — hide non-matching rows
+      if (searchQuery) {
+        const matchesSearch =
+          labelText.toLowerCase().includes(searchQuery) ||
+          (lineData?.runName && lineData.runName.toLowerCase().includes(searchQuery)) ||
+          (lineData?.runId && lineData.runId.toLowerCase().includes(searchQuery)) ||
+          (lineData?.metricName && lineData.metricName.toLowerCase().includes(searchQuery));
+        if (!matchesSearch) {
+          const cached = cachedRows.get(String(i));
+          if (cached) cached.row.style.display = "none";
+          continue;
+        }
+      }
+
+      const cached = cachedRows.get(String(i));
+      if (!cached) {
+        // Series not in cache — need a full rebuild
+        tooltipStructureDirty = true;
+        cachedRows.clear();
+        updateTooltipContent(u, idx);
+        return;
+      }
+
+      const isHighlighted = !isSeriesHidden && highlightedSId !== null && lineData?.seriesId === highlightedSId;
+      const sqid = lineData?.seriesId?.split(':')[0];
+
+      // Handle hidden series — show greyed out row with "hidden" text
+      if (isSeriesHidden) {
+        const vk = "hidden";
+        if (cached.lastValueKey !== vk) {
           cached.valueSpan.textContent = "";
           formatValueContent(cached.valueSpan, {
-            name: labelText,
-            value: 0,
-            color: lineData?.color || "",
-            isHighlighted: highlightedSId !== null && lineData?.seriesId === highlightedSId,
-            isInterpolated: false,
-            flagText: flag,
-            dash: lineData?.dash,
-            runName: lineData?.runName,
-            runId: lineData?.runId,
-            metricName: lineData?.metricName,
+            name: labelText, value: 0, color: theme === "dark" ? "#555" : "#bbb",
+            isHighlighted: false, isInterpolated: false, flagText: "hidden",
           }, textColor);
-          cached.row.style.display = "grid";
-          updatedKeys.add(labelText);
-          sortItems.push({ name: labelText, value: 0, isHighlighted: highlightedSId !== null && lineData?.seriesId === highlightedSId });
+          cached.row.style.opacity = "0.4";
+          cached.lastValueKey = vk;
         }
+        cached.row.style.background = "";
+        cached.row.style.display = "grid";
+        updatedKeys.add(String(i));
+        sortItems.push({ name: labelText, idx: i, value: 0, isHighlighted: false, seriesHidden: true, seriesId: lineData?.seriesId, sqid });
         continue;
       }
 
+      // Reset opacity for visible series
+      if (cached.lastValueKey === "hidden") cached.row.style.opacity = "";
+
+      let yVal = u.data[i][idx] as number | null | undefined;
+      let isInterpolated = false;
+      const xAtIdx = xValues[idx];
+      const flag = lineData?.valueFlags?.get(xAtIdx);
+
+      // Non-finite value flag (NaN/Inf/-Inf)
+      if (yVal == null && flag) {
+        const vk = `flag:${flag}`;
+        if (cached.lastValueKey !== vk) {
+          cached.valueSpan.textContent = "";
+          formatValueContent(cached.valueSpan, {
+            name: labelText, value: 0, color: lineData?.color || "",
+            isHighlighted, isInterpolated: false, flagText: flag,
+            dash: lineData?.dash, runName: lineData?.runName, runId: lineData?.runId, metricName: lineData?.metricName,
+          }, textColor);
+          cached.row.style.background = isHighlighted ? "rgba(59, 130, 246, 0.15)" : "";
+          cached.lastValueKey = vk;
+          cached.lastHighlight = isHighlighted;
+        } else if (cached.lastHighlight !== isHighlighted) {
+          cached.row.style.background = isHighlighted ? "rgba(59, 130, 246, 0.15)" : "";
+          cached.lastHighlight = isHighlighted;
+        }
+        cached.row.style.display = "grid";
+        updatedKeys.add(String(i));
+        sortItems.push({ name: labelText, idx: i, value: 0, isHighlighted, seriesHidden: false, seriesId: lineData?.seriesId, sqid });
+        continue;
+      }
+
+      // Non-finite bucket markers (bucketed data path)
+      if (yVal == null && lineData?.nonFiniteMarkers) {
+        const bucketFlags = lineData.nonFiniteMarkers.get(xAtIdx);
+        if (bucketFlags && bucketFlags.size > 0) {
+          const parts: string[] = [];
+          if (bucketFlags.has("NaN")) parts.push("NaN");
+          if (bucketFlags.has("Inf")) parts.push("+Inf");
+          if (bucketFlags.has("-Inf")) parts.push("-Inf");
+          const vk = `bucket:${parts.join(',')}`;
+          if (cached.lastValueKey !== vk) {
+            cached.valueSpan.textContent = "";
+            formatValueContent(cached.valueSpan, {
+              name: labelText, value: 0, color: lineData.color || "",
+              isHighlighted, isInterpolated: false, flagText: parts.join(", "),
+              dash: lineData.dash, runName: lineData.runName, runId: lineData.runId, metricName: lineData.metricName,
+            }, textColor);
+            cached.row.style.background = isHighlighted ? "rgba(59, 130, 246, 0.15)" : "";
+            cached.lastValueKey = vk;
+            cached.lastHighlight = isHighlighted;
+          } else if (cached.lastHighlight !== isHighlighted) {
+            cached.row.style.background = isHighlighted ? "rgba(59, 130, 246, 0.15)" : "";
+            cached.lastHighlight = isHighlighted;
+          }
+          cached.row.style.display = "grid";
+          updatedKeys.add(String(i));
+          sortItems.push({ name: labelText, idx: i, value: 0, isHighlighted, seriesHidden: false, seriesId: lineData?.seriesId, sqid });
+          continue;
+        }
+      }
+
+      // Interpolation
       if (yVal == null && tooltipInterpolation !== "none") {
         const yData = u.data[i] as (number | null | undefined)[];
         if (!spanGaps && isInsideDataGap(yData, idx)) {
@@ -1824,109 +1829,94 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       }
 
       if (yVal != null) {
-        const labelText = typeof series.label === "string" ? series.label : `Series ${i}`;
-        if (lineData?.hideFromLegend) continue;
-
-        // Apply search filter
-        if (searchQuery) {
-          const matchesSearch =
-            labelText.toLowerCase().includes(searchQuery) ||
-            (lineData?.runName && lineData.runName.toLowerCase().includes(searchQuery)) ||
-            (lineData?.runId && lineData.runId.toLowerCase().includes(searchQuery)) ||
-            (lineData?.metricName && lineData.metricName.toLowerCase().includes(searchQuery));
-          if (!matchesSearch) continue;
+        const bucketFlags = lineData?.nonFiniteMarkers?.get(xAtIdx);
+        let bucketFlagText: string | undefined;
+        if (bucketFlags && bucketFlags.size > 0) {
+          if (bucketFlags.has("NaN")) bucketFlagText = "NaN";
+          else if (bucketFlags.has("Inf")) bucketFlagText = "+Inf";
+          else if (bucketFlags.has("-Inf")) bucketFlagText = "-Inf";
         }
 
-        const cached = cachedRows.get(labelText);
-        if (cached) {
-          const isHighlighted = highlightedSId !== null && lineData?.seriesId === highlightedSId;
-          // Update only the value span content
+        // Build a cache key to skip redundant DOM writes
+        const rawVal = rawValues.get(labelText);
+        const rawFlag = rawFlags.get(labelText);
+        const vk = `${yVal}|${isInterpolated ? 1 : 0}|${bucketFlagText ?? ""}|${rawVal ?? ""}|${rawFlag ?? ""}`;
+        if (cached.lastValueKey !== vk) {
           cached.valueSpan.textContent = "";
           formatValueContent(cached.valueSpan, {
-            name: labelText,
-            value: yVal,
-            color: lineData?.color || "",
-            isHighlighted,
-            rawValue: rawValues.get(labelText),
-            isInterpolated,
-            rawFlagText: rawFlags.get(labelText),
-            dash: lineData?.dash,
-            runName: lineData?.runName,
-            runId: lineData?.runId,
-            metricName: lineData?.metricName,
+            name: labelText, value: yVal, color: lineData?.color || "",
+            isHighlighted, rawValue: rawVal,
+            isInterpolated, rawFlagText: rawFlag,
+            flagText: bucketFlagText,
+            dash: lineData?.dash, runName: lineData?.runName, runId: lineData?.runId, metricName: lineData?.metricName,
+            nonFiniteFlags: bucketFlags,
           }, textColor);
-          // Update highlight background
           cached.row.style.background = isHighlighted ? "rgba(59, 130, 246, 0.15)" : "";
-          cached.row.style.display = "grid";
-          updatedKeys.add(labelText);
-          sortItems.push({ name: labelText, value: yVal, isHighlighted });
-        } else {
-          // Series not in cache — need a full rebuild
-          tooltipStructureDirty = true;
-          cachedRows.clear();
-          updateTooltipContent(u, idx);
-          return;
+          cached.lastValueKey = vk;
+          cached.lastHighlight = isHighlighted;
+        } else if (cached.lastHighlight !== isHighlighted) {
+          cached.row.style.background = isHighlighted ? "rgba(59, 130, 246, 0.15)" : "";
+          cached.lastHighlight = isHighlighted;
         }
+        cached.row.style.display = "grid";
+        updatedKeys.add(String(i));
+        sortItems.push({ name: labelText, idx: i, value: yVal, isHighlighted, seriesHidden: false, seriesId: lineData?.seriesId, sqid });
+      } else {
+        // No value at this index — hide the row
+        cached.row.style.display = "none";
       }
     }
 
-    // Hide rows that no longer have data at this index
+    // Hide cached rows that weren't updated (series no longer present)
     for (const [key, entry] of cachedRows) {
       if (!updatedKeys.has(key)) {
         entry.row.style.display = "none";
       }
     }
 
-    // Sort rows: highlighted first, then by value descending
-    // Use CSS order property to avoid DOM reflows from insertBefore
+    // Sort rows: matches full-rebuild sort logic (hidden → bottom, highlighted → top, then by value)
     sortItems.sort((a, b) => {
+      if (a.seriesHidden !== b.seriesHidden) return a.seriesHidden ? 1 : -1;
       if (highlightedSId) {
-        if (a.isHighlighted && !b.isHighlighted) return -1;
-        if (b.isHighlighted && !a.isHighlighted) return 1;
+        const aExact = a.seriesId === highlightedSId;
+        const bExact = b.seriesId === highlightedSId;
+        if (aExact && !bExact) return -1;
+        if (bExact && !aExact) return 1;
+      }
+      if (highlightedRunId) {
+        const aRun = a.sqid === highlightedRunId;
+        const bRun = b.sqid === highlightedRunId;
+        if (aRun && !bRun) return -1;
+        if (bRun && !aRun) return 1;
       }
       return b.value - a.value;
     });
     for (let i = 0; i < sortItems.length; i++) {
-      const cached = cachedRows.get(sortItems[i].name);
-      if (cached) {
+      const cached = cachedRows.get(String(sortItems[i].idx));
+      if (cached && cached.lastOrder !== i) {
         cached.row.style.order = String(i);
+        cached.lastOrder = i;
       }
     }
 
-    // Update count label
+    // Update count label — match full-rebuild logic
     if (cachedCountLabel) {
-      const visibleCount = updatedKeys.size;
-      const totalVisible = sortItems.length;
+      let shownCount = 0;
+      let hiddenCount = 0;
+      for (const s of sortItems) { if (s.seriesHidden) hiddenCount++; else shownCount++; }
       cachedCountLabel.textContent = searchQuery
-        ? `${totalVisible}/${visibleCount} series`
-        : `${visibleCount} series`;
+        ? `${sortItems.length}/${updatedKeys.size} series`
+        : hiddenCount > 0
+          ? `${shownCount}/${shownCount + hiddenCount} series`
+          : `${shownCount} series`;
     }
 
     lastRenderedIdx = idx;
+    lastContentHighlight = highlightedSId;
 
     // Reposition tooltip (skip when pinned — position is locked)
     if (!isPinned) {
-      const tooltipWidth = tooltipEl.offsetWidth || 200;
-      const cursorLeft = (u.cursor.left != null && u.cursor.left >= 0) ? u.cursor.left : (lastLeft ?? 0);
-      const cursorTop = (u.cursor.top != null && u.cursor.top >= 0) ? u.cursor.top : (lastTop ?? 0);
-      const chartRect = u.over.getBoundingClientRect();
-      const viewportX = chartRect.left + cursorLeft;
-      const viewportY = chartRect.top + cursorTop;
-      const offsetX = 15;
-      const offsetY = 10;
-      const tooltipHeight = tooltipEl.offsetHeight || 100;
-      let left = viewportX + offsetX;
-      let top = viewportY - tooltipHeight - offsetY;
-      if (left + tooltipWidth > window.innerWidth - 10) {
-        left = viewportX - tooltipWidth - offsetX;
-      }
-      if (top < 10) {
-        top = viewportY + offsetY;
-      }
-      left = Math.max(10, Math.min(left, window.innerWidth - tooltipWidth - 10));
-      top = Math.max(10, Math.min(top, window.innerHeight - tooltipHeight - 10));
-      tooltipEl.style.left = `${left}px`;
-      tooltipEl.style.top = `${top}px`;
+      repositionTooltip(u);
     }
   }
 
@@ -1942,12 +1932,10 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       cachedRows.clear();
     }
 
-    // Check if highlighted series changed (needs full rebuild for sort + highlight)
+    // Track highlighted series — fast path handles highlight changes incrementally
     const currentHighlight = highlightedSeriesIdRef?.current ?? null;
     if (currentHighlight !== lastHighlightedSeriesId) {
       lastHighlightedSeriesId = currentHighlight;
-      tooltipStructureDirty = true;
-      cachedRows.clear();
     }
 
     if (tooltipStructureDirty) {
@@ -1994,10 +1982,10 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     // Close button is safe — it lives on tooltipEl, outside contentContainer.
     if (isPinned) {
       const syncIdx = u.cursor.idx ?? lastIdx;
-      // Check if highlighted series changed (vertical mouse movement at same step)
+      // Track highlighted series — fast path handles this incrementally
       const pinnedHighlightCheck = highlightedSeriesIdRef?.current ?? null;
       if (pinnedHighlightCheck !== lastHighlightedSeriesId) {
-        tooltipStructureDirty = true;
+        lastHighlightedSeriesId = pinnedHighlightCheck;
       }
       const indexChanged = syncIdx != null && syncIdx !== lastIdx;
       const needsUpdate = indexChanged || tooltipStructureDirty;
@@ -2061,12 +2049,13 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     if (displayIdx == null) return;
 
     // Phase 2: same-index guard — cursor didn't move to a new data point
-    // But still check if highlighted series changed (e.g. moving cursor vertically at same step)
+    // Highlight changes are handled incrementally in the fast path
     const currentHighlightCheck = highlightedSeriesIdRef?.current ?? null;
-    if (currentHighlightCheck !== lastHighlightedSeriesId) {
-      tooltipStructureDirty = true;
+    const highlightChanged = currentHighlightCheck !== lastHighlightedSeriesId;
+    if (highlightChanged) {
+      lastHighlightedSeriesId = currentHighlightCheck;
     }
-    if (displayIdx === lastRenderedIdx && !tooltipStructureDirty) return;
+    if (displayIdx === lastRenderedIdx && !tooltipStructureDirty && !highlightChanged) return;
 
     scheduleTooltipUpdate(u, displayIdx);
   }

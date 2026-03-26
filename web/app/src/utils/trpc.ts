@@ -10,7 +10,7 @@ import { env } from "@/lib/env";
 
 const isProduction = env.VITE_ENV === "production";
 const isTest = env.VITE_ENV === "test";
-const MAX_URL_LENGTH = 2083;
+const MAX_URL_LENGTH = 8192;
 
 // In test/Docker environments, use relative URLs to go through Vite proxy
 // This ensures same-origin requests for proper cookie handling

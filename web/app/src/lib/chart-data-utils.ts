@@ -261,6 +261,23 @@ export function applySmoothing(
   return data;
 }
 
+// ============================
+// Multi-metric batch utilities
+// ============================
+
+/** Chunk size for multi-metric batch queries (100 metrics fits within 8KB URL limit) */
+export const MULTI_METRIC_CHUNK = 100;
+
+/** Split an array into chunks of `size` */
+export function chunkArray<T>(arr: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) {
+    chunks.push(arr.slice(i, i + size));
+  }
+  return chunks;
+}
+
+
 /** Bucketed data point from server-side downsampling (graphBucketed endpoint) */
 export interface BucketedChartDataPoint {
   step: number;
@@ -269,9 +286,7 @@ export interface BucketedChartDataPoint {
   minY: number | null;    // min(finite values) — envelope bottom (null if all non-finite)
   maxY: number | null;    // max(finite values) — envelope top (null if all non-finite)
   count: number;   // points in bucket
-  hasNaN?: boolean;    // bucket contained NaN value(s)
-  hasInf?: boolean;    // bucket contained +Infinity value(s)
-  hasNegInf?: boolean; // bucket contained -Infinity value(s)
+  nonFiniteFlags?: number; // bitmask: bit0=hasNaN, bit1=hasInf(+), bit2=hasNegInf(-)
 }
 
 /**
@@ -297,12 +312,13 @@ export function applyServerBuckets(
   let nonFiniteMarkers: Map<number, NonFiniteFlags> | undefined;
   for (let i = 0; i < bucketedData.length; i++) {
     const d = bucketedData[i];
-    if (d.hasNaN || d.hasInf || d.hasNegInf) {
+    const nff = d.nonFiniteFlags ?? 0;
+    if (nff !== 0) {
       if (!nonFiniteMarkers) nonFiniteMarkers = new Map();
       const flags: NonFiniteFlags = new Set();
-      if (d.hasNaN) flags.add("NaN");
-      if (d.hasInf) flags.add("Inf");
-      if (d.hasNegInf) flags.add("-Inf");
+      if ((nff & 1) !== 0) flags.add("NaN");
+      if ((nff & 2) !== 0) flags.add("Inf");
+      if ((nff & 4) !== 0) flags.add("-Inf");
       nonFiniteMarkers.set(x[i], flags);
     }
   }

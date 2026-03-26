@@ -3248,7 +3248,7 @@ describe('SDK API Endpoints (with API Key)', () => {
       }
     });
 
-    it('Test 24.2c: graphBatchBucketed returns null value and hasNaN for all-NaN metric', async () => {
+    it('Test 24.2c: graphBatchBucketed returns null value and nonFiniteFlags for all-NaN metric', async () => {
       if (!sessionCookie) {
         console.log('   No session - skipping');
         return;
@@ -3288,9 +3288,9 @@ describe('SDK API Endpoints (with API Key)', () => {
       expect(runData).toBeDefined();
       expect(runData.length).toBeGreaterThan(0);
 
-      // All buckets should have hasNaN: true and null value (all-NaN metric)
+      // All buckets should have nonFiniteFlags bit 0 set (hasNaN) and null value (all-NaN metric)
       for (const bucket of runData) {
-        expect(bucket.hasNaN).toBe(true);
+        expect((bucket.nonFiniteFlags & 1) !== 0).toBe(true);
         expect(bucket.value).toBeNull();
       }
     });
@@ -3334,8 +3334,8 @@ describe('SDK API Endpoints (with API Key)', () => {
       expect(runData).toBeDefined();
       expect(runData.length).toBeGreaterThan(0);
 
-      // Some buckets should have hasNaN: true with non-null value (mixed)
-      const nanBuckets = runData.filter((b: any) => b.hasNaN === true);
+      // Some buckets should have nonFiniteFlags bit 0 set (hasNaN) with non-null value (mixed)
+      const nanBuckets = runData.filter((b: any) => (b.nonFiniteFlags & 1) !== 0);
       expect(nanBuckets.length).toBeGreaterThan(0);
 
       // Mixed buckets should have a finite average value
@@ -5342,6 +5342,162 @@ describe('SDK API Endpoints (with API Key)', () => {
       expect(points.length).toBeGreaterThan(0);
       expect(points[0]).toHaveProperty('step');
       expect(points[0]).toHaveProperty('value');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Test Suite 30: Multi-Metric Batch Bucketed Endpoint
+  // ---------------------------------------------------------------------------
+  // Tests for graphMultiMetricBatchBucketed — fetches bucketed data for multiple
+  // metrics in a single ClickHouse query. Used by custom dashboards with many
+  // metrics in one chart widget.
+  describe('Test Suite 30: Multi-Metric Batch Bucketed', () => {
+    const TEST_EMAIL = process.env.TEST_USER_EMAIL || 'test-smoke@mlop.local';
+    const TEST_PASSWORD = 'TestPassword123!';
+    let sessionCookie: string | null = null;
+    let serverAvailable = false;
+    let staircaseRunSqid: string | null = null;
+
+    beforeAll(async () => {
+      try {
+        const healthCheck = await makeRequest('/api/health');
+        serverAvailable = healthCheck.status === 200;
+      } catch {
+        serverAvailable = false;
+      }
+
+      if (!serverAvailable) return;
+
+      try {
+        const signInResponse = await makeRequest('/api/auth/sign-in/email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: TEST_EMAIL, password: TEST_PASSWORD }),
+        });
+
+        const setCookie = signInResponse.headers.get('set-cookie');
+        if (setCookie) {
+          const match = setCookie.match(/better_auth\.session_token=([^;]+)/);
+          if (match) {
+            sessionCookie = `better_auth.session_token=${match[1]}`;
+          }
+        }
+      } catch (e) {
+        console.log('   Sign in failed:', e);
+      }
+
+      if (!sessionCookie) return;
+
+      const listResponse = await makeTrpcRequest('runs.list', {
+        projectName: TEST_PROJECT_NAME,
+        search: 'staircase-test',
+        limit: 5,
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      if (listResponse.status === 200) {
+        const listData = await listResponse.json();
+        const runs = listData.result?.data?.runs;
+        const staircase = runs?.find((r: { name: string }) => r.name === 'staircase-test');
+        if (staircase) {
+          staircaseRunSqid = staircase.id;
+        }
+      }
+    });
+
+    it('Test 30.1: Returns bucketed data for multiple metrics in one request', async () => {
+      if (!sessionCookie || !staircaseRunSqid) {
+        console.log('   No session or staircase run - skipping');
+        return;
+      }
+
+      const response = await makeTrpcRequest('runs.data.graphMultiMetricBatchBucketed', {
+        runIds: [staircaseRunSqid],
+        projectName: TEST_PROJECT_NAME,
+        logNames: ['test/staircase', 'test/staircase_irregular'],
+        buckets: 50,
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      const result = data.result?.data;
+      expect(result).toBeDefined();
+
+      // Result should be nested: logName → runId → points[]
+      expect(result['test/staircase']).toBeDefined();
+      expect(result['test/staircase_irregular']).toBeDefined();
+
+      const staircasePoints = result['test/staircase'][staircaseRunSqid!];
+      expect(staircasePoints).toBeDefined();
+      expect(staircasePoints.length).toBeGreaterThan(0);
+
+      const irregularPoints = result['test/staircase_irregular'][staircaseRunSqid!];
+      expect(irregularPoints).toBeDefined();
+      expect(irregularPoints.length).toBeGreaterThan(0);
+
+      // Verify bucketed data shape
+      const firstPoint = staircasePoints[0];
+      expect(firstPoint).toHaveProperty('step');
+      expect(firstPoint).toHaveProperty('value');
+      expect(firstPoint).toHaveProperty('minY');
+      expect(firstPoint).toHaveProperty('maxY');
+      expect(firstPoint).toHaveProperty('count');
+    });
+
+    it('Test 30.2: Respects stepMin/stepMax for zoom refetch', async () => {
+      if (!sessionCookie || !staircaseRunSqid) {
+        console.log('   No session or staircase run - skipping');
+        return;
+      }
+
+      const response = await makeTrpcRequest('runs.data.graphMultiMetricBatchBucketed', {
+        runIds: [staircaseRunSqid],
+        projectName: TEST_PROJECT_NAME,
+        logNames: ['test/staircase', 'test/staircase_irregular'],
+        buckets: 50,
+        stepMin: 100,
+        stepMax: 200,
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      const result = data.result?.data;
+      expect(result).toBeDefined();
+
+      const points = result['test/staircase'][staircaseRunSqid!];
+      expect(points).toBeDefined();
+      expect(points.length).toBeGreaterThan(0);
+
+      for (const p of points) {
+        expect(p.step).toBeGreaterThanOrEqual(100);
+        expect(p.step).toBeLessThanOrEqual(200);
+      }
+    });
+
+    it('Test 30.3: Returns empty object for non-existent metric', async () => {
+      if (!sessionCookie || !staircaseRunSqid) {
+        console.log('   No session or staircase run - skipping');
+        return;
+      }
+
+      const response = await makeTrpcRequest('runs.data.graphMultiMetricBatchBucketed', {
+        runIds: [staircaseRunSqid],
+        projectName: TEST_PROJECT_NAME,
+        logNames: ['test/staircase', 'nonexistent/metric'],
+        buckets: 50,
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      const result = data.result?.data;
+      expect(result).toBeDefined();
+
+      // Existing metric should have data
+      expect(result['test/staircase']).toBeDefined();
+      const points = result['test/staircase'][staircaseRunSqid!];
+      expect(points.length).toBeGreaterThan(0);
+
+      // Non-existent metric should be absent
+      expect(result['nonexistent/metric']).toBeUndefined();
     });
   });
 });
