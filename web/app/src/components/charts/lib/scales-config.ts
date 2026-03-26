@@ -8,7 +8,6 @@ interface ScalesConfigParams {
   yMinProp: number | undefined | null;
   yMaxProp: number | undefined | null;
   yRange: [number, number, boolean];
-  yZoom: boolean;
 }
 
 /**
@@ -27,7 +26,6 @@ export function buildScalesConfig({
   yMinProp,
   yMaxProp,
   yRange,
-  yZoom,
 }: ScalesConfigParams): uPlot.Scales {
   return {
     x: logXAxis
@@ -101,12 +99,16 @@ export function buildCursorConfig(
       // syncXScale handles zoom sync with proper group filtering.
       scales: [null, null],
       setSeries: false, // DISABLED - was causing seriesIdx to always be null due to cross-chart sync
-      // Filter out drag events on the receiving side to avoid uPlot bug:
-      // src.scales[xKeySrc].ori crashes when xKeySrc is null (from scales above).
-      // Cursor position sync still works; drag/zoom sync is handled by our syncXScale.
+      // Prevent mousedown/mouseup from syncing to avoid uPlot crash:
+      // synced mousedown sets `dragging = true` on receiving charts, which
+      // causes `src.scales[xKeySrc].ori` to crash when xKeySrc is null
+      // (from scales: [null, null] above). Blocking these events keeps
+      // receiving charts' `dragging` flag false so the crash path is never
+      // reached. Cursor position sync (mousemove) still works; drag/zoom
+      // sync is handled by our custom syncXScale.
       filters: {
-        pub: () => true,
-        sub: (_type: string, src: uPlot) => !(src?.cursor?.drag as any)?._x && !(src?.cursor?.drag as any)?._y,
+        pub: (type: string) => type !== "mousedown" && type !== "mouseup",
+        sub: () => true,
       },
     },
     focus: {
