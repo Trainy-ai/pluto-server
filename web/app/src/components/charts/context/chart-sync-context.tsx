@@ -319,6 +319,17 @@ export function ChartSyncProvider({
         (chart as any)._tableHighlightRunId = runId;
         applySeriesHighlight(chart, runId, '_seriesId', lw);
         chart.redraw(false);
+
+        // Expose highlight state on the DOM for testability (only if chart contains the series)
+        const container = chart.root?.closest('[data-testid="line-chart-container"]');
+        if (container) {
+          const hasMatch = runId && chart.series.some((s: any) => seriesKeyMatches(s._seriesId, runId, '_seriesId'));
+          if (hasMatch) {
+            container.setAttribute('data-table-highlighted-run', runId!);
+          } else {
+            container.removeAttribute('data-table-highlighted-run');
+          }
+        }
       });
     }
     document.addEventListener("run-table-hover", handleRunTableHover);
