@@ -4,8 +4,25 @@ import { prisma } from "./prisma";
 import superjson from "superjson";
 import { z } from "zod";
 
+/**
+ * Custom superjson wrapper that skips serialization for plain JSON-safe data.
+ * superjson walks the entire object graph looking for Dates/BigInts/Maps,
+ * adding ~2s overhead on 7+ MB responses that only contain numbers and strings.
+ * Objects tagged with __json_safe skip the traversal.
+ */
+const fastSuperjson = {
+  serialize(object: unknown) {
+    if (object && typeof object === "object" && "__json_safe" in object) {
+      const { __json_safe, ...data } = object as Record<string, unknown>;
+      return { json: data, meta: undefined };
+    }
+    return superjson.serialize(object);
+  },
+  deserialize: superjson.deserialize.bind(superjson),
+};
+
 export const t = initTRPC.context<Context>().create({
-  transformer: superjson,
+  transformer: fastSuperjson,
 });
 
 export const router = t.router;

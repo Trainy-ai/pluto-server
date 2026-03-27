@@ -5426,21 +5426,21 @@ describe('SDK API Endpoints (with API Key)', () => {
       expect(result['test/staircase']).toBeDefined();
       expect(result['test/staircase_irregular']).toBeDefined();
 
-      const staircasePoints = result['test/staircase'][staircaseRunSqid!];
-      expect(staircasePoints).toBeDefined();
-      expect(staircasePoints.length).toBeGreaterThan(0);
+      const staircaseSeries = result['test/staircase'][staircaseRunSqid!];
+      expect(staircaseSeries).toBeDefined();
+      // Columnar format: parallel arrays instead of array of objects
+      expect(staircaseSeries).toHaveProperty('steps');
+      expect(staircaseSeries).toHaveProperty('values');
+      expect(staircaseSeries).toHaveProperty('minYs');
+      expect(staircaseSeries).toHaveProperty('maxYs');
+      expect(staircaseSeries).toHaveProperty('counts');
+      expect(staircaseSeries).toHaveProperty('times');
+      expect(staircaseSeries).toHaveProperty('nfFlags');
+      expect(staircaseSeries.steps.length).toBeGreaterThan(0);
 
-      const irregularPoints = result['test/staircase_irregular'][staircaseRunSqid!];
-      expect(irregularPoints).toBeDefined();
-      expect(irregularPoints.length).toBeGreaterThan(0);
-
-      // Verify bucketed data shape
-      const firstPoint = staircasePoints[0];
-      expect(firstPoint).toHaveProperty('step');
-      expect(firstPoint).toHaveProperty('value');
-      expect(firstPoint).toHaveProperty('minY');
-      expect(firstPoint).toHaveProperty('maxY');
-      expect(firstPoint).toHaveProperty('count');
+      const irregularSeries = result['test/staircase_irregular'][staircaseRunSqid!];
+      expect(irregularSeries).toBeDefined();
+      expect(irregularSeries.steps.length).toBeGreaterThan(0);
     });
 
     it('Test 30.2: Respects stepMin/stepMax for zoom refetch', async () => {
@@ -5463,13 +5463,13 @@ describe('SDK API Endpoints (with API Key)', () => {
       const result = data.result?.data;
       expect(result).toBeDefined();
 
-      const points = result['test/staircase'][staircaseRunSqid!];
-      expect(points).toBeDefined();
-      expect(points.length).toBeGreaterThan(0);
+      const series = result['test/staircase'][staircaseRunSqid!];
+      expect(series).toBeDefined();
+      expect(series.steps.length).toBeGreaterThan(0);
 
-      for (const p of points) {
-        expect(p.step).toBeGreaterThanOrEqual(100);
-        expect(p.step).toBeLessThanOrEqual(200);
+      for (const step of series.steps) {
+        expect(step).toBeGreaterThanOrEqual(100);
+        expect(step).toBeLessThanOrEqual(200);
       }
     });
 
@@ -5491,10 +5491,10 @@ describe('SDK API Endpoints (with API Key)', () => {
       const result = data.result?.data;
       expect(result).toBeDefined();
 
-      // Existing metric should have data
+      // Existing metric should have data (columnar format)
       expect(result['test/staircase']).toBeDefined();
-      const points = result['test/staircase'][staircaseRunSqid!];
-      expect(points.length).toBeGreaterThan(0);
+      const series = result['test/staircase'][staircaseRunSqid!];
+      expect(series.steps.length).toBeGreaterThan(0);
 
       // Non-existent metric should be absent
       expect(result['nonexistent/metric']).toBeUndefined();

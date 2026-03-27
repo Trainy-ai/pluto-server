@@ -362,7 +362,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             : (_u, val) => val == null ? "--" : formatAxisLabel(val),
       });
 
-      const scales = buildScalesConfig({ logXAxis, logYAxis, isDateTime, yMinProp, yMaxProp, yRange });
+      const scales = buildScalesConfig({ logXAxis, logYAxis, isDateTime, yMinProp, yMaxProp, yRange, yZoom });
       const axes = buildAxesConfig({ showXAxis, showYAxis, axisColor, gridColor, isDateTime, isRelativeTime, logXAxis, logYAxis, xlabel, ylabel, timeRange });
       const cursor = buildCursorConfig(effectiveSyncKey, yZoom);
       const bands = buildBandsConfig(processedLines, lastFocusedSeriesRef, crossChartRunIdRef, tableHighlightRef);

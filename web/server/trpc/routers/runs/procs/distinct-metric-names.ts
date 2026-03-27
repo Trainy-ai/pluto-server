@@ -2,6 +2,10 @@ import { z } from "zod";
 import { protectedOrgProcedure } from "../../../../lib/trpc";
 import { queryDistinctMetrics } from "../../../../lib/queries/metric-summaries";
 import { sqidDecode } from "../../../../lib/sqid";
+import { getCached, setCached, buildBatchCacheKey } from "../../../../lib/cache";
+
+/** Fixed 30s TTL — deduplicates the 5-10 identical calls per page load */
+const DISTINCT_METRICS_TTL = 30 * 1000;
 
 /**
  * Discover all distinct metric names in a project.
@@ -20,6 +24,17 @@ export const distinctMetricNamesProcedure = protectedOrgProcedure
   .query(async ({ ctx, input }) => {
     const numericRunIds = input.runIds?.map((sqid) => sqidDecode(sqid));
 
+    const cacheKey = buildBatchCacheKey("distinctMetricNames", {
+      orgId: input.organizationId,
+      projectName: input.projectName,
+      search: input.search,
+      regex: input.regex,
+      runIds: numericRunIds ?? [],
+    });
+
+    const cached = await getCached<{ metricNames: string[] }>(cacheKey);
+    if (cached) return cached;
+
     const metricNames = await queryDistinctMetrics(ctx.clickhouse, {
       organizationId: input.organizationId,
       projectName: input.projectName,
@@ -30,5 +45,7 @@ export const distinctMetricNamesProcedure = protectedOrgProcedure
       ...(numericRunIds && numericRunIds.length > 0 ? { limit: 10000 } : {}),
     });
 
-    return { metricNames };
+    const result = { metricNames };
+    await setCached(cacheKey, result, DISTINCT_METRICS_TTL);
+    return result;
   });

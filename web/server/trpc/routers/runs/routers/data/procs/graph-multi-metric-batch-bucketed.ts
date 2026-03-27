@@ -1,11 +1,12 @@
 import { z } from "zod";
 import { protectedOrgProcedure } from "../../../../../../lib/trpc";
 import { resolveRunId } from "../../../../../../lib/resolve-run-id";
-import { queryRunMetricsMultiMetricBatchBucketed } from "../../../../../../lib/queries";
-import type { BucketedMetricDataPoint } from "../../../../../../lib/queries";
+import { queryRunMetricsMultiMetricBatchBucketed, toColumnar } from "../../../../../../lib/queries";
+import type { ColumnarBucketedSeries } from "../../../../../../lib/queries";
+import { withBatchCache } from "../../../../../../lib/cache";
 
-// Type for multi-metric batch bucketed graph data: logName → encoded runId → bucketed data points
-type GraphMultiMetricBatchBucketedData = Record<string, Record<string, BucketedMetricDataPoint[]>>;
+// Type for multi-metric batch bucketed graph data: logName → encoded runId → columnar series
+type GraphMultiMetricBatchBucketedData = Record<string, Record<string, ColumnarBucketedSeries>>;
 
 export const graphMultiMetricBatchBucketedProcedure = protectedOrgProcedure
   .input(
@@ -42,29 +43,48 @@ export const graphMultiMetricBatchBucketedProcedure = protectedOrgProcedure
       numericToEncoded.set(numericRunIds[i], encoded);
     });
 
-    const grouped = await queryRunMetricsMultiMetricBatchBucketed(ctx.clickhouse, {
-      organizationId,
-      projectName,
-      runIds: numericRunIds,
-      logNames,
-      buckets,
-      stepMin,
-      stepMax,
-      preview,
-    });
+    const result = await withBatchCache<GraphMultiMetricBatchBucketedData>(
+      ctx,
+      "graphMultiMetricBatchBucketed",
+      {
+        runIds: numericRunIds,
+        organizationId,
+        projectName,
+        logNames: logNames as unknown as string[],
+        buckets: buckets ?? 0,
+        stepMin: stepMin ?? -1,
+        stepMax: stepMax ?? -1,
+        preview: preview ?? false,
+      },
+      async () => {
+        const grouped = await queryRunMetricsMultiMetricBatchBucketed(ctx.clickhouse, {
+          organizationId,
+          projectName,
+          runIds: numericRunIds,
+          logNames,
+          buckets,
+          stepMin,
+          stepMax,
+          preview,
+        });
 
-    // Re-key results by encoded runId
-    const result: GraphMultiMetricBatchBucketedData = {};
-    for (const [logName, byNumericRun] of Object.entries(grouped)) {
-      const byEncodedRun: Record<string, BucketedMetricDataPoint[]> = {};
-      for (const [numericId, points] of Object.entries(byNumericRun)) {
-        const encoded = numericToEncoded.get(Number(numericId));
-        if (encoded) {
-          byEncodedRun[encoded] = points;
+        // Re-key results by encoded runId and convert to columnar format
+        const data: GraphMultiMetricBatchBucketedData = {};
+        for (const [logName, byNumericRun] of Object.entries(grouped)) {
+          const byEncodedRun: Record<string, ColumnarBucketedSeries> = {};
+          for (const [numericId, points] of Object.entries(byNumericRun)) {
+            const encoded = numericToEncoded.get(Number(numericId));
+            if (encoded) {
+              byEncodedRun[encoded] = toColumnar(points);
+            }
+          }
+          data[logName] = byEncodedRun;
         }
-      }
-      result[logName] = byEncodedRun;
-    }
+        return data;
+      },
+    );
 
-    return result;
+    // Tag as JSON-safe to skip superjson's expensive object graph traversal
+    // (chart data is all plain numbers/strings — no Dates, BigInts, Maps)
+    return { ...result, __json_safe: true } as unknown as typeof result;
   });

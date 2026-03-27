@@ -3,6 +3,7 @@ import { protectedOrgProcedure } from "../../../../../../lib/trpc";
 import { resolveRunId } from "../../../../../../lib/resolve-run-id";
 import { queryRunMetricsBatchBucketedByLogName } from "../../../../../../lib/queries";
 import type { BucketedMetricDataPoint } from "../../../../../../lib/queries";
+import { withBatchCache } from "../../../../../../lib/cache";
 
 // Type for batch bucketed graph data: map of encoded runId → bucketed data points
 type GraphBatchBucketedData = Record<string, BucketedMetricDataPoint[]>;
@@ -42,25 +43,31 @@ export const graphBatchBucketedProcedure = protectedOrgProcedure
       numericToEncoded.set(numericRunIds[i], encoded);
     });
 
-    const grouped = await queryRunMetricsBatchBucketedByLogName(ctx.clickhouse, {
-      organizationId,
-      projectName,
-      runIds: numericRunIds,
-      logName,
-      buckets,
-      stepMin,
-      stepMax,
-      preview,
-    });
+    return withBatchCache(
+      ctx,
+      "graphBatchBucketed",
+      { runIds: numericRunIds, organizationId, projectName, logName, buckets, stepMin, stepMax, preview },
+      async () => {
+        const grouped = await queryRunMetricsBatchBucketedByLogName(ctx.clickhouse, {
+          organizationId,
+          projectName,
+          runIds: numericRunIds,
+          logName,
+          buckets,
+          stepMin,
+          stepMax,
+          preview,
+        });
 
-    // Re-key results by encoded runId
-    const result: GraphBatchBucketedData = {};
-    for (const [numericId, points] of Object.entries(grouped)) {
-      const encoded = numericToEncoded.get(Number(numericId));
-      if (encoded) {
-        result[encoded] = points;
-      }
-    }
-
-    return result;
+        // Re-key results by encoded runId
+        const result: GraphBatchBucketedData = {};
+        for (const [numericId, points] of Object.entries(grouped)) {
+          const encoded = numericToEncoded.get(Number(numericId));
+          if (encoded) {
+            result[encoded] = points;
+          }
+        }
+        return result;
+      },
+    );
   });

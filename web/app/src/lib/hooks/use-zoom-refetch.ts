@@ -1,7 +1,7 @@
-import { useState, useMemo, useCallback } from "react";
-import { useQueries } from "@tanstack/react-query";
+import { useState, useMemo, useCallback, useRef } from "react";
+import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { trpc, trpcClient } from "@/utils/trpc";
-import { MULTI_METRIC_CHUNK, chunkArray, type BucketedChartDataPoint } from "@/lib/chart-data-utils";
+import { MULTI_METRIC_CHUNK, chunkArray, fromColumnar, type BucketedChartDataPoint, type ColumnarBucketedSeries } from "@/lib/chart-data-utils";
 import { translateZoomToStepRange, type TimeStepMapping } from "./zoom-translate";
 
 // Re-export for consumers
@@ -78,6 +78,7 @@ export function useZoomRefetch({
   buckets: zoomBuckets,
 }: UseZoomRefetchOptions): UseZoomRefetchReturn {
   const [localZoomRange, setLocalZoomRange] = useState<[number, number] | null>(null);
+  const queryClient = useQueryClient();
 
   const isRelativeTime = selectedLog === "Relative Time";
   const isStep = selectedLog === "Step";
@@ -99,7 +100,13 @@ export function useZoomRefetch({
     [rawZoomRange, selectedLog, timeStepMapping, isRelativeTime, sourceStepRange],
   );
 
-  const isZooming = enabled && zoomStepRange !== null && supportsZoom;
+  // Skip zoom refetch when already at max resolution: if the step range
+  // fits within the bucket count, every step gets its own bucket and
+  // refetching would return identical data.
+  const isMaxResolution = zoomStepRange !== null &&
+    (zoomStepRange[1] - zoomStepRange[0] + 1) <= zoomBuckets;
+
+  const isZooming = enabled && zoomStepRange !== null && supportsZoom && !isMaxResolution;
   const useBatch = runIds.length >= BATCH_THRESHOLD;
   const isMultiMetric = logNames.length > 1;
 
@@ -183,22 +190,30 @@ export function useZoomRefetch({
         : [],
   });
 
+  // Preserve previous zoom data while new queries are in-flight.
+  // Without this, the chart flashes back to the full-range view during refetch
+  // because zoomDataMap becomes null while queries load.
+  const prevZoomDataRef = useRef<Map<string, BucketedChartDataPoint[]> | null>(null);
+
   // Map zoom query results by zoomKey(runId, metric)
   const zoomDataMap = useMemo(() => {
-    if (!isZooming || !zoomStepRange) return null;
+    if (!isZooming || !zoomStepRange) {
+      prevZoomDataRef.current = null;
+      return null;
+    }
 
     const map = new Map<string, BucketedChartDataPoint[]>();
 
     if (useBatch && isMultiMetric) {
-      // Multi-metric path: merge all chunk responses
+      // Multi-metric path: merge all chunk responses, converting columnar → row format
       for (const q of zoomMultiQueries) {
-        const data = q.data as Record<string, Record<string, BucketedChartDataPoint[]>> | undefined;
+        const data = q.data as Record<string, Record<string, ColumnarBucketedSeries>> | undefined;
         if (data) {
           for (const [metric, byRun] of Object.entries(data)) {
             for (const runId of runIds) {
-              const points = byRun[runId];
-              if (points && points.length > 0) {
-                map.set(zoomKey(runId, metric), points);
+              const columnar = byRun[runId];
+              if (columnar && columnar.steps.length > 0) {
+                map.set(zoomKey(runId, metric), fromColumnar(columnar));
               }
             }
           }
@@ -226,24 +241,59 @@ export function useZoomRefetch({
       });
     }
 
-    return map.size > 0 ? map : null;
+    if (map.size > 0) {
+      prevZoomDataRef.current = map;
+      return map;
+    }
+
+    // Queries still loading — return previous zoom data to avoid flash to full range
+    return prevZoomDataRef.current;
   }, [isZooming, zoomStepRange, useBatch, isMultiMetric, logNames, runIds, ...zoomMultiQueries.map(q => q.data), batchQueries, individualQueries]);
 
   const onZoomRangeChange = useCallback(
     (range: [number, number] | null) => {
       if (range !== null && supportsZoom) {
+        // Compute step range eagerly to fire prefetch BEFORE React re-render.
+        // Without this, the network request waits 500ms+ for the React render
+        // cascade (useMemo recomputation of 95 series) before useQueries fires.
+        let stepRange: [number, number] | null = null;
         if (isStep) {
-          setLocalZoomRange([Math.floor(range[0]), Math.ceil(range[1])]);
+          stepRange = [Math.floor(range[0]), Math.ceil(range[1])];
+          setLocalZoomRange(stepRange);
         } else {
-          // For relative time, store the raw seconds range — translation
-          // to steps happens in the zoomStepRange useMemo above.
           setLocalZoomRange(range);
+          stepRange = translateZoomToStepRange(range, selectedLog, timeStepMapping);
+        }
+
+        // Eagerly prefetch zoom data — fires the network request immediately,
+        // in parallel with React's re-render cycle
+        if (stepRange && logNames.length > 1 && runIds.length > 0) {
+          const spanSize = stepRange[1] - stepRange[0] + 1;
+          if (spanSize > zoomBuckets) {
+            const chunks = chunkArray(logNames, MULTI_METRIC_CHUNK);
+            for (const chunk of chunks) {
+              const opts = {
+                organizationId,
+                projectName,
+                logNames: chunk,
+                runIds,
+                buckets: zoomBuckets,
+                stepMin: stepRange[0],
+                stepMax: stepRange[1],
+              };
+              queryClient.prefetchQuery({
+                queryKey: [...trpc.runs.data.graphMultiMetricBatchBucketed.queryOptions(opts).queryKey, "zoom"],
+                queryFn: ({ signal }) => trpcClient.runs.data.graphMultiMetricBatchBucketed.query(opts, { signal }),
+                staleTime,
+              });
+            }
+          }
         }
       } else {
         setLocalZoomRange(null);
       }
     },
-    [supportsZoom, isStep],
+    [supportsZoom, isStep, selectedLog, timeStepMapping, logNames, runIds, zoomBuckets, organizationId, projectName, queryClient, staleTime],
   );
 
   const isZoomFetching = isZooming && (

@@ -148,33 +148,35 @@ export function useChartLifecycle({
       ) {
         try {
           isProgrammaticScaleRef.current = true;
+          // Capture current X scale BEFORE setData resets it
+          const prevXMin = chartRef.current.scales.x.min;
+          const prevXMax = chartRef.current.scales.x.max;
+
+          // Single batch: setData + scale restore to prevent visual flash.
+          // Without this, uPlot paints the full-range reset between setData and setScale.
           chartRef.current.batch(() => {
             chartRef.current!.setData(uplotData);
-          });
 
-          // Re-apply synced zoom after setData
-          if (!logXAxis && !isDateTime) {
-            const syncedZoom = chartSyncContextRef.current?.syncedZoomRange;
-            const syncedGroup = chartSyncContextRef.current?.syncedZoomGroupRef?.current;
-            const xData = uplotData[0] as number[];
-            if (syncedZoom && syncedGroup === zoomGroup && zoomOverlapsData(syncedZoom, xData)) {
-              chartRef.current.batch(() => {
+            // Re-apply zoom/scale within the same batch
+            if (!logXAxis && !isDateTime) {
+              const syncedZoom = chartSyncContextRef.current?.syncedZoomRange;
+              const syncedGroup = chartSyncContextRef.current?.syncedZoomGroupRef?.current;
+              const xData = uplotData[0] as number[];
+              if (syncedZoom && syncedGroup === zoomGroup && zoomOverlapsData(syncedZoom, xData)) {
                 chartRef.current!.setScale("x", { min: syncedZoom[0], max: syncedZoom[1] });
-              });
-            } else {
-              const crossZoom = chartSyncContextRef.current?.crossGroupZoomRef?.current;
-              if (crossZoom && crossZoom.group === zoomGroup && zoomOverlapsData(crossZoom.range, xData)) {
-                chartRef.current.batch(() => {
+              } else {
+                const crossZoom = chartSyncContextRef.current?.crossGroupZoomRef?.current;
+                if (crossZoom && crossZoom.group === zoomGroup && zoomOverlapsData(crossZoom.range, xData)) {
                   chartRef.current!.setScale("x", { min: crossZoom.range[0], max: crossZoom.range[1] });
-                });
-              } else if (!userHasZoomedRef.current) {
-                // No active zoom — correct X scale to visible data only.
-                // setData() with auto:true uses the full data[0] range which
-                // includes hidden runs' data, so we override it here.
-                resetXScale(chartRef.current, uplotData, chartSyncContextRef.current?.globalXRange ?? null);
+                } else if (userHasZoomedRef.current && prevXMin != null && prevXMax != null) {
+                  // User has zoomed — preserve their X scale across data updates
+                  chartRef.current!.setScale("x", { min: prevXMin, max: prevXMax });
+                } else if (!userHasZoomedRef.current) {
+                  resetXScale(chartRef.current!, uplotData, chartSyncContextRef.current?.globalXRange ?? null);
+                }
               }
             }
-          }
+          });
         } finally {
           isProgrammaticScaleRef.current = false;
         }

@@ -5,10 +5,12 @@ import {
   getTimeUnitForDisplay,
   alignAndUnzip,
   applyServerBuckets,
+  fromColumnar,
   type ChartSeriesData,
   type SmoothingSettings,
   type ChartDataPoint,
   type BucketedChartDataPoint,
+  type ColumnarBucketedSeries,
 } from "../chart-data-utils";
 
 // ---------------------------------------------------------------------------
@@ -476,5 +478,99 @@ describe("applyServerBuckets", () => {
 
     // Step 3: no flags
     expect(markers.has(3)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fromColumnar (columnar → row-oriented conversion)
+// ---------------------------------------------------------------------------
+
+describe("fromColumnar", () => {
+  it("converts columnar format to row-oriented BucketedChartDataPoint[]", () => {
+    const columnar: ColumnarBucketedSeries = {
+      steps: [0, 10, 20],
+      times: ["2024-01-01T00:00:00", "2024-01-01T00:01:00", "2024-01-01T00:02:00"],
+      values: [1.5, 2.0, null],
+      minYs: [1.0, 1.5, null],
+      maxYs: [2.0, 2.5, null],
+      counts: [10, 20, 5],
+      nfFlags: [0, 0, 1],
+    };
+
+    const rows = fromColumnar(columnar);
+    expect(rows).toHaveLength(3);
+
+    expect(rows[0]).toEqual({
+      step: 0,
+      time: "2024-01-01T00:00:00",
+      value: 1.5,
+      minY: 1.0,
+      maxY: 2.0,
+      count: 10,
+      nonFiniteFlags: 0,
+    });
+
+    expect(rows[1]).toEqual({
+      step: 10,
+      time: "2024-01-01T00:01:00",
+      value: 2.0,
+      minY: 1.5,
+      maxY: 2.5,
+      count: 20,
+      nonFiniteFlags: 0,
+    });
+
+    expect(rows[2]).toEqual({
+      step: 20,
+      time: "2024-01-01T00:02:00",
+      value: null,
+      minY: null,
+      maxY: null,
+      count: 5,
+      nonFiniteFlags: 1,
+    });
+  });
+
+  it("handles empty columnar series", () => {
+    const columnar: ColumnarBucketedSeries = {
+      steps: [],
+      times: [],
+      values: [],
+      minYs: [],
+      maxYs: [],
+      counts: [],
+      nfFlags: [],
+    };
+
+    const rows = fromColumnar(columnar);
+    expect(rows).toHaveLength(0);
+  });
+
+  it("roundtrips through applyServerBuckets without data loss", () => {
+    const original: BucketedChartDataPoint[] = [
+      { step: 0, time: "t0", value: 1.5, minY: 1.0, maxY: 2.0, count: 10, nonFiniteFlags: 0 },
+      { step: 1, time: "t1", value: null, minY: null, maxY: null, count: 5, nonFiniteFlags: 1 },
+      { step: 2, time: "t2", value: 3.0, minY: 2.5, maxY: 3.5, count: 20, nonFiniteFlags: 6 },
+    ];
+
+    // Simulate server toColumnar (manual construction matching the server function)
+    const columnar: ColumnarBucketedSeries = {
+      steps: original.map((p) => p.step),
+      times: original.map((p) => p.time),
+      values: original.map((p) => p.value),
+      minYs: original.map((p) => p.minY),
+      maxYs: original.map((p) => p.maxY),
+      counts: original.map((p) => p.count),
+      nfFlags: original.map((p) => p.nonFiniteFlags ?? 0),
+    };
+
+    const restored = fromColumnar(columnar);
+    expect(restored).toEqual(original);
+
+    // Verify applyServerBuckets produces identical output from restored data
+    const [mainOriginal] = applyServerBuckets(original, "test", "#00f");
+    const [mainRestored] = applyServerBuckets(restored, "test", "#00f");
+    expect(mainRestored.x).toEqual(mainOriginal.x);
+    expect(mainRestored.y).toEqual(mainOriginal.y);
   });
 });

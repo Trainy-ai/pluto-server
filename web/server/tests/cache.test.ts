@@ -76,7 +76,7 @@ describe('Cache Unit Tests', () => {
   describe('getTTLForStatus', () => {
     it('returns short TTL for RUNNING status', () => {
       expect(getTTLForStatus('RUNNING')).toBe(CACHE_TTL.RUNNING);
-      expect(getTTLForStatus('RUNNING')).toBe(5000); // 5 seconds
+      expect(getTTLForStatus('RUNNING')).toBe(30000); // 30 seconds
     });
 
     it('returns long TTL for completed statuses', () => {

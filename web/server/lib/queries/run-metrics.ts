@@ -622,6 +622,40 @@ export async function queryRunMetricsMultiMetricBatchBucketed(
   return grouped;
 }
 
+/** Columnar representation of bucketed series — eliminates repeated key names in JSON */
+export interface ColumnarBucketedSeries {
+  steps: number[];
+  times: string[];
+  values: (number | null)[];
+  minYs: (number | null)[];
+  maxYs: (number | null)[];
+  counts: number[];
+  nfFlags: number[];
+}
+
+/** Convert row-oriented bucketed points to columnar format for wire transfer */
+export function toColumnar(points: BucketedMetricDataPoint[]): ColumnarBucketedSeries {
+  const len = points.length;
+  const steps = new Array<number>(len);
+  const times = new Array<string>(len);
+  const values = new Array<number | null>(len);
+  const minYs = new Array<number | null>(len);
+  const maxYs = new Array<number | null>(len);
+  const counts = new Array<number>(len);
+  const nfFlags = new Array<number>(len);
+  for (let i = 0; i < len; i++) {
+    const p = points[i];
+    steps[i] = p.step;
+    times[i] = p.time;
+    values[i] = p.value;
+    minYs[i] = p.minY;
+    maxYs[i] = p.maxY;
+    counts[i] = p.count;
+    nfFlags[i] = p.nonFiniteFlags;
+  }
+  return { steps, times, values, minYs, maxYs, counts, nfFlags };
+}
+
 export async function queryRunMetricsBatchByLogName(
   ch: typeof clickhouse,
   params: {

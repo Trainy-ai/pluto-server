@@ -15,6 +15,7 @@ import healthRoutes from "./routes/health";
 import versionRoutes from "./routes/version";
 import runRoutes from "./routes/runs-openapi";
 import authRoutes from "./routes/auth";
+import chartDataRoutes from "./routes/chart-data";
 import stripeWebhookRoutes from "./routes/stripe-webhook";
 import linearOAuthRoutes from "./routes/linear-oauth";
 import { withApiKey } from "./routes/middleware";
@@ -83,6 +84,7 @@ app.route("/api/runs", runRoutes);
 app.route("/api/auth", authRoutes);
 app.route("/api/stripe", stripeWebhookRoutes);
 app.route("/api/integrations", linearOAuthRoutes);
+app.route("/api/chart-data", chartDataRoutes);
 
 app.use(
   "/trpc/*",

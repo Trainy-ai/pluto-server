@@ -33,7 +33,7 @@ const l1Cache = new LRUCache<string, CacheEntry<unknown>>({
  * Completed runs are static (long TTL).
  */
 export const CACHE_TTL = {
-  RUNNING: 5 * 1000, // 5 seconds for running runs
+  RUNNING: 30 * 1000, // 30 seconds for running runs
   COMPLETED: 5 * 60 * 1000, // 5 minutes for completed runs
   FAILED: 5 * 60 * 1000,
   TERMINATED: 5 * 60 * 1000,
@@ -132,6 +132,27 @@ export function clearL1Cache(): void {
 }
 
 /**
+ * Build a deterministic cache key that supports array-valued params
+ * (e.g., runIds, logNames). Arrays are sorted for order-independence.
+ */
+export function buildBatchCacheKey(
+  procedure: string,
+  params: Record<string, string | number | boolean | string[] | number[] | undefined>
+): string {
+  const parts: string[] = [];
+  for (const k of Object.keys(params).sort()) {
+    const v = params[k];
+    if (v === undefined) continue;
+    if (Array.isArray(v)) {
+      parts.push(`${k}=${[...v].sort().join(",")}`);
+    } else {
+      parts.push(`${k}=${v}`);
+    }
+  }
+  return `mlop:${procedure}:${parts.join(":")}`;
+}
+
+/**
  * Cache options for withCache wrapper.
  */
 interface WithCacheOptions {
@@ -147,6 +168,16 @@ interface CacheParams {
   organizationId: string;
   projectName: string;
   [key: string]: string | number | undefined;
+}
+
+/**
+ * Cache parameters for batch endpoints that operate on multiple runs.
+ */
+interface BatchCacheParams {
+  runIds: number[];
+  organizationId: string;
+  projectName: string;
+  [key: string]: string | number | boolean | string[] | number[] | undefined;
 }
 
 /**
@@ -210,5 +241,57 @@ export async function withCache<T>(
   // Cache the result
   await setCached(cacheKey, result, ttlMs);
 
+  return result;
+}
+
+/**
+ * Cache wrapper for batch endpoints that operate on multiple runs
+ * (e.g., graphBatchBucketed, graphMultiMetricBatchBucketed).
+ *
+ * Uses worst-case (shortest) TTL across all runs — if any run is RUNNING,
+ * the entry gets a 5s TTL; if all are COMPLETED, it gets 5 minutes.
+ */
+export async function withBatchCache<T>(
+  ctx: { prisma: PrismaClient },
+  procedure: string,
+  params: BatchCacheParams,
+  queryFn: () => Promise<T>,
+  options?: WithCacheOptions
+): Promise<T> {
+  const cacheKey = buildBatchCacheKey(procedure, {
+    orgId: params.organizationId,
+    projectName: params.projectName,
+    ...Object.fromEntries(
+      Object.entries(params).filter(
+        ([k]) => !["organizationId", "projectName"].includes(k)
+      )
+    ),
+  });
+
+  // Try cache first
+  const cached = await getCached<T>(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  // Get worst-case status across all runs for TTL
+  const runs = await ctx.prisma.runs.findMany({
+    where: { id: { in: params.runIds } },
+    select: { status: true },
+  });
+
+  let ttlMs: number;
+  if (runs.length === 0) {
+    ttlMs = CACHE_TTL.RUNNING;
+  } else {
+    ttlMs = Math.min(...runs.map((r: { status: string }) => getTTLForStatus(r.status as RunStatus)));
+  }
+
+  if (options?.maxTtlMs) {
+    ttlMs = Math.min(ttlMs, options.maxTtlMs);
+  }
+
+  const result = await queryFn();
+  await setCached(cacheKey, result, ttlMs);
   return result;
 }

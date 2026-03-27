@@ -4,7 +4,6 @@
 
 import { smoothData } from "@/lib/math/smoothing";
 import type { SmoothingAlgorithm } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/use-line-settings";
-
 // ============================
 // Types
 // ============================
@@ -265,8 +264,13 @@ export function applySmoothing(
 // Multi-metric batch utilities
 // ============================
 
-/** Chunk size for multi-metric batch queries (100 metrics fits within 8KB URL limit) */
-export const MULTI_METRIC_CHUNK = 100;
+/**
+ * Chunk size for multi-metric batch queries.
+ * Kept at 20 to handle long metric names (e.g. "training/dataset/alibaba_cluster_trace_2018")
+ * that inflate URL-encoded size well beyond short-name estimates, and to limit per-query
+ * ClickHouse load so a single widget doesn't saturate the database.
+ */
+export const MULTI_METRIC_CHUNK = 20;
 
 /** Split an array into chunks of `size` */
 export function chunkArray<T>(arr: T[], size: number): T[][] {
@@ -277,6 +281,35 @@ export function chunkArray<T>(arr: T[], size: number): T[][] {
   return chunks;
 }
 
+
+/** Columnar representation of bucketed series from the multi-metric batch endpoint */
+export interface ColumnarBucketedSeries {
+  steps: number[];
+  times: string[];
+  values: (number | null)[];
+  minYs: (number | null)[];
+  maxYs: (number | null)[];
+  counts: number[];
+  nfFlags: number[];
+}
+
+/** Convert columnar wire format back to row-oriented BucketedChartDataPoint[] */
+export function fromColumnar(series: ColumnarBucketedSeries): BucketedChartDataPoint[] {
+  const len = series.steps.length;
+  const result = new Array<BucketedChartDataPoint>(len);
+  for (let i = 0; i < len; i++) {
+    result[i] = {
+      step: series.steps[i],
+      time: series.times[i],
+      value: series.values[i],
+      minY: series.minYs[i],
+      maxY: series.maxYs[i],
+      count: series.counts[i],
+      nonFiniteFlags: series.nfFlags[i],
+    };
+  }
+  return result;
+}
 
 /** Bucketed data point from server-side downsampling (graphBucketed endpoint) */
 export interface BucketedChartDataPoint {

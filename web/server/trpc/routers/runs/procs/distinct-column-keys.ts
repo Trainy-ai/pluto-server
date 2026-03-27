@@ -1,11 +1,20 @@
 import { z } from "zod";
 import { protectedOrgProcedure } from "../../../../lib/trpc";
+import { getCached, setCached, buildBatchCacheKey } from "../../../../lib/cache";
 
 /** Maximum number of keys to return per source */
 const INITIAL_LOAD_LIMIT = 100;
 
 /** Maximum number of keys to return from a search */
 const SEARCH_RESULT_LIMIT = 100;
+
+/** 60s TTL — column keys only change when new runs ingest new config keys */
+const COLUMN_KEYS_CACHE_TTL = 60 * 1000;
+
+type ColumnKeysResult = {
+  configKeys: { key: string; type: "text" | "number" | "date" }[];
+  systemMetadataKeys: { key: string; type: "text" | "number" | "date" }[];
+};
 
 /**
  * Get the most recently discovered config and systemMetadata keys
@@ -19,6 +28,14 @@ export const distinctColumnKeysProcedure = protectedOrgProcedure
     })
   )
   .query(async ({ ctx, input }) => {
+    const cacheKey = buildBatchCacheKey("distinctColumnKeys", {
+      orgId: input.organizationId,
+      projectName: input.projectName,
+    });
+
+    const cached = await getCached<ColumnKeysResult>(cacheKey);
+    if (cached) return cached;
+
     const project = await ctx.prisma.projects.findFirst({
       where: {
         name: input.projectName,
@@ -56,14 +73,16 @@ export const distinctColumnKeysProcedure = protectedOrgProcedure
 
     // Sort alphabetically for display after fetching by recency
     const configKeys = configRows
-      .map((r) => ({ key: r.key, type: r.dataType as "text" | "number" | "date" }))
-      .sort((a, b) => a.key.localeCompare(b.key));
+      .map((r: { key: string; dataType: string }) => ({ key: r.key, type: r.dataType as "text" | "number" | "date" }))
+      .sort((a: { key: string }, b: { key: string }) => a.key.localeCompare(b.key));
 
     const systemMetadataKeys = sysMetaRows
-      .map((r) => ({ key: r.key, type: r.dataType as "text" | "number" | "date" }))
-      .sort((a, b) => a.key.localeCompare(b.key));
+      .map((r: { key: string; dataType: string }) => ({ key: r.key, type: r.dataType as "text" | "number" | "date" }))
+      .sort((a: { key: string }, b: { key: string }) => a.key.localeCompare(b.key));
 
-    return { configKeys, systemMetadataKeys };
+    const result: ColumnKeysResult = { configKeys, systemMetadataKeys };
+    await setCached(cacheKey, result, COLUMN_KEYS_CACHE_TTL);
+    return result;
   });
 
 /**

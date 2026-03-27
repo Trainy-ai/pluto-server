@@ -1,5 +1,9 @@
 import { z } from "zod";
 import { protectedOrgProcedure } from "../../../../lib/trpc";
+import { getCached, setCached, buildBatchCacheKey } from "../../../../lib/cache";
+
+/** 30s TTL — tags change when users add/remove tags from runs */
+const TAGS_CACHE_TTL = 30 * 1000;
 
 /**
  * Get all distinct tags across all runs in a project.
@@ -12,6 +16,14 @@ export const distinctTagsProcedure = protectedOrgProcedure
     })
   )
   .query(async ({ ctx, input }) => {
+    const cacheKey = buildBatchCacheKey("distinctTags", {
+      orgId: input.organizationId,
+      projectName: input.projectName,
+    });
+
+    const cached = await getCached<{ tags: string[] }>(cacheKey);
+    if (cached) return cached;
+
     // Get the project
     const project = await ctx.prisma.projects.findFirst({
       where: {
@@ -37,7 +49,7 @@ export const distinctTagsProcedure = protectedOrgProcedure
       ORDER BY tag
     `;
 
-    return {
-      tags: results.map((r) => r.tag),
-    };
+    const result = { tags: results.map((r: { tag: string }) => r.tag) };
+    await setCached(cacheKey, result, TAGS_CACHE_TTL);
+    return result;
   });

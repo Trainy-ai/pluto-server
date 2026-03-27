@@ -86,12 +86,9 @@ export function buildSetScaleHook({
         }
       }
 
-      // Auto-scale Y axis when X scale changes (zoom)
-      // Skip if user has manually zoomed Y-axis (yZoom mode) to preserve their range.
-      // For log scale without manual bounds, let uPlot handle it via distr:3
-      // For log scale WITH manual bounds, apply them during zoom too
-      // If user has manually zoomed Y, restore their range after uPlot's auto:true overwrites it.
-      // queueMicrotask runs after uPlot finishes processing (including auto-range) but before paint.
+      // Auto-scale Y axis when X scale changes (zoom).
+      // Deferred to rAF to avoid blocking the mouseup handler — the Y range
+      // computation scans all series×points and is expensive with 95+ series.
       if (userHasZoomedYRef.current && userYZoomRangeRef.current) {
         const [savedYMin, savedYMax] = userYZoomRangeRef.current;
         isXZoomAutoRangeRef.current = true;
@@ -105,81 +102,99 @@ export function buildSetScaleHook({
           }
         });
       } else if (!userHasZoomedYRef.current && (!logYAxis || (logYAxis && (yMinProp != null || yMaxProp != null)))) {
-        // Find Y min/max for data points within visible X range
-        let visibleYMin = Infinity;
-        let visibleYMax = -Infinity;
+        // Defer Y-range scan + no-data check to rAF so mouseup stays fast
+        requestAnimationFrame(() => {
+          // Combined single-pass scan: find visible Y range AND check for any data
+          let visibleYMin = Infinity;
+          let visibleYMax = -Infinity;
+          let hasVisibleData = false;
 
-        const xData = u.data[0] as number[];
-        for (let si = 1; si < u.data.length; si++) {
-          const yData = u.data[si] as (number | null)[];
-          for (let i = 0; i < xData.length; i++) {
+          const xData = u.data[0] as number[];
+          // Binary search for the start of the visible range (xData is sorted)
+          let startIdx = 0;
+          let lo = 0;
+          let hi = xData.length - 1;
+          while (lo <= hi) {
+            const mid = (lo + hi) >>> 1;
+            if (xData[mid] < xMin) { lo = mid + 1; } else { hi = mid - 1; }
+          }
+          startIdx = lo;
+
+          for (let i = startIdx; i < xData.length; i++) {
             const x = xData[i];
-            const y = yData[i];
-            if (x >= xMin && x <= xMax && y != null && Number.isFinite(y)) {
-              visibleYMin = Math.min(visibleYMin, y);
-              visibleYMax = Math.max(visibleYMax, y);
+            if (x > xMax) break; // Past visible range
+            for (let si = 1; si < u.data.length; si++) {
+              const y = (u.data[si] as (number | null)[])[i];
+              if (y != null) {
+                hasVisibleData = true;
+                if (Number.isFinite(y)) {
+                  if (y < visibleYMin) visibleYMin = y;
+                  if (y > visibleYMax) visibleYMax = y;
+                }
+              }
             }
           }
-        }
 
-        // Only update if we found valid data
-        if (visibleYMin !== Infinity && visibleYMax !== -Infinity) {
-          let newYMin: number;
-          let newYMax: number;
+          // Update Y scale if we found valid data
+          if (visibleYMin !== Infinity && visibleYMax !== -Infinity) {
+            let newYMin: number;
+            let newYMax: number;
 
-          if (logYAxis) {
-            // For log scale, use data range directly (no linear padding)
-            newYMin = visibleYMin;
-            newYMax = visibleYMax;
-          } else {
-            const range = visibleYMax - visibleYMin;
-            // Add 5% padding, with minimum padding for flat lines
-            const padding = Math.max(range * 0.05, Math.abs(visibleYMax) * 0.02, 0.1);
-            newYMin = visibleYMin >= 0 ? Math.max(0, visibleYMin - padding) : visibleYMin - padding;
-            newYMax = visibleYMax + padding;
-          }
+            if (logYAxis) {
+              newYMin = visibleYMin;
+              newYMax = visibleYMax;
+            } else {
+              const range = visibleYMax - visibleYMin;
+              const padding = Math.max(range * 0.05, Math.abs(visibleYMax) * 0.02, 0.1);
+              newYMin = visibleYMin >= 0 ? Math.max(0, visibleYMin - padding) : visibleYMin - padding;
+              newYMax = visibleYMax + padding;
+            }
 
-          // Respect manual bounds if set
-          if (yMinProp != null) newYMin = yMinProp;
-          if (yMaxProp != null) newYMax = yMaxProp;
+            if (yMinProp != null) newYMin = yMinProp;
+            if (yMaxProp != null) newYMax = yMaxProp;
 
-          // Only update if meaningfully different to avoid infinite loops
-          const currentYMin = u.scales.y.min ?? 0;
-          const currentYMax = u.scales.y.max ?? 1;
-          const threshold = (currentYMax - currentYMin) * 0.01;
+            const currentYMin = u.scales.y.min ?? 0;
+            const currentYMax = u.scales.y.max ?? 1;
+            const threshold = (currentYMax - currentYMin) * 0.01;
 
-          if (Math.abs(newYMin - currentYMin) > threshold ||
-              Math.abs(newYMax - currentYMax) > threshold) {
-            try {
-              isProgrammaticScaleRef.current = true;
-              u.setScale("y", { min: newYMin, max: newYMax });
-            } finally {
-              isProgrammaticScaleRef.current = false;
+            if (Math.abs(newYMin - currentYMin) > threshold ||
+                Math.abs(newYMax - currentYMax) > threshold) {
+              try {
+                isProgrammaticScaleRef.current = true;
+                u.setScale("y", { min: newYMin, max: newYMax });
+              } finally {
+                isProgrammaticScaleRef.current = false;
+              }
             }
           }
-        }
+
+          // "No data in view" toast
+          const zoomKey = `${xMin.toFixed(2)}-${xMax.toFixed(2)}`;
+          if (!hasVisibleData && userHasZoomedRef.current && noDataToastShownRef.current !== zoomKey) {
+            noDataToastShownRef.current = zoomKey;
+            toast.info("No data points in current view", {
+              description: "Double-click the chart to reset zoom",
+              duration: 4000,
+            });
+          }
+        });
+        return; // Skip the synchronous no-data check below
       }
 
-      // Check if any series has visible data points in the zoom range
-      // If not, show a notification to help the user
+      // No-data check for the userHasZoomedY path (already deferred above for auto-range)
       const zoomKey = `${xMin.toFixed(2)}-${xMax.toFixed(2)}`;
-      if (noDataToastShownRef.current !== zoomKey) {
-        let hasVisibleData = false;
+      if (noDataToastShownRef.current !== zoomKey && userHasZoomedRef.current) {
+        // Quick check — only need one data point
         const xData = u.data[0] as number[];
-
-        for (let si = 1; si < u.data.length && !hasVisibleData; si++) {
-          const yData = u.data[si] as (number | null)[];
-          for (let i = 0; i < xData.length; i++) {
-            const x = xData[i];
-            const y = yData[i];
-            if (x >= xMin && x <= xMax && y != null) {
-              hasVisibleData = true;
-              break;
-            }
+        let lo2 = 0; let hi2 = xData.length - 1;
+        while (lo2 <= hi2) { const m = (lo2 + hi2) >>> 1; if (xData[m] < xMin) lo2 = m + 1; else hi2 = m - 1; }
+        let found = false;
+        for (let i = lo2; i < xData.length && xData[i] <= xMax && !found; i++) {
+          for (let si = 1; si < u.data.length && !found; si++) {
+            if ((u.data[si] as (number | null)[])[i] != null) found = true;
           }
         }
-
-        if (!hasVisibleData && userHasZoomedRef.current) {
+        if (!found) {
           noDataToastShownRef.current = zoomKey;
           toast.info("No data points in current view", {
             description: "Double-click the chart to reset zoom",

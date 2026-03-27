@@ -16,8 +16,10 @@ import {
   alignAndUnzip,
   applySmoothing,
   bucketedAndSmooth,
+  fromColumnar,
   MULTI_METRIC_CHUNK,
   chunkArray,
+  type ColumnarBucketedSeries,
 } from "@/lib/chart-data-utils";
 import { resolveChartBuckets } from "@/lib/chart-bucket-estimate";
 import { parseChTimeMs } from "@/components/charts/lib/format";
@@ -281,12 +283,16 @@ const MultiLineChartInner = memo(
     const standardDataMap = useMemo(() => {
       const map = new Map<string, Record<string, BucketedChartDataPoint[]>>();
       if (isMultiMetricQuery) {
-        // Multi-metric: merge all chunk responses
+        // Multi-metric: merge all chunk responses, converting columnar → row format
         for (const q of standardMultiQueries) {
-          const data = q.data as Record<string, Record<string, BucketedChartDataPoint[]>> | undefined;
+          const data = q.data as Record<string, Record<string, ColumnarBucketedSeries>> | undefined;
           if (data) {
             for (const [logName, runData] of Object.entries(data)) {
-              map.set(logName, runData);
+              const converted: Record<string, BucketedChartDataPoint[]> = {};
+              for (const [runId, columnar] of Object.entries(runData)) {
+                converted[runId] = fromColumnar(columnar);
+              }
+              map.set(logName, converted);
             }
           }
         }
