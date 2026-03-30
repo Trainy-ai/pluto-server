@@ -29,6 +29,8 @@ interface LineChartWithFetchProps {
   boundsResetKey?: number;
   runCreatedAt?: string;
   runName?: string;
+  /** Number of chart columns in the layout (affects auto bucket resolution) */
+  columns?: number;
 }
 
 type ChartData = {
@@ -299,14 +301,15 @@ export const LineChartWithFetch = memo(
     boundsResetKey,
     runCreatedAt,
     runName,
+    columns,
   }: LineChartWithFetchProps) => {
     useCheckDatabaseSize(metricsCache);
 
     const { settings } = useLineSettings(tenantId, projectName, runId);
 
     const resolvedBuckets = useMemo(
-      () => resolveChartBuckets(settings.chartResolution, settings.smoothing.enabled),
-      [settings.chartResolution, settings.smoothing.enabled],
+      () => resolveChartBuckets(settings.chartResolution, settings.smoothing.enabled, columns),
+      [settings.chartResolution, settings.smoothing.enabled, columns],
     );
 
     const { data, isLoading, isError } = useGetGraphProgressive(

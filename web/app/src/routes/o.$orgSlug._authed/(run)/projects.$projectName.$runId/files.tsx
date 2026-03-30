@@ -22,6 +22,7 @@ import { StepNavigator } from "./~components/shared/step-navigator";
 import { LineChartWithFetch } from "./~components/group/line-chart";
 import { useLineSettings } from "./~components/use-line-settings";
 import { SmoothingSlider } from "@/components/charts/smoothing-slider";
+import { ChartSyncProvider } from "@/components/charts/context/chart-sync-context";
 import LineSettings from "@/routes/o.$orgSlug._authed/(runComparison)/projects.$projectName/~components/line-settings";
 
 export const Route = createFileRoute(
@@ -261,36 +262,38 @@ function RouteComponent() {
             </div>
 
             {/* Main: File/Metric Preview */}
-            <div className="flex min-w-0 flex-1 flex-col">
-              {selectedMetric ? (
-                <div className="flex min-h-0 flex-1 flex-col">
-                  <div className="flex items-center justify-between border-b px-4 py-2">
-                    <h2 className="text-lg font-semibold">{selectedMetric.logName}</h2>
-                    <div className="flex items-center gap-3">
-                      <SmoothingSlider
-                        settings={settings}
-                        updateSmoothingSettings={updateSmoothingSettings}
-                        updateSettings={updateSettings}
-                        getSmoothingConfig={getSmoothingConfig}
-                      />
-                      <LineSettings
-                        organizationId={organizationId}
+            <ChartSyncProvider syncKey={`run-files-${runId}`}>
+              <div className="flex min-w-0 flex-1 flex-col">
+                {selectedMetric ? (
+                  <div className="flex min-h-0 flex-1 flex-col">
+                    <div className="flex items-center justify-between border-b px-4 py-2">
+                      <h2 className="text-lg font-semibold">{selectedMetric.logName}</h2>
+                      <div className="flex items-center gap-3">
+                        <SmoothingSlider
+                          settings={settings}
+                          updateSmoothingSettings={updateSmoothingSettings}
+                          updateSettings={updateSettings}
+                          getSmoothingConfig={getSmoothingConfig}
+                        />
+                        <LineSettings
+                          organizationId={organizationId}
+                          projectName={projectName}
+                          logNames={currentRun?.logs?.filter((l: { logType: string }) => l.logType === "METRIC").map((l: { logName: string }) => l.logName) ?? []}
+                          settingsKey={runId}
+                        />
+                      </div>
+                    </div>
+                    <div className="min-h-0 flex-1 p-4">
+                      <LineChartWithFetch
+                        logName={selectedMetric.logName}
+                        tenantId={organizationId}
                         projectName={projectName}
-                        logNames={currentRun?.logs?.filter((l: { logType: string }) => l.logType === "METRIC").map((l: { logName: string }) => l.logName) ?? []}
-                        settingsKey={runId}
+                        runId={runId}
+                        columns={1}
                       />
                     </div>
                   </div>
-                  <div className="min-h-0 flex-1 p-4">
-                    <LineChartWithFetch
-                      logName={selectedMetric.logName}
-                      tenantId={organizationId}
-                      projectName={projectName}
-                      runId={runId}
-                    />
-                  </div>
-                </div>
-              ) : currentFile ? (
+                ) : currentFile ? (
                 <>
                   <div className="min-h-0 flex-1">
                     <FilePreview
@@ -317,7 +320,8 @@ function RouteComponent() {
                   <p className="text-sm">Select a file or metric to preview</p>
                 </div>
               )}
-            </div>
+              </div>
+            </ChartSyncProvider>
           </div>
         )}
       </div>

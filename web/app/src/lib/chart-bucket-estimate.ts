@@ -3,7 +3,7 @@ import type { ChartResolution } from "@/routes/o.$orgSlug._authed/(run)/projects
 const PIXELS_PER_BUCKET = 1; // 1:1 — max fidelity, one bucket per horizontal pixel
 
 /** Server-side bucket limit (must match tRPC validation in graph-bucketed.ts) */
-const MAX_BUCKETS = 20000;
+export const MAX_BUCKETS = 20_000;
 
 /** Preview tier bucket count — fixed for fast first paint */
 export const PREVIEW_BUCKETS = 200;
@@ -48,4 +48,17 @@ export function resolveChartBuckets(
     case "ultra":
       return RESOLUTION_PRESETS.ultra;
   }
+}
+
+/**
+ * Compute the bucket count for a zoom query.
+ * When zoomed, requests 1 bucket per visible step (capped at server max).
+ * Falls back to the overview bucket count when not zoomed.
+ */
+export function computeEffectiveZoomBuckets(
+  zoomStepRange: [number, number] | null,
+  zoomBuckets: number,
+): number {
+  if (zoomStepRange === null) return zoomBuckets;
+  return Math.min(zoomStepRange[1] - zoomStepRange[0] + 1, MAX_BUCKETS);
 }

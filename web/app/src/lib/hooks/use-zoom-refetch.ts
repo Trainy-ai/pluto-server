@@ -3,9 +3,11 @@ import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { trpc, trpcClient } from "@/utils/trpc";
 import { MULTI_METRIC_CHUNK, chunkArray, fromColumnar, type BucketedChartDataPoint, type ColumnarBucketedSeries } from "@/lib/chart-data-utils";
 import { translateZoomToStepRange, type TimeStepMapping } from "./zoom-translate";
+import { MAX_BUCKETS, computeEffectiveZoomBuckets } from "@/lib/chart-bucket-estimate";
 
 // Re-export for consumers
 export { translateZoomToStepRange, type TimeStepMapping } from "./zoom-translate";
+export { computeEffectiveZoomBuckets } from "@/lib/chart-bucket-estimate";
 
 interface UseZoomRefetchOptions {
   organizationId: string;
@@ -106,6 +108,10 @@ export function useZoomRefetch({
   const isMaxResolution = zoomStepRange !== null &&
     (zoomStepRange[1] - zoomStepRange[0] + 1) <= zoomBuckets;
 
+  // When zoomed, request up to 1 bucket per visible step (capped at server max).
+  // This gives much higher fidelity than reusing the overview bucket count.
+  const effectiveZoomBuckets = computeEffectiveZoomBuckets(zoomStepRange, zoomBuckets);
+
   const isZooming = enabled && zoomStepRange !== null && supportsZoom && !isMaxResolution;
   const useBatch = runIds.length >= BATCH_THRESHOLD;
   const isMultiMetric = logNames.length > 1;
@@ -126,7 +132,7 @@ export function useZoomRefetch({
               projectName,
               logNames: chunk,
               runIds,
-              buckets: zoomBuckets,
+              buckets: effectiveZoomBuckets,
               stepMin: zoomStepRange[0],
               stepMax: zoomStepRange[1],
             };
@@ -150,7 +156,7 @@ export function useZoomRefetch({
               projectName,
               logName: metric,
               runIds,
-              buckets: zoomBuckets,
+              buckets: effectiveZoomBuckets,
               stepMin: zoomStepRange[0],
               stepMax: zoomStepRange[1],
             };
@@ -175,7 +181,7 @@ export function useZoomRefetch({
                 projectName,
                 runId,
                 logName: metric,
-                buckets: zoomBuckets,
+                buckets: effectiveZoomBuckets,
                 stepMin: zoomStepRange[0],
                 stepMax: zoomStepRange[1],
               };
