@@ -137,7 +137,7 @@ export function AudioPlayer({ url, fileName, runLabel }: AudioPlayerProps) {
   };
 
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex flex-col gap-1.5" data-testid="audio-player">
       {runLabel && (
         <div className="flex items-center justify-center gap-1.5">
           <div
@@ -160,6 +160,7 @@ export function AudioPlayer({ url, fileName, runLabel }: AudioPlayerProps) {
               size="sm"
               className="h-7 gap-1.5 px-2"
               onClick={() => setShowAnalysis(true)}
+              data-testid="audio-analyze-btn"
             >
               <BarChart3 className="h-3 w-3" />
               <span className="text-xs">Analyze</span>
@@ -169,6 +170,7 @@ export function AudioPlayer({ url, fileName, runLabel }: AudioPlayerProps) {
               size="sm"
               className="h-7 gap-1.5 px-2"
               onClick={handleDownload}
+              data-testid="audio-download-btn"
             >
               <Download className="h-3 w-3" />
               <span className="text-xs">Download</span>
@@ -196,6 +198,7 @@ export function AudioPlayer({ url, fileName, runLabel }: AudioPlayerProps) {
               size="icon"
               className="h-7 w-7"
               onClick={togglePlay}
+              data-testid="audio-play-btn"
             >
               {isPlaying ? (
                 <Pause className="h-3 w-3" />
@@ -245,6 +248,7 @@ export function AudioPlayer({ url, fileName, runLabel }: AudioPlayerProps) {
               size="icon"
               className="h-7 w-7"
               onClick={toggleMute}
+              data-testid="audio-volume-btn"
             >
               {isMuted ? (
                 <VolumeX className="h-3 w-3" />

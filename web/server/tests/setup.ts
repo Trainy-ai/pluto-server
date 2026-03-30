@@ -759,7 +759,7 @@ async function setupTestData(): Promise<TestData> {
     //   bulk-run-000: 1 tag, bulk-run-001: 2 tags, ..., bulk-run-009: 10 tags
     const TAG_POOL = ['training', 'eval', 'sweep', 'baseline', 'production', 'debug', 'nightly', 'gpu', 'distributed', 'final'];
     const bulkRunData = Array.from({ length: SEARCH_TEST_RUN_COUNT }, (_, i) => ({
-      name: `bulk-run-${String(i).padStart(3, '0')}`,
+      name: (i >= 11 && i <= 13) ? `a-bulk-run-${String(i).padStart(3, '0')}` : `bulk-run-${String(i).padStart(3, '0')}`,
       organizationId: org.id,
       projectId: project.id,
       createdById: user.id,
@@ -817,7 +817,10 @@ async function setupTestData(): Promise<TestData> {
       where: {
         projectId: project.id,
         organizationId: org.id,
-        name: { startsWith: 'bulk-run-' },
+        OR: [
+          { name: { startsWith: 'bulk-run-' } },
+          { name: { startsWith: 'a-bulk-run-' } },
+        ],
       },
       select: { id: true, name: true, createdAt: true },
     });
@@ -1910,6 +1913,232 @@ async function setupTestData(): Promise<TestData> {
   });
   console.log('   ✓ Created Y-Zoom Widget Test dashboard view');
 
+  // 11b. Create "Media Widgets Test" dashboard view with all non-line-chart file types
+  console.log('\n1️⃣1️⃣b Creating Media Widgets Test dashboard view...');
+
+  const mediaWidgetsDashboardConfig = {
+    version: 1,
+    sections: [
+      {
+        id: 'media-dynamic-section',
+        name: 'All Media (Dynamic)',
+        collapsed: false,
+        widgets: [],
+        dynamicPattern: '^(images\\/training_viz|distributions\\/weights|video\\/animation|audio\\/tone_sample)$',
+        dynamicPatternMode: 'regex',
+      },
+      {
+        id: 'media-static-section',
+        name: 'All Media (Static)',
+        collapsed: false,
+        widgets: [
+          {
+            id: 'media-static-multiselect',
+            type: 'file-group',
+            config: {
+              title: 'All media types (explicit)',
+              files: ['audio/tone_sample', 'distributions/weights', 'images/training_viz', 'video/animation'],
+            },
+            layout: { x: 0, y: 0, w: 6, h: 5 },
+          },
+          {
+            id: 'media-static-regex-multiselect',
+            type: 'file-group',
+            config: {
+              title: 'All media types (regex)',
+              files: ['regex:^(audio\\/tone_sample|distributions\\/weights|images\\/training_viz|video\\/animation)$'],
+            },
+            layout: { x: 6, y: 0, w: 6, h: 5 },
+          },
+          {
+            id: 'media-static-images-1',
+            type: 'file-group',
+            config: { files: ['images/training_viz'] },
+            layout: { x: 0, y: 5, w: 6, h: 5 },
+          },
+          {
+            id: 'media-static-images-2',
+            type: 'file-group',
+            config: { files: ['images/training_viz'] },
+            layout: { x: 6, y: 5, w: 6, h: 5 },
+          },
+          {
+            id: 'media-static-histograms-1',
+            type: 'file-group',
+            config: { files: ['distributions/gradients'] },
+            layout: { x: 0, y: 10, w: 6, h: 5 },
+          },
+          {
+            id: 'media-static-histograms-2',
+            type: 'file-group',
+            config: { files: ['distributions/gradients'] },
+            layout: { x: 6, y: 10, w: 6, h: 5 },
+          },
+          {
+            id: 'media-static-audio-1',
+            type: 'file-group',
+            config: { files: ['audio/tone_sample'] },
+            layout: { x: 0, y: 15, w: 6, h: 5 },
+          },
+          {
+            id: 'media-static-audio-2',
+            type: 'file-group',
+            config: { files: ['audio/tone_sample'] },
+            layout: { x: 6, y: 15, w: 6, h: 5 },
+          },
+          {
+            id: 'media-static-video-1',
+            type: 'file-group',
+            config: { files: ['video/animation'] },
+            layout: { x: 0, y: 20, w: 6, h: 5 },
+          },
+          {
+            id: 'media-static-video-2',
+            type: 'file-group',
+            config: { files: ['video/animation'] },
+            layout: { x: 6, y: 20, w: 6, h: 5 },
+          },
+          {
+            id: 'media-static-console-1',
+            type: 'file-group',
+            config: { files: ['sys.stderr'] },
+            layout: { x: 0, y: 25, w: 6, h: 5 },
+          },
+          {
+            id: 'media-static-console-2',
+            type: 'file-group',
+            config: { files: ['sys.stderr'] },
+            layout: { x: 6, y: 25, w: 6, h: 5 },
+          },
+        ],
+      },
+    ],
+    settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
+  };
+
+  await prisma.dashboardView.upsert({
+    where: {
+      organizationId_projectId_name: {
+        organizationId: org.id,
+        projectId: project.id,
+        name: 'Media Widgets Test',
+      },
+    },
+    update: { config: mediaWidgetsDashboardConfig },
+    create: {
+      name: 'Media Widgets Test',
+      organizationId: org.id,
+      projectId: project.id,
+      createdById: user.id,
+      isDefault: false,
+      config: mediaWidgetsDashboardConfig,
+    },
+  });
+  console.log('   ✓ Created Media Widgets Test dashboard view');
+
+  // 11c. Create "Line Chart Variants Test" dashboard view with all metric widget combos
+  console.log('\n1️⃣1️⃣c Creating Line Chart Variants Test dashboard view...');
+
+  const lineChartVariantsDashboardConfig = {
+    version: 1,
+    sections: [
+      {
+        id: 'linechart-dynamic-section',
+        name: 'Train Metrics (Dynamic)',
+        collapsed: false,
+        widgets: [],
+        dynamicPattern: 'train/*',
+        dynamicPatternMode: 'search',
+      },
+      {
+        id: 'linechart-static-section',
+        name: 'Chart Widget Variants (Static)',
+        collapsed: false,
+        widgets: [
+          {
+            id: 'linechart-static-multimetric',
+            type: 'chart',
+            config: {
+              title: 'Static multi-metric',
+              metrics: ['train/metric_00', 'train/metric_01', 'train/metric_02'],
+              xAxis: 'step',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+              aggregation: 'LAST',
+              showOriginal: false,
+            },
+            layout: { x: 0, y: 0, w: 6, h: 4 },
+          },
+          {
+            id: 'linechart-dynamic-multimetric',
+            type: 'chart',
+            config: {
+              title: 'Dynamic multi-metric',
+              // glob:train/metric_0[0-2] isn't supported — use regex instead
+              metrics: ['regex:^train/metric_0[0-2]$'],
+              xAxis: 'step',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+              aggregation: 'LAST',
+              showOriginal: false,
+            },
+            layout: { x: 6, y: 0, w: 6, h: 4 },
+          },
+          {
+            id: 'linechart-static-singlemetric',
+            type: 'chart',
+            config: {
+              title: 'Static single-metric',
+              metrics: ['train/metric_10'],
+              xAxis: 'step',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+              aggregation: 'LAST',
+              showOriginal: false,
+            },
+            layout: { x: 0, y: 4, w: 6, h: 4 },
+          },
+          {
+            id: 'linechart-dynamic-singlemetric',
+            type: 'chart',
+            config: {
+              title: 'Dynamic single-metric',
+              // Must match exactly 1 metric — train/metric_10 only
+              metrics: ['regex:^train/metric_10$'],
+              xAxis: 'step',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+              aggregation: 'LAST',
+              showOriginal: false,
+            },
+            layout: { x: 6, y: 4, w: 6, h: 4 },
+          },
+        ],
+      },
+    ],
+    settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
+  };
+
+  await prisma.dashboardView.upsert({
+    where: {
+      organizationId_projectId_name: {
+        organizationId: org.id,
+        projectId: project.id,
+        name: 'Line Chart Variants Test',
+      },
+    },
+    update: { config: lineChartVariantsDashboardConfig },
+    create: {
+      name: 'Line Chart Variants Test',
+      organizationId: org.id,
+      projectId: project.id,
+      createdById: user.id,
+      isDefault: false,
+      config: lineChartVariantsDashboardConfig,
+    },
+  });
+  console.log('   ✓ Created Line Chart Variants Test dashboard view');
+
   // 12. Seed image and file data for file-viewer and step-sync E2E tests
   console.log('\n1️⃣2️⃣ Seeding image and file data...');
 
@@ -2080,6 +2309,378 @@ async function setupTestData(): Promise<TestData> {
     console.log(
       '   ⚠ Missing CLICKHOUSE_URL or STORAGE_* env vars, skipping image/file seeding',
     );
+  }
+
+  // 13. Seed media-rich data (histograms, images, audio, video) for a-bulk-run-011..013
+  // These 3 runs are guaranteed to have ALL media types, enabling reliable E2E tests
+  // across all 6 visualization locations without randomness issues.
+  console.log('\n1️⃣3️⃣ Seeding media-rich data for a-bulk-run-011..013...');
+
+  const mediaStorageEndpoint = process.env.STORAGE_ENDPOINT;
+  const mediaStorageAccessKey = process.env.STORAGE_ACCESS_KEY_ID;
+  const mediaStorageSecretKey = process.env.STORAGE_SECRET_ACCESS_KEY;
+  const mediaStorageBucket = process.env.STORAGE_BUCKET;
+  const mediaStorageRegion = process.env.STORAGE_REGION || 'us-east-1';
+  const mediaClickhouseUrl = process.env.CLICKHOUSE_URL;
+  const mediaClickhouseUser = process.env.CLICKHOUSE_USER || 'default';
+  const mediaClickhousePassword = process.env.CLICKHOUSE_PASSWORD || '';
+
+  if (mediaClickhouseUrl && mediaStorageEndpoint && mediaStorageAccessKey && mediaStorageSecretKey && mediaStorageBucket) {
+    const mediaS3 = new S3Client({
+      endpoint: mediaStorageEndpoint,
+      region: mediaStorageRegion,
+      credentials: {
+        accessKeyId: mediaStorageAccessKey,
+        secretAccessKey: mediaStorageSecretKey,
+      },
+      forcePathStyle: true,
+    });
+
+    const mediaCh = createClient({
+      url: mediaClickhouseUrl,
+      username: mediaClickhouseUser,
+      password: mediaClickhousePassword,
+    });
+
+    // Fetch a-bulk-run-011 through a-bulk-run-013
+    const mediaRuns = await prisma.runs.findMany({
+      where: {
+        projectId: project.id,
+        organizationId: org.id,
+        name: { in: Array.from({ length: 3 }, (_, i) => `a-bulk-run-${String(i + 11).padStart(3, '0')}`) },
+      },
+      select: { id: true, name: true, createdAt: true },
+      orderBy: { name: 'asc' },
+    });
+
+    if (mediaRuns.length > 0) {
+      // --- RunLogs entries for all media types (2 groups each) ---
+      const mediaRunLogData = mediaRuns.flatMap((run) => [
+        // Histograms
+        { runId: run.id, logName: 'distributions/weights', logGroup: 'distributions', logType: 'HISTOGRAM' as const },
+        { runId: run.id, logName: 'distributions/gradients', logGroup: 'distributions', logType: 'HISTOGRAM' as const },
+        // Images
+        { runId: run.id, logName: 'images/training_viz', logGroup: 'images', logType: 'IMAGE' as const },
+        { runId: run.id, logName: 'images/attention_maps', logGroup: 'images', logType: 'IMAGE' as const },
+        // Audio
+        { runId: run.id, logName: 'audio/tone_sample', logGroup: 'audio', logType: 'AUDIO' as const },
+        { runId: run.id, logName: 'audio/speech_sample', logGroup: 'audio', logType: 'AUDIO' as const },
+        // Video
+        { runId: run.id, logName: 'video/animation', logGroup: 'video', logType: 'VIDEO' as const },
+        { runId: run.id, logName: 'video/reconstruction', logGroup: 'video', logType: 'VIDEO' as const },
+      ]);
+      await prisma.runLogs.createMany({ data: mediaRunLogData, skipDuplicates: true });
+      console.log(`   ✓ Registered 8 media log names for ${mediaRuns.length} runs`);
+
+      // --- Histogram data (mlop_data) ---
+      // Steps: every 3rd epoch from 0-27 = [0, 3, 6, 9, 12, 15, 18, 21, 24, 27]
+      const histogramSteps = Array.from({ length: 10 }, (_, i) => i * 3);
+      const histogramRows: Record<string, unknown>[] = [];
+
+      for (const run of mediaRuns) {
+        const baseTime = run.createdAt.getTime();
+        const runIdx = parseInt(run.name.replace(/.*bulk-run-/, ''), 10);
+
+        for (const step of histogramSteps) {
+          const t = step / 27; // normalized progress
+          for (const logName of ['distributions/weights', 'distributions/gradients']) {
+            const isWeights = logName.includes('weights');
+            const std = isWeights ? 0.5 * Math.exp(-t) + 0.02 : 1.0 * Math.exp(-2 * t) + 0.01;
+            // Generate histogram bins
+            const numBins = 30;
+            const min = -3 * std;
+            const max = 3 * std;
+            const freq: number[] = [];
+            for (let b = 0; b < numBins; b++) {
+              const binCenter = min + (max - min) * (b + 0.5) / numBins;
+              // Gaussian-shaped frequency
+              const density = Math.exp(-0.5 * (binCenter / std) ** 2) / (std * Math.sqrt(2 * Math.PI));
+              freq.push(Math.round(density * 1000 * (1 + 0.1 * Math.sin(runIdx + b))));
+            }
+            const maxFreq = Math.max(...freq);
+
+            const histData = JSON.stringify({
+              freq,
+              bins: { min: parseFloat(min.toFixed(6)), max: parseFloat(max.toFixed(6)), num: numBins },
+              shape: 'uniform',
+              type: 'Histogram',
+              maxFreq,
+            });
+
+            histogramRows.push({
+              tenantId: org.id,
+              projectName: project.name,
+              runId: Number(run.id),
+              logGroup: 'distributions',
+              logName,
+              dataType: 'histogram',
+              time: new Date(baseTime + step * 1000).toISOString().replace('T', ' ').replace('Z', ''),
+              step,
+              data: histData,
+            });
+          }
+        }
+      }
+
+      if (histogramRows.length > 0) {
+        await mediaCh.insert({ table: 'mlop_data', values: histogramRows, format: 'JSONEachRow' });
+        console.log(`   ✓ Inserted ${histogramRows.length} histogram rows into ClickHouse`);
+      }
+
+      // --- Image files (mlop_files + S3) ---
+      // Steps: every 5th epoch from 0-25 = [0, 5, 10, 15, 20, 25]
+      const imageStepsMedia = [0, 5, 10, 15, 20, 25];
+      const imageFileRows: Record<string, unknown>[] = [];
+      const mediaS3Uploads: Promise<unknown>[] = [];
+
+      for (const run of mediaRuns) {
+        const baseTime = run.createdAt.getTime();
+        const runIdx = parseInt(run.name.replace(/.*bulk-run-/, ''), 10);
+
+        for (const logName of ['images/training_viz', 'images/attention_maps']) {
+          const logGroup = 'images';
+          for (const step of imageStepsMedia) {
+            const fileName = `epoch_${String(step).padStart(3, '0')}.png`;
+            const r = (step * 40 + runIdx * 20) % 256;
+            const g = (100 + step * 10) % 256;
+            const b = (150 + runIdx * 30) % 256;
+            const png = createSimplePNG(16, 16, r, g, b);
+            const s3Key = `${org.id}/${project.name}/${run.id}/${logName}/${fileName}`;
+
+            imageFileRows.push({
+              tenantId: org.id,
+              projectName: project.name,
+              runId: Number(run.id),
+              logGroup,
+              logName,
+              time: new Date(baseTime + step * 1000).toISOString().replace('T', ' ').replace('Z', ''),
+              step,
+              fileName,
+              fileType: 'image/png',
+              fileSize: png.length,
+            });
+
+            mediaS3Uploads.push(
+              mediaS3.send(new PutObjectCommand({
+                Bucket: mediaStorageBucket,
+                Key: s3Key,
+                Body: png,
+                ContentType: 'image/png',
+              })),
+            );
+          }
+        }
+      }
+
+      if (imageFileRows.length > 0) {
+        await mediaCh.insert({ table: 'mlop_files', values: imageFileRows, format: 'JSONEachRow' });
+        console.log(`   ✓ Inserted ${imageFileRows.length} image file rows into ClickHouse`);
+      }
+
+      // --- Audio files (mlop_files + S3) ---
+      // Steps: every 10th epoch from 0-20 = [0, 10, 20]
+      const audioSteps = [0, 10, 20];
+      const audioFileRows: Record<string, unknown>[] = [];
+
+      for (const run of mediaRuns) {
+        const baseTime = run.createdAt.getTime();
+        const runIdx = parseInt(run.name.replace(/.*bulk-run-/, ''), 10);
+
+        for (const logName of ['audio/tone_sample', 'audio/speech_sample']) {
+          const logGroup = 'audio';
+          for (const step of audioSteps) {
+            const fileName = `step_${String(step).padStart(3, '0')}.wav`;
+            // Create minimal WAV file (44-byte header + 1600 samples of 16-bit mono @ 16kHz = 0.1s)
+            const sampleRate = 16000;
+            const numSamples = 1600;
+            const freq = 220 + step * 20 + runIdx * 10;
+            const wavHeader = Buffer.alloc(44);
+            // RIFF header
+            wavHeader.write('RIFF', 0);
+            wavHeader.writeUInt32LE(36 + numSamples * 2, 4);
+            wavHeader.write('WAVE', 8);
+            // fmt chunk
+            wavHeader.write('fmt ', 12);
+            wavHeader.writeUInt32LE(16, 16); // chunk size
+            wavHeader.writeUInt16LE(1, 20); // PCM
+            wavHeader.writeUInt16LE(1, 22); // mono
+            wavHeader.writeUInt32LE(sampleRate, 24);
+            wavHeader.writeUInt32LE(sampleRate * 2, 28); // byte rate
+            wavHeader.writeUInt16LE(2, 32); // block align
+            wavHeader.writeUInt16LE(16, 34); // bits per sample
+            // data chunk
+            wavHeader.write('data', 36);
+            wavHeader.writeUInt32LE(numSamples * 2, 40);
+
+            const samples = Buffer.alloc(numSamples * 2);
+            for (let i = 0; i < numSamples; i++) {
+              const val = Math.round(16000 * Math.sin(2 * Math.PI * freq * i / sampleRate));
+              samples.writeInt16LE(Math.max(-32768, Math.min(32767, val)), i * 2);
+            }
+            const wav = Buffer.concat([wavHeader, samples]);
+            const s3Key = `${org.id}/${project.name}/${run.id}/${logName}/${fileName}`;
+
+            audioFileRows.push({
+              tenantId: org.id,
+              projectName: project.name,
+              runId: Number(run.id),
+              logGroup,
+              logName,
+              time: new Date(baseTime + step * 1000).toISOString().replace('T', ' ').replace('Z', ''),
+              step,
+              fileName,
+              fileType: 'audio/wav',
+              fileSize: wav.length,
+            });
+
+            mediaS3Uploads.push(
+              mediaS3.send(new PutObjectCommand({
+                Bucket: mediaStorageBucket,
+                Key: s3Key,
+                Body: wav,
+                ContentType: 'audio/wav',
+              })),
+            );
+          }
+        }
+      }
+
+      if (audioFileRows.length > 0) {
+        await mediaCh.insert({ table: 'mlop_files', values: audioFileRows, format: 'JSONEachRow' });
+        console.log(`   ✓ Inserted ${audioFileRows.length} audio file rows into ClickHouse`);
+      }
+
+      // --- Video files (mlop_files + S3) ---
+      // Steps: [0, 10, 20]
+      const videoSteps = [0, 10, 20];
+      const videoFileRows: Record<string, unknown>[] = [];
+
+      for (const run of mediaRuns) {
+        const baseTime = run.createdAt.getTime();
+        const runIdx = parseInt(run.name.replace(/.*bulk-run-/, ''), 10);
+
+        for (const logName of ['video/animation', 'video/reconstruction']) {
+          const logGroup = 'video';
+          for (const step of videoSteps) {
+            const fileName = `step_${String(step).padStart(3, '0')}.mp4`;
+            // Create minimal valid MP4 file (ftyp + mdat boxes)
+            // This is a stub — browsers won't play it but the file viewer will display the entry
+            const ftyp = Buffer.from([
+              0x00, 0x00, 0x00, 0x14, // box size: 20
+              0x66, 0x74, 0x79, 0x70, // 'ftyp'
+              0x69, 0x73, 0x6f, 0x6d, // 'isom'
+              0x00, 0x00, 0x02, 0x00, // minor version
+              0x69, 0x73, 0x6f, 0x6d, // compatible brand
+            ]);
+            const mdatContent = Buffer.alloc(8);
+            mdatContent.write('mdat', 4);
+            mdatContent.writeUInt32BE(8, 0);
+            const mp4 = Buffer.concat([ftyp, mdatContent]);
+            const s3Key = `${org.id}/${project.name}/${run.id}/${logName}/${fileName}`;
+
+            videoFileRows.push({
+              tenantId: org.id,
+              projectName: project.name,
+              runId: Number(run.id),
+              logGroup,
+              logName,
+              time: new Date(baseTime + step * 1000).toISOString().replace('T', ' ').replace('Z', ''),
+              step,
+              fileName,
+              fileType: 'video/mp4',
+              fileSize: mp4.length,
+            });
+
+            mediaS3Uploads.push(
+              mediaS3.send(new PutObjectCommand({
+                Bucket: mediaStorageBucket,
+                Key: s3Key,
+                Body: mp4,
+                ContentType: 'video/mp4',
+              })),
+            );
+          }
+        }
+      }
+
+      if (videoFileRows.length > 0) {
+        await mediaCh.insert({ table: 'mlop_files', values: videoFileRows, format: 'JSONEachRow' });
+        console.log(`   ✓ Inserted ${videoFileRows.length} video file rows into ClickHouse`);
+      }
+
+      // --- Console logs (mlop_logs) ---
+      // sys.stderr and sys.stdout are virtual entries read from mlop_logs (not RunLogs).
+      // Seed error + info log lines so dashboard console widgets have data.
+      const consoleLogRows: Record<string, unknown>[] = [];
+      const errorMessages = [
+        'CUDA out of memory. Tried to allocate 512MB. GPU 0 has 128MB free',
+        'NaN detected in gradients at step {step}. Skipping batch.',
+        'WARNING: Loss spike detected. Reducing loss scale.',
+        'Gradient overflow detected in layer 2. Clipping applied.',
+        'Numerical instability in attention scores. Applying clipping.',
+      ];
+      const infoMessages = [
+        '[Epoch {epoch}/30] train_loss=0.4523 val_loss=0.5012 acc=0.812',
+        '  LR: 0.000300 | Grad norm: 0.845 | Batch time: 125.3ms',
+        '  GPU mem: 24.5GB | Util: 87% | Throughput: 12500 samples/s',
+        'Saving checkpoint at epoch {epoch}...',
+        'Checkpoint saved successfully',
+        'Evaluation complete: accuracy=0.8234 f1=0.7891',
+      ];
+
+      for (const run of mediaRuns) {
+        const baseTime = run.createdAt.getTime();
+        let lineNum = 0;
+
+        // stderr lines (logType = 'error')
+        for (let i = 0; i < 20; i++) {
+          const msg = errorMessages[i % errorMessages.length]
+            .replace('{step}', String(i * 50))
+            .replace('{epoch}', String(i));
+          consoleLogRows.push({
+            tenantId: org.id,
+            projectName: project.name,
+            runId: Number(run.id),
+            logType: 'error',
+            time: new Date(baseTime + i * 2000).toISOString().replace('T', ' ').replace('Z', ''),
+            lineNumber: lineNum++,
+            message: msg,
+            step: i,
+          });
+        }
+
+        // stdout lines (logType = 'info')
+        for (let i = 0; i < 30; i++) {
+          const msg = infoMessages[i % infoMessages.length]
+            .replace('{epoch}', String(i));
+          consoleLogRows.push({
+            tenantId: org.id,
+            projectName: project.name,
+            runId: Number(run.id),
+            logType: 'info',
+            time: new Date(baseTime + i * 1000).toISOString().replace('T', ' ').replace('Z', ''),
+            lineNumber: lineNum++,
+            message: msg,
+            step: i,
+          });
+        }
+      }
+
+      if (consoleLogRows.length > 0) {
+        await mediaCh.insert({ table: 'mlop_logs', values: consoleLogRows, format: 'JSONEachRow' });
+        console.log(`   ✓ Inserted ${consoleLogRows.length} console log rows into ClickHouse`);
+      }
+
+      // Upload all media files to S3
+      await Promise.all(mediaS3Uploads);
+      console.log(`   ✓ Uploaded ${mediaS3Uploads.length} media files to S3/MinIO`);
+
+      await mediaCh.close();
+    } else {
+      console.log('   ⚠ No a-bulk-run-011..013 found for media seeding');
+    }
+  } else {
+    console.log('   ⚠ Missing CLICKHOUSE_URL or STORAGE_* env vars, skipping media-rich seeding');
   }
 
   const testData: TestData = {

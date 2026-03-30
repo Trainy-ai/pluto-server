@@ -124,6 +124,7 @@ export function TablePagination({
             }
           }}
           disabled={!table.getCanPreviousPage() && pageBase === 0}
+          data-testid="pagination-prev-btn"
         >
           <ChevronLeft className="h-4 w-4" />
         </Button>
@@ -156,6 +157,7 @@ export function TablePagination({
           }}
           disabled={(isLastAbsolutePage && !hasNextPage) || isFetchingNextPage}
           loading={isFetchingNextPage}
+          data-testid="pagination-next-btn"
         >
           <ChevronRight className="h-4 w-4" />
         </Button>

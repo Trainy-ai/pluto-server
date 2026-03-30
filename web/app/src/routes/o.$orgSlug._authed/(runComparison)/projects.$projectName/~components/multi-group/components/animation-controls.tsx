@@ -82,7 +82,7 @@ export const AnimationControls: React.FC<AnimationControlsProps> = ({
       {/* Settings and export controls */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="icon">
+          <Button variant="ghost" size="icon" data-testid="histogram-settings-btn">
             <Settings className="h-4 w-4" />
           </Button>
         </DropdownMenuTrigger>

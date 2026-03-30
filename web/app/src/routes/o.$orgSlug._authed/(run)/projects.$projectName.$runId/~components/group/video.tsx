@@ -223,6 +223,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     <div
       ref={containerRef}
       className="relative flex h-full w-full flex-1 flex-col bg-black"
+      data-testid="video-player"
     >
       <div
         className="relative aspect-video w-full flex-1"

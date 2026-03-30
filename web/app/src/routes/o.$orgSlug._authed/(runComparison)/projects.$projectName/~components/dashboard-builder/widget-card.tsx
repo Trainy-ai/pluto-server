@@ -157,6 +157,7 @@ export function WidgetCard({
                   variant="ghost"
                   size="icon"
                   className="widget-drag-cancel size-7 opacity-0 group-hover:opacity-100"
+                  data-testid="widget-menu-btn"
                 >
                   <MoreHorizontalIcon className="size-4" />
                 </Button>

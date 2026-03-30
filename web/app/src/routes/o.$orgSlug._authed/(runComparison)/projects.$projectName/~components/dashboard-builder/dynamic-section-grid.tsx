@@ -187,6 +187,7 @@ export function DynamicSectionGrid({
                         variant="ghost"
                         size="icon"
                         className="size-7 opacity-0 group-hover:opacity-100"
+                        data-testid="chart-bounds-btn"
                       >
                         <SlidersHorizontalIcon className="size-3.5" />
                       </Button>

@@ -94,7 +94,7 @@ function HistogramCanvas({
   }, [data, theme, globalMaxFreq, xAxisRange, canvasRef, drawSingleHistogram, color]);
 
   return (
-    <div ref={containerRef} className="relative min-h-[200px] w-full overflow-hidden rounded-md bg-background/50">
+    <div ref={containerRef} className="relative min-h-[200px] w-full overflow-hidden rounded-md bg-background/50" data-testid="histogram-canvas-container">
       <canvas ref={canvasRef} className="absolute inset-0" />
     </div>
   );

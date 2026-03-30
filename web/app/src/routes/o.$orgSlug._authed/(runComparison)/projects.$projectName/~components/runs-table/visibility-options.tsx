@@ -117,6 +117,7 @@ export const VisibilityOptions = memo(function VisibilityOptions({
                     size="icon"
                     className="h-6 w-6"
                     onClick={handleDecrement}
+                    data-testid="autoselect-decrement-btn"
                   >
                     <Minus className="h-3 w-3" />
                   </Button>
@@ -128,6 +129,7 @@ export const VisibilityOptions = memo(function VisibilityOptions({
                     size="icon"
                     className="h-6 w-6"
                     onClick={handleIncrement}
+                    data-testid="autoselect-increment-btn"
                   >
                     <Plus className="h-3 w-3" />
                   </Button>
