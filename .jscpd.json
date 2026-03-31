@@ -1,0 +1,23 @@
+{
+  "threshold": 0,
+  "reporters": ["console"],
+  "ignore": [
+    "node_modules",
+    "dist",
+    "web/.pnpm-store",
+    "web/app/src/routeTree.gen.ts",
+    ".git",
+    "*.lock",
+    "*.json"
+  ],
+  "absolute": true,
+  "gitignore": true,
+  "minLines": 15,
+  "minTokens": 70,
+  "format": ["typescript", "python"],
+  "pattern": [
+    "web/e2e/**/*.ts",
+    ".buildkite/scripts/*.py",
+    "load_tests/*.py"
+  ]
+}

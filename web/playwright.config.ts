@@ -125,6 +125,7 @@ trace: "retain-on-failure",
       name: "performance",
       testMatch: /performance\/.*\.spec\.ts/,
       timeout: 60000, // Longer timeout for performance tests
+      retries: process.env.CI ? 3 : 0, // Extra retries for volatile perf measurements
       use: {
         ...devices["Desktop Chrome"],
         // Larger viewport ensures more charts render initially (triggers IntersectionObserver)

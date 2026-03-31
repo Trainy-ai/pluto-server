@@ -1,0 +1,10 @@
+# Ruff config for CI scripts and load tests (repo root).
+# The mcp/ directory has its own config in mcp/pyproject.toml.
+line-length = 120
+target-version = "py310"
+
+[lint]
+select = ["E", "F", "I", "W", "ARG", "SIM"]
+# E501: HTML templates and long format strings are more readable on one line
+# ARG001: Locust event handlers require **kwargs signature even if unused
+ignore = ["E501", "ARG001"]
