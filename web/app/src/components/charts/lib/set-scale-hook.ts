@@ -5,8 +5,6 @@ import type { LineData } from "./types";
 interface SetScaleHookParams {
   logYAxis: boolean;
   logXAxis: boolean;
-  yMinProp: number | undefined | null;
-  yMaxProp: number | undefined | null;
   isProgrammaticScaleRef: React.RefObject<boolean>;
   chartSyncContextRef: React.RefObject<any>;
   isZoomSourceChart: () => boolean;
@@ -35,8 +33,6 @@ interface SetScaleHookParams {
 export function buildSetScaleHook({
   logYAxis,
   logXAxis,
-  yMinProp,
-  yMaxProp,
   isProgrammaticScaleRef,
   chartSyncContextRef,
   isZoomSourceChart,
@@ -101,7 +97,7 @@ export function buildSetScaleHook({
             isProgrammaticScaleRef.current = false;
           }
         });
-      } else if (!userHasZoomedYRef.current && (!logYAxis || (logYAxis && (yMinProp != null || yMaxProp != null)))) {
+      } else if (!userHasZoomedYRef.current && !logYAxis) {
         // Defer Y-range scan + no-data check to rAF so mouseup stays fast
         requestAnimationFrame(() => {
           // Combined single-pass scan: find visible Y range AND check for any data
@@ -137,21 +133,11 @@ export function buildSetScaleHook({
 
           // Update Y scale if we found valid data
           if (visibleYMin !== Infinity && visibleYMax !== -Infinity) {
-            let newYMin: number;
-            let newYMax: number;
-
-            if (logYAxis) {
-              newYMin = visibleYMin;
-              newYMax = visibleYMax;
-            } else {
-              const range = visibleYMax - visibleYMin;
-              const padding = Math.max(range * 0.05, Math.abs(visibleYMax) * 0.02, 0.1);
-              newYMin = visibleYMin >= 0 ? Math.max(0, visibleYMin - padding) : visibleYMin - padding;
-              newYMax = visibleYMax + padding;
-            }
-
-            if (yMinProp != null) newYMin = yMinProp;
-            if (yMaxProp != null) newYMax = yMaxProp;
+            const range = visibleYMax - visibleYMin;
+            const dataMagnitude = Math.max(Math.abs(visibleYMax), Math.abs(visibleYMin));
+            const padding = Math.max(range * 0.05, dataMagnitude * 0.02, 1e-9);
+            const newYMin = visibleYMin >= 0 ? Math.max(0, visibleYMin - padding) : visibleYMin - padding;
+            const newYMax = visibleYMax + padding;
 
             const currentYMin = u.scales.y.min ?? 0;
             const currentYMax = u.scales.y.max ?? 1;

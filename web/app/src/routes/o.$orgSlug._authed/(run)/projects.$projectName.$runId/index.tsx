@@ -21,11 +21,8 @@ import {
   useDashboardView,
 } from "../../(runComparison)/projects.$projectName/~queries/dashboard-views";
 import { ChartSyncProvider } from "@/components/charts/context/chart-sync-context";
-import { clearAllChartBounds } from "../../(runComparison)/projects.$projectName/~components/multi-group/chart-card-wrapper";
 import { searchUtils, type SearchState } from "../../(runComparison)/projects.$projectName/~lib/search-utils";
 import { useRunDashboardData } from "./~hooks/use-run-dashboard";
-import { RotateCcwIcon } from "lucide-react";
-import { Button } from "@/components/ui/button";
 
 import { useMemo, useState, useEffect, useRef, useCallback } from "react";
 
@@ -161,13 +158,6 @@ function RouteComponent() {
   // Build dashboard data (groupedMetrics + selectedRuns) from single run
   const { groupedMetrics, selectedRuns } = useRunDashboardData(runData, runId);
 
-  // Bounds reset - clearing localStorage + remounting charts via key change
-  const [boundsResetKey, setBoundsResetKey] = useState(0);
-  const handleResetAllBounds = useCallback(() => {
-    clearAllChartBounds();
-    setBoundsResetKey((k) => k + 1);
-  }, []);
-
   // Compute run createdAt as ISO string for relative time baseline
   const runCreatedAtStr = useMemo(() => {
     if (!runData?.createdAt) return undefined;
@@ -185,12 +175,11 @@ function RouteComponent() {
         tenantId={organizationId}
         projectName={projectName}
         runId={runId}
-        boundsResetKey={boundsResetKey}
         runCreatedAt={runCreatedAtStr}
         runName={runData?.name}
       />
     ));
-  }, [filteredLogGroups, organizationId, projectName, runId, boundsResetKey, runCreatedAtStr, runData?.name]);
+  }, [filteredLogGroups, organizationId, projectName, runId, runCreatedAtStr, runData?.name]);
 
   if (isLoading || !runData) {
     return (
@@ -221,18 +210,6 @@ function RouteComponent() {
             <LogSearch onSearch={handleSearch} placeholder="Search groups and metrics..." />
           </div>
           <div className="ml-auto flex items-center gap-3">
-            {!isDashboardView && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8 text-xs text-muted-foreground"
-                onClick={handleResetAllBounds}
-                title="Reset all Y-axis bounds"
-              >
-                <RotateCcwIcon className="mr-1.5 size-3.5" />
-                Reset Bounds
-              </Button>
-            )}
             <SmoothingSlider
               settings={settings}
               updateSmoothingSettings={updateSmoothingSettings}

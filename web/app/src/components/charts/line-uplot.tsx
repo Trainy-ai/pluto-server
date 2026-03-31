@@ -108,10 +108,6 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       showYAxis = true,
       showLegend = false,
       syncKey,
-      yMin: yMinProp,
-      yMax: yMaxProp,
-      onDataRange,
-      onResetBounds,
       tooltipInterpolation = "none",
       onZoomRangeChange,
       outlierDetection = false,
@@ -206,27 +202,8 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
     // Pre-calculate y-axis range with IQR-based outlier detection (extracted hook)
     const yRange = useYRange(uplotData, logYAxis, outlierDetection);
 
-    // Callback refs
-    const onResetBoundsRef = useRef(onResetBounds);
-    onResetBoundsRef.current = onResetBounds;
-    const onDataRangeRef = useRef(onDataRange);
-    onDataRangeRef.current = onDataRange;
-
-    // Fire onDataRange callback when data range changes
-    useEffect(() => {
-      if (!logYAxis && onDataRangeRef.current) {
-        const allYValues: number[] = [];
-        for (let i = 1; i < uplotData.length; i++) {
-          const series = uplotData[i] as (number | null)[];
-          for (const v of series) {
-            if (v !== null && Number.isFinite(v)) allYValues.push(v);
-          }
-        }
-        if (allYValues.length > 0) {
-          onDataRangeRef.current(arrayMin(allYValues), arrayMax(allYValues));
-        }
-      }
-    }, [uplotData, logYAxis]);
+    // Callback ref for reset bounds (used by chart lifecycle)
+    const onResetBoundsRef = useRef<(() => void) | undefined>(undefined);
 
     // Zoom state refs
     const userHasZoomedRef = useRef(false);
@@ -362,7 +339,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             : (_u, val) => val == null ? "--" : formatAxisLabel(val),
       });
 
-      const scales = buildScalesConfig({ logXAxis, logYAxis, isDateTime, yMinProp, yMaxProp, yRange, yZoom });
+      const scales = buildScalesConfig({ logXAxis, logYAxis, isDateTime, yRange, yZoom });
       const axes = buildAxesConfig({ showXAxis, showYAxis, axisColor, gridColor, isDateTime, isRelativeTime, logXAxis, logYAxis, xlabel, ylabel, timeRange });
       const cursor = buildCursorConfig(effectiveSyncKey, yZoom);
       const bands = buildBandsConfig(processedLines, lastFocusedSeriesRef, crossChartRunIdRef, tableHighlightRef);
@@ -375,7 +352,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       });
       const interpolationDotsHook = buildInterpolationDotsHook({ processedLines, tooltipInterpolation, spanGaps, isActiveChart });
       const setScaleHook = buildSetScaleHook({
-        logYAxis, logXAxis, yMinProp, yMaxProp,
+        logYAxis, logXAxis,
         isProgrammaticScaleRef, chartSyncContextRef, isZoomSourceChart,
         chartId, zoomGroup, userHasZoomedRef, userHasZoomedYRef,
         userYZoomRangeRef, isXZoomAutoRangeRef, onYZoomRangeChangeRef,
@@ -453,7 +430,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       xlabel, ylabel, showXAxis, showYAxis, showLegend,
       effectiveSyncKey, timeRange, chartId,
       handleHoverChange, isActiveChart, isZoomSourceChart,
-      chartLineWidth, spanGaps, yMinProp, yMaxProp,
+      chartLineWidth, spanGaps,
       tooltipInterpolation, yRange, yZoom,
     ]);
 

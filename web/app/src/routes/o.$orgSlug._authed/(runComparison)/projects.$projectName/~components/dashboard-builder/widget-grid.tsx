@@ -1,4 +1,4 @@
-import { useMemo, useCallback, useState, useRef, type ReactNode } from "react";
+import { useMemo, useCallback, useRef, type ReactNode } from "react";
 import GridLayout, { type Layout, type LayoutItem, verticalCompactor } from "react-grid-layout";
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
@@ -6,7 +6,7 @@ import "./widget-grid.css";
 import { cn } from "@/lib/utils";
 import { VirtualizedChart } from "@/components/core/virtualized-chart";
 import { ImageStepSyncProvider } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~context/image-step-sync-context";
-import type { Widget, ChartWidgetConfig } from "../../~types/dashboard-types";
+import type { Widget } from "../../~types/dashboard-types";
 import { WidgetCard } from "./widget-card";
 
 interface WidgetGridProps {
@@ -15,9 +15,8 @@ interface WidgetGridProps {
   onEditWidget: (widget: Widget) => void;
   onDeleteWidget: (widgetId: string) => void;
   onCopyWidget?: (widget: Widget) => void;
-  renderWidget: (widget: Widget, onDataRange?: (dataMin: number, dataMax: number) => void, onResetBounds?: () => void) => ReactNode;
+  renderWidget: (widget: Widget) => ReactNode;
   onFullscreenWidget?: (widget: Widget) => void;
-  onUpdateWidgetBounds?: (widgetId: string, yMin?: number, yMax?: number) => void;
   onUpdateWidgetScale?: (widgetId: string, axis: "x" | "y", value: boolean) => void;
   isEditing?: boolean;
   coarseMode?: boolean;
@@ -34,7 +33,6 @@ export function WidgetGrid({
   onCopyWidget,
   renderWidget,
   onFullscreenWidget,
-  onUpdateWidgetBounds,
   onUpdateWidgetScale,
   isEditing = false,
   coarseMode = true,
@@ -42,17 +40,6 @@ export function WidgetGrid({
   rowHeight = 80,
   containerWidth = 1200,
 }: WidgetGridProps) {
-  // Track data ranges per widget for clipping indicators
-  const [dataRanges, setDataRanges] = useState<Record<string, { min: number; max: number }>>({});
-
-  const handleWidgetDataRange = useCallback((widgetId: string, dataMin: number, dataMax: number) => {
-    setDataRanges((prev) => {
-      const existing = prev[widgetId];
-      if (existing && existing.min === dataMin && existing.max === dataMax) return prev;
-      return { ...prev, [widgetId]: { min: dataMin, max: dataMax } };
-    });
-  }, []);
-
   const cols = coarseMode ? 6 : colsProp;
 
   // Refs for stable callback closures
@@ -238,31 +225,17 @@ export function WidgetGrid({
       }}
     >
       {widgets.map((widget) => {
-        const chartConfig = widget.type === "chart" ? (widget.config as ChartWidgetConfig) : null;
-        const range = dataRanges[widget.id];
-        const clippingInfo = computeClippingInfo(chartConfig, range);
-
         return (
           <div key={widget.id} className="h-full" data-testid="dashboard-widget">
             <WidgetCard
               widget={widget}
               isEditing={isEditing}
-              clippingInfo={clippingInfo}
               onEdit={() => onEditWidget(widget)}
               onDelete={() => onDeleteWidget(widget.id)}
               onCopy={() => onCopyWidget?.(widget)}
               onFullscreen={() => onFullscreenWidget?.(widget)}
-              onUpdateBounds={(yMin, yMax) => onUpdateWidgetBounds?.(widget.id, yMin, yMax)}
               onUpdateScale={(axis, value) => onUpdateWidgetScale?.(widget.id, axis, value)}
-              renderWidget={(_, onResetBounds) =>
-                renderWidget(
-                  widget,
-                  widget.type === "chart"
-                    ? (dataMin: number, dataMax: number) => handleWidgetDataRange(widget.id, dataMin, dataMax)
-                    : undefined,
-                  onResetBounds,
-                )
-              }
+              renderWidget={() => renderWidget(widget)}
             />
           </div>
         );
@@ -277,17 +250,3 @@ export function WidgetGrid({
   return grid;
 }
 
-function computeClippingInfo(
-  chartConfig: ChartWidgetConfig | null,
-  range: { min: number; max: number } | undefined
-): string | null {
-  if (!chartConfig || !range) return null;
-  if (chartConfig.yMin == null && chartConfig.yMax == null) return null;
-  const clippedBelow = chartConfig.yMin != null && range.min < chartConfig.yMin;
-  const clippedAbove = chartConfig.yMax != null && range.max > chartConfig.yMax;
-  if (!clippedBelow && !clippedAbove) return null;
-  const parts: string[] = [];
-  if (clippedBelow) parts.push("below Y Min");
-  if (clippedAbove) parts.push("above Y Max");
-  return `Data clipped: values exist ${parts.join(" and ")}`;
-}

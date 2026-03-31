@@ -77,14 +77,6 @@ interface MultiLineChartProps {
   projectName: string;
   /** When true, all runs are in a terminal state and data won't change */
   allRunsCompleted?: boolean;
-  /** Manual Y-axis minimum bound */
-  yMin?: number;
-  /** Manual Y-axis maximum bound */
-  yMax?: number;
-  /** Callback fired when the actual data range (min/max of all Y values) is computed */
-  onDataRange?: (dataMin: number, dataMax: number) => void;
-  /** Callback fired on double-click to reset Y-axis bounds for this chart */
-  onResetBounds?: () => void;
   /** Override log X-axis scale (per-widget config takes precedence over global settings) */
   logXAxis?: boolean;
   /** Override log Y-axis scale (per-widget config takes precedence over global settings) */
@@ -132,10 +124,6 @@ const MultiLineChartInner = memo(
     organizationId,
     projectName,
     allRunsCompleted = false,
-    yMin,
-    yMax,
-    onDataRange,
-    onResetBounds,
     syncedZoomRange: syncedZoomRangeRaw,
     syncedZoomGroup,
     chartSyncContext,
@@ -853,10 +841,6 @@ const MultiLineChartInner = memo(
           isDateTime={chartResult.isDateTime}
           logXAxis={logXAxis}
           logYAxis={logYAxis}
-          yMin={yMin}
-          yMax={yMax}
-          onDataRange={onDataRange}
-          onResetBounds={onResetBounds}
           tooltipInterpolation={settings.tooltipInterpolation}
           outlierDetection={settings.yAxisScaleMode === "outlier-aware"}
           spanGaps={!settings.skipMissingValues}

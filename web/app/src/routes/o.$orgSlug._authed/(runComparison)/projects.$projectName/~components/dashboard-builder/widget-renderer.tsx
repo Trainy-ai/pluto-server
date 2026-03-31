@@ -16,10 +16,6 @@ interface WidgetRendererProps {
   selectedRuns: Record<string, SelectedRunWithColor>;
   organizationId: string;
   projectName: string;
-  /** Callback fired when chart data range is computed (for clipping detection) */
-  onDataRange?: (dataMin: number, dataMax: number) => void;
-  /** Callback fired on double-click to reset Y-axis bounds for this chart */
-  onResetBounds?: () => void;
   /** When provided, reads line settings from this runId instead of the "full" key */
   settingsRunId?: string;
   /** Externally-stored Y zoom range for persistence across mini/fullscreen */
@@ -34,8 +30,6 @@ export function WidgetRenderer({
   selectedRuns,
   organizationId,
   projectName,
-  onDataRange,
-  onResetBounds,
   settingsRunId,
   yZoomRange,
   onYZoomRangeChange,
@@ -49,8 +43,6 @@ export function WidgetRenderer({
           selectedRuns={selectedRuns}
           organizationId={organizationId}
           projectName={projectName}
-          onDataRange={onDataRange}
-          onResetBounds={onResetBounds}
           settingsRunId={settingsRunId}
           yZoomRange={yZoomRange}
           onYZoomRangeChange={onYZoomRangeChange}

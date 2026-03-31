@@ -26,14 +26,6 @@ interface LineChartWrapperProps extends React.HTMLAttributes<HTMLDivElement> {
   showLegend?: boolean;
   /** Sync key for cross-chart cursor sync */
   syncKey?: string;
-  /** Manual Y-axis minimum bound */
-  yMin?: number;
-  /** Manual Y-axis maximum bound */
-  yMax?: number;
-  /** Callback fired when the actual data range (min/max of all Y values) is computed */
-  onDataRange?: (dataMin: number, dataMax: number) => void;
-  /** Callback fired on double-click to reset Y-axis bounds for this chart */
-  onResetBounds?: () => void;
   /** Tooltip interpolation mode for missing values */
   tooltipInterpolation?: TooltipInterpolation;
   /** Callback fired when zoom range changes, for server re-fetch of full-resolution data */

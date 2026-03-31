@@ -9,7 +9,7 @@ import {
 } from "@/components/ui/dialog";
 import { SlidersHorizontalIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { ChartBoundsPopover } from "./chart-bounds-popover";
+import { ChartScalePopover } from "./chart-scale-popover";
 import { ChartExportMenu } from "./chart-export-menu";
 
 const SIDEBAR_STORAGE_KEY = "fullscreen-legend-sidebar-width";
@@ -33,15 +33,10 @@ interface ChartFullscreenDialogProps {
   onOpenChange: (open: boolean) => void;
   title: string;
   children: React.ReactNode;
-  /** When provided, renders a bounds popover in the header */
-  yMin?: number;
-  yMax?: number;
-  onBoundsChange?: (yMin?: number, yMax?: number) => void;
   /** Log scale state for the popover toggles */
   logXAxis?: boolean;
   logYAxis?: boolean;
   onLogScaleChange?: (axis: "x" | "y", value: boolean) => void;
-  onResetAll?: () => void;
 }
 
 export function ChartFullscreenDialog({
@@ -49,13 +44,9 @@ export function ChartFullscreenDialog({
   onOpenChange,
   title,
   children,
-  yMin,
-  yMax,
-  onBoundsChange,
   logXAxis,
   logYAxis,
   onLogScaleChange,
-  onResetAll,
 }: ChartFullscreenDialogProps) {
   const chartContentRef = useRef<HTMLDivElement>(null);
   const chartAreaRef = useRef<HTMLDivElement>(null);
@@ -172,15 +163,11 @@ export function ChartFullscreenDialog({
                 fileName={title}
                 variant="header"
               />
-              {onBoundsChange && (
-                <ChartBoundsPopover
-                  yMin={yMin}
-                  yMax={yMax}
-                  onBoundsChange={onBoundsChange}
+              {onLogScaleChange && (
+                <ChartScalePopover
                   logXAxis={logXAxis}
                   logYAxis={logYAxis}
                   onLogScaleChange={onLogScaleChange}
-                  onResetAll={onResetAll}
                 >
                   <Button
                     variant="outline"
@@ -191,7 +178,7 @@ export function ChartFullscreenDialog({
                     <SlidersHorizontalIcon className="size-3.5" />
                     Chart Settings
                   </Button>
-                </ChartBoundsPopover>
+                </ChartScalePopover>
               )}
             </div>
           </div>

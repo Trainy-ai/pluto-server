@@ -44,14 +44,6 @@ export interface LineChartProps extends React.HTMLAttributes<HTMLDivElement> {
   showLegend?: boolean;
   /** Sync key for cross-chart cursor sync */
   syncKey?: string;
-  /** Manual Y-axis minimum bound. When set, overrides auto-scaling for min. */
-  yMin?: number;
-  /** Manual Y-axis maximum bound. When set, overrides auto-scaling for max. */
-  yMax?: number;
-  /** Callback fired when the actual data range (min/max of all Y values) is computed */
-  onDataRange?: (dataMin: number, dataMax: number) => void;
-  /** Callback fired on double-click to reset Y-axis bounds for this chart */
-  onResetBounds?: () => void;
   /** Tooltip interpolation mode for series with missing values at the hovered step */
   tooltipInterpolation?: TooltipInterpolation;
   /** Callback fired when zoom range changes. The parent can use this to trigger

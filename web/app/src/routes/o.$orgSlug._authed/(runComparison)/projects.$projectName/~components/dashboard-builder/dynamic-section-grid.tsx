@@ -2,7 +2,7 @@ import { ZapIcon, SlidersHorizontalIcon, Maximize2Icon } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { VirtualizedChart } from "@/components/core/virtualized-chart";
-import { ChartBoundsPopover } from "@/components/charts/chart-bounds-popover";
+import { ChartScalePopover } from "@/components/charts/chart-scale-popover";
 import { ChartExportMenu } from "@/components/charts/chart-export-menu";
 import { useDynamicSectionWidgets } from "./use-dynamic-section";
 import { WidgetRenderer } from "./widget-renderer";
@@ -35,8 +35,6 @@ interface DynamicSectionGridProps {
 }
 
 interface WidgetBounds {
-  yMin?: number;
-  yMax?: number;
   logXAxis?: boolean;
   logYAxis?: boolean;
   yZoomRange?: [number, number] | null;
@@ -83,13 +81,6 @@ export function DynamicSectionGrid({
     onWidgetCountChange?.(filteredWidgets.length);
   }, [filteredWidgets.length, onWidgetCountChange]);
 
-  const updateBounds = useCallback((widgetId: string, yMin?: number, yMax?: number) => {
-    setWidgetBounds((prev) => ({
-      ...prev,
-      [widgetId]: { ...prev[widgetId], yMin, yMax },
-    }));
-  }, []);
-
   const updateScale = useCallback((widgetId: string, axis: "x" | "y", value: boolean) => {
     setWidgetBounds((prev) => ({
       ...prev,
@@ -97,13 +88,6 @@ export function DynamicSectionGrid({
         ...prev[widgetId],
         ...(axis === "x" ? { logXAxis: value } : { logYAxis: value }),
       },
-    }));
-  }, []);
-
-  const resetAll = useCallback((widgetId: string) => {
-    setWidgetBounds((prev) => ({
-      ...prev,
-      [widgetId]: {},
     }));
   }, []);
 
@@ -146,8 +130,6 @@ export function DynamicSectionGrid({
                 ...widget,
                 config: {
                   ...widget.config,
-                  yMin: bounds.yMin,
-                  yMax: bounds.yMax,
                   xAxisScale: bounds.logXAxis ? "log" : (widget.config as ChartWidgetConfig).xAxisScale,
                   yAxisScale: bounds.logYAxis ? "log" : (widget.config as ChartWidgetConfig).yAxisScale,
                 } as ChartWidgetConfig,
@@ -174,14 +156,10 @@ export function DynamicSectionGrid({
                       fileName={title}
                       className="size-7 opacity-0 group-hover:opacity-100"
                     />
-                    <ChartBoundsPopover
-                      yMin={bounds.yMin}
-                      yMax={bounds.yMax}
-                      onBoundsChange={(yMin, yMax) => updateBounds(widget.id, yMin, yMax)}
+                    <ChartScalePopover
                       logXAxis={bounds.logXAxis}
                       logYAxis={bounds.logYAxis}
                       onLogScaleChange={(axis, value) => updateScale(widget.id, axis, value)}
-                      onResetAll={() => resetAll(widget.id)}
                     >
                       <Button
                         variant="ghost"
@@ -191,7 +169,7 @@ export function DynamicSectionGrid({
                       >
                         <SlidersHorizontalIcon className="size-3.5" />
                       </Button>
-                    </ChartBoundsPopover>
+                    </ChartScalePopover>
                     <Button
                       variant="ghost"
                       size="icon"
@@ -236,14 +214,6 @@ export function DynamicSectionGrid({
           open={true}
           onOpenChange={(open) => { if (!open) setFullscreenWidget(null); }}
           title={fullscreenWidget.config.title || (fullscreenWidget.config as ChartWidgetConfig).metrics[0] || "Chart"}
-          yMin={(fullscreenWidget.config as ChartWidgetConfig).yMin}
-          yMax={(fullscreenWidget.config as ChartWidgetConfig).yMax}
-          onBoundsChange={(yMin, yMax) => {
-            updateBounds(fullscreenWidget.id, yMin, yMax);
-            setFullscreenWidget((prev) =>
-              prev ? { ...prev, config: { ...prev.config, yMin, yMax } as ChartWidgetConfig } as Widget : null
-            );
-          }}
           logXAxis={(fullscreenWidget.config as ChartWidgetConfig).xAxisScale === "log"}
           logYAxis={(fullscreenWidget.config as ChartWidgetConfig).yAxisScale === "log"}
           onLogScaleChange={(axis, value) => {
@@ -254,14 +224,6 @@ export function DynamicSectionGrid({
                 ? { ...prev, config: { ...prev.config, ...(axis === "x" ? { xAxisScale: scaleValue } : { yAxisScale: scaleValue }) } as ChartWidgetConfig } as Widget
                 : null
             );
-          }}
-          onResetAll={() => {
-            resetAll(fullscreenWidget.id);
-            setFullscreenWidget((prev) => {
-              if (!prev) return null;
-              const originalConfig = prev.config as ChartWidgetConfig;
-              return { ...prev, config: { ...originalConfig, yMin: undefined, yMax: undefined } as ChartWidgetConfig } as Widget;
-            });
           }}
         >
           <WidgetRenderer

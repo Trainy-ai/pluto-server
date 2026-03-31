@@ -2,7 +2,6 @@ import { Button } from "@/components/ui/button";
 import {
   SaveIcon,
   XIcon,
-  RotateCcwIcon,
   GridIcon,
   SlidersHorizontalIcon,
   ChevronsUpDownIcon,
@@ -17,7 +16,6 @@ interface DashboardToolbarProps {
   sectionCount: number;
   allCollapsed: boolean;
   coarseMode: boolean;
-  onResetAllBounds: () => void;
   onToggleAllSections: () => void;
   onSetCoarseMode: (coarse: boolean) => void;
   onCancel: () => void;
@@ -33,7 +31,6 @@ export function DashboardToolbar({
   sectionCount,
   allCollapsed,
   coarseMode,
-  onResetAllBounds,
   onToggleAllSections,
   onSetCoarseMode,
   onCancel,
@@ -49,18 +46,6 @@ export function DashboardToolbar({
         )}
       </div>
       <div className="flex items-center gap-2">
-        {sectionCount > 0 && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-8 text-xs text-muted-foreground"
-            onClick={onResetAllBounds}
-            title="Reset all Y-axis bounds"
-          >
-            <RotateCcwIcon className="mr-1.5 size-3.5" />
-            Reset Bounds
-          </Button>
-        )}
         {sectionCount >= 2 && (
           <Button
             variant="ghost"

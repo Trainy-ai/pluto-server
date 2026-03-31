@@ -9,9 +9,7 @@ import {
   addWidget,
   deleteWidget,
   updateWidgets,
-  updateWidgetBounds,
   updateWidgetScale,
-  resetAllWidgetBounds,
   copyWidget,
   pasteWidget,
   sanitizeConfig,
@@ -267,43 +265,6 @@ describe("updateWidgets", () => {
   });
 });
 
-describe("updateWidgetBounds", () => {
-  it("sets yMin and yMax on the correct widget", () => {
-    const widget = createTestWidget({ id: "w1" });
-    const config = createTestConfig([
-      createTestSection({ id: "s1", widgets: [widget] }),
-    ]);
-    const result = updateWidgetBounds(config, "w1", 0, 100);
-    expect((result.sections[0].widgets[0].config as any).yMin).toBe(0);
-    expect((result.sections[0].widgets[0].config as any).yMax).toBe(100);
-  });
-
-  it("clears bounds when undefined", () => {
-    const widget = createTestWidget({
-      id: "w1",
-      config: { metrics: ["loss"], xAxis: "step", yAxisScale: "linear", xAxisScale: "linear", aggregation: "LAST", showOriginal: false, yMin: 0, yMax: 100 },
-    });
-    const config = createTestConfig([
-      createTestSection({ id: "s1", widgets: [widget] }),
-    ]);
-    const result = updateWidgetBounds(config, "w1", undefined, undefined);
-    expect((result.sections[0].widgets[0].config as any).yMin).toBeUndefined();
-    expect((result.sections[0].widgets[0].config as any).yMax).toBeUndefined();
-  });
-
-  it("works across multiple sections", () => {
-    const w1 = createTestWidget({ id: "w1" });
-    const w2 = createTestWidget({ id: "w2" });
-    const config = createTestConfig([
-      createTestSection({ id: "s1", widgets: [w1] }),
-      createTestSection({ id: "s2", widgets: [w2] }),
-    ]);
-    const result = updateWidgetBounds(config, "w2", 5, 50);
-    expect((result.sections[0].widgets[0].config as any).yMin).toBeUndefined();
-    expect((result.sections[1].widgets[0].config as any).yMin).toBe(5);
-  });
-});
-
 describe("updateWidgetScale", () => {
   it("sets y-axis to log scale", () => {
     const widget = createTestWidget({ id: "w1" });
@@ -342,37 +303,6 @@ describe("updateWidgetScale", () => {
     ]);
     const result = updateWidgetScale(config, "w1", "y", true);
     // Should not change - histogram has no yAxisScale
-    expect(result.sections[0].widgets[0].config).toEqual({ metric: "loss" });
-  });
-});
-
-describe("resetAllWidgetBounds", () => {
-  it("clears yMin and yMax from all chart widgets", () => {
-    const w1 = createTestWidget({
-      id: "w1",
-      config: { metrics: ["loss"], xAxis: "step", yAxisScale: "linear", xAxisScale: "linear", aggregation: "LAST", showOriginal: false, yMin: 0, yMax: 100 },
-    });
-    const w2 = createTestWidget({
-      id: "w2",
-      config: { metrics: ["acc"], xAxis: "step", yAxisScale: "linear", xAxisScale: "linear", aggregation: "LAST", showOriginal: false, yMin: 5, yMax: 50 },
-    });
-    const config = createTestConfig([
-      createTestSection({ id: "s1", widgets: [w1] }),
-      createTestSection({ id: "s2", widgets: [w2] }),
-    ]);
-    const result = resetAllWidgetBounds(config);
-    expect((result.sections[0].widgets[0].config as any).yMin).toBeUndefined();
-    expect((result.sections[0].widgets[0].config as any).yMax).toBeUndefined();
-    expect((result.sections[1].widgets[0].config as any).yMin).toBeUndefined();
-    expect((result.sections[1].widgets[0].config as any).yMax).toBeUndefined();
-  });
-
-  it("does not affect non-chart widgets", () => {
-    const widget = createTestWidget({ id: "w1", type: "histogram", config: { metric: "loss" } });
-    const config = createTestConfig([
-      createTestSection({ id: "s1", widgets: [widget] }),
-    ]);
-    const result = resetAllWidgetBounds(config);
     expect(result.sections[0].widgets[0].config).toEqual({ metric: "loss" });
   });
 });

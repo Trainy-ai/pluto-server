@@ -108,7 +108,7 @@ export const MultiGroup = ({
               boundsResetKey={boundsResetKey}
               globalLogXAxis={globalLogXAxis}
               globalLogYAxis={globalLogYAxis}
-              renderChart={(yMin, yMax, onDataRange, onResetBounds, logXAxis, logYAxis, _yZoom, yZoomRange, onYZoomRangeChange) => (
+              renderChart={(_onResetBounds, logXAxis, logYAxis, _yZoom, yZoomRange, onYZoomRangeChange) => (
                 <MultiLineChart
                   lines={lines}
                   title={metric.name}
@@ -116,10 +116,6 @@ export const MultiGroup = ({
                   organizationId={organizationId}
                   projectName={projectName}
                   allRunsCompleted={allRunsCompleted}
-                  yMin={yMin}
-                  yMax={yMax}
-                  onDataRange={onDataRange}
-                  onResetBounds={onResetBounds}
                   logXAxis={logXAxis}
                   logYAxis={logYAxis}
                   yZoomRange={yZoomRange}

@@ -63,8 +63,6 @@ export const ChartWidgetConfigSchema = BaseWidgetConfigSchema.extend({
   smoothing: SmoothingConfigSchema.optional(),
   maxPoints: z.number().positive().optional(), // Server-side bucketed downsampling
   showOriginal: z.boolean().default(false),
-  yMin: z.number().optional(), // Manual Y-axis minimum bound
-  yMax: z.number().optional(), // Manual Y-axis maximum bound
 });
 export type ChartWidgetConfig = z.infer<typeof ChartWidgetConfigSchema>;
 

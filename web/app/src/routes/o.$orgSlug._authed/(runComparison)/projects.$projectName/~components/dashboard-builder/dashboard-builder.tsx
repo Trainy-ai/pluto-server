@@ -326,17 +326,9 @@ export function DashboardBuilder({
     setHasChanges(true);
   }, [copiedWidget]);
 
-  const updateWidgetBounds = useCallback((widgetId: string, yMin?: number, yMax?: number) => {
-    setConfig((prev) => configOps.updateWidgetBounds(prev, widgetId, yMin, yMax));
-  }, []);
-
   const updateWidgetScale = useCallback((widgetId: string, axis: "x" | "y", value: boolean) => {
     setConfig((prev) => configOps.updateWidgetScale(prev, widgetId, axis, value));
     setHasChanges(true);
-  }, []);
-
-  const resetAllWidgetBounds = useCallback(() => {
-    setConfig((prev) => configOps.resetAllWidgetBounds(prev));
   }, []);
 
   const allCollapsed = config.sections.length > 0 && config.sections.every((s) => s.collapsed);
@@ -389,7 +381,6 @@ export function DashboardBuilder({
         sectionCount={config.sections.length}
         allCollapsed={allCollapsed}
         coarseMode={coarseMode}
-        onResetAllBounds={resetAllWidgetBounds}
         onToggleAllSections={toggleAllSections}
         onSetCoarseMode={setCoarseMode}
         onCancel={handleCancel}
@@ -482,20 +473,17 @@ export function DashboardBuilder({
                     onDeleteWidget={(widgetId) => deleteWidget(section.id, widgetId)}
                     onCopyWidget={handleCopyWidget}
                     onFullscreenWidget={setFullscreenWidget}
-                    onUpdateWidgetBounds={updateWidgetBounds}
                     onUpdateWidgetScale={updateWidgetScale}
                     isEditing={isEditing}
                     coarseMode={coarseMode}
                     containerWidth={containerWidth - SECTION_HORIZONTAL_PADDING}
-                    renderWidget={(widget, onDataRange, onResetBounds) => (
+                    renderWidget={(widget) => (
                       <WidgetRenderer
                         widget={widget}
                         groupedMetrics={groupedMetrics}
                         selectedRuns={selectedRuns}
                         organizationId={organizationId}
                         projectName={projectName}
-                        onDataRange={onDataRange}
-                        onResetBounds={onResetBounds}
                         settingsRunId={settingsRunId}
                         yZoomRange={widgetYZoomRanges[widget.id] ?? null}
                         onYZoomRangeChange={(range) => setWidgetYZoomRanges((prev) => ({ ...prev, [widget.id]: range }))}
@@ -540,14 +528,6 @@ export function DashboardBuilder({
           open={true}
           onOpenChange={(open) => { if (!open) setFullscreenWidget(null); }}
           title={fullscreenWidget.config.title || (fullscreenWidget.config as ChartWidgetConfig).metrics[0] || "Chart"}
-          yMin={(fullscreenWidget.config as ChartWidgetConfig).yMin}
-          yMax={(fullscreenWidget.config as ChartWidgetConfig).yMax}
-          onBoundsChange={(yMin, yMax) => {
-            updateWidgetBounds(fullscreenWidget.id, yMin, yMax);
-            setFullscreenWidget((prev) =>
-              prev ? { ...prev, config: { ...prev.config, yMin, yMax } } : null
-            );
-          }}
           logXAxis={(fullscreenWidget.config as ChartWidgetConfig).xAxisScale === "log"}
           logYAxis={(fullscreenWidget.config as ChartWidgetConfig).yAxisScale === "log"}
           onLogScaleChange={(axis, value) => {
@@ -556,16 +536,6 @@ export function DashboardBuilder({
             setFullscreenWidget((prev) =>
               prev
                 ? { ...prev, config: { ...prev.config, ...(axis === "x" ? { xAxisScale: scaleValue } : { yAxisScale: scaleValue }) } }
-                : null
-            );
-          }}
-          onResetAll={() => {
-            updateWidgetBounds(fullscreenWidget.id, undefined, undefined);
-            updateWidgetScale(fullscreenWidget.id, "x", false);
-            updateWidgetScale(fullscreenWidget.id, "y", false);
-            setFullscreenWidget((prev) =>
-              prev
-                ? { ...prev, config: { ...prev.config, yMin: undefined, yMax: undefined, xAxisScale: "linear", yAxisScale: "linear" } }
                 : null
             );
           }}

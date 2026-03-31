@@ -11,7 +11,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { useRef, useMemo, useCallback, useEffect } from "react";
+import { useRef, useMemo, useCallback, useEffect, useReducer } from "react";
 import { GripVertical, Pin } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -169,10 +169,18 @@ export function DataTable({
   const tableBodyRef = useRef<HTMLTableSectionElement>(null);
   const theadRef = useRef<HTMLTableSectionElement>(null);
   const mainScrollRef = useRef<HTMLDivElement>(null);
-
-  // Ref-based stable getters to avoid column recreation on every color/tag change
+  // Ref-based getter for run colors — avoids recreating columns on every color change.
+  // The version counter forces a single column re-creation when colors first populate
+  // (e.g., from IndexedDB cache), preventing gray circles on initial render.
   const runColorsRef = useRef(runColors);
-  useEffect(() => { runColorsRef.current = runColors; }, [runColors]);
+  const [colorVersion, bumpColorVersion] = useReducer((v: number) => v + 1, 0);
+  useEffect(() => {
+    const wasEmpty = Object.keys(runColorsRef.current).length === 0;
+    runColorsRef.current = runColors;
+    if (wasEmpty && Object.keys(runColors).length > 0) {
+      bumpColorVersion();
+    }
+  }, [runColors]);
   const getRunColor = useCallback((runId: string) => runColorsRef.current[runId], []);
 
   const allTagsRef = useRef(allTags);
@@ -250,6 +258,7 @@ export function DataTable({
         pinnedColumnIds,
         onToggleColumnPin,
       }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       orgSlug, projectName, organizationId,
       onColorChange, onSelectionChange, onToggleVisibility, onTagsUpdate, onNotesUpdate,
@@ -258,6 +267,7 @@ export function DataTable({
       nameOverrides, onNameRename, onNameSetColor,
       sorting, onSortingChange, activeChartViewId,
       pinnedColumnIds, onToggleColumnPin,
+      colorVersion, // trigger cell re-render when colors first populate
     ],
   );
 
@@ -453,7 +463,7 @@ export function DataTable({
 
       <div className="min-h-0 flex-1 flex flex-col overflow-hidden rounded-md border">
         {isPinningActive ? (
-          <div ref={mainScrollRef} className="min-h-0 flex-1 overflow-auto" data-table-container>
+          <div ref={mainScrollRef} className="min-h-0 flex-1 overflow-y-auto overflow-x-scroll" data-table-container>
             <div className="sticky top-0 z-10 border-b-2 border-primary/30 bg-background">
               <Table
                 wrapperClassName="!overflow-x-visible"
@@ -493,8 +503,8 @@ export function DataTable({
             </Table>
           </div>
         ) : (
-          <div ref={mainScrollRef} className="min-h-0 flex-1 overflow-auto" data-table-container>
-            <Table style={{ tableLayout: "fixed", borderCollapse: "separate", borderSpacing: 0, minWidth: "100%", width: tableWidth }}>
+          <div ref={mainScrollRef} className="min-h-0 flex-1 overflow-y-auto overflow-x-scroll" data-table-container>
+            <Table wrapperClassName="!overflow-x-visible" style={{ tableLayout: "fixed", borderCollapse: "separate", borderSpacing: 0, minWidth: "100%", width: tableWidth }}>
               <colgroup>{renderColGroup()}</colgroup>
               <TableHeader ref={theadRef} className="sticky top-0 z-10 bg-background">
                 {table.getHeaderGroups().map((hg) => (

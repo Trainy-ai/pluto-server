@@ -455,7 +455,7 @@ export const LineChartWithFetch = memo(
         globalLogXAxis={settings.xAxisLogScale}
         globalLogYAxis={settings.yAxisLogScale}
         boundsResetKey={boundsResetKey}
-        renderChart={(yMin, yMax, onDataRange, onResetBounds, logXAxis, logYAxis, _yZoom, yZoomRange, onYZoomRangeChange) => {
+        renderChart={(_onResetBounds, logXAxis, logYAxis, _yZoom, yZoomRange, onYZoomRangeChange) => {
           const commonProps = {
             className: "h-full",
             title: logName,
@@ -483,10 +483,6 @@ export const LineChartWithFetch = memo(
                   isDateTime={chartConfig.isDateTime}
                   xlabel={chartConfig.xlabel}
                   showLegend={chartConfig.showLegend}
-                  yMin={yMin}
-                  yMax={yMax}
-                  onDataRange={onDataRange}
-                  onResetBounds={onResetBounds}
                   onZoomRangeChange={onZoomRangeChange}
                 />
               ) : (
@@ -496,10 +492,6 @@ export const LineChartWithFetch = memo(
                   xlabel={chartConfig.xlabel}
                   isDateTime={chartConfig.isDateTime}
                   showLegend={chartConfig.showLegend}
-                  yMin={yMin}
-                  yMax={yMax}
-                  onDataRange={onDataRange}
-                  onResetBounds={onResetBounds}
                   onZoomRangeChange={onZoomRangeChange}
                 />
               )}

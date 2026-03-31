@@ -130,23 +130,6 @@ export function updateWidgets(
   };
 }
 
-export function updateWidgetBounds(
-  config: DashboardViewConfig,
-  widgetId: string,
-  yMin?: number,
-  yMax?: number
-): DashboardViewConfig {
-  return {
-    ...config,
-    sections: config.sections.map((s) => ({
-      ...s,
-      widgets: s.widgets.map((w) =>
-        w.id === widgetId ? { ...w, config: { ...w.config, yMin, yMax } } : w
-      ),
-    })),
-  };
-}
-
 export function updateWidgetScale(
   config: DashboardViewConfig,
   widgetId: string,
@@ -170,24 +153,6 @@ export function updateWidgetScale(
               : { yAxisScale: scaleValue }),
           },
         };
-      }),
-    })),
-  };
-}
-
-export function resetAllWidgetBounds(
-  config: DashboardViewConfig
-): DashboardViewConfig {
-  return {
-    ...config,
-    sections: config.sections.map((s) => ({
-      ...s,
-      widgets: s.widgets.map((w) => {
-        if (w.type === "chart") {
-          const { yMin, yMax, ...restConfig } = w.config as ChartWidgetConfig;
-          return { ...w, config: restConfig };
-        }
-        return w;
       }),
     })),
   };

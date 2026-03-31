@@ -20,8 +20,6 @@ interface ChartWidgetProps {
   selectedRuns: Record<string, SelectedRunWithColor>;
   organizationId: string;
   projectName: string;
-  onDataRange?: (dataMin: number, dataMax: number) => void;
-  onResetBounds?: () => void;
   settingsRunId?: string;
   /** Externally-stored Y zoom range for persistence across mini/fullscreen */
   yZoomRange?: [number, number] | null;
@@ -35,8 +33,6 @@ export function ChartWidget({
   selectedRuns,
   organizationId,
   projectName,
-  onDataRange,
-  onResetBounds,
   settingsRunId,
   yZoomRange,
   onYZoomRangeChange,
@@ -159,10 +155,6 @@ export function ChartWidget({
         organizationId={organizationId}
         projectName={projectName}
         allRunsCompleted={allRunsCompleted}
-        yMin={config.yMin}
-        yMax={config.yMax}
-        onDataRange={onDataRange}
-        onResetBounds={onResetBounds}
         logXAxis={config.xAxisScale === "log" ? true : undefined}
         logYAxis={config.yAxisScale === "log" ? true : undefined}
         xAxisOverride={mapXAxisToDisplayLogName(config.xAxis)}

@@ -7,7 +7,6 @@ import {
   MoveIcon,
   Maximize2Icon,
   SlidersHorizontalIcon,
-  TriangleAlertIcon,
   ZapIcon,
   CopyIcon,
 } from "lucide-react";
@@ -23,7 +22,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { ChartBoundsPopover } from "@/components/charts/chart-bounds-popover";
+import { ChartScalePopover } from "@/components/charts/chart-scale-popover";
 import { ChartExportMenu } from "@/components/charts/chart-export-menu";
 import { VirtualizedChart } from "@/components/core/virtualized-chart";
 import type { Widget, ChartWidgetConfig } from "../../~types/dashboard-types";
@@ -35,30 +34,21 @@ const WIDGET_HEADER_HEIGHT = 40;
 interface WidgetCardProps {
   widget: Widget;
   isEditing: boolean;
-  clippingInfo: string | null;
   onEdit: () => void;
   onDelete: () => void;
   onCopy: () => void;
   onFullscreen?: () => void;
-  onUpdateBounds?: (yMin?: number, yMax?: number) => void;
   onUpdateScale?: (axis: "x" | "y", value: boolean) => void;
-  onDataRange?: (dataMin: number, dataMax: number) => void;
-  onResetBounds?: () => void;
-  renderWidget: (
-    onDataRange?: (dataMin: number, dataMax: number) => void,
-    onResetBounds?: () => void,
-  ) => ReactNode;
+  renderWidget: () => ReactNode;
 }
 
 export function WidgetCard({
   widget,
   isEditing,
-  clippingInfo,
   onEdit,
   onDelete,
   onCopy,
   onFullscreen,
-  onUpdateBounds,
   onUpdateScale,
   renderWidget,
 }: WidgetCardProps) {
@@ -94,16 +84,6 @@ export function WidgetCard({
               <p className="text-xs">{widget.config.title || getWidgetTitle(widget)}</p>
             </TooltipContent>
           </Tooltip>
-          {clippingInfo && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <TriangleAlertIcon className="size-3.5 shrink-0 text-amber-500" />
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                <p className="text-xs">{clippingInfo}</p>
-              </TooltipContent>
-            </Tooltip>
-          )}
         </div>
 
         <div className="flex shrink-0 items-center gap-1">
@@ -115,18 +95,10 @@ export function WidgetCard({
                 fileName={widget.config.title || getWidgetTitle(widget)}
                 className="widget-drag-cancel size-7 opacity-0 group-hover:opacity-100"
               />
-              <ChartBoundsPopover
-                yMin={chartConfig?.yMin}
-                yMax={chartConfig?.yMax}
-                onBoundsChange={(yMin, yMax) => onUpdateBounds?.(yMin, yMax)}
+              <ChartScalePopover
                 logXAxis={chartConfig?.xAxisScale === "log"}
                 logYAxis={chartConfig?.yAxisScale === "log"}
                 onLogScaleChange={(axis, value) => onUpdateScale?.(axis, value)}
-                onResetAll={() => {
-                  onUpdateBounds?.(undefined, undefined);
-                  onUpdateScale?.("x", false);
-                  onUpdateScale?.("y", false);
-                }}
               >
                 <Button
                   variant="ghost"
@@ -136,7 +108,7 @@ export function WidgetCard({
                 >
                   <SlidersHorizontalIcon className="size-3.5" />
                 </Button>
-              </ChartBoundsPopover>
+              </ChartScalePopover>
               <Button
                 variant="ghost"
                 size="icon"
@@ -189,21 +161,9 @@ export function WidgetCard({
         ref={contentRef}
         data-testid="widget-content"
         className={`h-[calc(100%-${WIDGET_HEADER_HEIGHT}px)] overflow-auto p-2`}
-        onDoubleClick={
-          widget.type === "chart"
-            ? () => onUpdateBounds?.(undefined, undefined)
-            : undefined
-        }
       >
         <VirtualizedChart minHeight="100%" loadMargin="400px" unloadMargin="1200px">
-          {renderWidget(
-            widget.type === "chart"
-              ? undefined // dataRange handled at grid level
-              : undefined,
-            widget.type === "chart"
-              ? () => onUpdateBounds?.(undefined, undefined)
-              : undefined,
-          )}
+          {renderWidget()}
         </VirtualizedChart>
       </div>
     </div>

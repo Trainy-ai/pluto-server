@@ -25,10 +25,6 @@ interface MultiLineChartProps {
   onLoad: () => void;
   organizationId: string;
   projectName: string;
-  /** Manual Y-axis minimum bound */
-  yMin?: number;
-  /** Manual Y-axis maximum bound */
-  yMax?: number;
 }
 
 export const MultiLineChart = memo(
@@ -40,8 +36,6 @@ export const MultiLineChart = memo(
     onLoad,
     organizationId,
     projectName,
-    yMin,
-    yMax,
   }: MultiLineChartProps) => {
     useCheckDatabaseSize(metricsCache);
 
@@ -141,8 +135,7 @@ export const MultiLineChart = memo(
           ref={ref}
           showLegend={true}
           isDateTime={true}
-          yMin={yMin}
-          yMax={yMax}
+
         />
       );
     }
@@ -167,8 +160,6 @@ export const MultiLineChart = memo(
         xlabel={xlabel}
         ref={ref}
         showLegend={true}
-        yMin={yMin}
-        yMax={yMax}
       />
     );
   },
