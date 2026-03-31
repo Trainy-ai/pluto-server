@@ -10,6 +10,8 @@ interface LinearIssuePickerProps {
   searchQuery: string;
   onSelectIssue: (identifier: string) => void;
   selectedTags: string[];
+  /** Tag prefix used when checking if an issue is already added. Defaults to "linear". */
+  tagPrefix?: "linear" | "baseline";
 }
 
 export function LinearIssuePicker({
@@ -17,8 +19,9 @@ export function LinearIssuePicker({
   searchQuery,
   onSelectIssue,
   selectedTags,
+  tagPrefix = "linear",
 }: LinearIssuePickerProps) {
-  const debouncedQuery = useDebounceValue(searchQuery, 300);
+  const debouncedQuery = useDebounceValue(searchQuery, 500);
 
   const { data: issues, isLoading } = useQuery(
     trpc.organization.integrations.searchLinearIssues.queryOptions(
@@ -53,9 +56,9 @@ export function LinearIssuePicker({
   }
 
   return (
-    <CommandGroup heading="Linear Issues">
+    <CommandGroup heading={tagPrefix === "baseline" ? "Linear Issues (as baseline)" : "Linear Issues"}>
       {issues.map((issue) => {
-        const tagValue = `linear:${issue.identifier}`;
+        const tagValue = `${tagPrefix}:${issue.identifier}`;
         const isSelected = selectedTags.includes(tagValue);
 
         return (
@@ -76,7 +79,10 @@ export function LinearIssuePicker({
             />
             <Badge
               variant="outline"
-              className="shrink-0 border-purple-300 bg-purple-50 text-purple-700 dark:border-purple-700 dark:bg-purple-950 dark:text-purple-300"
+              className={tagPrefix === "baseline"
+                ? "shrink-0 border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-300"
+                : "shrink-0 border-purple-300 bg-purple-50 text-purple-700 dark:border-purple-700 dark:bg-purple-950 dark:text-purple-300"
+              }
             >
               {issue.identifier}
             </Badge>

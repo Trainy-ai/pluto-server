@@ -28,6 +28,15 @@ vi.mock("../lib/sqid", () => ({
   sqidEncode: vi.fn((id: number) => `sqid_${id}`),
 }));
 
+vi.mock("../lib/resolve-run-id", () => ({
+  resolveRunId: vi.fn((_prisma: any, identifier: string) => {
+    // Mock: extract numeric part from display ID like "PRJ-2" → 2
+    const match = identifier.match(/-(\d+)$/);
+    if (match) return Promise.resolve(parseInt(match[1], 10));
+    return Promise.reject(new Error("Run not found"));
+  }),
+}));
+
 vi.mock("../lib/env", () => ({
   env: { BETTER_AUTH_URL: "http://localhost:3000" },
 }));
@@ -43,7 +52,20 @@ function createMockPrisma(overrides: {
   integration?: unknown;
   org?: unknown;
   runs?: unknown[];
+  /** Baseline runs returned when resolving baseline: display IDs */
+  baselineRuns?: unknown[];
 } = {}) {
+  const experimentRuns = overrides.runs ?? [];
+  const baselineRuns = overrides.baselineRuns ?? [];
+
+  // First findMany = experiment runs (linear: tag query).
+  // Second findMany (if any) = baseline runs (resolved by ID).
+  // Default to [] for any subsequent calls.
+  const findManyMock = vi.fn()
+    .mockResolvedValueOnce(experimentRuns)
+    .mockResolvedValueOnce(baselineRuns)
+    .mockResolvedValue([]);
+
   const mock: any = {
     $executeRawUnsafe: vi.fn().mockResolvedValue(0),
     integration: {
@@ -67,7 +89,7 @@ function createMockPrisma(overrides: {
       ),
     },
     runs: {
-      findMany: vi.fn().mockResolvedValue(overrides.runs ?? []),
+      findMany: findManyMock,
     },
   };
   // $transaction calls the callback with the mock itself as the tx client
@@ -84,6 +106,7 @@ function createMockRun(overrides: {
   number?: number | null;
   name?: string;
   status?: string;
+  tags?: string[];
   createdAt?: Date;
   project?: { name?: string; runPrefix?: string | null };
 } = {}) {
@@ -93,6 +116,7 @@ function createMockRun(overrides: {
     number: 1,
     name: "test-run",
     status: "COMPLETED",
+    tags: [] as string[],
     createdAt: new Date("2026-01-01"),
     ...rest,
     project: {
@@ -409,7 +433,7 @@ describe("syncRunsToLinearIssue", () => {
     });
 
     const body = vi.mocked(createComment).mock.calls[0][2];
-    expect(body).toContain("Compare in my\\-project");
+    expect(body).toContain("Compare all in my\\-project");
     expect(body).toContain("?runs=sqid_1,sqid_2");
   });
 
@@ -654,7 +678,9 @@ describe("syncRunsToLinearIssue", () => {
       createMockRun({ name: "run-1", createdAt: new Date("2026-02-09"), project: { name: "proj", runPrefix: "PRJ" } }),
     ];
 
-    const prisma = createMockPrisma({ runs });
+    // Use a custom mock that always returns runs for findMany (4 calls: 2 per sync)
+    const prisma = createMockPrisma({});
+    prisma.runs.findMany = vi.fn().mockResolvedValue(runs);
 
     vi.mocked(getIssueByIdentifier).mockResolvedValue({
       id: "linear-issue-1",
@@ -699,7 +725,116 @@ describe("syncRunsToLinearIssue", () => {
 
     const body = vi.mocked(createComment).mock.calls[0][2];
     // Each project should get its own comparison link
-    expect(body).toContain("Compare in project\\-alpha");
-    expect(body).toContain("Compare in project\\-beta");
+    expect(body).toContain("Compare all in project\\-alpha");
+    expect(body).toContain("Compare all in project\\-beta");
+  });
+
+  it("should show baseline display IDs as hyperlinks in Baselines column", async () => {
+    const experimentRuns = [
+      createMockRun({ id: BigInt(1), number: 1, name: "ablation-v1", tags: ["linear:TRA-1", "baseline:PRJ-2"], createdAt: new Date("2026-02-10"), project: { name: "proj", runPrefix: "PRJ" } }),
+    ];
+    const baselineRuns = [
+      createMockRun({ id: BigInt(2), number: 2, name: "prod-model", tags: [], createdAt: new Date("2026-01-01"), project: { name: "proj", runPrefix: "PRJ" } }),
+    ];
+
+    const prisma = createMockPrisma({ runs: experimentRuns, baselineRuns });
+
+    vi.mocked(getIssueByIdentifier).mockResolvedValue({ id: "iss-1", identifier: "TRA-1" });
+    vi.mocked(getIssueComments).mockResolvedValue([]);
+    vi.mocked(createComment).mockResolvedValue({ id: "c1" });
+
+    await syncRunsToLinearIssue({
+      prisma,
+      organizationId: "org-1",
+      issueIdentifier: "TRA-1",
+    });
+
+    const body = vi.mocked(createComment).mock.calls[0][2];
+    // Table header should have Baselines column
+    expect(body).toContain("| Baselines |");
+    // Baseline display ID should be a hyperlink in the row
+    expect(body).toContain("[PRJ\\-2]");
+    // Comparison URL should include both baseline and experiment
+    expect(body).toContain("?runs=sqid_2,sqid_1");
+    // Experiment run should appear
+    expect(body).toContain("ablation\\-v1");
+    // "Compare all" at bottom
+    expect(body).toContain("Compare all in");
+  });
+
+  it("should omit Baselines column when no baselines exist", async () => {
+    const experimentRuns = [
+      createMockRun({ id: BigInt(1), number: 1, name: "run-1", tags: ["linear:TRA-1"], createdAt: new Date("2026-02-10"), project: { name: "proj", runPrefix: "PRJ" } }),
+    ];
+
+    const prisma = createMockPrisma({ runs: experimentRuns });
+
+    vi.mocked(getIssueByIdentifier).mockResolvedValue({ id: "iss-1", identifier: "TRA-1" });
+    vi.mocked(getIssueComments).mockResolvedValue([]);
+    vi.mocked(createComment).mockResolvedValue({ id: "c1" });
+
+    await syncRunsToLinearIssue({
+      prisma,
+      organizationId: "org-1",
+      issueIdentifier: "TRA-1",
+    });
+
+    const body = vi.mocked(createComment).mock.calls[0][2];
+    expect(body).not.toContain("| Baselines |");
+  });
+
+  it("should deduplicate when baseline run also has linear: tag", async () => {
+    const experimentRuns = [
+      createMockRun({ id: BigInt(1), number: 1, name: "experiment", tags: ["linear:TRA-1", "baseline:PRJ-2"], createdAt: new Date("2026-02-10"), project: { name: "proj", runPrefix: "PRJ" } }),
+      createMockRun({ id: BigInt(2), number: 2, name: "dual-tagged", tags: ["linear:TRA-1"], createdAt: new Date("2026-01-01"), project: { name: "proj", runPrefix: "PRJ" } }),
+    ];
+    const baselineRuns = [
+      createMockRun({ id: BigInt(2), number: 2, name: "dual-tagged", tags: ["linear:TRA-1"], createdAt: new Date("2026-01-01"), project: { name: "proj", runPrefix: "PRJ" } }),
+    ];
+
+    const prisma = createMockPrisma({ runs: experimentRuns, baselineRuns });
+
+    vi.mocked(getIssueByIdentifier).mockResolvedValue({ id: "iss-1", identifier: "TRA-1" });
+    vi.mocked(getIssueComments).mockResolvedValue([]);
+    vi.mocked(createComment).mockResolvedValue({ id: "c1" });
+
+    await syncRunsToLinearIssue({
+      prisma,
+      organizationId: "org-1",
+      issueIdentifier: "TRA-1",
+    });
+
+    const body = vi.mocked(createComment).mock.calls[0][2];
+    // dual-tagged should not appear as an experiment row (it's a baseline, filtered out)
+    // Only experiment run should be in the table
+    expect(body).toContain("experiment");
+    expect(body).toContain("| Baselines |");
+  });
+});
+
+describe("triggerLinearSyncForTags — baseline tags", () => {
+  it("should re-sync linear: issues when baseline: tag is added", () => {
+    const prisma = createMockPrisma();
+
+    // Run has linear:TRA-1 and adds baseline:MMP-5 — should re-sync TRA-1
+    expect(() =>
+      triggerLinearSyncForTags(prisma, "org-1", [
+        "linear:TRA-1",
+        "baseline:MMP-5",
+      ])
+    ).not.toThrow();
+  });
+
+  it("should re-sync linear: issues when baseline: tag is removed", () => {
+    const prisma = createMockPrisma();
+
+    expect(() =>
+      triggerLinearSyncForTags(
+        prisma,
+        "org-1",
+        ["linear:TRA-1"],
+        ["linear:TRA-1", "baseline:MMP-5"] // baseline tag was removed
+      )
+    ).not.toThrow();
   });
 });

@@ -1,9 +1,9 @@
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, Star } from "lucide-react";
 
 export interface ParsedTag {
-  type: "linear" | "plain";
+  type: "linear" | "baseline" | "plain";
   display: string;
   url?: string;
   issueId?: string;
@@ -29,6 +29,17 @@ export function parseTag(tag: string): ParsedTag {
     };
   }
 
+  // Baseline run reference: baseline:MMP-169 or baseline:T0-1055
+  const baselineMatch = tag.match(/^baseline:([A-Z0-9]+-\d+)$/i);
+  if (baselineMatch) {
+    const runDisplayId = baselineMatch[1].toUpperCase();
+    return {
+      type: "baseline",
+      display: `↳ ${runDisplayId}`,
+      issueId: runDisplayId,
+    };
+  }
+
   return {
     type: "plain",
     display: tag,
@@ -43,6 +54,23 @@ interface TagBadgeProps {
 
 export function TagBadge({ tag, className, truncate }: TagBadgeProps) {
   const parsed = parseTag(tag);
+
+  if (parsed.type === "baseline") {
+    return (
+      <Badge
+        variant="secondary"
+        className={cn(
+          "gap-1 text-xs",
+          "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300",
+          className
+        )}
+        title={`Baseline run: ${parsed.issueId}`}
+      >
+        <Star className="h-3 w-3 shrink-0" />
+        <span>{parsed.display}</span>
+      </Badge>
+    );
+  }
 
   if (parsed.type === "linear" && parsed.url) {
     return (

@@ -203,20 +203,33 @@ export function TagsEditorPopover({
                 );
               })}
             </CommandGroup>
-            {linearConfigured && organizationId && inputValue.trim() && (
-              <LinearIssuePicker
-                organizationId={organizationId}
-                searchQuery={inputValue.trim()}
-                selectedTags={pendingTags}
-                onSelectIssue={(identifier) => {
-                  const tag = `linear:${identifier}`;
-                  if (!pendingTags.includes(tag)) {
-                    setPendingTags([...pendingTags, tag]);
-                  }
-                  setInputValue("");
-                }}
-              />
-            )}
+            {linearConfigured && organizationId && inputValue.trim() && (() => {
+              const raw = inputValue.trim();
+
+              // Only show Linear picker when input has a recognized prefix with a search term after it.
+              // This avoids firing Linear API calls for partial typing like "l", "li", "lin", etc.
+              const prefixMatch = raw.match(/^(linear|baseline):(.+)/i);
+              if (!prefixMatch) return null;
+
+              const tagPrefix = prefixMatch[1].toLowerCase() === "baseline" ? "baseline" as const : "linear" as const;
+              const searchQuery = prefixMatch[2];
+
+              return (
+                <LinearIssuePicker
+                  organizationId={organizationId}
+                  searchQuery={searchQuery}
+                  selectedTags={pendingTags}
+                  tagPrefix={tagPrefix}
+                  onSelectIssue={(identifier) => {
+                    const tag = `${tagPrefix}:${identifier}`;
+                    if (!pendingTags.includes(tag)) {
+                      setPendingTags([...pendingTags, tag]);
+                    }
+                    setInputValue("");
+                  }}
+                />
+              );
+            })()}
           </CommandList>
         </Command>
         {pendingTags.length > 0 && (

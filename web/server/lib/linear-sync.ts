@@ -3,6 +3,7 @@ import { createComment, updateComment, getIssueByIdentifier, getIssueComments } 
 import { getValidToken } from "./linear-oauth";
 import { sqidEncode } from "./sqid";
 import { env } from "./env";
+import { resolveRunId } from "./resolve-run-id";
 
 interface SyncOptions {
   prisma: PrismaClient;
@@ -57,6 +58,11 @@ function escapeMarkdown(text: string): string {
  * Fire-and-forget sync for all linear: tags in a tag array.
  * Call from any tag-update path to avoid duplicating trigger logic.
  * Pass previousTags to also re-sync any linear: tags that were removed.
+ *
+ * baseline: tags point to run display IDs (e.g. "baseline:MMP-169"), not
+ * Linear issues, so they don't directly trigger a sync. However, adding or
+ * removing a baseline: tag on a run that also has linear: tags should re-sync
+ * those issues so the comment table updates.
  */
 export function triggerLinearSyncForTags(
   prisma: PrismaClient,
@@ -71,6 +77,23 @@ export function triggerLinearSyncForTags(
     for (const t of previousTags) {
       if (t.startsWith("linear:") && !linearTags.has(t)) {
         linearTags.add(t);
+      }
+    }
+  }
+
+  // If a baseline: tag was added/removed, re-sync all linear: issues on this run
+  // so the comment table picks up the baseline change.
+  const hasBaselineChange =
+    tags.some((t) => t.startsWith("baseline:")) ||
+    (previousTags?.some((t) => t.startsWith("baseline:")) ?? false);
+  if (hasBaselineChange) {
+    // Ensure all current linear: tags are synced
+    for (const t of tags) {
+      if (t.startsWith("linear:")) linearTags.add(t);
+    }
+    if (previousTags) {
+      for (const t of previousTags) {
+        if (t.startsWith("linear:")) linearTags.add(t);
       }
     }
   }
@@ -143,21 +166,58 @@ async function syncRunsToLinearIssueInternal({ prisma, organizationId, issueIden
     }
 
     const tagValue = `linear:${issueIdentifier}`;
-    const runs: SyncRun[] = await tx.runs.findMany({
-      where: {
-        organizationId,
-        tags: { has: tagValue },
-      },
-      select: {
-        id: true,
-        number: true,
-        name: true,
-        status: true,
-        createdAt: true,
-        project: { select: { name: true, runPrefix: true } },
-      },
+    const runSelect = {
+      id: true,
+      number: true,
+      name: true,
+      status: true,
+      tags: true,
+      createdAt: true,
+      project: { select: { name: true, runPrefix: true } },
+    };
+
+    const experimentRuns: (SyncRun & { tags: string[] })[] = await tx.runs.findMany({
+      where: { organizationId, tags: { has: tagValue } },
+      select: runSelect,
       orderBy: { createdAt: "desc" },
     });
+
+    // Scan experiment runs for baseline: tags pointing to run display IDs.
+    // e.g. "baseline:MMP-169" means "my baseline is run MMP-169".
+    const baselineDisplayIds = new Set<string>();
+    for (const run of experimentRuns) {
+      for (const tag of run.tags) {
+        if (tag.startsWith("baseline:")) {
+          const displayId = tag.slice("baseline:".length);
+          if (displayId) baselineDisplayIds.add(displayId);
+        }
+      }
+    }
+
+    // Resolve baseline display IDs to actual runs
+    const baselineRunIds: bigint[] = [];
+    for (const displayId of baselineDisplayIds) {
+      try {
+        const numericId = await resolveRunId(tx as any, displayId, organizationId);
+        baselineRunIds.push(BigInt(numericId));
+      } catch {
+        console.log(`[linear-sync] could not resolve baseline run "${displayId}", skipping`);
+      }
+    }
+
+    const baselineRuns: SyncRun[] = baselineRunIds.length > 0
+      ? await tx.runs.findMany({
+          where: { id: { in: baselineRunIds } },
+          select: { id: true, number: true, name: true, status: true, createdAt: true, project: { select: { name: true, runPrefix: true } } },
+        })
+      : [];
+
+    // Merge: baselines first, then experiments (dedup if a baseline also has linear: tag)
+    const baselineIdSet = new Set(baselineRuns.map((r) => r.id));
+    const runs: (SyncRun & { role: "baseline" | "experiment" })[] = [
+      ...baselineRuns.map((r) => ({ ...r, role: "baseline" as const })),
+      ...experimentRuns.filter((r) => !baselineIdSet.has(r.id)).map(({ tags: _tags, ...r }) => ({ ...r, role: "experiment" as const })),
+    ];
 
     const metadata = (integration.metadata ?? {}) as Record<string, unknown>;
     const commentIds = (metadata.commentIds ?? {}) as Record<string, string>;
@@ -213,40 +273,82 @@ async function syncRunsToLinearIssueInternal({ prisma, organizationId, issueIden
     return { success: true };
   }
 
-  // Build the markdown comment — run names are hyperlinked
-  const rows = runs.map((run) => {
+  // Build a map from baseline run ID → { displayId, encodedId, url } for linking
+  const baselineRuns = runs.filter((r) => r.role === "baseline");
+  const experimentRuns = runs.filter((r) => r.role === "experiment");
+  const hasBaselines = baselineRuns.length > 0;
+
+  // Helper to build run URL and display ID
+  function runMeta(run: typeof runs[number]) {
     const encodedId = sqidEncode(Number(run.id));
     const projectName = run.project.name;
     const url = `${env.BETTER_AUTH_URL}/o/${orgSlug}/projects/${encodeURIComponent(projectName)}/${encodedId}`;
-    const date = run.createdAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
     const displayId = run.number != null && run.project.runPrefix
       ? `${run.project.runPrefix}-${run.number}`
       : encodedId;
-    return `| ${escapeMarkdown(displayId)} | [${escapeMarkdown(run.name)}](${url}) | ${escapeMarkdown(projectName)} | ${run.status} | ${date} |`;
+    const date = run.createdAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    return { encodedId, projectName, url, displayId, date };
+  }
+
+  // Map baseline display IDs to their metadata (for building inline links)
+  const baselineByDisplayId = new Map<string, { encodedId: string; url: string; displayId: string }>();
+  for (const r of baselineRuns) {
+    const m = runMeta(r);
+    baselineByDisplayId.set(m.displayId, { encodedId: m.encodedId, url: m.url, displayId: m.displayId });
+  }
+
+  // For each experiment run, find its baseline: tags and build the Baselines column
+  // Each experiment run's tags contain baseline:DISPLAY_ID entries
+  const allRuns = experimentRuns.length > 0 ? experimentRuns : runs;
+  const rows = allRuns.map((run) => {
+    const m = runMeta(run);
+
+    if (!hasBaselines) {
+      return `| ${escapeMarkdown(m.displayId)} | [${escapeMarkdown(run.name)}](${m.url}) | ${escapeMarkdown(m.projectName)} | ${run.status} | ${m.date} |`;
+    }
+
+    // Find this run's baselines from the resolved baseline runs
+    // Build comparison URL: all baseline IDs + this run's ID
+    const baselineEncodedIds = baselineRuns.map((b) => sqidEncode(Number(b.id)));
+    const compareIds = [...baselineEncodedIds, m.encodedId].join(",");
+    const compareUrl = `${env.BETTER_AUTH_URL}/o/${orgSlug}/projects/${encodeURIComponent(m.projectName)}?runs=${compareIds}`;
+
+    // Build baseline links as comma-separated hyperlinked display IDs
+    const baselineLinks = baselineRuns.map((b) => {
+      const bm = runMeta(b);
+      return `[${escapeMarkdown(bm.displayId)}](${compareUrl})`;
+    }).join(", ");
+
+    return `| ${escapeMarkdown(m.displayId)} | [${escapeMarkdown(run.name)}](${m.url}) | ${escapeMarkdown(m.projectName)} | ${run.status} | ${baselineLinks} | ${m.date} |`;
   });
 
-  // Build comparison URLs grouped by project
-  const runsByProject = new Map<string, string[]>();
+  // Build "compare all" link
+  const allRunsByProject = new Map<string, string[]>();
   for (const run of runs) {
-    const encodedId = sqidEncode(Number(run.id));
-    const projectName = run.project.name;
-    if (!runsByProject.has(projectName)) {
-      runsByProject.set(projectName, []);
+    const m = runMeta(run);
+    if (!allRunsByProject.has(m.projectName)) {
+      allRunsByProject.set(m.projectName, []);
     }
-    runsByProject.get(projectName)!.push(encodedId);
+    allRunsByProject.get(m.projectName)!.push(m.encodedId);
+  }
+  const comparisonLinks: string[] = [];
+  for (const [projectName, encodedIds] of allRunsByProject) {
+    const comparisonUrl = `${env.BETTER_AUTH_URL}/o/${orgSlug}/projects/${encodeURIComponent(projectName)}?runs=${encodedIds.join(",")}`;
+    comparisonLinks.push(`[Compare all in ${escapeMarkdown(projectName)}](${comparisonUrl})`);
   }
 
-  const comparisonLinks: string[] = [];
-  for (const [projectName, encodedIds] of runsByProject) {
-    const comparisonUrl = `${env.BETTER_AUTH_URL}/o/${orgSlug}/projects/${encodeURIComponent(projectName)}?runs=${encodedIds.join(",")}`;
-    comparisonLinks.push(`[Compare in ${escapeMarkdown(projectName)}](${comparisonUrl})`);
-  }
+  const tableHeader = hasBaselines
+    ? "| Run ID | Run | Project | Status | Baselines | Created |"
+    : "| Run ID | Run | Project | Status | Created |";
+  const tableSeparator = hasBaselines
+    ? "|--------|-----|---------|--------|-----------|---------|"
+    : "|--------|-----|---------|--------|---------|";
 
   const body = [
     "## Pluto Experiments",
     "",
-    "| Run ID | Run | Project | Status | Created |",
-    "|--------|-----|---------|--------|---------|",
+    tableHeader,
+    tableSeparator,
     ...rows,
     "",
     comparisonLinks.join(" · "),
