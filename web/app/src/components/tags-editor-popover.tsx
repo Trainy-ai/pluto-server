@@ -41,6 +41,17 @@ interface TagsEditorPopoverProps {
   onOpenChange?: (open: boolean) => void;
 }
 
+/** Extract run display ID from a baseline tag, e.g. "baseline:T0-123" → "T0-123" */
+function getBaselineRunId(tag: string): string | null {
+  const m = tag.match(/^baseline:([A-Z]+-\d+)$/i);
+  return m ? m[1].toUpperCase() : null;
+}
+
+/** Check if a baseline for the given run ID already exists in the tags list */
+function hasExistingBaseline(runId: string, tags: string[]): boolean {
+  return tags.some((t) => getBaselineRunId(t) === runId);
+}
+
 export function TagsEditorPopover({
   tags,
   allTags = [],
@@ -57,6 +68,7 @@ export function TagsEditorPopover({
   // Local state for pending tag changes (batch updates)
   const [pendingTags, setPendingTags] = useState<string[]>(tags);
   const [hasChanges, setHasChanges] = useState(false);
+  const [baselineError, setBaselineError] = useState<string | null>(null);
   // Guard against double-fire: handleApply calls onTagsUpdate then closes,
   // which would trigger onOpenChange to call onTagsUpdate again.
   const appliedRef = useRef(false);
@@ -83,14 +95,28 @@ export function TagsEditorPopover({
   const handleTagToggle = (tag: string) => {
     if (pendingTags.includes(tag)) {
       setPendingTags(pendingTags.filter((t) => t !== tag));
+      setBaselineError(null);
     } else {
+      const issueId = getBaselineRunId(tag);
+      if (issueId && hasExistingBaseline(issueId, pendingTags)) {
+        setBaselineError(`A baseline for ${issueId} already exists on this run`);
+        return;
+      }
+      setBaselineError(null);
       setPendingTags([...pendingTags, tag]);
     }
   };
 
+
   const handleAddNewTag = () => {
     const trimmedValue = inputValue.trim();
     if (trimmedValue && !pendingTags.includes(trimmedValue)) {
+      const issueId = getBaselineRunId(trimmedValue);
+      if (issueId && hasExistingBaseline(issueId, pendingTags)) {
+        setBaselineError(`A baseline for ${issueId} already exists on this run`);
+        return;
+      }
+      setBaselineError(null);
       setPendingTags([...pendingTags, trimmedValue]);
       setInputValue("");
     }
@@ -157,7 +183,7 @@ export function TagsEditorPopover({
             placeholder="Search or add tag..."
             value={inputValue}
             maxLength={30}
-            onValueChange={(v) => setInputValue(v.slice(0, 30))}
+            onValueChange={(v) => { setInputValue(v.slice(0, 30)); setBaselineError(null); }}
             onKeyDown={(e) => {
               if (e.key === "Enter" && inputValue.trim()) {
                 e.preventDefault();
@@ -222,9 +248,13 @@ export function TagsEditorPopover({
                   tagPrefix={tagPrefix}
                   onSelectIssue={(identifier) => {
                     const tag = `${tagPrefix}:${identifier}`;
-                    if (!pendingTags.includes(tag)) {
-                      setPendingTags([...pendingTags, tag]);
+                    if (pendingTags.includes(tag)) return;
+                    if (tagPrefix === "baseline" && hasExistingBaseline(identifier.toUpperCase(), pendingTags)) {
+                      setBaselineError(`A baseline for ${identifier} already exists on this run`);
+                      return;
                     }
+                    setBaselineError(null);
+                    setPendingTags([...pendingTags, tag]);
                     setInputValue("");
                   }}
                 />
@@ -232,6 +262,11 @@ export function TagsEditorPopover({
             })()}
           </CommandList>
         </Command>
+        {baselineError && (
+          <div className="border-t px-3 py-2 text-xs text-destructive">
+            {baselineError}
+          </div>
+        )}
         {pendingTags.length > 0 && (
           <div className="border-t p-2">
             <div className="text-xs text-muted-foreground mb-1">

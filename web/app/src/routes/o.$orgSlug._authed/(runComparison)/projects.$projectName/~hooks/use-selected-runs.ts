@@ -287,7 +287,12 @@ export function useSelectedRuns(
         .map((id) => runsById.get(id))
         .filter((r): r is Run => r != null);
 
-      if (matchedRuns.length === 0) return null;
+      // Wait until ALL URL runs are found in availableRuns before applying.
+      // A partial match means some runs haven't loaded yet (e.g., getByIds
+      // prefetch still in flight). Returning null keeps us in url-pending.
+      // Invalid/deleted IDs won't cause a hang because urlRunIds (a dep of
+      // this effect) updates once the prefetch resolves, dropping invalid IDs.
+      if (matchedRuns.length < urlRunIds.length) return null;
 
       const colorAssignment = assignSequentialColors(matchedRuns, chartColorsRef.current);
       const selected: Record<RunId, { run: Run; color: Color }> = {};
