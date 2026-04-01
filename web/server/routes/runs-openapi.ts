@@ -1385,7 +1385,7 @@ const queryMetricsRoute = createRoute({
   path: "/metrics",
   tags: ["Runs"],
   summary: "Query metrics from a run",
-  description: "Returns time-series metrics from ClickHouse. Supports filtering by metric name and group. Uses reservoir sampling to limit data points.",
+  description: "Returns time-series metrics from ClickHouse. Supports filtering by metric name, group, and step range. Uses reservoir sampling to limit data points.",
   security: [{ bearerAuth: [] }],
   request: {
     query: z.object({
@@ -1394,6 +1394,8 @@ const queryMetricsRoute = createRoute({
       logName: z.string().optional().openapi({ description: "Filter by metric name (e.g., train/loss)" }),
       logGroup: z.string().optional().openapi({ description: "Filter by metric group (e.g., train)" }),
       limit: z.coerce.number().min(1).max(10000).default(2000).openapi({ description: "Maximum data points to return" }),
+      stepMin: z.coerce.number().int().min(0).optional().openapi({ description: "Minimum step number (inclusive). Use with stepMax to query a specific range of steps." }),
+      stepMax: z.coerce.number().int().min(0).optional().openapi({ description: "Maximum step number (inclusive). Use with stepMin to query a specific range of steps." }),
     }),
   },
   responses: {
@@ -1419,7 +1421,7 @@ const queryMetricsRoute = createRoute({
 router.use(queryMetricsRoute.path, withApiKey);
 router.openapi(queryMetricsRoute, async (c) => {
   const apiKey = c.get("apiKey");
-  const { runId, projectName, logName, logGroup, limit } = c.req.valid("query");
+  const { runId, projectName, logName, logGroup, limit, stepMin, stepMax } = c.req.valid("query");
 
   const metrics = await queryRunMetrics(clickhouse, {
     organizationId: apiKey.organization.id,
@@ -1428,6 +1430,8 @@ router.openapi(queryMetricsRoute, async (c) => {
     logName,
     logGroup,
     limit,
+    stepMin,
+    stepMax,
   });
 
   return c.json({ metrics }, 200);

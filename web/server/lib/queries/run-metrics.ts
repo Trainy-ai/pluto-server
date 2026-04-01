@@ -34,6 +34,8 @@ export interface QueryRunMetricsParams {
   logName?: string;
   logGroup?: string;
   limit?: number;
+  stepMin?: number;
+  stepMax?: number;
 }
 
 export interface RunMetricEntry {
@@ -69,6 +71,8 @@ export async function queryRunMetrics(
     logName,
     logGroup,
     limit = DEFAULT_MAX_POINTS,
+    stepMin,
+    stepMax,
   } = params;
 
   // Build where clause
@@ -92,6 +96,16 @@ export async function queryRunMetrics(
   if (logGroup) {
     whereClause += ` AND logGroup = {logGroup: String}`;
     queryParams.logGroup = logGroup;
+  }
+
+  if (stepMin !== undefined) {
+    whereClause += ` AND step >= {stepMin: UInt64}`;
+    queryParams.stepMin = stepMin;
+  }
+
+  if (stepMax !== undefined) {
+    whereClause += ` AND step <= {stepMax: UInt64}`;
+    queryParams.stepMax = stepMax;
   }
 
   // Use reservoir sampling to limit results while maintaining distribution

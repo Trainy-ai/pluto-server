@@ -444,6 +444,28 @@ describe('SDK API Endpoints (with API Key)', () => {
       const data = await updateResponse.json();
       expect(data.success).toBe(true);
     });
+
+    it('Test 6.9: Query Metrics with stepMin/stepMax (SDK)', async () => {
+      expect(testRunId).toBeDefined();
+
+      // Query metrics with step range filter — should return 200 even if no metrics exist
+      const params = new URLSearchParams({
+        runId: String(testRunId),
+        projectName: TEST_PROJECT_NAME,
+        stepMin: '10',
+        stepMax: '100',
+      });
+      const response = await makeRequest(`/api/runs/metrics?${params}`, {
+        headers: {
+          'Authorization': `Bearer ${TEST_API_KEY}`,
+        },
+      });
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      expect(data.metrics).toBeDefined();
+      expect(Array.isArray(data.metrics)).toBe(true);
+    });
   });
 
   describe('Test Suite 7: Tags Management', () => {
