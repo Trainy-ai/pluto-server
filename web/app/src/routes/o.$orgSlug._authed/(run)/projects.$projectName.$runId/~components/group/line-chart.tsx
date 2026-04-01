@@ -312,12 +312,14 @@ export const LineChartWithFetch = memo(
       [settings.chartResolution, settings.smoothing.enabled, columns],
     );
 
+    const resolvedAlgorithm = settings.downsamplingAlgorithm ?? "avg";
     const { data, isLoading, isError } = useGetGraphProgressive(
       tenantId,
       projectName,
       runId,
       logName,
       resolvedBuckets,
+      resolvedAlgorithm !== "avg" ? resolvedAlgorithm : undefined,
     );
 
     // Register step<->time mapping for cross-axis zoom sync (single-run view)
@@ -388,6 +390,7 @@ export const LineChartWithFetch = memo(
       sourceStepRange,
       timeStepMapping,
       buckets: resolvedBuckets,
+      algorithm: resolvedAlgorithm !== "avg" ? resolvedAlgorithm : undefined,
     });
     const zoomData = zoomDataMap?.get(zoomKey(runId, logName));
 

@@ -33,6 +33,7 @@ export function useProgressiveGraph(
   runId: string,
   logName: string,
   buckets: number,
+  algorithm?: "avg" | "lttb",
 ): UseProgressiveGraphResult {
   // === Tier 2: Standard (caller-specified buckets) ===
   const standardOpts = {
@@ -41,6 +42,7 @@ export function useProgressiveGraph(
     runId,
     logName,
     buckets,
+    algorithm: algorithm !== "avg" ? algorithm : undefined,
   };
 
   const standardQuery = useQuery({

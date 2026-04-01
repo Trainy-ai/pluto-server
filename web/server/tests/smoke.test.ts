@@ -5522,4 +5522,272 @@ describe('SDK API Endpoints (with API Key)', () => {
       expect(result['nonexistent/metric']).toBeUndefined();
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Test Suite 31: LTTB Downsampling Algorithm
+  // ---------------------------------------------------------------------------
+  // Tests that the `algorithm: "lttb"` parameter produces bucketed data with
+  // min/max envelope bands (not just raw selected points).
+  describe('Test Suite 31: LTTB Downsampling Algorithm', () => {
+    const TEST_EMAIL = process.env.TEST_USER_EMAIL || 'test-smoke@mlop.local';
+    const TEST_PASSWORD = 'TestPassword123!';
+    let sessionCookie: string | null = null;
+    let serverAvailable = false;
+    let staircaseRunSqid: string | null = null;
+
+    beforeAll(async () => {
+      try {
+        const healthCheck = await makeRequest('/api/health');
+        serverAvailable = healthCheck.status === 200;
+      } catch {
+        serverAvailable = false;
+      }
+
+      if (!serverAvailable) return;
+
+      try {
+        const signInResponse = await makeRequest('/api/auth/sign-in/email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: TEST_EMAIL, password: TEST_PASSWORD }),
+        });
+
+        const setCookie = signInResponse.headers.get('set-cookie');
+        if (setCookie) {
+          const match = setCookie.match(/better_auth\.session_token=([^;]+)/);
+          if (match) {
+            sessionCookie = `better_auth.session_token=${match[1]}`;
+          }
+        }
+      } catch (e) {
+        console.log('   Sign in failed:', e);
+      }
+
+      if (!sessionCookie) return;
+
+      const listResponse = await makeTrpcRequest('runs.list', {
+        projectName: TEST_PROJECT_NAME,
+        search: 'staircase-test',
+        limit: 5,
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      if (listResponse.status === 200) {
+        const listData = await listResponse.json();
+        const runs = listData.result?.data?.runs;
+        const staircase = runs?.find((r: { name: string }) => r.name === 'staircase-test');
+        if (staircase) {
+          staircaseRunSqid = staircase.id;
+        }
+      }
+    });
+
+    it('Test 31.1: graphBatchBucketed with algorithm=lttb returns bucketed data with min/max envelopes', async () => {
+      if (!sessionCookie || !staircaseRunSqid) {
+        console.log('   No session or staircase run - skipping');
+        return;
+      }
+
+      const response = await makeTrpcRequest('runs.data.graphBatchBucketed', {
+        runIds: [staircaseRunSqid],
+        projectName: TEST_PROJECT_NAME,
+        logName: 'test/staircase',
+        buckets: 50,
+        algorithm: 'lttb',
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      const result = data.result?.data;
+      expect(result).toBeDefined();
+
+      const points = result[staircaseRunSqid!];
+      expect(points).toBeDefined();
+      expect(points.length).toBeGreaterThan(0);
+
+      // Every bucket must have min/max envelope fields (not null for finite data)
+      const firstPoint = points[0];
+      expect(firstPoint).toHaveProperty('step');
+      expect(firstPoint).toHaveProperty('value');
+      expect(firstPoint).toHaveProperty('minY');
+      expect(firstPoint).toHaveProperty('maxY');
+      expect(firstPoint).toHaveProperty('count');
+      expect(firstPoint).toHaveProperty('nonFiniteFlags');
+
+      // Staircase data is all finite — min/max should be numbers
+      expect(typeof firstPoint.minY).toBe('number');
+      expect(typeof firstPoint.maxY).toBe('number');
+      expect(typeof firstPoint.value).toBe('number');
+
+      // minY <= value <= maxY for each bucket
+      for (const p of points) {
+        if (p.value !== null && p.minY !== null && p.maxY !== null) {
+          expect(p.minY).toBeLessThanOrEqual(p.value);
+          expect(p.maxY).toBeGreaterThanOrEqual(p.value);
+        }
+      }
+    });
+
+    it('Test 31.2: graphBatchBucketed with algorithm=lttb returns different values than algorithm=avg', async () => {
+      if (!sessionCookie || !staircaseRunSqid) {
+        console.log('   No session or staircase run - skipping');
+        return;
+      }
+
+      // Fetch with AVG (default)
+      const avgResponse = await makeTrpcRequest('runs.data.graphBatchBucketed', {
+        runIds: [staircaseRunSqid],
+        projectName: TEST_PROJECT_NAME,
+        logName: 'test/staircase',
+        buckets: 20,
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      // Fetch with LTTB
+      const lttbResponse = await makeTrpcRequest('runs.data.graphBatchBucketed', {
+        runIds: [staircaseRunSqid],
+        projectName: TEST_PROJECT_NAME,
+        logName: 'test/staircase',
+        buckets: 20,
+        algorithm: 'lttb',
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(avgResponse.status).toBe(200);
+      expect(lttbResponse.status).toBe(200);
+
+      const avgData = (await avgResponse.json()).result?.data;
+      const lttbData = (await lttbResponse.json()).result?.data;
+
+      const avgPoints = avgData[staircaseRunSqid!];
+      const lttbPoints = lttbData[staircaseRunSqid!];
+
+      expect(avgPoints.length).toBeGreaterThan(0);
+      expect(lttbPoints.length).toBeGreaterThan(0);
+
+      // The representative values should differ between AVG and LTTB
+      // (AVG computes the mean; LTTB picks a specific raw point)
+      const avgValues = avgPoints.map((p: any) => p.value);
+      const lttbValues = lttbPoints.map((p: any) => p.value);
+      const identical = avgValues.every((v: number, i: number) => v === lttbValues[i]);
+      // With 500 raw points bucketed into 20 buckets, at least some values should differ
+      // (Unless all data is perfectly linear, which the staircase is not at bucket boundaries)
+      expect(identical).toBe(false);
+    });
+
+    it('Test 31.3: graphMultiMetricBatchBucketed with algorithm=lttb returns columnar data with envelopes', async () => {
+      if (!sessionCookie || !staircaseRunSqid) {
+        console.log('   No session or staircase run - skipping');
+        return;
+      }
+
+      const response = await makeTrpcRequest('runs.data.graphMultiMetricBatchBucketed', {
+        runIds: [staircaseRunSqid],
+        projectName: TEST_PROJECT_NAME,
+        logNames: ['test/staircase', 'test/staircase_irregular'],
+        buckets: 50,
+        algorithm: 'lttb',
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      const result = data.result?.data;
+      expect(result).toBeDefined();
+
+      // Both metrics should be present
+      expect(result['test/staircase']).toBeDefined();
+      expect(result['test/staircase_irregular']).toBeDefined();
+
+      // Columnar format with envelope fields
+      const series = result['test/staircase'][staircaseRunSqid!];
+      expect(series).toBeDefined();
+      expect(series).toHaveProperty('steps');
+      expect(series).toHaveProperty('values');
+      expect(series).toHaveProperty('minYs');
+      expect(series).toHaveProperty('maxYs');
+      expect(series).toHaveProperty('counts');
+      expect(series).toHaveProperty('nfFlags');
+      expect(series.steps.length).toBeGreaterThan(0);
+
+      // Verify min <= value <= max for each bucket (columnar)
+      for (let i = 0; i < series.steps.length; i++) {
+        const v = series.values[i];
+        const minY = series.minYs[i];
+        const maxY = series.maxYs[i];
+        if (v !== null && minY !== null && maxY !== null) {
+          expect(minY).toBeLessThanOrEqual(v);
+          expect(maxY).toBeGreaterThanOrEqual(v);
+        }
+      }
+    });
+
+    it('Test 31.4: graphBatchBucketed with algorithm=lttb respects stepMin/stepMax', async () => {
+      if (!sessionCookie || !staircaseRunSqid) {
+        console.log('   No session or staircase run - skipping');
+        return;
+      }
+
+      // Zoom to steps 100-200 with LTTB
+      const response = await makeTrpcRequest('runs.data.graphBatchBucketed', {
+        runIds: [staircaseRunSqid],
+        projectName: TEST_PROJECT_NAME,
+        logName: 'test/staircase',
+        buckets: 50,
+        stepMin: 100,
+        stepMax: 200,
+        algorithm: 'lttb',
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      const result = data.result?.data;
+      const points = result[staircaseRunSqid!];
+      expect(points).toBeDefined();
+      expect(points.length).toBeGreaterThan(0);
+
+      // All returned steps should be within [100, 200]
+      for (const p of points) {
+        expect(p.step).toBeGreaterThanOrEqual(100);
+        expect(p.step).toBeLessThanOrEqual(200);
+      }
+
+      // Should still have min/max envelopes
+      expect(typeof points[0].minY).toBe('number');
+      expect(typeof points[0].maxY).toBe('number');
+    });
+
+    it('Test 31.5: graphBatchBucketed with algorithm=avg (default) still works unchanged', async () => {
+      if (!sessionCookie || !staircaseRunSqid) {
+        console.log('   No session or staircase run - skipping');
+        return;
+      }
+
+      // Explicit algorithm=avg should behave identically to omitting it
+      const [defaultResponse, explicitResponse] = await Promise.all([
+        makeTrpcRequest('runs.data.graphBatchBucketed', {
+          runIds: [staircaseRunSqid],
+          projectName: TEST_PROJECT_NAME,
+          logName: 'test/staircase',
+          buckets: 50,
+        }, { 'Cookie': sessionCookie }, 'GET'),
+        makeTrpcRequest('runs.data.graphBatchBucketed', {
+          runIds: [staircaseRunSqid],
+          projectName: TEST_PROJECT_NAME,
+          logName: 'test/staircase',
+          buckets: 50,
+          algorithm: 'avg',
+        }, { 'Cookie': sessionCookie }, 'GET'),
+      ]);
+
+      expect(defaultResponse.status).toBe(200);
+      expect(explicitResponse.status).toBe(200);
+
+      const defaultData = (await defaultResponse.json()).result?.data;
+      const explicitData = (await explicitResponse.json()).result?.data;
+
+      const defaultPoints = defaultData[staircaseRunSqid!];
+      const explicitPoints = explicitData[staircaseRunSqid!];
+
+      // Same bucket count and same values
+      expect(defaultPoints.length).toBe(explicitPoints.length);
+      expect(defaultPoints[0].value).toBe(explicitPoints[0].value);
+    });
+  });
 });

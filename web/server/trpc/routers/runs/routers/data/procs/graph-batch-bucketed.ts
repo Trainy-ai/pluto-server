@@ -18,6 +18,7 @@ export const graphBatchBucketedProcedure = protectedOrgProcedure
       stepMin: z.number().int().nonnegative().optional(),
       stepMax: z.number().int().nonnegative().optional(),
       preview: z.boolean().optional(),
+      algorithm: z.enum(["avg", "lttb"]).optional(),
     })
   )
   .query(async ({ ctx, input }) => {
@@ -30,6 +31,7 @@ export const graphBatchBucketedProcedure = protectedOrgProcedure
       stepMin,
       stepMax,
       preview,
+      algorithm,
     } = input;
 
     // Resolve run identifiers (display IDs like "MMP-7" or SQIDs) → numeric IDs
@@ -46,7 +48,7 @@ export const graphBatchBucketedProcedure = protectedOrgProcedure
     return withBatchCache(
       ctx,
       "graphBatchBucketed",
-      { runIds: numericRunIds, organizationId, projectName, logName, buckets, stepMin, stepMax, preview },
+      { runIds: numericRunIds, organizationId, projectName, logName, buckets, stepMin, stepMax, preview, algorithm },
       async () => {
         const grouped = await queryRunMetricsBatchBucketedByLogName(ctx.clickhouse, {
           organizationId,
@@ -57,6 +59,7 @@ export const graphBatchBucketedProcedure = protectedOrgProcedure
           stepMin,
           stepMax,
           preview,
+          algorithm,
         });
 
         // Re-key results by encoded runId

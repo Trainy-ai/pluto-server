@@ -2,7 +2,7 @@ import { z } from "zod";
 import { protectedOrgProcedure } from "../../../../../../lib/trpc";
 import { resolveRunId } from "../../../../../../lib/resolve-run-id";
 import { queryRunMetricsMultiMetricBatchBucketed, toColumnar } from "../../../../../../lib/queries";
-import type { ColumnarBucketedSeries } from "../../../../../../lib/queries";
+import type { ColumnarBucketedSeries, DownsamplingAlgorithm } from "../../../../../../lib/queries";
 import { withBatchCache } from "../../../../../../lib/cache";
 
 // Type for multi-metric batch bucketed graph data: logName → encoded runId → columnar series
@@ -18,6 +18,7 @@ export const graphMultiMetricBatchBucketedProcedure = protectedOrgProcedure
       stepMin: z.number().int().nonnegative().optional(),
       stepMax: z.number().int().nonnegative().optional(),
       preview: z.boolean().optional(),
+      algorithm: z.enum(["avg", "lttb"]).optional(),
     })
   )
   .query(async ({ ctx, input }) => {
@@ -30,6 +31,7 @@ export const graphMultiMetricBatchBucketedProcedure = protectedOrgProcedure
       stepMin,
       stepMax,
       preview,
+      algorithm,
     } = input;
 
     // Resolve run identifiers (display IDs like "MMP-7" or SQIDs) → numeric IDs
@@ -55,6 +57,7 @@ export const graphMultiMetricBatchBucketedProcedure = protectedOrgProcedure
         stepMin: stepMin ?? -1,
         stepMax: stepMax ?? -1,
         preview: preview ?? false,
+        algorithm: algorithm ?? "avg",
       },
       async () => {
         const grouped = await queryRunMetricsMultiMetricBatchBucketed(ctx.clickhouse, {
@@ -66,6 +69,7 @@ export const graphMultiMetricBatchBucketedProcedure = protectedOrgProcedure
           stepMin,
           stepMax,
           preview,
+          algorithm,
         });
 
         // Re-key results by encoded runId and convert to columnar format

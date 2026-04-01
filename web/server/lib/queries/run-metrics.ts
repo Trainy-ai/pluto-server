@@ -6,6 +6,11 @@
 import type { clickhouse } from "../clickhouse";
 import { getLogGroupName } from "../utilts";
 
+/** Server-side downsampling algorithm. "avg" = fixed-width buckets with
+ *  avg/min/max aggregation. "lttb" = Largest Triangle Three Buckets —
+ *  selects visually representative points that preserve curve shape. */
+export type DownsamplingAlgorithm = "avg" | "lttb";
+
 // Maximum number of data points to return per metric series.
 // The server does bucketed downsampling with min/max envelope rendering,
 // so 10k points is enough for high-quality charts.
@@ -359,9 +364,14 @@ export async function queryRunMetricsBucketedByLogName(
     stepMin?: number;
     stepMax?: number;
     preview?: boolean;
+    algorithm?: DownsamplingAlgorithm;
   }
 ): Promise<BucketedMetricDataPoint[]> {
-  const { organizationId, projectName, runId, logName, stepMin, stepMax, preview } = params;
+  const { organizationId, projectName, runId, logName, stepMin, stepMax, preview, algorithm } = params;
+
+  if (algorithm === "lttb") {
+    return queryRunMetricsBucketedByLogNameLttb(ch, params);
+  }
   const logGroup = getLogGroupName(logName);
   const numBuckets = params.buckets ?? (preview ? PREVIEW_BUCKETS : DEFAULT_BUCKETS);
 
@@ -436,11 +446,16 @@ export async function queryRunMetricsBatchBucketedByLogName(
     stepMin?: number;
     stepMax?: number;
     preview?: boolean;
+    algorithm?: DownsamplingAlgorithm;
   }
 ): Promise<Record<number, BucketedMetricDataPoint[]>> {
-  const { organizationId, projectName, runIds, logName, stepMin, stepMax, preview } = params;
+  const { organizationId, projectName, runIds, logName, stepMin, stepMax, preview, algorithm } = params;
 
   if (runIds.length === 0) return {};
+
+  if (algorithm === "lttb") {
+    return queryRunMetricsBatchBucketedByLogNameLttb(ch, params);
+  }
 
   const logGroup = getLogGroupName(logName);
   const numBuckets = params.buckets ?? (preview ? PREVIEW_BUCKETS : DEFAULT_BUCKETS);
@@ -535,11 +550,16 @@ export async function queryRunMetricsMultiMetricBatchBucketed(
     stepMin?: number;
     stepMax?: number;
     preview?: boolean;
+    algorithm?: DownsamplingAlgorithm;
   }
 ): Promise<Record<string, Record<number, BucketedMetricDataPoint[]>>> {
-  const { organizationId, projectName, runIds, logNames, stepMin, stepMax, preview } = params;
+  const { organizationId, projectName, runIds, logNames, stepMin, stepMax, preview, algorithm } = params;
 
   if (runIds.length === 0 || logNames.length === 0) return {};
+
+  if (algorithm === "lttb") {
+    return queryRunMetricsMultiMetricBatchBucketedLttb(ch, params);
+  }
 
   const numBuckets = params.buckets ?? (preview ? PREVIEW_BUCKETS : DEFAULT_BUCKETS);
 
@@ -817,6 +837,451 @@ export async function queryRunMetricsBatchByLogName(
   for (const row of rows) {
     const arr = grouped[row.runId] ?? (grouped[row.runId] = []);
     arr.push({ value: row.value, valueFlag: row.valueFlag, time: row.time, step: row.step });
+  }
+
+  return grouped;
+}
+
+// ---------------------------------------------------------------------------
+// LTTB variants — use ClickHouse's native lttb() aggregate function for
+// downsampling, combined with bucket aggregation for min/max envelopes.
+//
+// Single query per variant: bucket aggregation (min/max/count/flags) runs
+// alongside lttb(N)(step, value) grouped by (logName, runId). The LTTB-
+// selected value replaces avg() as each bucket's representative value,
+// preserving visual shape while keeping envelope bands.
+// ---------------------------------------------------------------------------
+
+/** Non-finite flags bitmask SQL fragment */
+const NF_FLAGS_SQL = `toUInt8((countIf(isNaN(m.value)) > 0) + (countIf(isInfinite(m.value) AND m.value > 0) > 0) * 2 + (countIf(isInfinite(m.value) AND m.value < 0) > 0) * 4)`;
+
+/**
+ * LTTB variant of queryRunMetricsBucketedByLogName (single run, single metric).
+ *
+ * Runs two passes in a single query:
+ *   1. Bucket aggregation → min/max/count/nonFiniteFlags per bucket (envelopes)
+ *   2. lttb(N)(step, value) → visually representative points
+ * Then JOINs the LTTB value onto each bucket, falling back to avg if no
+ * LTTB point lands in a given bucket.
+ */
+async function queryRunMetricsBucketedByLogNameLttb(
+  ch: typeof clickhouse,
+  params: {
+    organizationId: string;
+    projectName: string;
+    runId: number;
+    logName: string;
+    buckets?: number;
+    stepMin?: number;
+    stepMax?: number;
+    preview?: boolean;
+  },
+): Promise<BucketedMetricDataPoint[]> {
+  const { organizationId, projectName, runId, logName, stepMin, stepMax, preview } = params;
+  const logGroup = getLogGroupName(logName);
+  const numBuckets = params.buckets ?? (preview ? PREVIEW_BUCKETS : DEFAULT_BUCKETS);
+
+  const queryParams: Record<string, unknown> = {
+    tenantId: organizationId,
+    projectName,
+    runId,
+    logName,
+    logGroup,
+    numBuckets,
+  };
+
+  const whereClause = `
+    tenantId = {tenantId: String}
+    AND projectName = {projectName: String}
+    AND runId = {runId: UInt64}
+    AND logName = {logName: String}
+    AND logGroup = {logGroup: String}
+  `;
+
+  let boundsStepRange = "";
+  let mainStepRange = "";
+  if (stepMin !== undefined && stepMax !== undefined) {
+    boundsStepRange = ` AND step >= {stepMin: UInt64} AND step <= {stepMax: UInt64}`;
+    mainStepRange = ` AND m.step >= {stepMin: UInt64} AND m.step <= {stepMax: UInt64}`;
+    queryParams.stepMin = stepMin;
+    queryParams.stepMax = stepMax;
+  }
+
+  const query = `
+    WITH
+      bounds AS (
+        SELECT min(step) AS minStep, max(step) AS maxStep
+        FROM mlop_metrics
+        WHERE ${whereClause}${boundsStepRange}
+      ),
+      params AS (
+        SELECT minStep,
+          greatest(toUInt64(1), intDiv(maxStep - minStep + 1, toUInt64({numBuckets: UInt32}))) AS bucketWidth
+        FROM bounds
+      ),
+      bucket_agg AS (
+        SELECT
+          intDiv(m.step - p.minStep, p.bucketWidth) AS bucket,
+          min(m.step) AS step,
+          argMin(m.time, m.step) AS time,
+          avgIf(m.value, isFinite(m.value)) AS avg_value,
+          minIf(m.value, isFinite(m.value)) AS minY,
+          maxIf(m.value, isFinite(m.value)) AS maxY,
+          toUInt64(count()) AS count,
+          ${NF_FLAGS_SQL} AS nonFiniteFlags
+        FROM mlop_metrics m
+        CROSS JOIN params p
+        WHERE ${whereClause}${mainStepRange}
+        GROUP BY bucket
+      ),
+      lttb_selected AS (
+        SELECT lttb({numBuckets: UInt32})(toFloat64(m.step), m.value) AS sampled_points
+        FROM mlop_metrics m
+        WHERE ${whereClause}${mainStepRange} AND isFinite(m.value)
+      ),
+      lttb_bucketed AS (
+        SELECT
+          intDiv(toUInt64(tupleElement(pt, 1)) - p.minStep, p.bucketWidth) AS bucket,
+          tupleElement(pt, 2) AS lttb_value
+        FROM lttb_selected
+        CROSS JOIN params p
+        ARRAY JOIN sampled_points AS pt
+      ),
+      lttb_per_bucket AS (
+        SELECT bucket, any(lttb_value) AS lttb_value
+        FROM lttb_bucketed
+        GROUP BY bucket
+      )
+    SELECT
+      ba.step AS step,
+      ba.time AS time,
+      if(lpb.lttb_value IS NOT NULL, lpb.lttb_value, ba.avg_value) AS value,
+      ba.minY AS minY,
+      ba.maxY AS maxY,
+      ba.count AS count,
+      ba.nonFiniteFlags AS nonFiniteFlags
+    FROM bucket_agg ba
+    LEFT JOIN lttb_per_bucket lpb ON ba.bucket = lpb.bucket
+    ORDER BY ba.bucket ASC
+  `;
+
+  const result = await ch.query(query, queryParams);
+  return sanitizeBucketedRows((await result.json()) as BucketedMetricDataPoint[]);
+}
+
+/**
+ * LTTB variant of queryRunMetricsBatchBucketedByLogName (multi run, single metric).
+ */
+async function queryRunMetricsBatchBucketedByLogNameLttb(
+  ch: typeof clickhouse,
+  params: {
+    organizationId: string;
+    projectName: string;
+    runIds: number[];
+    logName: string;
+    buckets?: number;
+    stepMin?: number;
+    stepMax?: number;
+    preview?: boolean;
+  },
+): Promise<Record<number, BucketedMetricDataPoint[]>> {
+  const { organizationId, projectName, runIds, logName, stepMin, stepMax, preview } = params;
+  const logGroup = getLogGroupName(logName);
+  const numBuckets = params.buckets ?? (preview ? PREVIEW_BUCKETS : DEFAULT_BUCKETS);
+
+  const queryParams: Record<string, unknown> = {
+    tenantId: organizationId,
+    projectName,
+    runIds,
+    logName,
+    logGroup,
+    numBuckets,
+  };
+
+  const whereClause = `
+    tenantId = {tenantId: String}
+    AND projectName = {projectName: String}
+    AND runId IN ({runIds: Array(UInt64)})
+    AND logName = {logName: String}
+    AND logGroup = {logGroup: String}
+  `;
+
+  let boundsStepRange = "";
+  let mainStepRange = "";
+  if (stepMin !== undefined && stepMax !== undefined) {
+    boundsStepRange = ` AND step >= {stepMin: UInt64} AND step <= {stepMax: UInt64}`;
+    mainStepRange = ` AND m.step >= {stepMin: UInt64} AND m.step <= {stepMax: UInt64}`;
+    queryParams.stepMin = stepMin;
+    queryParams.stepMax = stepMax;
+  }
+
+  const query = `
+    WITH
+      bounds AS (
+        SELECT min(step) AS minStep, max(step) AS maxStep
+        FROM mlop_metrics
+        WHERE ${whereClause}${boundsStepRange}
+      ),
+      params AS (
+        SELECT minStep,
+          greatest(toUInt64(1), intDiv(maxStep - minStep + 1, toUInt64({numBuckets: UInt32}))) AS bucketWidth
+        FROM bounds
+      ),
+      bucket_agg AS (
+        SELECT
+          m.runId AS runId,
+          intDiv(m.step - p.minStep, p.bucketWidth) AS bucket,
+          min(m.step) AS step,
+          argMin(m.time, m.step) AS time,
+          avgIf(m.value, isFinite(m.value)) AS avg_value,
+          minIf(m.value, isFinite(m.value)) AS minY,
+          maxIf(m.value, isFinite(m.value)) AS maxY,
+          toUInt64(count()) AS count,
+          ${NF_FLAGS_SQL} AS nonFiniteFlags
+        FROM mlop_metrics m
+        CROSS JOIN params p
+        WHERE ${whereClause}${mainStepRange}
+        GROUP BY m.runId, bucket
+      ),
+      lttb_selected AS (
+        SELECT
+          runId,
+          lttb({numBuckets: UInt32})(toFloat64(step), value) AS sampled_points
+        FROM mlop_metrics
+        WHERE ${whereClause}${boundsStepRange} AND isFinite(value)
+        GROUP BY runId
+      ),
+      lttb_bucketed AS (
+        SELECT
+          ls.runId AS runId,
+          intDiv(toUInt64(tupleElement(pt, 1)) - p.minStep, p.bucketWidth) AS bucket,
+          tupleElement(pt, 2) AS lttb_value
+        FROM lttb_selected ls
+        CROSS JOIN params p
+        ARRAY JOIN sampled_points AS pt
+      ),
+      lttb_per_bucket AS (
+        SELECT runId, bucket, any(lttb_value) AS lttb_value
+        FROM lttb_bucketed
+        GROUP BY runId, bucket
+      )
+    SELECT
+      ba.runId AS runId,
+      ba.step AS step,
+      ba.time AS time,
+      if(lpb.lttb_value IS NOT NULL, lpb.lttb_value, ba.avg_value) AS value,
+      ba.minY AS minY,
+      ba.maxY AS maxY,
+      ba.count AS count,
+      ba.nonFiniteFlags AS nonFiniteFlags
+    FROM bucket_agg ba
+    LEFT JOIN lttb_per_bucket lpb ON ba.runId = lpb.runId AND ba.bucket = lpb.bucket
+    ORDER BY ba.runId, ba.bucket ASC
+  `;
+
+  const result = await ch.query(query, queryParams);
+  const rows = sanitizeBucketedRows(
+    (await result.json()) as (BucketedMetricDataPoint & { runId: number })[]
+  );
+
+  // Group by runId
+  const grouped: Record<number, BucketedMetricDataPoint[]> = {};
+  for (const row of rows) {
+    const arr = grouped[row.runId] ?? (grouped[row.runId] = []);
+    arr.push({ step: row.step, time: row.time, value: row.value, minY: row.minY, maxY: row.maxY, count: row.count, nonFiniteFlags: row.nonFiniteFlags });
+  }
+
+  return grouped;
+}
+
+/**
+ * LTTB variant of queryRunMetricsMultiMetricBatchBucketed (multi run, multi metric).
+ *
+ * Uses per-metric bucket boundaries (like the AVG variant) so each metric's
+ * step range is independently bucketed. lttb() runs per (logName, runId).
+ */
+async function queryRunMetricsMultiMetricBatchBucketedLttb(
+  ch: typeof clickhouse,
+  params: {
+    organizationId: string;
+    projectName: string;
+    runIds: number[];
+    logNames: string[];
+    buckets?: number;
+    stepMin?: number;
+    stepMax?: number;
+    preview?: boolean;
+  },
+): Promise<Record<string, Record<number, BucketedMetricDataPoint[]>>> {
+  const { organizationId, projectName, runIds, logNames, stepMin, stepMax, preview } = params;
+
+  if (runIds.length === 0 || logNames.length === 0) return {};
+
+  const numBuckets = params.buckets ?? (preview ? PREVIEW_BUCKETS : DEFAULT_BUCKETS);
+
+  const queryParams: Record<string, unknown> = {
+    tenantId: organizationId,
+    projectName,
+    runIds,
+    logNames,
+    numBuckets,
+  };
+
+  let whereClause = `
+    tenantId = {tenantId: String}
+    AND projectName = {projectName: String}
+    AND runId IN ({runIds: Array(UInt64)})
+    AND logName IN ({logNames: Array(String)})
+  `;
+
+  let mainStepRange = "";
+  const hasStepRange = stepMin !== undefined && stepMax !== undefined;
+  if (hasStepRange) {
+    mainStepRange = ` AND m.step >= {stepMin: UInt64} AND m.step <= {stepMax: UInt64}`;
+    queryParams.stepMin = stepMin;
+    queryParams.stepMax = stepMax;
+  }
+
+  // Build LTTB query with per-metric bucket boundaries
+  let query: string;
+  if (hasStepRange) {
+    // Zoom: compute bucket width from the provided step range
+    query = `
+      WITH
+        bucket_agg AS (
+          SELECT
+            m.logName AS logName,
+            m.runId AS runId,
+            intDiv(m.step - {stepMin: UInt64}, greatest(toUInt64(1), intDiv({stepMax: UInt64} - {stepMin: UInt64} + 1, toUInt64({numBuckets: UInt32})))) AS bucket,
+            any(toUInt64({stepMin: UInt64} + intDiv(m.step - {stepMin: UInt64}, greatest(toUInt64(1), intDiv({stepMax: UInt64} - {stepMin: UInt64} + 1, toUInt64({numBuckets: UInt32})))) * greatest(toUInt64(1), intDiv({stepMax: UInt64} - {stepMin: UInt64} + 1, toUInt64({numBuckets: UInt32}))))) AS step,
+            argMin(m.time, m.step) AS time,
+            avgIf(m.value, isFinite(m.value)) AS avg_value,
+            minIf(m.value, isFinite(m.value)) AS minY,
+            maxIf(m.value, isFinite(m.value)) AS maxY,
+            toUInt64(count()) AS count,
+            ${NF_FLAGS_SQL} AS nonFiniteFlags
+          FROM mlop_metrics m
+          WHERE ${whereClause}${mainStepRange}
+          GROUP BY m.logName, m.runId, bucket
+        ),
+        lttb_selected AS (
+          SELECT
+            logName, runId,
+            lttb({numBuckets: UInt32})(toFloat64(step), value) AS sampled_points
+          FROM mlop_metrics
+          WHERE ${whereClause}${mainStepRange.replace(/m\.step/g, 'step')} AND isFinite(value)
+          GROUP BY logName, runId
+        ),
+        lttb_bucketed AS (
+          SELECT
+            ls.logName AS logName,
+            ls.runId AS runId,
+            intDiv(toUInt64(tupleElement(pt, 1)) - {stepMin: UInt64}, greatest(toUInt64(1), intDiv({stepMax: UInt64} - {stepMin: UInt64} + 1, toUInt64({numBuckets: UInt32})))) AS bucket,
+            tupleElement(pt, 2) AS lttb_value
+          FROM lttb_selected ls
+          ARRAY JOIN sampled_points AS pt
+        ),
+        lttb_per_bucket AS (
+          SELECT logName, runId, bucket, any(lttb_value) AS lttb_value
+          FROM lttb_bucketed
+          GROUP BY logName, runId, bucket
+        )
+      SELECT
+        ba.logName AS logName,
+        ba.runId AS runId,
+        ba.step AS step,
+        ba.time AS time,
+        if(lpb.lttb_value IS NOT NULL, lpb.lttb_value, ba.avg_value) AS value,
+        ba.minY AS minY,
+        ba.maxY AS maxY,
+        ba.count AS count,
+        ba.nonFiniteFlags AS nonFiniteFlags
+      FROM bucket_agg ba
+      LEFT JOIN lttb_per_bucket lpb ON ba.logName = lpb.logName AND ba.runId = lpb.runId AND ba.bucket = lpb.bucket
+      ORDER BY ba.logName, ba.runId, ba.bucket ASC
+    `;
+  } else {
+    // Non-zoom: per-metric bounds CTE
+    query = `
+      WITH
+        bounds AS (
+          SELECT logName, min(step) AS minStep, max(step) AS maxStep
+          FROM mlop_metrics
+          WHERE ${whereClause}
+          GROUP BY logName
+        ),
+        params AS (
+          SELECT logName, minStep,
+            greatest(toUInt64(1), intDiv(maxStep - minStep + 1, toUInt64({numBuckets: UInt32}))) AS bucketWidth
+          FROM bounds
+        ),
+        bucket_agg AS (
+          SELECT
+            m.logName AS logName,
+            m.runId AS runId,
+            intDiv(m.step - p.minStep, p.bucketWidth) AS bucket,
+            any(toUInt64(p.minStep + intDiv(m.step - p.minStep, p.bucketWidth) * p.bucketWidth)) AS step,
+            argMin(m.time, m.step) AS time,
+            avgIf(m.value, isFinite(m.value)) AS avg_value,
+            minIf(m.value, isFinite(m.value)) AS minY,
+            maxIf(m.value, isFinite(m.value)) AS maxY,
+            toUInt64(count()) AS count,
+            ${NF_FLAGS_SQL} AS nonFiniteFlags
+          FROM mlop_metrics m
+          INNER JOIN params p ON m.logName = p.logName
+          WHERE ${whereClause}
+          GROUP BY m.logName, m.runId, bucket
+        ),
+        lttb_selected AS (
+          SELECT
+            logName, runId,
+            lttb({numBuckets: UInt32})(toFloat64(step), value) AS sampled_points
+          FROM mlop_metrics
+          WHERE ${whereClause} AND isFinite(value)
+          GROUP BY logName, runId
+        ),
+        lttb_bucketed AS (
+          SELECT
+            ls.logName AS logName,
+            ls.runId AS runId,
+            intDiv(toUInt64(tupleElement(pt, 1)) - p.minStep, p.bucketWidth) AS bucket,
+            tupleElement(pt, 2) AS lttb_value
+          FROM lttb_selected ls
+          INNER JOIN params p ON ls.logName = p.logName
+          ARRAY JOIN sampled_points AS pt
+        ),
+        lttb_per_bucket AS (
+          SELECT logName, runId, bucket, any(lttb_value) AS lttb_value
+          FROM lttb_bucketed
+          GROUP BY logName, runId, bucket
+        )
+      SELECT
+        ba.logName AS logName,
+        ba.runId AS runId,
+        ba.step AS step,
+        ba.time AS time,
+        if(lpb.lttb_value IS NOT NULL, lpb.lttb_value, ba.avg_value) AS value,
+        ba.minY AS minY,
+        ba.maxY AS maxY,
+        ba.count AS count,
+        ba.nonFiniteFlags AS nonFiniteFlags
+      FROM bucket_agg ba
+      LEFT JOIN lttb_per_bucket lpb ON ba.logName = lpb.logName AND ba.runId = lpb.runId AND ba.bucket = lpb.bucket
+      ORDER BY ba.logName, ba.runId, ba.bucket ASC
+    `;
+  }
+
+  const result = await ch.query(query, queryParams);
+  const rows = sanitizeBucketedRows(
+    (await result.json()) as (BucketedMetricDataPoint & { logName: string; runId: number })[]
+  );
+
+  // Group by logName → runId
+  const grouped: Record<string, Record<number, BucketedMetricDataPoint[]>> = {};
+  for (const row of rows) {
+    const byRun = grouped[row.logName] ?? (grouped[row.logName] = {});
+    const arr = byRun[row.runId] ?? (byRun[row.runId] = []);
+    arr.push({ step: row.step, time: row.time, value: row.value, minY: row.minY, maxY: row.maxY, count: row.count, nonFiniteFlags: row.nonFiniteFlags });
   }
 
   return grouped;

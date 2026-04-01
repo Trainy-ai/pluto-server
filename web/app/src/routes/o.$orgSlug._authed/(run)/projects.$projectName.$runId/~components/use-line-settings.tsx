@@ -16,6 +16,11 @@ export type ChartResolution = "auto" | "high" | "max" | "ultra";
 /** Y-axis scaling mode. "auto" = full data range (default), "outlier-aware" = IQR-based outlier detection */
 export type YAxisScaleMode = "auto" | "outlier-aware";
 
+/** Server-side downsampling algorithm.
+ *  "avg" = fixed-width buckets with avg/min/max aggregation (default).
+ *  "lttb" = Largest Triangle Three Buckets — selects visually representative points. */
+export type DownsamplingAlgorithm = "avg" | "lttb";
+
 export interface LineChartSettings {
   selectedLog: DisplayLogName;
   xAxisLogScale: boolean;
@@ -41,6 +46,10 @@ export interface LineChartSettings {
   /** Server-side data resolution. Controls bucket count for downsampled queries.
    *  "auto" = screen-based (boosted when smoothing off). */
   chartResolution: ChartResolution;
+  /** Server-side downsampling algorithm. "avg" = bucketed averaging with min/max
+   *  envelopes (default). "lttb" = Largest Triangle Three Buckets for better
+   *  visual shape preservation. */
+  downsamplingAlgorithm: DownsamplingAlgorithm;
 }
 
 export const DEFAULT_SETTINGS: LineChartSettings = {
@@ -62,6 +71,7 @@ export const DEFAULT_SETTINGS: LineChartSettings = {
   skipMissingValues: false,
   maxSeriesCount: 500,
   chartResolution: "auto",
+  downsamplingAlgorithm: "avg",
 };
 
 const lineSettingsDb = new LocalCache<LineChartSettings>(

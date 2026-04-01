@@ -10,7 +10,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { UseLineSettingsResult } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/use-line-settings";
-import type { ChartResolution } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/use-line-settings";
+import type { ChartResolution, DownsamplingAlgorithm } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/use-line-settings";
 
 interface SmoothingSliderProps {
   settings: UseLineSettingsResult["settings"];
@@ -31,6 +31,11 @@ const RESOLUTION_LABELS: Record<ChartResolution, string> = {
   high: "High (3k)",
   max: "Max (5k)",
   ultra: "Ultra (20k)",
+};
+
+const ALGORITHM_LABELS_DS: Record<DownsamplingAlgorithm, string> = {
+  avg: "Avg",
+  lttb: "LTTB",
 };
 
 export function SmoothingSlider({
@@ -140,6 +145,29 @@ export function SmoothingSlider({
           </SelectTrigger>
           <SelectContent className="min-w-0">
             {Object.entries(RESOLUTION_LABELS).map(([value, label]) => (
+              <SelectItem key={value} value={value} className="text-xs">
+                {label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="mx-1 h-4 w-px bg-border" />
+      <div className="flex items-center gap-1.5">
+        <Label className="whitespace-nowrap text-xs text-muted-foreground">
+          Sampling
+        </Label>
+        <Select
+          value={settings.downsamplingAlgorithm ?? "avg"}
+          onValueChange={(value) => updateSettings("downsamplingAlgorithm", value as DownsamplingAlgorithm)}
+        >
+          <SelectTrigger className="h-6 w-auto gap-1 border-none bg-muted/50 px-2 text-xs shadow-none">
+            <SelectValue>
+              {ALGORITHM_LABELS_DS[settings.downsamplingAlgorithm ?? "avg"]}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent className="min-w-0">
+            {Object.entries(ALGORITHM_LABELS_DS).map(([value, label]) => (
               <SelectItem key={value} value={value} className="text-xs">
                 {label}
               </SelectItem>

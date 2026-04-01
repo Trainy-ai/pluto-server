@@ -37,6 +37,8 @@ interface UseZoomRefetchOptions {
   timeStepMapping?: TimeStepMapping | null;
   /** Number of buckets for zoom queries. Resolved by the caller via resolveChartBuckets(). */
   buckets: number;
+  /** Server-side downsampling algorithm ("avg" or "lttb"). */
+  algorithm?: "avg" | "lttb";
 }
 
 /** Build a composite key for the zoom data map: "runId\0metricName" */
@@ -78,6 +80,7 @@ export function useZoomRefetch({
   sourceStepRange,
   timeStepMapping,
   buckets: zoomBuckets,
+  algorithm,
 }: UseZoomRefetchOptions): UseZoomRefetchReturn {
   const [localZoomRange, setLocalZoomRange] = useState<[number, number] | null>(null);
   const queryClient = useQueryClient();
@@ -135,6 +138,7 @@ export function useZoomRefetch({
               buckets: effectiveZoomBuckets,
               stepMin: zoomStepRange[0],
               stepMax: zoomStepRange[1],
+              algorithm: algorithm !== "avg" ? algorithm : undefined,
             };
             return {
               queryKey: [...trpc.runs.data.graphMultiMetricBatchBucketed.queryOptions(opts).queryKey, "zoom"],
@@ -159,6 +163,7 @@ export function useZoomRefetch({
               buckets: effectiveZoomBuckets,
               stepMin: zoomStepRange[0],
               stepMax: zoomStepRange[1],
+              algorithm: algorithm !== "avg" ? algorithm : undefined,
             };
             return {
               queryKey: [...trpc.runs.data.graphBatchBucketed.queryOptions(opts).queryKey, "zoom"],
@@ -184,6 +189,7 @@ export function useZoomRefetch({
                 buckets: effectiveZoomBuckets,
                 stepMin: zoomStepRange[0],
                 stepMax: zoomStepRange[1],
+                algorithm: algorithm !== "avg" ? algorithm : undefined,
               };
               return {
                 queryKey: [...trpc.runs.data.graphBucketed.queryOptions(opts).queryKey, "zoom"],
@@ -286,6 +292,7 @@ export function useZoomRefetch({
                 buckets: zoomBuckets,
                 stepMin: stepRange[0],
                 stepMax: stepRange[1],
+                algorithm: algorithm !== "avg" ? algorithm : undefined,
               };
               queryClient.prefetchQuery({
                 queryKey: [...trpc.runs.data.graphMultiMetricBatchBucketed.queryOptions(opts).queryKey, "zoom"],
