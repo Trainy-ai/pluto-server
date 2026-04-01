@@ -5,6 +5,7 @@ import {
   getTimeUnitForDisplay,
   alignAndUnzip,
   applyServerBuckets,
+  bucketedAndSmooth,
   fromColumnar,
   type ChartSeriesData,
   type SmoothingSettings,
@@ -572,5 +573,103 @@ describe("fromColumnar", () => {
     const [mainRestored] = applyServerBuckets(restored, "test", "#00f");
     expect(mainRestored.x).toEqual(mainOriginal.x);
     expect(mainRestored.y).toEqual(mainOriginal.y);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// bucketedAndSmooth — smoothed line must stay within envelope bands
+// ---------------------------------------------------------------------------
+
+describe("bucketedAndSmooth envelope invariant", () => {
+  /**
+   * Generate LTTB-like bucketed data where each bucket has a tight min/max
+   * band but the representative value jumps between high and low ranges.
+   * This simulates LTTB selecting an extreme data point from alternating
+   * high/low regions — realistic for noisy metrics where adjacent buckets
+   * happen to sample opposite ends of the noise spectrum.
+   *
+   * The key property: each value IS within its bucket's [minY, maxY], but
+   * adjacent buckets have very different value ranges. When smoothing blends
+   * across bucket boundaries, the smoothed line can escape a bucket's band.
+   */
+  function makeLttbLikeBuckets(n: number): BucketedChartDataPoint[] {
+    return Array.from({ length: n }, (_, i) => {
+      // Alternate between high-range buckets and low-range buckets
+      const isHigh = i % 2 === 0;
+      const center = isHigh ? 0.85 : 0.15;
+      const halfWidth = 0.05;
+      const minY = center - halfWidth;
+      const maxY = center + halfWidth;
+      // LTTB picks a point within the bucket's range
+      const value = center;
+      return {
+        step: i * 100,
+        time: `2024-01-01T00:${String(i).padStart(2, "0")}:00`,
+        value,
+        minY,
+        maxY,
+        count: 50,
+        nonFiniteFlags: 0,
+      };
+    });
+  }
+
+  for (const { name, settings } of SMOOTHING_CONFIGS) {
+    it(`${name}: smoothed line stays within envelope bands`, () => {
+      const buckets = makeLttbLikeBuckets(100);
+      const series = bucketedAndSmooth(buckets, "metric", "#00f", settings);
+
+      // Find the main series (not envelope, not companion)
+      const main = series.find(
+        (s) => !s.envelopeOf && !s.label.includes("(original)"),
+      );
+      const envMin = series.find((s) => s.envelopeBound === "min");
+      const envMax = series.find((s) => s.envelopeBound === "max");
+
+      expect(main).toBeDefined();
+      expect(envMin).toBeDefined();
+      expect(envMax).toBeDefined();
+
+      for (let i = 0; i < main!.y.length; i++) {
+        const v = main!.y[i];
+        const lo = envMin!.y[i];
+        const hi = envMax!.y[i];
+        if (v === null || lo === null || hi === null) continue;
+
+        expect(v).toBeGreaterThanOrEqual(lo as number);
+        expect(v).toBeLessThanOrEqual(hi as number);
+      }
+    });
+  }
+
+  it("without smoothing: line stays within envelope bands (baseline)", () => {
+    const buckets = makeLttbLikeBuckets(100);
+    const noSmooth: SmoothingSettings = {
+      enabled: false,
+      algorithm: "gaussian",
+      parameter: 2,
+      showOriginalData: false,
+    };
+    const series = bucketedAndSmooth(buckets, "metric", "#00f", noSmooth);
+
+    const main = series.find(
+      (s) => !s.envelopeOf && !s.label.includes("(original)"),
+    );
+    const envMin = series.find((s) => s.envelopeBound === "min");
+    const envMax = series.find((s) => s.envelopeBound === "max");
+
+    expect(main).toBeDefined();
+    expect(envMin).toBeDefined();
+    expect(envMax).toBeDefined();
+
+    for (let i = 0; i < main!.y.length; i++) {
+      const v = main!.y[i];
+      const lo = envMin!.y[i];
+      const hi = envMax!.y[i];
+      if (v === null || lo === null || hi === null) continue;
+
+      expect(v).toBeGreaterThanOrEqual(lo as number);
+      expect(v).toBeLessThanOrEqual(hi as number);
+    }
   });
 });

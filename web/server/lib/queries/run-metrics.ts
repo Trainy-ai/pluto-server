@@ -948,7 +948,7 @@ async function queryRunMetricsBucketedByLogNameLttb(
         ARRAY JOIN sampled_points AS pt
       ),
       lttb_per_bucket AS (
-        SELECT bucket, any(lttb_value) AS lttb_value
+        SELECT bucket, toNullable(any(lttb_value)) AS lttb_value
         FROM lttb_bucketed
         GROUP BY bucket
       )
@@ -1061,7 +1061,7 @@ async function queryRunMetricsBatchBucketedByLogNameLttb(
         ARRAY JOIN sampled_points AS pt
       ),
       lttb_per_bucket AS (
-        SELECT runId, bucket, any(lttb_value) AS lttb_value
+        SELECT runId, bucket, toNullable(any(lttb_value)) AS lttb_value
         FROM lttb_bucketed
         GROUP BY runId, bucket
       )
@@ -1182,7 +1182,7 @@ async function queryRunMetricsMultiMetricBatchBucketedLttb(
           ARRAY JOIN sampled_points AS pt
         ),
         lttb_per_bucket AS (
-          SELECT logName, runId, bucket, any(lttb_value) AS lttb_value
+          SELECT logName, runId, bucket, toNullable(any(lttb_value)) AS lttb_value
           FROM lttb_bucketed
           GROUP BY logName, runId, bucket
         )
@@ -1251,7 +1251,7 @@ async function queryRunMetricsMultiMetricBatchBucketedLttb(
           ARRAY JOIN sampled_points AS pt
         ),
         lttb_per_bucket AS (
-          SELECT logName, runId, bucket, any(lttb_value) AS lttb_value
+          SELECT logName, runId, bucket, toNullable(any(lttb_value)) AS lttb_value
           FROM lttb_bucketed
           GROUP BY logName, runId, bucket
         )

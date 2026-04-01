@@ -5789,5 +5789,53 @@ describe('SDK API Endpoints (with API Key)', () => {
       expect(defaultPoints.length).toBe(explicitPoints.length);
       expect(defaultPoints[0].value).toBe(explicitPoints[0].value);
     });
+
+    it('Test 31.6: graphMultiMetricBatchBucketed with algorithm=lttb and stepMin/stepMax maintains value ∈ [minY, maxY]', async () => {
+      if (!sessionCookie || !staircaseRunSqid) {
+        console.log('   No session or staircase run - skipping');
+        return;
+      }
+
+      const response = await makeTrpcRequest('runs.data.graphMultiMetricBatchBucketed', {
+        runIds: [staircaseRunSqid],
+        projectName: TEST_PROJECT_NAME,
+        logNames: ['test/staircase', 'test/staircase_irregular'],
+        buckets: 50,
+        stepMin: 50,
+        stepMax: 300,
+        algorithm: 'lttb',
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      const result = data.result?.data;
+      expect(result).toBeDefined();
+
+      // Check each metric's columnar data
+      for (const metricName of ['test/staircase', 'test/staircase_irregular']) {
+        const metricData = result[metricName];
+        if (!metricData) continue;
+
+        const series = metricData[staircaseRunSqid!];
+        if (!series || !series.steps || series.steps.length === 0) continue;
+
+        // All steps should be within [50, 300]
+        for (let i = 0; i < series.steps.length; i++) {
+          expect(series.steps[i]).toBeGreaterThanOrEqual(50);
+          expect(series.steps[i]).toBeLessThanOrEqual(300);
+        }
+
+        // value ∈ [minY, maxY] for every bucket
+        for (let i = 0; i < series.steps.length; i++) {
+          const v = series.values[i];
+          const minY = series.minYs[i];
+          const maxY = series.maxYs[i];
+          if (v !== null && minY !== null && maxY !== null) {
+            expect(minY).toBeLessThanOrEqual(v);
+            expect(maxY).toBeGreaterThanOrEqual(v);
+          }
+        }
+      }
+    });
   });
 });
