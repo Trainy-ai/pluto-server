@@ -3,6 +3,7 @@ import {
   estimateStandardBuckets,
   resolveChartBuckets,
   MAX_BUCKETS,
+  PREVIEW_BUCKETS,
   RESOLUTION_PRESETS,
 } from "../chart-bucket-estimate";
 
@@ -24,9 +25,9 @@ describe("estimateStandardBuckets", () => {
     Object.defineProperty(window, "innerWidth", { value: w, writable: true });
   }
 
-  it("returns a value between 10 and MAX_BUCKETS", () => {
+  it("returns a value between PREVIEW_BUCKETS and MAX_BUCKETS", () => {
     const result = estimateStandardBuckets();
-    expect(result).toBeGreaterThanOrEqual(10);
+    expect(result).toBeGreaterThanOrEqual(PREVIEW_BUCKETS);
     expect(result).toBeLessThanOrEqual(MAX_BUCKETS);
   });
 
@@ -37,9 +38,9 @@ describe("estimateStandardBuckets", () => {
     expect(oneCol).toBeGreaterThan(threeCols);
   });
 
-  it("floors at minimum 10 buckets", () => {
+  it("floors at PREVIEW_BUCKETS for narrow windows", () => {
     setWindowWidth(0);
-    expect(estimateStandardBuckets()).toBeGreaterThanOrEqual(10);
+    expect(estimateStandardBuckets()).toBe(PREVIEW_BUCKETS);
   });
 
   it("caps at MAX_BUCKETS for very wide screens", () => {
@@ -76,7 +77,8 @@ describe("resolveChartBuckets", () => {
     expect(resolveChartBuckets("auto", false, 2)).toBe(estimateStandardBuckets(2));
   });
 
-  it("auto with columns=1 returns more than columns=3", () => {
+  it("auto with columns=1 returns more than columns=3 on wide screens", () => {
+    Object.defineProperty(window, "innerWidth", { value: 2400, writable: true });
     const oneCol = resolveChartBuckets("auto", false, 1);
     const threeCols = resolveChartBuckets("auto", false, 3);
     expect(oneCol).toBeGreaterThan(threeCols);

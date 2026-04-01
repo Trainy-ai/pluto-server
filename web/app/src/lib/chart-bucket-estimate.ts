@@ -1,6 +1,6 @@
 import type { ChartResolution } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/use-line-settings";
 
-const PIXELS_PER_BUCKET = 1; // 1:1 — max fidelity, one bucket per horizontal pixel
+const PIXELS_PER_BUCKET = 4; // 4:1 — good fidelity with min/max envelope
 
 /** Server-side bucket limit (must match tRPC validation in graph-bucketed.ts) */
 export const MAX_BUCKETS = 20_000;
@@ -23,7 +23,8 @@ export function estimateStandardBuckets(columns = 3): number {
     200,
     (available - (columns - 1) * 16 - 64) / columns,
   );
-  return Math.max(10, Math.min(MAX_BUCKETS, Math.round(chartWidth / PIXELS_PER_BUCKET)));
+  const buckets = Math.round(chartWidth / PIXELS_PER_BUCKET);
+  return Math.max(PREVIEW_BUCKETS, Math.min(MAX_BUCKETS, buckets));
 }
 
 /**

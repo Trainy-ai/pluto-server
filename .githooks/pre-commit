@@ -1,0 +1,14 @@
+#!/bin/bash
+set -e
+
+echo "Running pre-commit type checks..."
+
+cd "$(git rev-parse --show-toplevel)/web"
+
+echo "Checking @mlop/app types..."
+pnpm --filter @mlop/app check-types
+
+echo "Checking @mlop/server types..."
+pnpm --filter @mlop/server check-types
+
+echo "Type checks passed."
