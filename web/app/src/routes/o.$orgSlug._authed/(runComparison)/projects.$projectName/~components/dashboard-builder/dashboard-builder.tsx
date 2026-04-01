@@ -1,7 +1,9 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { toast } from "sonner";
+import { PlusIcon } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { ChartFullscreenDialog } from "@/components/charts/chart-fullscreen-dialog";
-import { SectionContainer, AddSectionButton } from "./section-container";
+import { SectionContainer, FolderContainer, AddSectionButton, AddFolderButton } from "./section-container";
 import { WidgetGrid } from "./widget-grid";
 import { WidgetRenderer } from "./widget-renderer";
 import { AddWidgetModal } from "./add-widget-modal";
@@ -161,33 +163,67 @@ export function DashboardBuilder({
   useEffect(() => {
     if (isEditing) return;
     setConfig((prev) => {
-      const collapseState = new Map(prev.sections.map((s) => [s.id, s.collapsed]));
+      // Build collapse state maps for both top-level and child sections
+      const collapseState = new Map<string, boolean>();
+      for (const s of prev.sections) {
+        collapseState.set(s.id, s.collapsed);
+        for (const c of s.children ?? []) {
+          collapseState.set(c.id, c.collapsed);
+        }
+      }
       return {
         ...view.config,
         sections: view.config.sections.map((s) => ({
           ...s,
           collapsed: collapseState.get(s.id) ?? false,
+          ...(s.children
+            ? {
+                children: s.children.map((c) => ({
+                  ...c,
+                  collapsed: collapseState.get(c.id) ?? false,
+                })),
+              }
+            : {}),
         })),
       };
     });
     setHasChanges(false);
   }, [view.config, isEditing]);
 
-  // Filter sections/widgets based on search state
+  // Filter sections/widgets based on search state (walks children too)
   const filteredSections = useMemo(() => {
     if (!searchState || !searchState.query.trim()) {
       return config.sections;
     }
+
+    const filterSection = (section: Section): Section => ({
+      ...section,
+      widgets: section.widgets.filter((widget) =>
+        searchUtils.doesWidgetMatchSearch(widget, searchState)
+      ),
+      ...(section.children
+        ? {
+            children: section.children
+              .map(filterSection)
+              .filter((child) => {
+                if (child.dynamicPattern) {
+                  return (dynamicWidgetCounts[child.id] ?? 0) > 0;
+                }
+                return child.widgets.length > 0;
+              }),
+          }
+        : {}),
+    });
+
     return config.sections
-      .map((section) => ({
-        ...section,
-        widgets: section.widgets.filter((widget) =>
-          searchUtils.doesWidgetMatchSearch(widget, searchState)
-        ),
-      }))
+      .map(filterSection)
       .filter((section) => {
         if (section.dynamicPattern) {
           return (dynamicWidgetCounts[section.id] ?? 0) > 0;
+        }
+        // Keep folders that still have children or direct widgets
+        if (section.children) {
+          return (section.children.length > 0) || (section.widgets.length > 0);
         }
         return section.widgets.length > 0;
       });
@@ -293,25 +329,73 @@ export function DashboardBuilder({
     setHasChanges(true);
   }, []);
 
-  const addWidget = useCallback((sectionId: string, widget: Omit<Widget, "id">) => {
-    setConfig((prev) => configOps.addWidget(prev, sectionId, widget));
+  // ─── Folder operations ───────────────────────────────────────────────
+
+  const addFolder = useCallback((name: string) => {
+    setConfig((prev) => configOps.addFolder(prev, name));
+    setHasChanges(true);
+  }, []);
+
+  const addChildSection = useCallback((parentId: string, name: string, dynamicPattern?: string, dynamicPatternMode?: "search" | "regex") => {
+    setConfig((prev) => configOps.addChildSection(prev, parentId, name, dynamicPattern, dynamicPatternMode));
+    setHasChanges(true);
+  }, []);
+
+  const deleteChildSection = useCallback((parentId: string, childId: string) => {
+    setConfig((prev) => configOps.deleteChildSection(prev, parentId, childId));
+    setHasChanges(true);
+  }, []);
+
+  const updateChildSection = useCallback((parentId: string, childId: string, child: Section) => {
+    setConfig((prev) => configOps.updateChildSection(prev, parentId, childId, child));
+    setHasChanges(true);
+  }, []);
+
+  const toggleChildSectionCollapse = useCallback((parentId: string, childId: string) => {
+    setConfig((prev) => configOps.toggleChildSectionCollapse(prev, parentId, childId));
+  }, []);
+
+  const reorderChildSections = useCallback((parentId: string, fromIndex: number, toIndex: number) => {
+    setConfig((prev) => configOps.reorderChildSections(prev, parentId, fromIndex, toIndex));
+    setHasChanges(true);
+  }, []);
+
+  const toggleAllChildSections = useCallback(() => {
+    setConfig((prev) => configOps.toggleAllChildSections(prev));
+  }, []);
+
+  const allChildSections = useMemo(
+    () => config.sections.flatMap((s) => s.children ?? []),
+    [config.sections],
+  );
+  const hasChildSections = allChildSections.length > 0;
+  const allChildrenCollapsed = hasChildSections && allChildSections.every((c) => c.collapsed);
+
+  // ─── Widget operations ──────────────────────────────────────────────
+
+  const [addWidgetParentId, setAddWidgetParentId] = useState<string | null>(null);
+
+  const addWidget = useCallback((sectionId: string, widget: Omit<Widget, "id">, parentId?: string) => {
+    setConfig((prev) => configOps.addWidget(prev, sectionId, widget, parentId));
     setHasChanges(true);
     setAddWidgetSectionId(null);
+    setAddWidgetParentId(null);
   }, []);
 
-  const updateWidgetsInSection = useCallback((sectionId: string, widgets: Widget[]) => {
+  const updateWidgetsInSection = useCallback((sectionId: string, widgets: Widget[], parentId?: string) => {
     if (isSearchingRef.current) return;
-    setConfig((prev) => configOps.updateWidgets(prev, sectionId, widgets));
+    setConfig((prev) => configOps.updateWidgets(prev, sectionId, widgets, parentId));
     setHasChanges(true);
   }, []);
 
-  const deleteWidget = useCallback((sectionId: string, widgetId: string) => {
-    setConfig((prev) => configOps.deleteWidget(prev, sectionId, widgetId));
+  const deleteWidget = useCallback((sectionId: string, widgetId: string, parentId?: string) => {
+    setConfig((prev) => configOps.deleteWidget(prev, sectionId, widgetId, parentId));
     setHasChanges(true);
   }, []);
 
-  const editWidget = useCallback((sectionId: string, widget: Widget) => {
+  const editWidget = useCallback((sectionId: string, widget: Widget, parentId?: string) => {
     setAddWidgetSectionId(sectionId);
+    setAddWidgetParentId(parentId ?? null);
     setEditingWidget(widget);
   }, []);
 
@@ -320,12 +404,22 @@ export function DashboardBuilder({
     toast.success("Widget copied");
   }, []);
 
-  const pasteWidget = useCallback((sectionId: string) => {
+  const pasteWidget = useCallback((sectionId: string, parentId?: string) => {
     if (!copiedWidget) return;
-    setConfig((prev) => configOps.pasteWidget(prev, sectionId, copiedWidget));
+    setConfig((prev) => configOps.pasteWidget(prev, sectionId, copiedWidget, parentId));
     setHasChanges(true);
   }, [copiedWidget]);
 
+  const handleMoveWidget = useCallback((
+    widgetId: string,
+    fromSectionId: string,
+    fromParentId: string | undefined,
+    target: configOps.SectionLocation,
+  ) => {
+    setConfig((prev) => configOps.moveWidget(prev, widgetId, { sectionId: fromSectionId, parentId: fromParentId }, target));
+    setHasChanges(true);
+    toast.success("Widget moved");
+  }, []);
   const updateWidgetScale = useCallback((widgetId: string, axis: "x" | "y", value: boolean) => {
     setConfig((prev) => configOps.updateWidgetScale(prev, widgetId, axis, value));
     setHasChanges(true);
@@ -354,21 +448,316 @@ export function DashboardBuilder({
     [filteredSections]
   );
 
+  const folderIds = useMemo(
+    () => filteredSections.filter((s) => configOps.isFolder(s)).map((s) => s.id),
+    [filteredSections],
+  );
+
+  // Map child section ID → parent folder ID (for drag target identification)
+  const childToParentMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const s of filteredSections) {
+      for (const c of s.children ?? []) {
+        map[c.id] = s.id;
+      }
+    }
+    return map;
+  }, [filteredSections]);
+
+  // Map folder ID → ordered child IDs (for reorder index computation)
+  const folderChildIds = useMemo(() => {
+    const map: Record<string, string[]> = {};
+    for (const s of filteredSections) {
+      if (s.children) {
+        map[s.id] = s.children.map((c) => c.id);
+      }
+    }
+    return map;
+  }, [filteredSections]);
+
+  const handleDragMoveIntoFolder = useCallback(
+    (sectionId: string, fromParentId: string | undefined, folderId: string) => {
+      if (fromParentId) {
+        setConfig((prev) => configOps.moveSectionBetweenFolders(prev, sectionId, fromParentId, folderId));
+      } else {
+        setConfig((prev) => configOps.moveSectionIntoFolder(prev, sectionId, folderId));
+      }
+      setHasChanges(true);
+      toast.success("Section moved into folder");
+    },
+    [],
+  );
+
+  const handleDragMoveOutOfFolder = useCallback(
+    (sectionId: string, fromParentId: string, targetSectionId: string, position: "above" | "below") => {
+      setConfig((prev) => configOps.moveSectionOutOfFolder(prev, sectionId, fromParentId, targetSectionId, position));
+      setHasChanges(true);
+      toast.success("Section moved to top level");
+    },
+    [],
+  );
+
+  const handleDropNearChild = useCallback(
+    (sectionId: string, fromParentId: string | undefined, targetParentId: string, targetChildId: string, position: "above" | "below") => {
+      setConfig((prev) => configOps.moveSectionIntoFolderAtPosition(prev, sectionId, fromParentId, targetParentId, targetChildId, position));
+      setHasChanges(true);
+      toast.success("Section moved into folder");
+    },
+    [],
+  );
+
+  const handleReorderChildren = useCallback(
+    (parentId: string, fromIndex: number, toIndex: number) => {
+      setConfig((prev) => configOps.reorderChildSections(prev, parentId, fromIndex, toIndex));
+      setHasChanges(true);
+    },
+    [],
+  );
+
   const { dragState, handleDragStart, handleDragOver, handleDrop, handleDragEnd, handleDragLeave } =
-    useSectionDrag({ onReorder: reorderSections, sectionIds });
+    useSectionDrag({
+      onReorder: reorderSections,
+      sectionIds,
+      onMoveIntoFolder: handleDragMoveIntoFolder,
+      onMoveOutOfFolder: handleDragMoveOutOfFolder,
+      onDropNearChild: handleDropNearChild,
+      onReorderChildren: handleReorderChildren,
+      folderIds,
+      childToParentMap,
+      folderChildIds,
+    });
 
   const handleEditWidgetSave = useCallback(
     (widgetData: Omit<Widget, "id">) => {
       if (!editingWidget || !addWidgetSectionId) return;
       setConfig((prev) =>
-        configOps.handleEditWidgetSave(prev, addWidgetSectionId, editingWidget.id, widgetData)
+        configOps.handleEditWidgetSave(prev, addWidgetSectionId, editingWidget.id, widgetData, addWidgetParentId ?? undefined)
       );
       setHasChanges(true);
       setAddWidgetSectionId(null);
+      setAddWidgetParentId(null);
       setEditingWidget(null);
     },
-    [editingWidget, addWidgetSectionId]
+    [editingWidget, addWidgetSectionId, addWidgetParentId]
   );
+
+  // ─── Section/folder rendering helpers ──────────────────────────────
+
+  /** Render a widget grid or dynamic grid for a given section. */
+  function renderSectionContent(section: Section, parentId?: string) {
+    const visibleWidgets = isEditing || section.dynamicPattern
+      ? section.widgets
+      : section.widgets.filter((w) => !hiddenWidgetIds.has(w.id));
+
+    if (section.dynamicPattern) {
+      return (
+        <DynamicSectionGrid
+          sectionId={section.id}
+          pattern={section.dynamicPattern}
+          patternMode={section.dynamicPatternMode}
+          organizationId={organizationId}
+          projectName={projectName}
+          selectedRunIds={selectedRunIds}
+          groupedMetrics={groupedMetrics}
+          selectedRuns={selectedRuns}
+          searchState={searchState}
+          onWidgetCountChange={(count) => handleDynamicWidgetCount(section.id, count)}
+          settingsRunId={settingsRunId}
+        />
+      );
+    }
+    const sectionMoveTargets = isEditing
+      ? configOps.getMoveTargets(config, section.id, parentId)
+      : [];
+
+    return (
+      <WidgetGrid
+        widgets={visibleWidgets}
+        onLayoutChange={(widgets) => updateWidgetsInSection(section.id, widgets, parentId)}
+        onEditWidget={(widget) => editWidget(section.id, widget, parentId)}
+        onDeleteWidget={(widgetId) => deleteWidget(section.id, widgetId, parentId)}
+        onCopyWidget={handleCopyWidget}
+        onMoveWidget={(widgetId, target) => handleMoveWidget(widgetId, section.id, parentId, target)}
+        moveTargets={sectionMoveTargets}
+        onFullscreenWidget={setFullscreenWidget}
+        onUpdateWidgetScale={updateWidgetScale}
+        isEditing={isEditing}
+        coarseMode={coarseMode}
+        containerWidth={containerWidth - SECTION_HORIZONTAL_PADDING}
+        renderWidget={(widget) => (
+          <WidgetRenderer
+            widget={widget}
+            groupedMetrics={groupedMetrics}
+            selectedRuns={selectedRuns}
+            organizationId={organizationId}
+            projectName={projectName}
+            settingsRunId={settingsRunId}
+            yZoomRange={widgetYZoomRanges[widget.id] ?? null}
+            onYZoomRangeChange={(range) => setWidgetYZoomRanges((prev) => ({ ...prev, [widget.id]: range }))}
+          />
+        )}
+      />
+    );
+  }
+
+  /** Render a regular section (no children). */
+  /** Get folder targets for moving a section. */
+  function getSectionMoveTargets(section: Section, parentId?: string) {
+    if (!isEditing) return undefined;
+    // Don't allow folders to be moved into other folders
+    if (configOps.isFolder(section)) return undefined;
+
+    const targets: { label: string; id: string }[] = [];
+
+    if (parentId) {
+      // Child section — can move to top level or other folders
+      targets.push({ label: "Top level", id: "" });
+    }
+
+    // All folders except the current parent
+    for (const s of config.sections) {
+      if (!configOps.isFolder(s)) continue;
+      if (s.id === parentId) continue; // skip current parent
+      targets.push({ label: s.name, id: s.id });
+    }
+
+    return targets.length > 0 ? targets : undefined;
+  }
+
+  function handleMoveSection(sectionId: string, parentId: string | undefined, targetFolderId: string | null) {
+    if (targetFolderId === "" || targetFolderId === null) {
+      // Move out of folder to top level
+      if (parentId) {
+        setConfig((prev) => configOps.moveSectionOutOfFolder(prev, sectionId, parentId));
+        setHasChanges(true);
+        toast.success("Section moved to top level");
+      }
+    } else if (parentId) {
+      // Move from one folder to another
+      setConfig((prev) => configOps.moveSectionBetweenFolders(prev, sectionId, parentId, targetFolderId));
+      setHasChanges(true);
+      toast.success("Section moved");
+    } else {
+      // Move from top level into a folder
+      setConfig((prev) => configOps.moveSectionIntoFolder(prev, sectionId, targetFolderId));
+      setHasChanges(true);
+      toast.success("Section moved into folder");
+    }
+  }
+
+  function renderSection(section: Section, parentId?: string) {
+    const visibleWidgets = isEditing || section.dynamicPattern
+      ? section.widgets
+      : section.widgets.filter((w) => !hiddenWidgetIds.has(w.id));
+
+    if (!isEditing && !section.dynamicPattern && visibleWidgets.length === 0 && section.widgets.length > 0) {
+      return null;
+    }
+
+    const folderTargets = getSectionMoveTargets(section, parentId);
+
+    return (
+      <SectionContainer
+        key={section.id}
+        section={section}
+          visibleWidgetCount={section.dynamicPattern ? undefined : visibleWidgets.length}
+          onUpdate={(s) => parentId ? updateChildSection(parentId, section.id, s) : updateSection(section.id, s)}
+          onToggleCollapse={() => parentId ? toggleChildSectionCollapse(parentId, section.id) : toggleSectionCollapse(section.id)}
+          onDelete={() => parentId ? deleteChildSection(parentId, section.id) : deleteSection(section.id)}
+          onAddWidget={() => {
+            setAddWidgetSectionId(section.id);
+            setAddWidgetParentId(parentId ?? null);
+          }}
+          onPasteWidget={() => pasteWidget(section.id, parentId)}
+          hasCopiedWidget={!!copiedWidget}
+          onMoveToFolder={folderTargets ? (folderId) => handleMoveSection(section.id, parentId, folderId) : undefined}
+          moveFolderTargets={folderTargets}
+          isEditing={isEditing}
+          dynamicWidgetCount={dynamicWidgetCounts[section.id]}
+          onDynamicCountChange={handleDynamicWidgetCount}
+          organizationId={organizationId}
+          projectName={projectName}
+          selectedRunIds={selectedRunIds}
+          drag={isEditing && !isSearching ? {
+            onDragStart: (e) => handleDragStart(section.id, e, parentId),
+            onDragOver: (e) => handleDragOver(section.id, e),
+            onDrop: (e) => handleDrop(section.id, e),
+            onDragEnd: handleDragEnd,
+            onDragLeave: handleDragLeave,
+            isDragging: dragState.draggedId === section.id,
+            isDropTarget: dragState.dragOverId === section.id && dragState.draggedId !== section.id,
+            dropPosition: dragState.dragOverId === section.id ? dragState.dropPosition : null,
+          } : undefined}
+        >
+          {renderSectionContent(section, parentId)}
+      </SectionContainer>
+    );
+  }
+
+  /** Render a folder (section with children). */
+  function renderFolder(section: Section) {
+    return (
+      <FolderContainer
+        key={section.id}
+        section={section}
+        onUpdate={(s) => updateSection(section.id, s)}
+        onToggleCollapse={() => toggleSectionCollapse(section.id)}
+        onDelete={() => deleteSection(section.id)}
+        onAddChildSection={(name, dp, dpm) => addChildSection(section.id, name, dp, dpm)}
+        organizationId={organizationId}
+        projectName={projectName}
+        selectedRunIds={selectedRunIds}
+        onAddWidget={() => {
+          setAddWidgetSectionId(section.id);
+          setAddWidgetParentId(null);
+        }}
+        onPasteWidget={() => pasteWidget(section.id)}
+        hasCopiedWidget={!!copiedWidget}
+        dynamicWidgetCounts={dynamicWidgetCounts}
+        isEditing={isEditing}
+        drag={isEditing && !isSearching ? {
+          onDragStart: (e) => handleDragStart(section.id, e),
+          onDragOver: (e) => handleDragOver(section.id, e),
+          onDrop: (e) => handleDrop(section.id, e),
+          onDragEnd: handleDragEnd,
+          onDragLeave: handleDragLeave,
+          isDragging: dragState.draggedId === section.id,
+          isDropTarget: dragState.dragOverId === section.id && dragState.draggedId !== section.id,
+          dropPosition: dragState.dragOverId === section.id ? dragState.dropPosition : null,
+        } : undefined}
+      >
+        {/* Child sections inside the folder */}
+        {(section.children ?? []).map((child) => renderSection(child, section.id))}
+
+        {/* Folder's direct widgets (after sections) */}
+        {section.widgets.length > 0 && renderSectionContent(section)}
+
+        {/* Add child section / widget buttons inside folder */}
+        {isEditing && (
+          <div className="flex items-center justify-center gap-2 py-2">
+            <AddSectionButton
+              onAddSection={(name, dp, dpm) => addChildSection(section.id, name, dp, dpm)}
+              organizationId={organizationId}
+              projectName={projectName}
+              selectedRunIds={selectedRunIds}
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-muted-foreground"
+              onClick={() => {
+                setAddWidgetSectionId(section.id);
+                setAddWidgetParentId(null);
+              }}
+            >
+              <PlusIcon className="mr-1.5 size-3.5" />
+              Add Widget
+            </Button>
+          </div>
+        )}
+      </FolderContainer>
+    );
+  }
 
   return (
     <div ref={containerRef} className="flex-1 space-y-4">
@@ -382,6 +771,9 @@ export function DashboardBuilder({
         allCollapsed={allCollapsed}
         coarseMode={coarseMode}
         onToggleAllSections={toggleAllSections}
+        hasChildSections={hasChildSections}
+        allChildrenCollapsed={allChildrenCollapsed}
+        onToggleAllChildSections={toggleAllChildSections}
         onSetCoarseMode={setCoarseMode}
         onCancel={handleCancel}
         onSave={handleSave}
@@ -402,106 +794,40 @@ export function DashboardBuilder({
           <p className="text-muted-foreground mb-4">
             {isSearching
               ? "No widgets match your search."
-              : "This dashboard is empty. Start by adding a section."}
+              : "This dashboard is empty. Start by adding a section or folder."}
           </p>
           {isEditing && !isSearching && (
-            <AddSectionButton
-              onAddSection={addSection}
-              organizationId={organizationId}
-              projectName={projectName}
-              selectedRunIds={selectedRunIds}
-            />
+            <div className="flex items-center gap-2">
+              <AddSectionButton
+                onAddSection={addSection}
+                organizationId={organizationId}
+                projectName={projectName}
+                selectedRunIds={selectedRunIds}
+              />
+              <AddFolderButton onAddFolder={addFolder} />
+            </div>
           )}
         </div>
       ) : (
         <div className="space-y-4">
           {filteredSections.map((section) => {
-            const visibleWidgets = isEditing || section.dynamicPattern
-              ? section.widgets
-              : section.widgets.filter((w) => !hiddenWidgetIds.has(w.id));
-
-            if (!isEditing && !section.dynamicPattern && visibleWidgets.length === 0 && section.widgets.length > 0) {
-              return null;
+            // Render a section or folder depending on whether it has children
+            if (configOps.isFolder(section)) {
+              return renderFolder(section);
             }
-
-            return (
-              <SectionContainer
-                key={section.id}
-                section={section}
-                visibleWidgetCount={section.dynamicPattern ? undefined : visibleWidgets.length}
-                onUpdate={(s) => updateSection(section.id, s)}
-                onToggleCollapse={() => toggleSectionCollapse(section.id)}
-                onDelete={() => deleteSection(section.id)}
-                onAddWidget={() => setAddWidgetSectionId(section.id)}
-                onPasteWidget={() => pasteWidget(section.id)}
-                hasCopiedWidget={!!copiedWidget}
-                isEditing={isEditing}
-                dynamicWidgetCount={dynamicWidgetCounts[section.id]}
-                organizationId={organizationId}
-                projectName={projectName}
-                selectedRunIds={selectedRunIds}
-                drag={isEditing && !isSearching ? {
-                  onDragStart: (e) => handleDragStart(section.id, e),
-                  onDragOver: (e) => handleDragOver(section.id, e),
-                  onDrop: (e) => handleDrop(section.id, e),
-                  onDragEnd: handleDragEnd,
-                  onDragLeave: handleDragLeave,
-                  isDragging: dragState.draggedId === section.id,
-                  isDropTarget: dragState.dragOverId === section.id && dragState.draggedId !== section.id,
-                  dropPosition: dragState.dragOverId === section.id ? dragState.dropPosition : null,
-                } : undefined}
-              >
-                {section.dynamicPattern ? (
-                  <DynamicSectionGrid
-                    sectionId={section.id}
-                    pattern={section.dynamicPattern}
-                    patternMode={section.dynamicPatternMode}
-                    organizationId={organizationId}
-                    projectName={projectName}
-                    selectedRunIds={selectedRunIds}
-                    groupedMetrics={groupedMetrics}
-                    selectedRuns={selectedRuns}
-                    searchState={searchState}
-                    onWidgetCountChange={(count) => handleDynamicWidgetCount(section.id, count)}
-                    settingsRunId={settingsRunId}
-                  />
-                ) : (
-                  <WidgetGrid
-                    widgets={visibleWidgets}
-                    onLayoutChange={(widgets) => updateWidgetsInSection(section.id, widgets)}
-                    onEditWidget={(widget) => editWidget(section.id, widget)}
-                    onDeleteWidget={(widgetId) => deleteWidget(section.id, widgetId)}
-                    onCopyWidget={handleCopyWidget}
-                    onFullscreenWidget={setFullscreenWidget}
-                    onUpdateWidgetScale={updateWidgetScale}
-                    isEditing={isEditing}
-                    coarseMode={coarseMode}
-                    containerWidth={containerWidth - SECTION_HORIZONTAL_PADDING}
-                    renderWidget={(widget) => (
-                      <WidgetRenderer
-                        widget={widget}
-                        groupedMetrics={groupedMetrics}
-                        selectedRuns={selectedRuns}
-                        organizationId={organizationId}
-                        projectName={projectName}
-                        settingsRunId={settingsRunId}
-                        yZoomRange={widgetYZoomRanges[widget.id] ?? null}
-                        onYZoomRangeChange={(range) => setWidgetYZoomRanges((prev) => ({ ...prev, [widget.id]: range }))}
-                      />
-                    )}
-                  />
-                )}
-              </SectionContainer>
-            );
+            return renderSection(section);
           })}
 
           {isEditing && (
-            <AddSectionButton
-              onAddSection={addSection}
-              organizationId={organizationId}
-              projectName={projectName}
-              selectedRunIds={selectedRunIds}
-            />
+            <div className="flex items-center justify-center gap-2 py-4">
+              <AddSectionButton
+                onAddSection={addSection}
+                organizationId={organizationId}
+                projectName={projectName}
+                selectedRunIds={selectedRunIds}
+              />
+              <AddFolderButton onAddFolder={addFolder} />
+            </div>
           )}
         </div>
       )}
@@ -515,7 +841,7 @@ export function DashboardBuilder({
             setEditingWidget(null);
           }
         }}
-        onAdd={editingWidget ? handleEditWidgetSave : (w) => addWidgetSectionId && addWidget(addWidgetSectionId, w)}
+        onAdd={editingWidget ? handleEditWidgetSave : (w) => addWidgetSectionId && addWidget(addWidgetSectionId, w, addWidgetParentId ?? undefined)}
         organizationId={organizationId}
         projectName={projectName}
         editWidget={editingWidget ?? undefined}

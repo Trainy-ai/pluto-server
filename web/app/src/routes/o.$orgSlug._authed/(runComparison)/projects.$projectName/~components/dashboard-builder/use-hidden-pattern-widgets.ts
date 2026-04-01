@@ -44,8 +44,8 @@ export function useHiddenPatternWidgets({
   // This avoids a stale-query race when transitioning back to view mode.
   const patternWidgets = useMemo(() => {
     const result: { id: string; metrics: string[] }[] = [];
-    for (const section of sections) {
-      for (const widget of section.widgets) {
+    const collectFromWidgets = (widgets: Section["widgets"]) => {
+      for (const widget of widgets) {
         if (widget.type !== "chart") continue;
         const config = widget.config as ChartWidgetConfig;
         if (
@@ -55,6 +55,12 @@ export function useHiddenPatternWidgets({
         ) {
           result.push({ id: widget.id, metrics: config.metrics });
         }
+      }
+    };
+    for (const section of sections) {
+      collectFromWidgets(section.widgets);
+      for (const child of section.children ?? []) {
+        collectFromWidgets(child.widgets);
       }
     }
     return result;

@@ -17,6 +17,12 @@ interface DashboardToolbarProps {
   allCollapsed: boolean;
   coarseMode: boolean;
   onToggleAllSections: () => void;
+  /** Whether any folders have child sections */
+  hasChildSections?: boolean;
+  /** Whether all child sections are collapsed */
+  allChildrenCollapsed?: boolean;
+  /** Toggle collapse of all child sections inside folders */
+  onToggleAllChildSections?: () => void;
   onSetCoarseMode: (coarse: boolean) => void;
   onCancel: () => void;
   onSave: () => void;
@@ -32,6 +38,9 @@ export function DashboardToolbar({
   allCollapsed,
   coarseMode,
   onToggleAllSections,
+  hasChildSections,
+  allChildrenCollapsed,
+  onToggleAllChildSections,
   onSetCoarseMode,
   onCancel,
   onSave,
@@ -63,6 +72,27 @@ export function DashboardToolbar({
               <>
                 <ChevronsDownUpIcon className="mr-1.5 size-3.5" />
                 Collapse All
+              </>
+            )}
+          </Button>
+        )}
+        {hasChildSections && onToggleAllChildSections && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 text-xs text-muted-foreground"
+            onClick={onToggleAllChildSections}
+            title={allChildrenCollapsed ? "Expand all subsections" : "Collapse all subsections"}
+          >
+            {allChildrenCollapsed ? (
+              <>
+                <ChevronsUpDownIcon className="mr-1.5 size-3.5" />
+                Expand Subsections
+              </>
+            ) : (
+              <>
+                <ChevronsDownUpIcon className="mr-1.5 size-3.5" />
+                Collapse Subsections
               </>
             )}
           </Button>

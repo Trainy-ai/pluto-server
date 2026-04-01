@@ -15,6 +15,9 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSub,
+  DropdownMenuSubTrigger,
+  DropdownMenuSubContent,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -25,11 +28,19 @@ import {
 import { ChartScalePopover } from "@/components/charts/chart-scale-popover";
 import { ChartExportMenu } from "@/components/charts/chart-export-menu";
 import { VirtualizedChart } from "@/components/core/virtualized-chart";
+import { ArrowRightIcon, FolderIcon } from "lucide-react";
 import type { Widget, ChartWidgetConfig } from "../../~types/dashboard-types";
 import { getWidgetTitle, hasWidgetPatterns } from "./widget-utils";
+import type { SectionLocation } from "./use-dashboard-config";
 
 /** Height of the widget card header in pixels. */
 const WIDGET_HEADER_HEIGHT = 40;
+
+interface MoveTarget {
+  label: string;
+  location: SectionLocation;
+  isFolder: boolean;
+}
 
 interface WidgetCardProps {
   widget: Widget;
@@ -37,6 +48,8 @@ interface WidgetCardProps {
   onEdit: () => void;
   onDelete: () => void;
   onCopy: () => void;
+  onMove?: (target: SectionLocation) => void;
+  moveTargets?: MoveTarget[];
   onFullscreen?: () => void;
   onUpdateScale?: (axis: "x" | "y", value: boolean) => void;
   renderWidget: () => ReactNode;
@@ -48,6 +61,8 @@ export function WidgetCard({
   onEdit,
   onDelete,
   onCopy,
+  onMove,
+  moveTargets,
   onFullscreen,
   onUpdateScale,
   renderWidget,
@@ -143,6 +158,25 @@ export function WidgetCard({
                   <CopyIcon className="mr-2 size-4" />
                   Copy Widget
                 </DropdownMenuItem>
+                {onMove && moveTargets && moveTargets.length > 0 && (
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger>
+                      <ArrowRightIcon className="mr-2 size-4" />
+                      Move to...
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent className="max-h-60 overflow-y-auto">
+                      {moveTargets.map((target) => (
+                        <DropdownMenuItem
+                          key={`${target.location.parentId ?? ""}-${target.location.sectionId}`}
+                          onClick={() => onMove(target.location)}
+                        >
+                          {target.isFolder && <FolderIcon className="mr-2 size-3.5 text-primary/60" />}
+                          <span className="truncate">{target.label}</span>
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                )}
                 <DropdownMenuItem
                   className="text-destructive"
                   onClick={onDelete}

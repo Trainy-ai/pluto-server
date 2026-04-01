@@ -202,16 +202,55 @@ export const WidgetSchema = z.object({
 });
 export type Widget = z.infer<typeof WidgetSchema>;
 
-// Section definition (simple container for widgets)
-export const SectionSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  collapsed: z.boolean().default(false),
-  widgets: z.array(WidgetSchema).default([]),
-  dynamicPattern: z.string().optional(),
-  dynamicPatternMode: z.enum(["search", "regex"]).optional(),
-});
-export type Section = z.infer<typeof SectionSchema>;
+// Section definition (container for widgets, optionally a "folder" with child sections)
+// A section with `children` is a folder that can group other sections and/or hold its own widgets.
+// Max 1 level of nesting: children cannot themselves have children.
+// Dynamic patterns are only allowed on leaf sections (no children).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- recursive schema needs a loose type annotation;
+// the runtime Zod validation guarantees the output matches Section.
+export const SectionSchema: z.ZodType<Section, z.ZodTypeDef, any> = z.lazy(() =>
+  z.object({
+    id: z.string(),
+    name: z.string(),
+    collapsed: z.boolean().default(false),
+    widgets: z.array(WidgetSchema).default([]),
+    dynamicPattern: z.string().optional(),
+    dynamicPatternMode: z.enum(["search", "regex"]).optional(),
+    children: z.array(z.lazy(() => SectionSchema)).optional(),
+  }).superRefine((section, ctx) => {
+    // Folders (sections with children) cannot have dynamic patterns
+    if (section.children && section.dynamicPattern) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Folder sections cannot have a dynamic pattern",
+        path: ["dynamicPattern"],
+      });
+    }
+    // Enforce max 1 level of nesting
+    if (section.children) {
+      for (let i = 0; i < section.children.length; i++) {
+        const child = section.children[i] as Section;
+        if (child.children && child.children.length > 0) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "Child sections cannot have their own children (max 1 level of nesting)",
+            path: ["children", i, "children"],
+          });
+        }
+      }
+    }
+  })
+);
+
+export interface Section {
+  id: string;
+  name: string;
+  collapsed: boolean;
+  widgets: Widget[];
+  dynamicPattern?: string;
+  dynamicPatternMode?: "search" | "regex";
+  children?: Section[];
+}
 
 // Complete dashboard view config
 export const DashboardViewConfigSchema = z.object({

@@ -108,7 +108,10 @@ export interface Widget {
   layout: WidgetLayout;
 }
 
-// Section definition (simple container for widgets)
+// Section definition (container for widgets, optionally a "folder" with child sections)
+// A section with `children` is a folder that can group other sections and/or hold its own widgets.
+// Max 1 level of nesting: children cannot themselves have children.
+// Dynamic patterns are only allowed on leaf sections (no children).
 export interface Section {
   id: string;
   name: string;
@@ -116,6 +119,7 @@ export interface Section {
   widgets: Widget[];
   dynamicPattern?: string;
   dynamicPatternMode?: "search" | "regex";
+  children?: Section[];
 }
 
 // Dashboard settings

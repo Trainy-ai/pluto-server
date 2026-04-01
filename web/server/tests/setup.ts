@@ -1913,6 +1913,277 @@ async function setupTestData(): Promise<TestData> {
   });
   console.log('   ✓ Created Y-Zoom Widget Test dashboard view');
 
+  // 12. Create "Folder Test" dashboard view for folder/subsection E2E tests
+  console.log('\n1️⃣2️⃣  Creating Folder Test dashboard view...');
+
+  const folderTestDashboardConfig = {
+    version: 1,
+    sections: [
+      // Folder 1: Training — 1 static section + 1 dynamic section + 2 direct widgets
+      {
+        id: 'folder-training',
+        name: 'Training',
+        collapsed: false,
+        widgets: [
+          {
+            id: 'folder-training-direct-w1',
+            type: 'chart',
+            config: {
+              metrics: ['train/metric_04'],
+              xAxis: 'step',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+              aggregation: 'LAST',
+              showOriginal: false,
+              title: 'Training Folder Widget 1',
+            },
+            layout: { x: 0, y: 0, w: 6, h: 4 },
+          },
+          {
+            id: 'folder-training-direct-w2',
+            type: 'chart',
+            config: {
+              metrics: ['train/metric_05'],
+              xAxis: 'step',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+              aggregation: 'LAST',
+              showOriginal: false,
+              title: 'Training Folder Widget 2',
+            },
+            layout: { x: 6, y: 0, w: 6, h: 4 },
+          },
+        ],
+        children: [
+          {
+            id: 'folder-training-static',
+            name: 'Loss Curves',
+            collapsed: false,
+            widgets: [
+              {
+                id: 'folder-training-static-w1',
+                type: 'chart',
+                config: {
+                  metrics: ['train/metric_00'],
+                  xAxis: 'step',
+                  yAxisScale: 'linear',
+                  xAxisScale: 'linear',
+                  aggregation: 'LAST',
+                  showOriginal: false,
+                  title: 'Training Loss',
+                },
+                layout: { x: 0, y: 0, w: 6, h: 4 },
+              },
+              {
+                id: 'folder-training-static-w2',
+                type: 'chart',
+                config: {
+                  metrics: ['train/metric_01'],
+                  xAxis: 'step',
+                  yAxisScale: 'linear',
+                  xAxisScale: 'linear',
+                  aggregation: 'LAST',
+                  showOriginal: false,
+                  title: 'Validation Loss',
+                },
+                layout: { x: 6, y: 0, w: 6, h: 4 },
+              },
+            ],
+          },
+          {
+            id: 'folder-training-dynamic',
+            name: 'All Train Metrics',
+            collapsed: false,
+            widgets: [],
+            dynamicPattern: 'train/*',
+            dynamicPatternMode: 'search',
+          },
+        ],
+      },
+      // Folder 2: Evaluation — 1 static section + 1 dynamic section + 2 direct widgets
+      {
+        id: 'folder-evaluation',
+        name: 'Evaluation',
+        collapsed: false,
+        widgets: [
+          {
+            id: 'folder-eval-direct-w1',
+            type: 'chart',
+            config: {
+              metrics: ['train/metric_06'],
+              xAxis: 'step',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+              aggregation: 'LAST',
+              showOriginal: false,
+              title: 'Eval Folder Widget 1',
+            },
+            layout: { x: 0, y: 0, w: 6, h: 4 },
+          },
+          {
+            id: 'folder-eval-direct-w2',
+            type: 'chart',
+            config: {
+              metrics: ['train/metric_07'],
+              xAxis: 'step',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+              aggregation: 'LAST',
+              showOriginal: false,
+              title: 'Eval Folder Widget 2',
+            },
+            layout: { x: 6, y: 0, w: 6, h: 4 },
+          },
+        ],
+        children: [
+          {
+            id: 'folder-eval-static',
+            name: 'Eval Charts',
+            collapsed: false,
+            widgets: [
+              {
+                id: 'folder-eval-static-w1',
+                type: 'chart',
+                config: {
+                  metrics: ['train/metric_02'],
+                  xAxis: 'step',
+                  yAxisScale: 'linear',
+                  xAxisScale: 'linear',
+                  aggregation: 'LAST',
+                  showOriginal: false,
+                  title: 'Eval Accuracy',
+                },
+                layout: { x: 0, y: 0, w: 12, h: 4 },
+              },
+            ],
+          },
+          {
+            id: 'folder-eval-dynamic',
+            name: 'All Eval Metrics',
+            collapsed: false,
+            widgets: [],
+            dynamicPattern: 'train/metric_0*',
+            dynamicPatternMode: 'search',
+          },
+        ],
+      },
+      // Folder 3: Overview — 1 static section + 1 dynamic section + 2 direct widgets
+      {
+        id: 'folder-overview',
+        name: 'Overview',
+        collapsed: false,
+        widgets: [
+          {
+            id: 'folder-overview-direct-w1',
+            type: 'chart',
+            config: {
+              metrics: ['train/metric_08'],
+              xAxis: 'step',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+              aggregation: 'LAST',
+              showOriginal: false,
+              title: 'Overview Folder Widget 1',
+            },
+            layout: { x: 0, y: 0, w: 6, h: 4 },
+          },
+          {
+            id: 'folder-overview-direct-w2',
+            type: 'chart',
+            config: {
+              metrics: ['train/metric_09'],
+              xAxis: 'step',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+              aggregation: 'LAST',
+              showOriginal: false,
+              title: 'Overview Folder Widget 2',
+            },
+            layout: { x: 6, y: 0, w: 6, h: 4 },
+          },
+        ],
+        children: [
+          {
+            id: 'folder-overview-static',
+            name: 'Key Metrics',
+            collapsed: false,
+            widgets: [
+              {
+                id: 'folder-overview-static-w1',
+                type: 'chart',
+                config: {
+                  metrics: ['train/metric_00', 'train/metric_01'],
+                  xAxis: 'step',
+                  yAxisScale: 'linear',
+                  xAxisScale: 'linear',
+                  aggregation: 'LAST',
+                  showOriginal: false,
+                  title: 'Key Metrics Combined',
+                },
+                layout: { x: 0, y: 0, w: 12, h: 4 },
+              },
+            ],
+          },
+          {
+            id: 'folder-overview-dynamic',
+            name: 'All Metrics',
+            collapsed: false,
+            widgets: [],
+            dynamicPattern: '*',
+            dynamicPatternMode: 'search',
+          },
+        ],
+      },
+      // Standalone section (not in a folder) for move tests
+      {
+        id: 'standalone-movable',
+        name: 'Standalone Movable',
+        collapsed: false,
+        widgets: [
+          {
+            id: 'standalone-movable-w1',
+            type: 'chart',
+            config: {
+              metrics: ['train/metric_03'],
+              xAxis: 'step',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+              aggregation: 'LAST',
+              showOriginal: false,
+              title: 'Movable Chart',
+            },
+            layout: { x: 0, y: 0, w: 12, h: 4 },
+          },
+        ],
+      },
+    ],
+    settings: {
+      gridCols: 12,
+      rowHeight: 80,
+      compactType: 'vertical',
+    },
+  };
+
+  await prisma.dashboardView.upsert({
+    where: {
+      organizationId_projectId_name: {
+        organizationId: org.id,
+        projectId: project.id,
+        name: 'Folder Test',
+      },
+    },
+    update: { config: folderTestDashboardConfig },
+    create: {
+      name: 'Folder Test',
+      organizationId: org.id,
+      projectId: project.id,
+      createdById: user.id,
+      isDefault: false,
+      config: folderTestDashboardConfig,
+    },
+  });
+  console.log('   ✓ Created Folder Test dashboard view');
+
   // 11b. Create "Media Widgets Test" dashboard view with all non-line-chart file types
   console.log('\n1️⃣1️⃣b Creating Media Widgets Test dashboard view...');
 
@@ -2139,8 +2410,8 @@ async function setupTestData(): Promise<TestData> {
   });
   console.log('   ✓ Created Line Chart Variants Test dashboard view');
 
-  // 12. Seed image and file data for file-viewer and step-sync E2E tests
-  console.log('\n1️⃣2️⃣ Seeding image and file data...');
+  // 13. Seed image and file data for file-viewer and step-sync E2E tests
+  console.log('\n1️⃣3️⃣ Seeding image and file data...');
 
   const storageEndpoint = process.env.STORAGE_ENDPOINT;
   const storageAccessKey = process.env.STORAGE_ACCESS_KEY_ID;

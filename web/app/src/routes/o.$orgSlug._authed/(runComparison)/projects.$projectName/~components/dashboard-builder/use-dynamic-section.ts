@@ -244,3 +244,121 @@ export function useDynamicSectionWidgets(
 
   return { dynamicWidgets, isLoading };
 }
+
+/**
+ * Lightweight hook that returns only the widget count for a dynamic section.
+ * Shares the same query cache keys as useDynamicSectionWidgets, so if the
+ * section was previously expanded the data comes from cache (0ms).
+ *
+ * Does NOT create Widget objects, sort, or allocate layouts — just counts matches.
+ * Safe to mount for collapsed sections without performance impact.
+ */
+export function useDynamicWidgetCount(
+  dynamicPattern: string | undefined,
+  patternMode: "search" | "regex",
+  organizationId: string,
+  projectName: string,
+  selectedRunIds: string[],
+): number {
+  const hasPattern = !!dynamicPattern?.trim();
+  const trimmed = dynamicPattern?.trim() ?? "";
+  const hasRuns = selectedRunIds.length > 0;
+
+  const isGlob =
+    patternMode === "search" &&
+    (trimmed.includes("*") || trimmed.includes("?"));
+  const isRe2Valid = patternMode === "regex" && trimmed ? isValidRe2Regex(trimmed) : true;
+  const backendSearch = isGlob ? trimmed.replace(/[*?]/g, "") : trimmed;
+
+  // Same queries as useDynamicSectionWidgets — shares cache
+  const initialMetrics = useQuery(
+    trpc.runs.distinctMetricNames.queryOptions(
+      { organizationId, projectName, runIds: selectedRunIds },
+      { enabled: hasPattern && hasRuns && patternMode === "search", staleTime: 60_000 },
+    ),
+  );
+  const initialFiles = useQuery(
+    trpc.runs.distinctFileLogNames.queryOptions(
+      { organizationId, projectName, runIds: selectedRunIds },
+      { enabled: hasPattern && hasRuns && patternMode === "search", staleTime: 60_000 },
+    ),
+  );
+  const searchMetrics = useQuery(
+    trpc.runs.distinctMetricNames.queryOptions(
+      { organizationId, projectName, runIds: selectedRunIds, search: backendSearch },
+      { enabled: hasPattern && hasRuns && patternMode === "search" && backendSearch.length > 0, staleTime: 60_000, placeholderData: (prev) => prev },
+    ),
+  );
+  const searchFiles = useQuery(
+    trpc.runs.distinctFileLogNames.queryOptions(
+      { organizationId, projectName, runIds: selectedRunIds, search: backendSearch },
+      { enabled: hasPattern && hasRuns && patternMode === "search" && backendSearch.length > 0, staleTime: 60_000, placeholderData: (prev) => prev },
+    ),
+  );
+  const regexMetrics = useQuery(
+    trpc.runs.distinctMetricNames.queryOptions(
+      { organizationId, projectName, runIds: selectedRunIds, regex: trimmed },
+      { enabled: hasPattern && hasRuns && patternMode === "regex" && isRe2Valid, staleTime: 60_000, placeholderData: (prev) => prev },
+    ),
+  );
+  const regexFiles = useQuery(
+    trpc.runs.distinctFileLogNames.queryOptions(
+      { organizationId, projectName, runIds: selectedRunIds, regex: trimmed },
+      { enabled: hasPattern && hasRuns && patternMode === "regex" && isRe2Valid, staleTime: 60_000, placeholderData: (prev) => prev },
+    ),
+  );
+
+  return useMemo(() => {
+    if (!hasPattern) return 0;
+
+    let metricCount: number;
+    let fileCount: number;
+
+    if (patternMode === "regex") {
+      metricCount = regexMetrics.data?.metricNames?.length ?? 0;
+      const backendFileCount = regexFiles.data?.files?.length ?? 0;
+      let syntheticCount = 0;
+      if (trimmed) {
+        try {
+          const re = new RegExp(trimmed);
+          syntheticCount = SYNTHETIC_CONSOLE_ENTRIES.filter((e) => re.test(e.logName)).length;
+        } catch { /* invalid regex */ }
+      }
+      fileCount = syntheticCount + backendFileCount;
+    } else {
+      const initM = initialMetrics.data?.metricNames ?? [];
+      const searchM = searchMetrics.data?.metricNames ?? [];
+      const mergedMetrics = new Set([...searchM, ...initM]);
+
+      const initF = initialFiles.data?.files ?? [];
+      const searchF = searchFiles.data?.files ?? [];
+      const fileNames = new Set<string>();
+      for (const e of SYNTHETIC_CONSOLE_ENTRIES) fileNames.add(e.logName);
+      for (const f of initF) fileNames.add(f.logName);
+      for (const f of searchF) fileNames.add(f.logName);
+
+      if (!trimmed) {
+        metricCount = mergedMetrics.size;
+        fileCount = fileNames.size;
+      } else if (isGlob) {
+        try {
+          const regex = globToRegex(trimmed);
+          metricCount = [...mergedMetrics].filter((m) => regex.test(m)).length;
+          fileCount = [...fileNames].filter((n) => regex.test(n)).length;
+        } catch {
+          return 0;
+        }
+      } else {
+        metricCount = fuzzyFilter([...mergedMetrics], trimmed).length;
+        fileCount = fuzzyFilter([...fileNames], trimmed).length;
+      }
+    }
+
+    return Math.min(metricCount + fileCount, MAX_DYNAMIC_WIDGETS);
+  }, [
+    hasPattern, trimmed, isGlob, patternMode,
+    initialMetrics.data, initialFiles.data,
+    searchMetrics.data, searchFiles.data,
+    regexMetrics.data, regexFiles.data,
+  ]);
+}

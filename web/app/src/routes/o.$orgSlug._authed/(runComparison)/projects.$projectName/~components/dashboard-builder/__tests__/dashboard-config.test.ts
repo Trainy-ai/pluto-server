@@ -1,11 +1,19 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   addSection,
+  addFolder,
   deleteSection,
   updateSection,
   toggleSectionCollapse,
   toggleAllSections,
   reorderSections,
+  addChildSection,
+  deleteChildSection,
+  updateChildSection,
+  toggleChildSectionCollapse,
+  reorderChildSections,
+  toggleAllChildSections,
+  isFolder,
   addWidget,
   deleteWidget,
   updateWidgets,
@@ -393,5 +401,273 @@ describe("handleEditWidgetSave", () => {
     const result = handleEditWidgetSave(config, "s1", "w1", newData);
     expect(result.sections[0].widgets).toHaveLength(2);
     expect(result.sections[0].widgets[1].id).toBe("w2");
+  });
+});
+
+// ─── Folder (children) operations ────────────────────────────────────
+
+function createTestFolder(overrides: Partial<Section> = {}): Section {
+  return {
+    id: "folder-1",
+    name: "Test Folder",
+    collapsed: false,
+    widgets: [],
+    children: [],
+    ...overrides,
+  };
+}
+
+describe("isFolder", () => {
+  it("returns true for sections with children array", () => {
+    expect(isFolder(createTestFolder())).toBe(true);
+  });
+
+  it("returns false for regular sections", () => {
+    expect(isFolder(createTestSection())).toBe(false);
+  });
+
+  it("returns true for folders with non-empty children", () => {
+    expect(isFolder(createTestFolder({ children: [createTestSection()] }))).toBe(true);
+  });
+});
+
+describe("addFolder", () => {
+  it("adds a folder with empty children array", () => {
+    const config = createTestConfig();
+    const result = addFolder(config, "My Folder");
+    expect(result.sections).toHaveLength(1);
+    expect(result.sections[0].name).toBe("My Folder");
+    expect(result.sections[0].children).toEqual([]);
+    expect(result.sections[0].widgets).toEqual([]);
+  });
+
+  it("preserves existing sections", () => {
+    const config = createTestConfig([createTestSection({ id: "s1" })]);
+    const result = addFolder(config, "Folder");
+    expect(result.sections).toHaveLength(2);
+    expect(result.sections[0].id).toBe("s1");
+  });
+});
+
+describe("addChildSection", () => {
+  it("adds a child section to a folder", () => {
+    const config = createTestConfig([createTestFolder({ id: "f1" })]);
+    const result = addChildSection(config, "f1", "Child");
+    expect(result.sections[0].children).toHaveLength(1);
+    expect(result.sections[0].children![0].name).toBe("Child");
+    expect(result.sections[0].children![0].id).toMatch(/^section-/);
+  });
+
+  it("adds a dynamic child section", () => {
+    const config = createTestConfig([createTestFolder({ id: "f1" })]);
+    const result = addChildSection(config, "f1", "Dynamic", "train/*", "search");
+    expect(result.sections[0].children![0].dynamicPattern).toBe("train/*");
+    expect(result.sections[0].children![0].dynamicPatternMode).toBe("search");
+  });
+
+  it("does not affect non-folder sections", () => {
+    const config = createTestConfig([createTestSection({ id: "s1" })]);
+    const result = addChildSection(config, "s1", "Child");
+    expect(result.sections[0].children).toBeUndefined();
+  });
+
+  it("preserves existing children", () => {
+    const existing = createTestSection({ id: "child-1", name: "Existing" });
+    const config = createTestConfig([createTestFolder({ id: "f1", children: [existing] })]);
+    const result = addChildSection(config, "f1", "New");
+    expect(result.sections[0].children).toHaveLength(2);
+    expect(result.sections[0].children![0].id).toBe("child-1");
+  });
+});
+
+describe("deleteChildSection", () => {
+  it("removes a child section from a folder", () => {
+    const child = createTestSection({ id: "child-1" });
+    const config = createTestConfig([createTestFolder({ id: "f1", children: [child] })]);
+    const result = deleteChildSection(config, "f1", "child-1");
+    expect(result.sections[0].children).toHaveLength(0);
+  });
+
+  it("preserves other children", () => {
+    const c1 = createTestSection({ id: "c1" });
+    const c2 = createTestSection({ id: "c2" });
+    const config = createTestConfig([createTestFolder({ id: "f1", children: [c1, c2] })]);
+    const result = deleteChildSection(config, "f1", "c1");
+    expect(result.sections[0].children).toHaveLength(1);
+    expect(result.sections[0].children![0].id).toBe("c2");
+  });
+});
+
+describe("updateChildSection", () => {
+  it("replaces a child section", () => {
+    const child = createTestSection({ id: "c1", name: "Old" });
+    const config = createTestConfig([createTestFolder({ id: "f1", children: [child] })]);
+    const updated = { ...child, name: "New Name" };
+    const result = updateChildSection(config, "f1", "c1", updated);
+    expect(result.sections[0].children![0].name).toBe("New Name");
+  });
+});
+
+describe("toggleChildSectionCollapse", () => {
+  it("toggles a child section collapsed state", () => {
+    const child = createTestSection({ id: "c1", collapsed: false });
+    const config = createTestConfig([createTestFolder({ id: "f1", children: [child] })]);
+    const result = toggleChildSectionCollapse(config, "f1", "c1");
+    expect(result.sections[0].children![0].collapsed).toBe(true);
+  });
+});
+
+describe("reorderChildSections", () => {
+  it("reorders children within a folder", () => {
+    const c1 = createTestSection({ id: "c1" });
+    const c2 = createTestSection({ id: "c2" });
+    const c3 = createTestSection({ id: "c3" });
+    const config = createTestConfig([createTestFolder({ id: "f1", children: [c1, c2, c3] })]);
+    const result = reorderChildSections(config, "f1", 0, 2);
+    expect(result.sections[0].children!.map((c) => c.id)).toEqual(["c2", "c3", "c1"]);
+  });
+
+  it("does not affect other folders", () => {
+    const config = createTestConfig([
+      createTestFolder({ id: "f1", children: [createTestSection({ id: "c1" })] }),
+      createTestFolder({ id: "f2", children: [createTestSection({ id: "c2" })] }),
+    ]);
+    const result = reorderChildSections(config, "f1", 0, 0);
+    expect(result.sections[1].children![0].id).toBe("c2");
+  });
+});
+
+describe("toggleAllChildSections", () => {
+  it("collapses all children when not all collapsed", () => {
+    const config = createTestConfig([
+      createTestFolder({
+        id: "f1",
+        children: [
+          createTestSection({ id: "c1", collapsed: true }),
+          createTestSection({ id: "c2", collapsed: false }),
+        ],
+      }),
+    ]);
+    const result = toggleAllChildSections(config);
+    expect(result.sections[0].children!.every((c) => c.collapsed)).toBe(true);
+  });
+
+  it("expands all children when all collapsed", () => {
+    const config = createTestConfig([
+      createTestFolder({
+        id: "f1",
+        children: [
+          createTestSection({ id: "c1", collapsed: true }),
+          createTestSection({ id: "c2", collapsed: true }),
+        ],
+      }),
+    ]);
+    const result = toggleAllChildSections(config);
+    expect(result.sections[0].children!.every((c) => !c.collapsed)).toBe(true);
+  });
+
+  it("works across multiple folders", () => {
+    const config = createTestConfig([
+      createTestFolder({
+        id: "f1",
+        children: [createTestSection({ id: "c1", collapsed: true })],
+      }),
+      createTestFolder({
+        id: "f2",
+        children: [createTestSection({ id: "c2", collapsed: true })],
+      }),
+    ]);
+    const result = toggleAllChildSections(config);
+    expect(result.sections[0].children![0].collapsed).toBe(false);
+    expect(result.sections[1].children![0].collapsed).toBe(false);
+  });
+
+  it("returns unchanged config when no children exist", () => {
+    const config = createTestConfig([createTestSection({ id: "s1" })]);
+    const result = toggleAllChildSections(config);
+    expect(result).toEqual(config);
+  });
+});
+
+// ─── Widget operations with parentId (folder children) ──────────────
+
+describe("widget operations inside folder children", () => {
+  it("addWidget to a child section via parentId", () => {
+    const child = createTestSection({ id: "c1" });
+    const config = createTestConfig([createTestFolder({ id: "f1", children: [child] })]);
+    const widget = createTestWidget();
+    const { id: _, ...widgetWithoutId } = widget;
+    const result = addWidget(config, "c1", widgetWithoutId, "f1");
+    expect(result.sections[0].children![0].widgets).toHaveLength(1);
+    expect(result.sections[0].widgets).toHaveLength(0);
+  });
+
+  it("deleteWidget from a child section via parentId", () => {
+    const w = createTestWidget({ id: "w1" });
+    const child = createTestSection({ id: "c1", widgets: [w] });
+    const config = createTestConfig([createTestFolder({ id: "f1", children: [child] })]);
+    const result = deleteWidget(config, "c1", "w1", "f1");
+    expect(result.sections[0].children![0].widgets).toHaveLength(0);
+  });
+
+  it("updateWidgets in a child section via parentId", () => {
+    const child = createTestSection({ id: "c1", widgets: [createTestWidget({ id: "w1" })] });
+    const config = createTestConfig([createTestFolder({ id: "f1", children: [child] })]);
+    const newWidgets = [createTestWidget({ id: "w2" })];
+    const result = updateWidgets(config, "c1", newWidgets, "f1");
+    expect(result.sections[0].children![0].widgets[0].id).toBe("w2");
+  });
+
+  it("pasteWidget into a child section via parentId", () => {
+    const child = createTestSection({ id: "c1" });
+    const config = createTestConfig([createTestFolder({ id: "f1", children: [child] })]);
+    const copied = copyWidget(createTestWidget({ id: "original" }));
+    const result = pasteWidget(config, "c1", copied, "f1");
+    expect(result.sections[0].children![0].widgets).toHaveLength(1);
+    expect(result.sections[0].children![0].widgets[0].id).toMatch(/^widget-/);
+  });
+
+  it("handleEditWidgetSave in a child section via parentId", () => {
+    const w = createTestWidget({ id: "w1" });
+    const child = createTestSection({ id: "c1", widgets: [w] });
+    const config = createTestConfig([createTestFolder({ id: "f1", children: [child] })]);
+    const newData: Omit<Widget, "id"> = {
+      type: "chart",
+      config: { metrics: ["updated"], xAxis: "step", yAxisScale: "linear", xAxisScale: "linear", aggregation: "AVG", showOriginal: false },
+      layout: { x: 0, y: 0, w: 6, h: 4 },
+    };
+    const result = handleEditWidgetSave(config, "c1", "w1", newData, "f1");
+    expect((result.sections[0].children![0].widgets[0].config as any).aggregation).toBe("AVG");
+  });
+});
+
+// ─── Global widget ops walk children ─────────────────────────────────
+
+describe("global widget operations across folders", () => {
+  function createFolderWithChildWidget() {
+    const w = createTestWidget({ id: "child-widget" });
+    const child = createTestSection({ id: "c1", widgets: [w] });
+    const folderWidget = createTestWidget({ id: "folder-widget" });
+    return createTestConfig([
+      createTestFolder({ id: "f1", widgets: [folderWidget], children: [child] }),
+    ]);
+  }
+
+  it("updateWidgetScale finds widgets inside children", () => {
+    const config = createFolderWithChildWidget();
+    const result = updateWidgetScale(config, "child-widget", "y", true);
+    expect((result.sections[0].children![0].widgets[0].config as any).yAxisScale).toBe("log");
+  });
+
+  it("sanitizeConfig fixes layouts in children too", () => {
+    const w = createTestWidget({
+      id: "child-widget",
+      layout: { x: Infinity, y: NaN, w: 6, h: 4 },
+    });
+    const child = createTestSection({ id: "c1", widgets: [w] });
+    const config = createTestConfig([createTestFolder({ id: "f1", children: [child] })]);
+    const result = sanitizeConfig(config);
+    expect(result.sections[0].children![0].widgets[0].layout.x).toBe(0);
+    expect(result.sections[0].children![0].widgets[0].layout.y).toBe(9999);
   });
 });

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import {
   ChevronDownIcon,
@@ -10,6 +10,8 @@ import {
   ZapIcon,
   ClipboardPasteIcon,
   GripVerticalIcon,
+  FolderIcon,
+  ArrowRightIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -22,6 +24,9 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubTrigger,
+  DropdownMenuSubContent,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -38,6 +43,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { DynamicPatternPreview } from "./dynamic-pattern-preview";
+import { useDynamicWidgetCount } from "./use-dynamic-section";
 import { REGEX_MAX_LENGTH } from "./regex-search-panel";
 import { isValidRe2Regex } from "../../~lib/validate-re2-regex";
 import type { Section } from "../../~types/dashboard-types";
@@ -50,7 +56,12 @@ interface SectionDragProps {
   onDragLeave?: (e: React.DragEvent) => void;
   isDragging?: boolean;
   isDropTarget?: boolean;
-  dropPosition?: "above" | "below" | null;
+  dropPosition?: "above" | "below" | "inside" | null;
+}
+
+interface SectionMoveTarget {
+  label: string;
+  id: string;
 }
 
 interface SectionContainerProps {
@@ -63,9 +74,14 @@ interface SectionContainerProps {
   onAddWidget: () => void;
   onPasteWidget?: () => void;
   hasCopiedWidget?: boolean;
+  /** Folders this section can be moved into (or "Top level" to move out) */
+  onMoveToFolder?: (folderId: string | null) => void;
+  moveFolderTargets?: SectionMoveTarget[];
   children: React.ReactNode;
   isEditing?: boolean;
   dynamicWidgetCount?: number;
+  /** Report the lightweight dynamic widget count upward (for folder totals) */
+  onDynamicCountChange?: (sectionId: string, count: number) => void;
   organizationId: string;
   projectName: string;
   selectedRunIds: string[];
@@ -81,9 +97,12 @@ export function SectionContainer({
   onAddWidget,
   onPasteWidget,
   hasCopiedWidget = false,
+  onMoveToFolder,
+  moveFolderTargets,
   children,
   isEditing = false,
   dynamicWidgetCount,
+  onDynamicCountChange,
   organizationId,
   projectName,
   selectedRunIds,
@@ -99,8 +118,25 @@ export function SectionContainer({
   );
 
   const isDynamic = !!section.dynamicPattern;
+
+  // Lightweight count for dynamic sections — shares query cache, no widget creation
+  const dynamicCount = useDynamicWidgetCount(
+    isDynamic ? section.dynamicPattern : undefined,
+    section.dynamicPatternMode ?? "search",
+    organizationId,
+    projectName,
+    selectedRunIds,
+  );
+
+  // Report lightweight count upward so folder totals work even when collapsed
+  useEffect(() => {
+    if (isDynamic && onDynamicCountChange) {
+      onDynamicCountChange(section.id, dynamicCount);
+    }
+  }, [isDynamic, dynamicCount, section.id, onDynamicCountChange]);
+
   const widgetCount = isDynamic
-    ? (dynamicWidgetCount ?? 0)
+    ? (dynamicWidgetCount ?? dynamicCount)
     : (visibleWidgetCount ?? section.widgets.length);
 
   const handleToggleCollapse = () => {
@@ -161,7 +197,7 @@ export function SectionContainer({
               </button>
             )}
             <CollapsibleTrigger asChild>
-              <button className="flex items-center gap-2 text-sm font-medium hover:text-accent-foreground">
+              <button className="flex flex-1 items-center gap-2 text-sm font-medium hover:text-accent-foreground">
                 {section.collapsed ? (
                   <ChevronRightIcon className="size-4" />
                 ) : (
@@ -174,9 +210,9 @@ export function SectionContainer({
                     {section.dynamicPattern}
                   </Badge>
                 )}
-                <span className="text-xs text-muted-foreground">
-                  ({widgetCount} widgets)
-                </span>
+                <Badge variant="outline" className="text-xs font-normal">
+                  {widgetCount} widget{widgetCount !== 1 ? "s" : ""}
+                </Badge>
               </button>
             </CollapsibleTrigger>
 
@@ -222,6 +258,27 @@ export function SectionContainer({
                       <PencilIcon className="mr-2 size-4" />
                       Edit Section
                     </DropdownMenuItem>
+                    {onMoveToFolder && moveFolderTargets && moveFolderTargets.length > 0 && (
+                      <DropdownMenuSub>
+                        <DropdownMenuSubTrigger>
+                          <ArrowRightIcon className="mr-2 size-4" />
+                          Move to...
+                        </DropdownMenuSubTrigger>
+                        <DropdownMenuSubContent className="max-h-60 overflow-y-auto">
+                          {moveFolderTargets.map((target) => (
+                            <DropdownMenuItem
+                              key={target.id ?? "top-level"}
+                              onClick={() => onMoveToFolder(target.id)}
+                            >
+                              {target.id ? (
+                                <FolderIcon className="mr-2 size-3.5 text-primary/60" />
+                              ) : null}
+                              <span className="truncate">{target.label}</span>
+                            </DropdownMenuItem>
+                          ))}
+                        </DropdownMenuSubContent>
+                      </DropdownMenuSub>
+                    )}
                     <DropdownMenuSeparator />
                     <DropdownMenuItem
                       className="text-destructive"
@@ -240,12 +297,12 @@ export function SectionContainer({
             <div className="p-4">
               {!isDynamic && section.widgets.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-8 text-center text-muted-foreground">
-                  <p className="mb-2">No widgets in this section yet.</p>
+                  <p className="mb-2">This section is empty.</p>
                   {isEditing && (
                     <div className="flex items-center gap-2">
                       <Button variant="outline" size="sm" onClick={onAddWidget}>
                         <PlusIcon className="mr-2 size-4" />
-                        Add your first widget
+                        Add a widget
                       </Button>
                       {hasCopiedWidget && (
                         <Button variant="outline" size="sm" onClick={onPasteWidget}>
@@ -436,14 +493,339 @@ function DynamicPatternInput({
   );
 }
 
+// ─── Folder container (outer grouping layer) ────────────────────────
+
+interface FolderContainerProps {
+  section: Section;
+  onUpdate: (section: Section) => void;
+  onToggleCollapse: () => void;
+  onDelete: () => void;
+  onAddChildSection: (name: string, dynamicPattern?: string, dynamicPatternMode?: "search" | "regex") => void;
+  organizationId: string;
+  projectName: string;
+  selectedRunIds: string[];
+  onAddWidget: () => void;
+  onPasteWidget?: () => void;
+  hasCopiedWidget?: boolean;
+  /** Dynamic widget counts keyed by child section ID */
+  dynamicWidgetCounts?: Record<string, number>;
+  children: React.ReactNode;
+  isEditing?: boolean;
+  drag?: SectionDragProps;
+}
+
+export function FolderContainer({
+  section,
+  onUpdate,
+  onToggleCollapse,
+  onDelete,
+  onAddChildSection,
+  organizationId,
+  projectName,
+  selectedRunIds,
+  onAddWidget,
+  onPasteWidget,
+  hasCopiedWidget = false,
+  dynamicWidgetCounts = {},
+  children,
+  isEditing = false,
+  drag,
+}: FolderContainerProps) {
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [editName, setEditName] = useState(section.name);
+
+  const childCount = section.children?.length ?? 0;
+  const directWidgetCount = section.widgets.length;
+  const totalWidgetCount = directWidgetCount +
+    (section.children ?? []).reduce((sum, c) => {
+      if (c.dynamicPattern) {
+        return sum + (dynamicWidgetCounts[c.id] ?? 0);
+      }
+      return sum + c.widgets.length;
+    }, 0);
+
+  const handleSaveEdit = () => {
+    onUpdate({ ...section, name: editName });
+    setIsEditDialogOpen(false);
+  };
+
+  const handleOpenEditDialog = () => {
+    setEditName(section.name);
+    setIsEditDialogOpen(true);
+  };
+
+  return (
+    <>
+      <div
+        className={cn(
+          "relative rounded-lg border-2 shadow-sm transition-colors",
+          drag?.isDropTarget && drag.dropPosition === "inside"
+            ? "border-primary bg-primary/10"
+            : "border-primary/20 bg-primary/[0.02]",
+          drag?.isDragging && "opacity-50",
+        )}
+        data-testid="folder-container"
+        data-section-name={section.name}
+        onDragOver={drag?.onDragOver}
+        onDrop={drag?.onDrop}
+        onDragLeave={drag?.onDragLeave}
+      >
+        {/* Drop indicator lines for above/below reorder */}
+        {drag?.isDropTarget && drag.dropPosition === "above" && (
+          <div className="absolute -top-[2px] left-0 right-0 z-10 h-[3px] rounded-full bg-primary" />
+        )}
+        {drag?.isDropTarget && drag.dropPosition === "below" && (
+          <div className="absolute -bottom-[2px] left-0 right-0 z-10 h-[3px] rounded-full bg-primary" />
+        )}
+
+        <Collapsible open={!section.collapsed} onOpenChange={onToggleCollapse}>
+          <div className="flex items-center justify-between border-b border-primary/10 px-4 py-2">
+            {isEditing && drag?.onDragStart && (
+              <button
+                draggable
+                onDragStart={drag.onDragStart}
+                onDragEnd={drag.onDragEnd}
+                className="mr-1 cursor-grab text-muted-foreground hover:text-foreground active:cursor-grabbing"
+                aria-label="Drag to reorder folder"
+              >
+                <GripVerticalIcon className="size-4" />
+              </button>
+            )}
+            <CollapsibleTrigger asChild>
+              <button className="flex flex-1 items-center gap-2 text-sm font-semibold hover:text-accent-foreground">
+                {section.collapsed ? (
+                  <ChevronRightIcon className="size-4" />
+                ) : (
+                  <ChevronDownIcon className="size-4" />
+                )}
+                <FolderIcon className="size-4 text-primary/60" />
+                <span>{section.name}</span>
+                <Badge variant="outline" className="text-xs font-normal">
+                  {childCount} section{childCount !== 1 ? "s" : ""}
+                </Badge>
+                {directWidgetCount > 0 && (
+                  <Badge variant="outline" className="text-xs font-normal">
+                    {directWidgetCount} widget{directWidgetCount !== 1 ? "s" : ""}
+                  </Badge>
+                )}
+                {totalWidgetCount > 0 && (
+                  <Badge variant="outline" className="text-xs font-normal">
+                    {totalWidgetCount} total widget{totalWidgetCount !== 1 ? "s" : ""}
+                  </Badge>
+                )}
+              </button>
+            </CollapsibleTrigger>
+
+            {isEditing && (
+              <div className="flex items-center gap-2">
+                <AddSectionButton
+                  onAddSection={onAddChildSection}
+                  organizationId={organizationId}
+                  projectName={projectName}
+                  selectedRunIds={selectedRunIds}
+                  buttonVariant="ghost"
+                />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onAddWidget();
+                  }}
+                >
+                  <PlusIcon className="mr-1 size-4" />
+                  Add Widget
+                </Button>
+                {hasCopiedWidget && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onPasteWidget?.();
+                    }}
+                  >
+                    <ClipboardPasteIcon className="mr-1 size-4" />
+                    Paste
+                  </Button>
+                )}
+
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="icon" className="size-8" data-testid="folder-menu-btn">
+                      <MoreHorizontalIcon className="size-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem onClick={handleOpenEditDialog}>
+                      <PencilIcon className="mr-2 size-4" />
+                      Edit Folder
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      className="text-destructive"
+                      onClick={() => setIsDeleteDialogOpen(true)}
+                    >
+                      <Trash2Icon className="mr-2 size-4" />
+                      Delete Folder
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            )}
+          </div>
+
+          <CollapsibleContent>
+            <div className="space-y-3 p-3">
+              {childCount === 0 && directWidgetCount === 0 ? (
+                <div className="flex flex-col items-center justify-center py-6 text-center text-muted-foreground">
+                  <p className="mb-2">This folder is empty.</p>
+                  {isEditing && (
+                    <div className="flex items-center gap-2">
+                      <AddSectionButton
+                        onAddSection={onAddChildSection}
+                        organizationId={organizationId}
+                        projectName={projectName}
+                        selectedRunIds={selectedRunIds}
+                      />
+                      <Button variant="outline" size="sm" onClick={onAddWidget}>
+                        <PlusIcon className="mr-2 size-4" />
+                        Add a widget
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                children
+              )}
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
+      </div>
+
+      {/* Edit Folder Dialog */}
+      <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Edit Folder</DialogTitle>
+            <DialogDescription>
+              Update the folder name.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid gap-2">
+              <Label htmlFor="folder-name">Folder Name</Label>
+              <Input
+                id="folder-name"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleSaveEdit();
+                }}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsEditDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleSaveEdit}>Save</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Folder Confirmation */}
+      <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Delete Folder</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete &quot;{section.name}&quot;? This will also
+              delete all sections and widgets inside it.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsDeleteDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={onDelete}>
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+// ─── Add buttons ─────────────────────────────────────────────────────
+
+interface AddFolderButtonProps {
+  onAddFolder: (name: string) => void;
+}
+
+export function AddFolderButton({ onAddFolder }: AddFolderButtonProps) {
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [name, setName] = useState("");
+
+  const handleCreate = () => {
+    onAddFolder(name.trim() || "New Folder");
+    setIsDialogOpen(false);
+    setName("");
+  };
+
+  return (
+    <>
+      <Button variant="outline" size="sm" className="text-muted-foreground" onClick={() => setIsDialogOpen(true)}>
+        <PlusIcon className="mr-1.5 size-3.5" />
+        Add Folder
+      </Button>
+
+      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Create New Folder</DialogTitle>
+            <DialogDescription>
+              Create a folder to group sections together.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid gap-2">
+              <Label htmlFor="new-folder-name">Folder Name</Label>
+              <Input
+                id="new-folder-name"
+                placeholder="New Folder"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleCreate();
+                }}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleCreate}>Create Folder</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
 interface AddSectionButtonProps {
   onAddSection: (name: string, dynamicPattern?: string, dynamicPatternMode?: "search" | "regex") => void;
   organizationId: string;
   projectName: string;
   selectedRunIds: string[];
+  /** Button variant — "outline" (default, for bottom area) or "ghost" (for header bars) */
+  buttonVariant?: "outline" | "ghost";
 }
 
-export function AddSectionButton({ onAddSection, organizationId, projectName, selectedRunIds }: AddSectionButtonProps) {
+export function AddSectionButton({ onAddSection, organizationId, projectName, selectedRunIds, buttonVariant = "outline" }: AddSectionButtonProps) {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [name, setName] = useState("");
   const [isDynamic, setIsDynamic] = useState(false);
@@ -464,12 +846,10 @@ export function AddSectionButton({ onAddSection, organizationId, projectName, se
 
   return (
     <>
-      <div className="flex items-center justify-center py-4">
-        <Button variant="outline" onClick={() => setIsDialogOpen(true)}>
-          <PlusIcon className="mr-2 size-4" />
-          New Section
-        </Button>
-      </div>
+      <Button variant={buttonVariant} size="sm" className={buttonVariant === "outline" ? "text-muted-foreground" : ""} onClick={() => setIsDialogOpen(true)}>
+        <PlusIcon className="mr-1.5 size-3.5" />
+        Add Section
+      </Button>
 
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
         <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">

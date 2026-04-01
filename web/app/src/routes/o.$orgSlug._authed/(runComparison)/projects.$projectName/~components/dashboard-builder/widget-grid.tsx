@@ -8,6 +8,7 @@ import { VirtualizedChart } from "@/components/core/virtualized-chart";
 import { ImageStepSyncProvider } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~context/image-step-sync-context";
 import type { Widget } from "../../~types/dashboard-types";
 import { WidgetCard } from "./widget-card";
+import type { SectionLocation } from "./use-dashboard-config";
 
 interface WidgetGridProps {
   widgets: Widget[];
@@ -18,6 +19,8 @@ interface WidgetGridProps {
   renderWidget: (widget: Widget) => ReactNode;
   onFullscreenWidget?: (widget: Widget) => void;
   onUpdateWidgetScale?: (widgetId: string, axis: "x" | "y", value: boolean) => void;
+  onMoveWidget?: (widgetId: string, target: SectionLocation) => void;
+  moveTargets?: { label: string; location: SectionLocation; isFolder: boolean }[];
   isEditing?: boolean;
   coarseMode?: boolean;
   cols?: number;
@@ -34,6 +37,8 @@ export function WidgetGrid({
   renderWidget,
   onFullscreenWidget,
   onUpdateWidgetScale,
+  onMoveWidget,
+  moveTargets,
   isEditing = false,
   coarseMode = true,
   cols: colsProp = 12,
@@ -233,6 +238,8 @@ export function WidgetGrid({
               onEdit={() => onEditWidget(widget)}
               onDelete={() => onDeleteWidget(widget.id)}
               onCopy={() => onCopyWidget?.(widget)}
+              onMove={onMoveWidget ? (target) => onMoveWidget(widget.id, target) : undefined}
+              moveTargets={moveTargets}
               onFullscreen={() => onFullscreenWidget?.(widget)}
               onUpdateScale={(axis, value) => onUpdateWidgetScale?.(widget.id, axis, value)}
               renderWidget={() => renderWidget(widget)}
