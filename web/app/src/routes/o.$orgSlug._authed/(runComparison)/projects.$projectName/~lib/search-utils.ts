@@ -210,11 +210,28 @@ export const searchUtils = {
    * Checks whether a widget matches the current search state.
    * Uses substring matching (not fuzzy) for precise widget filtering.
    */
-  doesWidgetMatchSearch(widget: Widget, searchState: SearchState): boolean {
+  /**
+   * Checks whether a widget matches the current search state.
+   * For pattern-based widgets (glob/regex metrics), uses resolved metric names
+   * from the resolvedPatternMetrics map instead of searching the raw pattern string.
+   */
+  doesWidgetMatchSearch(
+    widget: Widget,
+    searchState: SearchState,
+    resolvedPatternMetrics?: Map<string, string[]>,
+  ): boolean {
     if (!searchState.query.trim()) return true;
     if (searchState.isRegex && !searchState.regex) return false;
 
+    // Start with standard search terms (title + literal metric names)
     const terms = searchUtils.getWidgetSearchTerms(widget);
+
+    // If we have resolved metric names for this pattern widget, add them as search terms
+    const resolvedNames = resolvedPatternMetrics?.get(widget.id);
+    if (resolvedNames && resolvedNames.length > 0) {
+      terms.push(...resolvedNames.map((n) => n.toLowerCase()));
+    }
+
     if (terms.length === 0) return false;
 
     if (searchState.isRegex && searchState.regex) {

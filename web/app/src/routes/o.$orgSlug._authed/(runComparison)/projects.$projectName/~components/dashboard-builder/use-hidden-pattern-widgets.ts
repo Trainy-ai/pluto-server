@@ -37,7 +37,11 @@ export function useHiddenPatternWidgets({
   organizationId,
   projectName,
   isEditing,
-}: UseHiddenPatternWidgetsParams): Set<string> {
+}: UseHiddenPatternWidgetsParams): {
+  hidden: Set<string>;
+  /** Map of pattern widget ID → resolved metric names (for search filtering) */
+  resolved: Map<string, string[]>;
+} {
   // Collect all pattern-only chart widgets across all sections.
   // Always compute this regardless of isEditing so that the downstream
   // useQueries observers stay active and cached during edit mode.
@@ -129,26 +133,28 @@ export function useHiddenPatternWidgets({
     globSearchResults.every((r) => !r.isLoading) &&
     regexSearchResults.every((r) => !r.isLoading);
 
+  const empty = useMemo(() => ({ hidden: new Set<string>(), resolved: new Map<string, string[]>() }), []);
+
   return useMemo(() => {
     // Never hide in edit mode
-    if (isEditing) return new Set<string>();
+    if (isEditing) return empty;
 
     // No pattern widgets → nothing to hide
-    if (patternWidgets.length === 0) return new Set<string>();
+    if (patternWidgets.length === 0) return empty;
 
     // No runs selected → can't determine matches yet, don't hide (prevents
     // flash of hidden content on initial page load before runs are selected)
-    if (selectedRunIds.length === 0) return new Set<string>();
+    if (selectedRunIds.length === 0) return empty;
 
     // Queries still loading → don't hide yet (prevent flash)
-    if (!queriesSettled) return new Set<string>();
+    if (!queriesSettled) return empty;
 
     // If the base metric names query returned nothing, the data source may be
     // empty or unavailable (e.g. ClickHouse MV not populated).  Don't hide
     // anything in that case — we can't distinguish "no data" from "patterns
     // genuinely don't match".
     if ((allMetricNames?.metricNames?.length ?? 0) === 0) {
-      return new Set<string>();
+      return empty;
     }
 
     // Build the combined available metric names set
@@ -169,15 +175,17 @@ export function useHiddenPatternWidgets({
 
     const availableArray = Array.from(available);
 
-    // For each pattern-only widget, check if its patterns resolve to anything
+    // For each pattern-only widget, resolve its patterns to actual metric names
     const hidden = new Set<string>();
+    const resolved = new Map<string, string[]>();
     for (const pw of patternWidgets) {
-      const resolved = resolveMetrics(pw.metrics, availableArray);
-      if (resolved.length === 0) {
+      const names = resolveMetrics(pw.metrics, availableArray);
+      resolved.set(pw.id, names);
+      if (names.length === 0) {
         hidden.add(pw.id);
       }
     }
-    return hidden;
+    return { hidden, resolved };
   }, [
     isEditing,
     patternWidgets,

@@ -14,6 +14,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { ImageStepSyncProvider } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~context/image-step-sync-context";
+import { useHiddenRunIds } from "@/hooks/use-hidden-run-ids";
 import type { Widget, ChartWidgetConfig } from "../../~types/dashboard-types";
 import type { GroupedMetrics } from "@/lib/grouping/types";
 import type { SelectedRunWithColor } from "../../~hooks/use-selected-runs";
@@ -53,13 +54,25 @@ export function DynamicSectionGrid({
   onWidgetCountChange,
   settingsRunId,
 }: DynamicSectionGridProps) {
+  const hiddenRunIds = useHiddenRunIds();
+
+  // Exclude hidden runs so dynamic widgets are only generated for metrics/files
+  // that exist on visible runs (matching deselect behavior).
+  const visibleRunIds = useMemo(
+    () =>
+      hiddenRunIds.size === 0
+        ? selectedRunIds
+        : selectedRunIds.filter((id) => !hiddenRunIds.has(id)),
+    [selectedRunIds, hiddenRunIds],
+  );
+
   const { dynamicWidgets, isLoading } = useDynamicSectionWidgets(
     sectionId,
     pattern,
     patternMode ?? "search",
     organizationId,
     projectName,
-    selectedRunIds,
+    visibleRunIds,
   );
 
   const filteredWidgets = useMemo(() => {

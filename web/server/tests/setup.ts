@@ -788,7 +788,7 @@ async function setupTestData(): Promise<TestData> {
       creatorApiKeyId: apiKey.id,
       status: 'COMPLETED' as const,
       tags: ['needle-tag'], // Unique tag for tag filtering test
-      config: { epochs: 50, lr: 0.01 },
+      config: { epochs: 50, lr: 0.01, batch_size: 32, dataset: 'needle-dataset', optimizer: 'SGD' },
       systemMetadata: { hostname: 'needle-host', python: '3.11' },
       updatedAt: new Date(),
     });
@@ -801,7 +801,7 @@ async function setupTestData(): Promise<TestData> {
       createdById: user.id,
       creatorApiKeyId: apiKey.id,
       status: 'COMPLETED' as const,
-      config: { epochs: 100, lr: 0.001 },
+      config: { epochs: 100, lr: 0.001, batch_size: 32, dataset: 'nan-inf-dataset', optimizer: 'AdamW' },
       systemMetadata: { hostname: 'test-host', python: '3.11' },
       updatedAt: new Date(),
     });

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import {
   ChevronDownIcon,
@@ -42,6 +42,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import { DynamicPatternPreview } from "./dynamic-pattern-preview";
 import { useDynamicWidgetCount } from "./use-dynamic-section";
 import { REGEX_MAX_LENGTH } from "./regex-search-panel";
@@ -120,7 +121,7 @@ export function SectionContainer({
   const isDynamic = !!section.dynamicPattern;
 
   // Lightweight count for dynamic sections — shares query cache, no widget creation
-  const dynamicCount = useDynamicWidgetCount(
+  const { count: dynamicCount, isLoading: dynamicCountLoading } = useDynamicWidgetCount(
     isDynamic ? section.dynamicPattern : undefined,
     section.dynamicPatternMode ?? "search",
     organizationId,
@@ -210,9 +211,13 @@ export function SectionContainer({
                     {section.dynamicPattern}
                   </Badge>
                 )}
-                <Badge variant="outline" className="text-xs font-normal">
-                  {widgetCount} widget{widgetCount !== 1 ? "s" : ""}
-                </Badge>
+                {isDynamic && dynamicCountLoading ? (
+                  <Skeleton className="h-5 w-16 rounded-full" />
+                ) : (
+                  <Badge variant="outline" className="text-xs font-normal">
+                    {widgetCount} widget{widgetCount !== 1 ? "s" : ""}
+                  </Badge>
+                )}
               </button>
             </CollapsibleTrigger>
 
@@ -493,6 +498,39 @@ function DynamicPatternInput({
   );
 }
 
+// ─── Helper: compute dynamic widget count for a single child (always mounted) ──
+
+/** Renderless component that runs useDynamicWidgetCount for a single section
+ *  and reports the result upward. Mounted unconditionally inside FolderContainer
+ *  so counts are available even when the folder is collapsed. */
+function DynamicChildCounter({
+  section,
+  organizationId,
+  projectName,
+  selectedRunIds,
+  onCount,
+}: {
+  section: Section;
+  organizationId: string;
+  projectName: string;
+  selectedRunIds: string[];
+  onCount: (sectionId: string, count: number, isLoading: boolean) => void;
+}) {
+  const { count, isLoading } = useDynamicWidgetCount(
+    section.dynamicPattern,
+    section.dynamicPatternMode ?? "search",
+    organizationId,
+    projectName,
+    selectedRunIds,
+  );
+
+  useEffect(() => {
+    onCount(section.id, count, isLoading);
+  }, [count, isLoading, section.id, onCount]);
+
+  return null;
+}
+
 // ─── Folder container (outer grouping layer) ────────────────────────
 
 interface FolderContainerProps {
@@ -535,12 +573,33 @@ export function FolderContainer({
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [editName, setEditName] = useState(section.name);
 
+  // Local dynamic counts populated by DynamicChildCounter (always-mounted)
+  const [localDynamicCounts, setLocalDynamicCounts] = useState<Record<string, number>>({});
+  const [dynamicLoading, setDynamicLoading] = useState<Record<string, boolean>>({});
+  const handleDynamicCount = useCallback((sectionId: string, count: number, isLoading: boolean) => {
+    setLocalDynamicCounts((prev) => {
+      if (prev[sectionId] === count) return prev;
+      return { ...prev, [sectionId]: count };
+    });
+    setDynamicLoading((prev) => {
+      if (prev[sectionId] === isLoading) return prev;
+      return { ...prev, [sectionId]: isLoading };
+    });
+  }, []);
+
+  // Merge: prefer parent-provided counts (from mounted grids) over local counts
+  const mergedCounts = { ...localDynamicCounts, ...dynamicWidgetCounts };
+
+  const dynamicChildren = (section.children ?? []).filter((c) => !!c.dynamicPattern);
+  const anyDynamicChildLoading = dynamicChildren.length > 0 &&
+    dynamicChildren.some((c) => dynamicLoading[c.id] !== false);
+
   const childCount = section.children?.length ?? 0;
   const directWidgetCount = section.widgets.length;
   const totalWidgetCount = directWidgetCount +
     (section.children ?? []).reduce((sum, c) => {
       if (c.dynamicPattern) {
-        return sum + (dynamicWidgetCounts[c.id] ?? 0);
+        return sum + (mergedCounts[c.id] ?? 0);
       }
       return sum + c.widgets.length;
     }, 0);
@@ -557,6 +616,17 @@ export function FolderContainer({
 
   return (
     <>
+      {/* Always-mounted counters for dynamic children so totals are correct when collapsed */}
+      {dynamicChildren.map((child) => (
+        <DynamicChildCounter
+          key={child.id}
+          section={child}
+          organizationId={organizationId}
+          projectName={projectName}
+          selectedRunIds={selectedRunIds}
+          onCount={handleDynamicCount}
+        />
+      ))}
       <div
         className={cn(
           "relative rounded-lg border-2 shadow-sm transition-colors",
@@ -609,11 +679,13 @@ export function FolderContainer({
                     {directWidgetCount} widget{directWidgetCount !== 1 ? "s" : ""}
                   </Badge>
                 )}
-                {totalWidgetCount > 0 && (
+                {anyDynamicChildLoading ? (
+                  <Skeleton className="h-5 w-24 rounded-full" />
+                ) : totalWidgetCount > 0 ? (
                   <Badge variant="outline" className="text-xs font-normal">
                     {totalWidgetCount} total widget{totalWidgetCount !== 1 ? "s" : ""}
                   </Badge>
-                )}
+                ) : null}
               </button>
             </CollapsibleTrigger>
 

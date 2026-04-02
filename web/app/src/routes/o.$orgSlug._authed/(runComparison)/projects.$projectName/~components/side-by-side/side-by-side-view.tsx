@@ -2,6 +2,7 @@ import { useMemo, useState, useCallback, useRef, useEffect } from "react";
 import type { Run } from "../../~queries/list-runs";
 import { useRunMetricNames, usePerMetricSummaries } from "../../~queries/metric-summaries";
 import { Badge } from "@/components/ui/badge";
+import { TagBadge } from "@/components/tag-badge";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
@@ -985,13 +986,7 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
                         {tags.length > 0 ? (
                           <div className="flex flex-wrap items-center gap-1">
                             {tags.map((tag) => (
-                              <Badge
-                                key={tag}
-                                variant="secondary"
-                                className="text-xs"
-                              >
-                                {tag}
-                              </Badge>
+                              <TagBadge key={tag} tag={tag} truncate />
                             ))}
                           </div>
                         ) : (

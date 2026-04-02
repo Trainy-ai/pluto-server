@@ -259,7 +259,7 @@ export function useDynamicWidgetCount(
   organizationId: string,
   projectName: string,
   selectedRunIds: string[],
-): number {
+): { count: number; isLoading: boolean } {
   const hasPattern = !!dynamicPattern?.trim();
   const trimmed = dynamicPattern?.trim() ?? "";
   const hasRuns = selectedRunIds.length > 0;
@@ -308,7 +308,18 @@ export function useDynamicWidgetCount(
     ),
   );
 
-  return useMemo(() => {
+  const isLoading =
+    hasPattern &&
+    hasRuns &&
+    ((patternMode === "search" &&
+      (initialMetrics.isLoading ||
+        initialFiles.isLoading ||
+        searchMetrics.isLoading ||
+        searchFiles.isLoading)) ||
+      (patternMode === "regex" &&
+        (regexMetrics.isLoading || regexFiles.isLoading)));
+
+  const count = useMemo(() => {
     if (!hasPattern) return 0;
 
     let metricCount: number;
@@ -361,4 +372,6 @@ export function useDynamicWidgetCount(
     searchMetrics.data, searchFiles.data,
     regexMetrics.data, regexFiles.data,
   ]);
+
+  return { count, isLoading };
 }

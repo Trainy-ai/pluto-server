@@ -136,7 +136,7 @@ export function DashboardBuilder({
     onConflict: useCallback(() => setIsStale(true), []),
   });
 
-  const hiddenWidgetIds = useHiddenPatternWidgets({
+  const { hidden: hiddenWidgetIds, resolved: resolvedPatternMetrics } = useHiddenPatternWidgets({
     sections: config.sections,
     selectedRunIds,
     organizationId,
@@ -199,7 +199,7 @@ export function DashboardBuilder({
     const filterSection = (section: Section): Section => ({
       ...section,
       widgets: section.widgets.filter((widget) =>
-        searchUtils.doesWidgetMatchSearch(widget, searchState)
+        searchUtils.doesWidgetMatchSearch(widget, searchState, resolvedPatternMetrics)
       ),
       ...(section.children
         ? {
@@ -227,7 +227,7 @@ export function DashboardBuilder({
         }
         return section.widgets.length > 0;
       });
-  }, [config.sections, searchState, dynamicWidgetCounts]);
+  }, [config.sections, searchState, dynamicWidgetCounts, resolvedPatternMetrics]);
 
   const isSearching = !!searchState?.query.trim();
   const isSearchingRef = useRef(false);

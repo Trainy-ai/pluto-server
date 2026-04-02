@@ -405,18 +405,21 @@ const LineSettings = ({
                   </SelectContent>
                 </Select>
               </div>
-            </SettingsSection>
 
-            {showMaxSeriesCount && (
-              <SettingsSection title="Max Series per Chart">
+              {showMaxSeriesCount && (
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1">
-                      <Label className="text-sm">Series Limit</Label>
-                      <InfoTooltip
-                        title="Max Series per Chart"
-                        description="Maximum number of series (metrics × runs) per chart widget. When exceeded, the chart shows a warning instead of rendering. Increase this if you have many metrics but most are sparse/zero."
-                      />
+                    <div className="flex items-center gap-2">
+                      <Label
+                        htmlFor="max-series"
+                        className="flex items-center gap-1.5 text-sm"
+                      >
+                        Max series per chart
+                        <InfoTooltip
+                          title="Max Series per Chart"
+                          description="Maximum number of series (metrics × runs) per chart widget. When exceeded, the chart shows a warning instead of rendering. Increase this if you have many metrics but most are sparse/zero."
+                        />
+                      </Label>
                     </div>
                     <span className="rounded bg-muted px-2 py-0.5 text-sm font-medium">
                       {(settings.maxSeriesCount ?? DEFAULT_SETTINGS.maxSeriesCount) === 0
@@ -430,7 +433,7 @@ const LineSettings = ({
                       updateSettings("maxSeriesCount", Number(value))
                     }
                   >
-                    <SelectTrigger className="h-9 rounded-md border border-input text-sm">
+                    <SelectTrigger id="max-series" className="h-9 rounded-md border border-input text-sm">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent className="rounded-md border border-input">
@@ -442,8 +445,8 @@ const LineSettings = ({
                     </SelectContent>
                   </Select>
                 </div>
-              </SettingsSection>
-            )}
+              )}
+            </SettingsSection>
 
             <SettingsSection title="Line Width">
               <div className="space-y-3">
