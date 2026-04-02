@@ -8,6 +8,7 @@ import { DataTable } from "./~components/table/data-table";
 import DashboardLayout from "@/components/layout/dashboard/layout";
 import { RefreshButton } from "@/components/core/refresh-button";
 import { useState, useMemo } from "react";
+import { useDocumentTitle } from "@/hooks/use-document-title";
 import { queryClient } from "@/utils/trpc";
 import { LocalCache } from "@/lib/db/local-cache";
 import type { inferOutput } from "@trpc/tanstack-react-query";
@@ -70,6 +71,7 @@ export const Route = createFileRoute("/o/$orgSlug/_authed/projects/")({
 
 function RouteComponent() {
   const { organizationId, organizationSlug } = Route.useRouteContext();
+  useDocumentTitle("Projects");
   const [lastRefreshed, setLastRefreshed] = useState<Date | undefined>(
     undefined,
   );

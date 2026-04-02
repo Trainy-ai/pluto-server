@@ -4,6 +4,7 @@ import RunComparisonLayout from "@/components/layout/runComparison/layout";
 import PageLayout from "@/components/layout/page-layout";
 import { OrganizationPageTitle } from "@/components/layout/page-title";
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
+import { useDocumentTitle } from "@/hooks/use-document-title";
 import type { SortingState } from "@tanstack/react-table";
 import { useQuery } from "@tanstack/react-query";
 import { useSelectedRuns } from "./~hooks/use-selected-runs";
@@ -108,6 +109,7 @@ function RouteComponent() {
     Route.useRouteContext();
   const { chart, runs: urlRunsParam, hidden: urlHiddenParam, listMode: urlListMode, inherited: urlInherited } = Route.useSearch();
   const navigate = useNavigate();
+  useDocumentTitle(projectName);
 
   // Parse comma-separated run IDs from URL into array (may be display IDs like "MMP-1" or SQIDs)
   const rawUrlRunIds = useMemo(() => {

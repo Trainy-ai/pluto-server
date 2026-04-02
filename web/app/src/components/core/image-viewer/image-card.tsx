@@ -62,42 +62,17 @@ export function ImageCard({ url, fileName, runLabel, stepNavigation, sharedScale
     setLocalScale(next);
     onScaleChange?.(next);
   };
-  const [position, setPosition] = useState({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
+  const [naturalSize, setNaturalSize] = useState<{ w: number; h: number } | null>(null);
+
+  // Reset scroll position when the image changes (e.g. step change)
+  useEffect(() => {
+    containerRef.current?.scrollTo(0, 0);
+  }, [url]);
 
   const resetView = () => {
     setScale(1);
-    setPosition({ x: 0, y: 0 });
-  };
-
-  // Reset pan position (but preserve zoom) when the image changes (e.g. step change)
-  useEffect(() => {
-    setPosition({ x: 0, y: 0 });
-  }, [url]);
-
-  const handleMouseDown = (e: React.MouseEvent) => {
-    if (scale > 1) {
-      setIsDragging(true);
-      setDragStart({
-        x: e.clientX - position.x,
-        y: e.clientY - position.y,
-      });
-    }
-  };
-
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (isDragging && scale > 1) {
-      setPosition({
-        x: e.clientX - dragStart.x,
-        y: e.clientY - dragStart.y,
-      });
-    }
-  };
-
-  const handleMouseUp = () => {
-    setIsDragging(false);
+    containerRef.current?.scrollTo(0, 0);
   };
 
   const handleWheel = (e: React.WheelEvent) => {
@@ -107,12 +82,6 @@ export function ImageCard({ url, fileName, runLabel, stepNavigation, sharedScale
       setScale((s) => Math.min(Math.max(1, s + delta * 0.01), 8));
     }
   };
-
-  useEffect(() => {
-    if (scale === 1) {
-      setPosition({ x: 0, y: 0 });
-    }
-  }, [scale]);
 
   return (
     <div className="flex flex-col gap-1.5">
@@ -148,33 +117,33 @@ export function ImageCard({ url, fileName, runLabel, stepNavigation, sharedScale
             </Button>
           </div>
         </DialogTrigger>
-        <DialogContent className="h-[95vh] w-[95vw]">
-          <div className="flex h-full w-full flex-col">
+        <DialogContent className="h-[95vh] w-[95vw] overflow-hidden">
+          <div className="flex h-full w-full flex-col overflow-hidden">
             <div
               ref={containerRef}
-              className="relative flex flex-1 items-center justify-center bg-background/95 p-4"
-              onMouseDown={handleMouseDown}
-              onMouseMove={handleMouseMove}
-              onMouseUp={handleMouseUp}
-              onMouseLeave={handleMouseUp}
+              className="relative flex-1 min-h-0 overflow-auto bg-background/95 p-4"
               onWheel={handleWheel}
-              style={{
-                cursor:
-                  scale > 1 ? (isDragging ? "grabbing" : "grab") : "default",
-              }}
             >
               <div
-                className="relative transition-transform duration-75 ease-out"
-                style={{
-                  transform: `scale(${scale}) translate(${position.x / scale}px, ${position.y / scale}px)`,
-                  transformOrigin: "center",
-                }}
+                style={naturalSize ? {
+                  width: Math.round(naturalSize.w * scale),
+                  height: Math.round(naturalSize.h * scale),
+                  position: "relative",
+                  margin: "auto",
+                } : undefined}
               >
                 <img
                   src={url}
                   alt={fileName}
-                  className="h-full w-full object-contain select-none"
+                  className="absolute top-0 left-0 select-none origin-top-left"
                   draggable={false}
+                  onLoad={(e) => {
+                    const img = e.currentTarget;
+                    setNaturalSize({ w: img.naturalWidth, h: img.naturalHeight });
+                  }}
+                  style={{
+                    transform: `scale(${scale})`,
+                  }}
                 />
               </div>
             </div>

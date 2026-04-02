@@ -11,6 +11,7 @@ import {
   useLatestRuns,
 } from "@/components/layout/dashboard/queries";
 import { Button } from "@/components/ui/button";
+import { useDocumentTitle } from "@/hooks/use-document-title";
 export const Route = createFileRoute("/o/$orgSlug/_authed/(index)/")({
   component: RouteComponent,
   beforeLoad: async ({ context }) => {
@@ -22,6 +23,7 @@ export const Route = createFileRoute("/o/$orgSlug/_authed/(index)/")({
 function RouteComponent() {
   const { orgSlug } = Route.useParams();
   const { auth } = Route.useRouteContext();
+  useDocumentTitle("Dashboard");
   const { visibility } = useGettingStartedVisibility({ orgSlug });
 
   const { data: runs, isLoading } = useLatestRuns(auth.activeOrganization.id);

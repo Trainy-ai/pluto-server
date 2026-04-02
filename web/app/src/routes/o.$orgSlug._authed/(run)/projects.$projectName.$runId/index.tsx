@@ -25,6 +25,7 @@ import { searchUtils, type SearchState } from "../../(runComparison)/projects.$p
 import { useRunDashboardData } from "./~hooks/use-run-dashboard";
 
 import { useMemo, useState, useEffect, useRef, useCallback } from "react";
+import { useDocumentTitle } from "@/hooks/use-document-title";
 
 // Search params for run route - supports ?chart=viewId to deep-link to a dashboard view
 interface RunSearchParams {
@@ -69,6 +70,8 @@ function RouteComponent() {
     projectName,
     runId,
   );
+
+  useDocumentTitle(runData ? `${runId}(${runData.name})` : runId);
 
   const { lastRefreshTime, handleRefresh } = useRefreshTime({
     runId,
