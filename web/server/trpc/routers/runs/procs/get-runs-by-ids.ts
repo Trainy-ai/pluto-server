@@ -7,7 +7,7 @@ export const getByIdsProcedure = protectedOrgProcedure
   .input(
     z.object({
       projectName: z.string(),
-      runIds: z.array(z.string()).max(50),
+      runIds: z.array(z.string()).max(100),
     }),
   )
   .query(async ({ ctx, input }) => {

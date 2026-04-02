@@ -2,6 +2,7 @@ node_modules/
 .DS_Store
 .env*
 !.env.example
+CLAUDE.local.md
 test.*
 web/app/public
 .mlop/
