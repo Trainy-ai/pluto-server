@@ -442,7 +442,10 @@ describe("Source chart local focus: experiment group on hovered chart", () => {
   });
 
   it("without experiment map, localFocusIdx highlights only the single series", () => {
-    const expMap = null; // Runs mode — no experiment map
+    // Runs mode — no experiment map. Use a helper to avoid TS narrowing the
+    // literal `null` to `never` inside the ternary.
+    const getExpMap = (): Map<string, string[]> | null => null;
+    const expMap = getExpMap();
     const focusedRunId = "toWyJ";
     const expIds = focusedRunId && expMap ? expMap.get(focusedRunId) : null;
 

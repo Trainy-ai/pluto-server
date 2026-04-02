@@ -80,6 +80,7 @@ trace: "retain-on-failure",
       testIgnore: [
         /performance\/.*\.spec\.ts/,       // Perf tests run in dedicated pipeline step
         /nan-inf-ingest-e2e\.spec\.ts/,    // Requires Rust ingest; runs in "Non-Finite Metrics Ingestion Test" step
+        /fork-workflow\.spec\.ts/,         // Requires Rust ingest for metrics ingestion; runs in dedicated step
       ],
       use: {
         ...devices["Desktop Chrome"],

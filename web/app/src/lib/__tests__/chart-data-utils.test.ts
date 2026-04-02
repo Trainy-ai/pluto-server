@@ -614,12 +614,24 @@ describe("bucketedAndSmooth envelope invariant", () => {
     });
   }
 
+  // Effective kernel radius per algorithm. Smoothing can pull values from
+  // this many buckets on each side, so the smoothed value at index i must
+  // lie within [min(envMin[i-r..i+r]), max(envMax[i-r..i+r])].
+  function windowRadius(settings: SmoothingSettings): number {
+    switch (settings.algorithm) {
+      case "gaussian": return Math.ceil(settings.parameter * 3); // 3-sigma
+      case "running":  return Math.ceil(settings.parameter);
+      case "ema":      return Math.ceil(3 / settings.parameter); // ~3 time-constants
+      case "twema":    return Math.ceil(settings.parameter * 3);
+      default:         return 10;
+    }
+  }
+
   for (const { name, settings } of SMOOTHING_CONFIGS) {
-    it(`${name}: smoothed line stays within envelope bands`, () => {
+    it(`${name}: smoothed line stays within windowed envelope`, () => {
       const buckets = makeLttbLikeBuckets(100);
       const series = bucketedAndSmooth(buckets, "metric", "#00f", settings);
 
-      // Find the main series (not envelope, not companion)
       const main = series.find(
         (s) => !s.envelopeOf && !s.label.includes("(original)"),
       );
@@ -630,14 +642,30 @@ describe("bucketedAndSmooth envelope invariant", () => {
       expect(envMin).toBeDefined();
       expect(envMax).toBeDefined();
 
-      for (let i = 0; i < main!.y.length; i++) {
-        const v = main!.y[i];
-        const lo = envMin!.y[i];
-        const hi = envMax!.y[i];
-        if (v === null || lo === null || hi === null) continue;
+      const n = main!.y.length;
+      const r = windowRadius(settings);
 
-        expect(v).toBeGreaterThanOrEqual(lo as number);
-        expect(v).toBeLessThanOrEqual(hi as number);
+      // Smoothing blends across bucket boundaries, so the smoothed value can
+      // exceed a single bucket's [minY, maxY]. Instead, verify it stays within
+      // the envelope range of the surrounding window of buckets that the
+      // smoothing kernel actually reads from.
+      for (let i = 0; i < n; i++) {
+        const v = main!.y[i];
+        if (v === null) continue;
+
+        const lo = Math.max(0, i - r);
+        const hi = Math.min(n - 1, i + r);
+        let wMin = Infinity;
+        let wMax = -Infinity;
+        for (let j = lo; j <= hi; j++) {
+          const minVal = envMin!.y[j];
+          const maxVal = envMax!.y[j];
+          if (minVal !== null && minVal < wMin) wMin = minVal;
+          if (maxVal !== null && maxVal > wMax) wMax = maxVal;
+        }
+
+        expect(v).toBeGreaterThanOrEqual(wMin);
+        expect(v).toBeLessThanOrEqual(wMax);
       }
     });
   }

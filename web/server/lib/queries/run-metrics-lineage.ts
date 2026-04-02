@@ -9,6 +9,7 @@ import type { clickhouse } from "../clickhouse";
 import {
   queryRunMetricsBucketedByLogName,
   type BucketedMetricDataPoint,
+  type DownsamplingAlgorithm,
 } from "./run-metrics";
 import { getLogGroupName } from "../utilts";
 
@@ -122,9 +123,10 @@ export async function queryLineageMetricsBucketedByLogName(
     logName: string;
     buckets?: number;
     preview?: boolean;
+    algorithm?: DownsamplingAlgorithm;
   }
 ): Promise<BucketedMetricDataPoint[]> {
-  const { organizationId, projectName, runId, logName, buckets, preview } =
+  const { organizationId, projectName, runId, logName, buckets, preview, algorithm } =
     params;
 
   const segments = await resolveLineageChain(prisma, runId, organizationId);
@@ -138,6 +140,7 @@ export async function queryLineageMetricsBucketedByLogName(
       logName,
       buckets,
       preview,
+      algorithm,
     });
   }
 

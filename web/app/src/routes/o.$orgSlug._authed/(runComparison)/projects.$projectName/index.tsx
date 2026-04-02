@@ -246,7 +246,8 @@ function RouteComponent() {
   const listMode: ListMode = urlListMode ?? "runs";
   const handleListModeChange = useCallback((mode: ListMode) => {
     navigate({
-      search: (prev: RunComparisonSearchParams) => ({
+      to: ".",
+      search: (prev) => ({
         ...prev,
         listMode: mode === "runs" ? undefined : mode,
       }),
@@ -259,7 +260,8 @@ function RouteComponent() {
   const handleInheritedToggle = useCallback(() => {
     const current = urlInherited !== "false"; // default true
     navigate({
-      search: (prev: RunComparisonSearchParams) => ({
+      to: ".",
+      search: (prev) => ({
         ...prev,
         inherited: current ? "false" : undefined, // remove param when true (default)
       }),
@@ -269,7 +271,8 @@ function RouteComponent() {
 
   const handleInheritedChange = useCallback((value: boolean) => {
     navigate({
-      search: (prev: RunComparisonSearchParams) => ({
+      to: ".",
+      search: (prev) => ({
         ...prev,
         inherited: value ? undefined : "false", // remove param when true (default)
       }),
