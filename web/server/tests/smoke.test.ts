@@ -2351,6 +2351,101 @@ describe('SDK API Endpoints (with API Key)', () => {
       // Mark as cleaned up
       testViewId = null;
     });
+
+    // --- Default View Tests ---
+
+    let defaultViewId: string | null = null;
+
+    it('Test 19.9: Create default view via create endpoint', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+
+      const testConfig = {
+        version: 1,
+        columns: [
+          { id: 'runId', source: 'system', label: 'Id' },
+          { id: 'createdAt', source: 'system', label: 'Created' },
+          { id: 'tags', source: 'system', label: 'Tags' },
+        ],
+        baseOverrides: {},
+        filters: [],
+        sorting: [{ id: 'createdAt', desc: true }],
+      };
+
+      const response = await makeTrpcRequest('runTableViews.create', {
+        projectName: TEST_PROJECT_NAME,
+        name: 'Default',
+        config: testConfig,
+      }, { 'Cookie': sessionCookie }, 'POST');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      expect(data.result?.data?.name).toBe('Default');
+      expect(data.result?.data?.config?.columns).toHaveLength(3);
+
+      defaultViewId = data.result?.data?.id;
+    });
+
+    it('Test 19.10: Update default view config', async () => {
+      if (!sessionCookie || !defaultViewId) {
+        console.log('   No session or default view - skipping');
+        return;
+      }
+
+      const updatedConfig = {
+        version: 1,
+        columns: [
+          { id: 'runId', source: 'system', label: 'Id' },
+        ],
+        baseOverrides: {},
+        filters: [],
+        sorting: [],
+      };
+
+      const response = await makeTrpcRequest('runTableViews.update', {
+        viewId: defaultViewId,
+        config: updatedConfig,
+      }, { 'Cookie': sessionCookie }, 'POST');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      expect(data.result?.data?.config?.columns).toHaveLength(1);
+    });
+
+    it('Test 19.11: Cannot delete default view', async () => {
+      if (!sessionCookie || !defaultViewId) {
+        console.log('   No session or default view - skipping');
+        return;
+      }
+
+      const response = await makeTrpcRequest('runTableViews.delete', {
+        viewId: defaultViewId,
+      }, { 'Cookie': sessionCookie }, 'POST');
+
+      const data = await response.json();
+      expect(data.error).toBeDefined();
+    });
+
+    it('Test 19.12: Cannot create another view named "Default"', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+
+      const response = await makeTrpcRequest('runTableViews.create', {
+        projectName: TEST_PROJECT_NAME,
+        name: 'Default',
+        config: { version: 1, columns: [], baseOverrides: {}, filters: [], sorting: [] },
+      }, { 'Cookie': sessionCookie }, 'POST');
+
+      const data = await response.json();
+      expect(data.error).toBeDefined();
+    });
+
+    // Clean up: remove the default view directly since API blocks it
+    // In practice, test DB is ephemeral so this is fine
   });
 
   describe('Test Suite 20: Server-Side Sorting (Authenticated)', () => {

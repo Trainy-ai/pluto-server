@@ -45,6 +45,8 @@ interface RunTableViewConfig {
   pageSize?: number;
 }
 
+const DEFAULT_VIEW_NAME = "Default";
+
 interface RunTableViewSelectorProps {
   organizationId: string;
   projectName: string;
@@ -83,9 +85,22 @@ export function RunTableViewSelector({
   const deleteMutation = useDeleteRunTableView(organizationId, projectName);
 
   const views = data?.views ?? [];
+  const savedDefaultView = views.find((v) => v.name === DEFAULT_VIEW_NAME);
+  const customViews = views.filter((v) => v.name !== DEFAULT_VIEW_NAME);
+
   const activeView = activeViewId
     ? views.find((v) => v.id === activeViewId)
     : null;
+
+  // Whether we're on the Default view (null activeViewId)
+  const isOnDefault = !activeViewId;
+
+  // Track the config snapshot from when a view was last loaded or saved.
+  // Compare against this rather than the DB value to avoid false positives
+  // on initial page load (where activeViewId is restored from localStorage
+  // but the config state hasn't been synced yet).
+  const loadedConfigSnapshotRef = useRef<string | null>(null);
+  const defaultSnapshotInitialized = useRef(false);
 
   const getCurrentConfig = useCallback((): RunTableViewConfig => {
     return {
@@ -101,6 +116,7 @@ export function RunTableViewSelector({
   const handleSelectView = useCallback(
     (view: RunTableView) => {
       loadedConfigSnapshotRef.current = JSON.stringify(view.config);
+      defaultSnapshotInitialized.current = false;
       onActiveViewChange(view.id);
       onLoadView(view.config as RunTableViewConfig);
     },
@@ -108,10 +124,18 @@ export function RunTableViewSelector({
   );
 
   const handleSelectDefault = useCallback(() => {
-    loadedConfigSnapshotRef.current = null;
-    onActiveViewChange(null);
-    onResetToDefault();
-  }, [onActiveViewChange, onResetToDefault]);
+    defaultSnapshotInitialized.current = false;
+    if (savedDefaultView) {
+      loadedConfigSnapshotRef.current = JSON.stringify(savedDefaultView.config);
+      defaultSnapshotInitialized.current = true;
+      onActiveViewChange(null);
+      onLoadView(savedDefaultView.config as RunTableViewConfig);
+    } else {
+      loadedConfigSnapshotRef.current = null;
+      onActiveViewChange(null);
+      onResetToDefault();
+    }
+  }, [onActiveViewChange, onLoadView, onResetToDefault, savedDefaultView]);
 
   const [createError, setCreateError] = useState<string | null>(null);
 
@@ -135,7 +159,7 @@ export function RunTableViewSelector({
           onActiveViewChange(newView.id);
         },
         onError: (error) => {
-          if (error.message.includes("already exists")) {
+          if (error.message.includes("already exists") || error.message.includes("reserved")) {
             setCreateError("A view with this name already exists.");
           } else {
             setCreateError("Failed to create view.");
@@ -161,6 +185,41 @@ export function RunTableViewSelector({
       config: getCurrentConfig(),
     });
   }, [activeViewId, organizationId, getCurrentConfig, updateMutation]);
+
+  const handleSaveToDefault = useCallback(() => {
+    const config = getCurrentConfig();
+
+    if (savedDefaultView) {
+      // Update existing default view
+      updateMutation.mutate(
+        {
+          organizationId,
+          viewId: savedDefaultView.id,
+          config,
+        },
+        {
+          onSuccess: () => {
+            loadedConfigSnapshotRef.current = JSON.stringify(config);
+          },
+        }
+      );
+    } else {
+      // Create the default view for the first time
+      createMutation.mutate(
+        {
+          organizationId,
+          projectName,
+          name: DEFAULT_VIEW_NAME,
+          config,
+        },
+        {
+          onSuccess: () => {
+            loadedConfigSnapshotRef.current = JSON.stringify(config);
+          },
+        }
+      );
+    }
+  }, [organizationId, projectName, getCurrentConfig, savedDefaultView, updateMutation, createMutation]);
 
   const handleDeleteView = useCallback(() => {
     if (!viewToDelete) return;
@@ -190,12 +249,6 @@ export function RunTableViewSelector({
     onResetToDefault,
   ]);
 
-  // Track the config snapshot from when a view was last loaded or saved.
-  // Compare against this rather than the DB value to avoid false positives
-  // on initial page load (where activeViewId is restored from localStorage
-  // but the config state hasn't been synced yet).
-  const loadedConfigSnapshotRef = useRef<string | null>(null);
-
   // Set snapshot when saving to current view
   useEffect(() => {
     if (updateMutation.isSuccess) {
@@ -213,18 +266,38 @@ export function RunTableViewSelector({
     }
   }, [activeView, onLoadView]);
 
+  // Initialize snapshot for the default view.
+  // If a saved default exists, load its config. Otherwise, snapshot the current
+  // (hardcoded) config so we can detect changes from it.
+  useEffect(() => {
+    if (isOnDefault && loadedConfigSnapshotRef.current === null && !defaultSnapshotInitialized.current) {
+      if (savedDefaultView) {
+        loadedConfigSnapshotRef.current = JSON.stringify(savedDefaultView.config);
+        onLoadView(savedDefaultView.config as RunTableViewConfig);
+        defaultSnapshotInitialized.current = true;
+      } else if (!isLoading) {
+        // No saved default — snapshot the current hardcoded default config
+        loadedConfigSnapshotRef.current = JSON.stringify(getCurrentConfig());
+        defaultSnapshotInitialized.current = true;
+      }
+    }
+  }, [isOnDefault, savedDefaultView, isLoading, onLoadView, getCurrentConfig]);
+
   const hasUnsavedChanges = useMemo(() => {
-    if (!activeView) return false;
-    // No snapshot yet = page just loaded, don't show indicator
-    if (loadedConfigSnapshotRef.current === null) return false;
-    const current = getCurrentConfig();
-    // Normalize: strip pageSize from both if snapshot doesn't have it
-    const snapshot = JSON.parse(loadedConfigSnapshotRef.current) as RunTableViewConfig;
-    const normalizedSnapshot = { ...snapshot, pageSize: snapshot.pageSize ?? current.pageSize };
-    return JSON.stringify(normalizedSnapshot) !== JSON.stringify(current);
-  }, [activeView, getCurrentConfig]);
+    const snapshot = loadedConfigSnapshotRef.current;
+    if (snapshot === null) return false;
+    // Works for both custom views and default view
+    if (activeView || isOnDefault) {
+      const current = getCurrentConfig();
+      const parsed = JSON.parse(snapshot) as RunTableViewConfig;
+      const normalizedSnapshot = { ...parsed, pageSize: parsed.pageSize ?? current.pageSize };
+      return JSON.stringify(normalizedSnapshot) !== JSON.stringify(current);
+    }
+    return false;
+  }, [activeView, isOnDefault, savedDefaultView, getCurrentConfig]);
 
   const displayLabel = activeView ? activeView.name : "Default";
+  const isSaving = updateMutation.isPending || createMutation.isPending;
 
   return (
     <>
@@ -250,12 +323,12 @@ export function RunTableViewSelector({
           {/* Default view */}
           <DropdownMenuItem onClick={handleSelectDefault}>
             <span className="flex-1">Default</span>
-            {!activeViewId && <CheckIcon className="ml-2 size-4" />}
+            {isOnDefault && <CheckIcon className="ml-2 size-4" />}
           </DropdownMenuItem>
 
-          {/* Saved views */}
-          {views.length > 0 && <DropdownMenuSeparator />}
-          {views.map((view) => (
+          {/* Saved custom views */}
+          {customViews.length > 0 && <DropdownMenuSeparator />}
+          {customViews.map((view) => (
             <DropdownMenuItem
               key={view.id}
               onClick={() => handleSelectView(view)}
@@ -275,8 +348,19 @@ export function RunTableViewSelector({
             Save to new view preset
           </DropdownMenuItem>
 
-          {/* Save to current view (only when non-default view is active) */}
-          {activeView && (
+          {/* Save to Default (when on default view) */}
+          {isOnDefault && (
+            <DropdownMenuItem
+              onClick={handleSaveToDefault}
+              disabled={isSaving}
+            >
+              <SaveIcon className="mr-2 size-4" />
+              Save to &quot;Default&quot;
+            </DropdownMenuItem>
+          )}
+
+          {/* Save to current view (only when on a custom view) */}
+          {activeView && activeView.name !== DEFAULT_VIEW_NAME && (
             <DropdownMenuItem
               onClick={handleSaveToCurrentView}
               disabled={updateMutation.isPending}
@@ -288,8 +372,8 @@ export function RunTableViewSelector({
             </DropdownMenuItem>
           )}
 
-          {/* Delete (only when non-default view is active) */}
-          {activeView && (
+          {/* Delete (only for non-default views) */}
+          {activeView && activeView.name !== DEFAULT_VIEW_NAME && (
             <>
               <DropdownMenuSeparator />
               <DropdownMenuItem

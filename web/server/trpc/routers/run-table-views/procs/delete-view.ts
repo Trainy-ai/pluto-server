@@ -26,6 +26,13 @@ export const deleteViewProcedure = protectedOrgProcedure
       });
     }
 
+    if (existingView.name === "Default") {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "The default view cannot be deleted",
+      });
+    }
+
     // No creator/admin role checks — any org member can delete any view
 
     // Delete the view
