@@ -132,9 +132,12 @@ const LineSettings = ({
         <DrawerTrigger asChild>
           <Button
             variant="outline"
-            className="transition-all duration-200 hover:bg-muted/80"
+            className="relative transition-all duration-200 hover:bg-muted/80"
           >
             <SettingsIcon className="h-4 w-4" />
+            {!settings.showInheritedMetrics && (
+              <span className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-primary" />
+            )}
           </Button>
         </DrawerTrigger>
         <DrawerContent className="h-full" data-vaul-no-drag>
@@ -535,6 +538,34 @@ const LineSettings = ({
                   checked={settings.skipMissingValues}
                   onCheckedChange={(checked) =>
                     updateSettings("skipMissingValues", checked)
+                  }
+                  className={SETTINGS_SWITCH_CLASS}
+                />
+              </div>
+            </SettingsSection>
+
+            <SettingsSection
+              title="Inherited Metrics"
+              description="Control how forked runs display data inherited from parent runs"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Label
+                    htmlFor="show-inherited-metrics"
+                    className="flex cursor-pointer items-center gap-1.5 text-sm"
+                  >
+                    Show inherited metrics
+                    <InfoTooltip
+                      title="Inherited Metrics"
+                      description="When enabled, charts show the full metric history including data inherited from parent runs. When disabled, only data points logged by this run are shown."
+                    />
+                  </Label>
+                </div>
+                <Switch
+                  id="show-inherited-metrics"
+                  checked={settings.showInheritedMetrics}
+                  onCheckedChange={(checked) =>
+                    updateSettings("showInheritedMetrics", checked)
                   }
                   className={SETTINGS_SWITCH_CLASS}
                 />

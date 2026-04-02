@@ -25,6 +25,7 @@ import {
   queryAllProjects,
 } from "../lib/queries";
 import { triggerLinearSyncForTags } from "../lib/linear-sync";
+import { resolveForkParent, validateForkStep } from "../lib/fork-helpers";
 import {
   queryDistinctMetrics,
   queryMetricSortedRunIds,
@@ -83,6 +84,10 @@ const createRunRoute = createRoute({
             config: z.string().optional().nullable().openapi({ description: "Run configuration as JSON string", example: '{"lr": 0.001}' }),
             createdAt: z.number().optional().nullable().openapi({ description: "Creation timestamp in milliseconds" }),
             updatedAt: z.number().optional().nullable().openapi({ description: "Update timestamp in milliseconds" }),
+            forkRunId: z.number().optional().nullable().openapi({ description: "ID of the run to fork from. Creates a child run that inherits metrics up to forkStep." }),
+            forkStep: z.number().optional().nullable().openapi({ description: "Step at which to fork. Required when forkRunId is provided. The child run inherits all metrics up to and including this step." }),
+            inheritConfig: z.boolean().optional().nullable().openapi({ description: "Whether to inherit config from the parent run (default: true). Only applies when forkRunId is provided." }),
+            inheritTags: z.boolean().optional().nullable().openapi({ description: "Whether to inherit tags from the parent run (default: false). Only applies when forkRunId is provided." }),
           }),
         },
       },
@@ -101,6 +106,8 @@ const createRunRoute = createRoute({
             organizationSlug: z.string().openapi({ description: "Organization slug" }),
             url: z.string().openapi({ description: "URL to view the run" }),
             resumed: z.boolean().openapi({ description: "Whether an existing run was resumed (true) or a new run was created (false)" }),
+            forkedFromRunId: z.number().nullable().optional().openapi({ description: "ID of the parent run this was forked from (null if not forked)" }),
+            forkStep: z.number().nullable().optional().openapi({ description: "Step at which the fork occurred (null if not forked)" }),
           }).openapi("CreateRunResponse"),
         },
       },
@@ -123,7 +130,7 @@ const createRunRoute = createRoute({
 router.use(createRunRoute.path, withApiKey);
 router.openapi(createRunRoute, async (c) => {
   const apiKey = c.get("apiKey");
-  const { runName, projectName, externalId, tags, loggerSettings, systemMetadata, config, createdAt, updatedAt } = c.req.valid("json");
+  const { runName, projectName, externalId, tags, loggerSettings, systemMetadata, config, createdAt, updatedAt, forkRunId, forkStep, inheritConfig, inheritTags } = c.req.valid("json");
 
   const ctx = await createContext({ hono: c });
 
@@ -178,6 +185,64 @@ router.openapi(createRunRoute, async (c) => {
     }
   }
 
+  // Validate fork parameters
+  let resolvedForkRunId: bigint | null = null;
+  let resolvedForkStep: bigint | null = null;
+  let inheritedConfig: unknown = null;
+  let inheritedTags: string[] = [];
+
+  if (forkRunId && !resumed) {
+    if (forkStep === undefined || forkStep === null) {
+      return c.json({ error: "forkStep is required when forkRunId is provided" }, 400);
+    }
+
+    // Validate that the requested parent run exists and belongs to the same org+project
+    const requestedParent = await ctx.prisma.runs.findFirst({
+      where: {
+        id: BigInt(forkRunId),
+        organizationId: apiKey.organization.id,
+        projectId: project.id,
+      },
+      select: {
+        id: true,
+        config: true,
+        tags: true,
+        forkedFromRunId: true,
+        forkStep: true,
+      },
+    });
+
+    if (!requestedParent) {
+      return c.json({ error: "Fork parent run not found in this project" }, 400);
+    }
+
+    // Resolve lineage: walk up to find the ancestor that owns the forkStep
+    const resolvedParent = await resolveForkParent(
+      ctx.prisma, requestedParent, forkStep, apiKey.organization.id
+    );
+
+    resolvedForkRunId = resolvedParent.id;
+    resolvedForkStep = BigInt(forkStep);
+
+    // Validate forkStep against the resolved parent's actual max step
+    const validationError = await validateForkStep(
+      clickhouse, apiKey.organization.id, projectName, resolvedParent.id, forkStep
+    );
+    if (validationError) {
+      return c.json({ error: validationError }, 400);
+    }
+
+    // Inherit config from the resolved parent if requested (default: true)
+    if (inheritConfig !== false && resolvedParent.config && resolvedParent.config !== null) {
+      inheritedConfig = resolvedParent.config;
+    }
+
+    // Inherit tags from the resolved parent if requested (default: false)
+    if (inheritTags === true) {
+      inheritedTags = resolvedParent.tags;
+    }
+  }
+
   // Create new run if not resuming
   if (!run) {
     // Check usage limits only when creating a new run
@@ -206,6 +271,21 @@ router.openapi(createRunRoute, async (c) => {
       });
       const runNumber = updatedProject.nextRunNumber - 1;
 
+      // Merge inherited config with explicitly provided config (explicit wins)
+      let finalConfig = parsedConfig;
+      if (inheritedConfig && parsedConfig === Prisma.DbNull) {
+        finalConfig = inheritedConfig;
+      } else if (inheritedConfig && parsedConfig !== Prisma.DbNull) {
+        // Shallow merge: explicit config overrides inherited keys
+        finalConfig = { ...(inheritedConfig as Record<string, unknown>), ...(parsedConfig as Record<string, unknown>) };
+      }
+
+      // Merge inherited tags with explicit tags
+      const explicitTags = tags || [];
+      const finalTags = inheritedTags.length > 0
+        ? [...new Set([...inheritedTags, ...explicitTags])]
+        : explicitTags;
+
       run = await ctx.prisma.runs.create({
         data: {
           name: runName,
@@ -213,13 +293,15 @@ router.openapi(createRunRoute, async (c) => {
           externalId: externalId || null,
           projectId: project.id,
           organizationId: apiKey.organization.id,
-          tags: tags || [],
+          tags: finalTags,
           status: RunStatus.RUNNING,
           loggerSettings: parsedLoggerSettings,
           systemMetadata: parsedSystemMetadata,
-          config: parsedConfig,
+          config: finalConfig,
           createdById: apiKey.user.id,
           creatorApiKeyId: apiKey.id,
+          forkedFromRunId: resolvedForkRunId,
+          forkStep: resolvedForkStep,
         },
         select: { id: true, number: true },
       });
@@ -327,6 +409,8 @@ router.openapi(createRunRoute, async (c) => {
     organizationSlug: apiKey.organization.slug,
     url: runUrl,
     resumed,
+    forkedFromRunId: resolvedForkRunId != null ? Number(resolvedForkRunId) : null,
+    forkStep: resolvedForkStep != null ? Number(resolvedForkStep) : null,
   }, 200);
 });
 
@@ -1154,6 +1238,8 @@ const getRunDetailsRoute = createRoute({
             statusUpdated: z.string().nullable(),
             projectName: z.string(),
             externalId: z.string().nullable(),
+            forkedFromRunId: z.number().nullable(),
+            forkStep: z.number().nullable(),
             logNames: z.array(z.object({
               logName: z.string(),
               logType: z.string(),
@@ -1201,6 +1287,8 @@ router.openapi(getRunDetailsRoute, async (c) => {
     statusUpdated: run.statusUpdated?.toISOString() ?? null,
     projectName: run.projectName,
     externalId: run.externalId,
+    forkedFromRunId: run.forkedFromRunId,
+    forkStep: run.forkStep,
     logNames: run.logNames,
   }, 200);
 });

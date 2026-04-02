@@ -14,6 +14,8 @@ export interface SeriesConfigRefs {
   crossChartRunIdRef: { current: string | null };
   /** Table-driven highlighted series ID (from runs table hover) */
   tableHighlightRef: { current: string | null };
+  /** Experiment run ID lookup: runId → all runIds in same experiment. Null when not in experiments mode. */
+  experimentRunIdsMapRef?: { current: Map<string, string[]> | null };
 }
 
 // ============================
@@ -93,19 +95,40 @@ export function buildSeriesConfig(
 
           if (localFocusIdx !== null) {
             // Local focus takes priority (this chart is being hovered)
-            isHighlighted = seriesIdx === localFocusIdx;
+            // In experiments mode, highlight all series in the same experiment
+            const localExpMap: Map<string, string[]> | null = refs.experimentRunIdsMapRef?.current ?? null;
+            if (localExpMap) {
+              const focusedSid = (u.series[localFocusIdx] as any)?._seriesId;
+              const focusedRunId = focusedSid?.split(':')[0];
+              const expIds = focusedRunId ? (localExpMap.get(focusedRunId) ?? null) : null;
+              if (expIds) {
+                isHighlighted = expIds.some((rid: string) =>
+                  thisSeriesId === rid || (!!thisSeriesId && thisSeriesId.startsWith(rid + ':'))
+                );
+              } else {
+                isHighlighted = seriesIdx === localFocusIdx;
+              }
+            } else {
+              isHighlighted = seriesIdx === localFocusIdx;
+            }
             highlightedLabel = typeof u.series[localFocusIdx]?.label === "string"
               ? (u.series[localFocusIdx].label as string) : null;
           } else if (crossChartRunId !== null) {
             // Cross-chart highlight (another chart is being hovered)
-            // Match by run ID prefix — works for both single-metric ("runId") and multi-metric ("runId:metric") seriesIds
-            isHighlighted = thisSeriesId === crossChartRunId ||
-              (!!thisSeriesId && thisSeriesId.startsWith(crossChartRunId + ':'));
+            // In experiments mode, _crossHighlightRunIds contains all run IDs for the experiment
+            const crossRunIds: string[] = (u as any)._crossHighlightRunIds ?? [crossChartRunId];
+            isHighlighted = crossRunIds.some((rid: string) =>
+              thisSeriesId === rid || (!!thisSeriesId && thisSeriesId.startsWith(rid + ':'))
+            );
             // Multiple series can match — don't set highlightedLabel (raw companions get standard dim)
             highlightedLabel = null;
           } else if (tableId !== null) {
             // Table row hover highlight - match by runId prefix to handle composite "runId:metric" seriesIds
-            isHighlighted = thisSeriesId === tableId || (!!thisSeriesId && thisSeriesId.startsWith(tableId + ':'));
+            // In experiments mode, _tableHighlightRunIds contains all run IDs for the experiment
+            const tableRunIds: string[] = (u as any)._tableHighlightRunIds ?? [tableId];
+            isHighlighted = tableRunIds.some((id: string) =>
+              thisSeriesId === id || (!!thisSeriesId && thisSeriesId.startsWith(id + ':'))
+            );
           }
 
           const isFocusActive =

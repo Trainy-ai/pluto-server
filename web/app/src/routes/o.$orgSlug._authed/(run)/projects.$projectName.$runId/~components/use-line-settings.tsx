@@ -46,6 +46,9 @@ export interface LineChartSettings {
   /** Server-side data resolution. Controls bucket count for downsampled queries.
    *  "auto" = screen-based (boosted when smoothing off). */
   chartResolution: ChartResolution;
+  /** When true, forked runs show inherited metrics from parent runs.
+   *  When false, only the run's own data points are shown. */
+  showInheritedMetrics: boolean;
   /** Server-side downsampling algorithm. "avg" = bucketed averaging with min/max
    *  envelopes (default). "lttb" = Largest Triangle Three Buckets for better
    *  visual shape preservation. */
@@ -71,6 +74,7 @@ export const DEFAULT_SETTINGS: LineChartSettings = {
   skipMissingValues: false,
   maxSeriesCount: 500,
   chartResolution: "auto",
+  showInheritedMetrics: true,
   downsamplingAlgorithm: "avg",
 };
 

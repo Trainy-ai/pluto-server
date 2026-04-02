@@ -147,6 +147,10 @@ interface ChartSyncContextValue {
   // sourceStepRange preserves the original step bounds from a Step→RelTime translation
   // so that refetch can skip the lossy time→step roundtrip.
   crossGroupZoomRef: React.RefObject<{ group: string; range: [number, number]; sourceStepRange?: [number, number] } | null>;
+
+  /** Experiment run ID lookup: maps runId → all runIds in the same experiment.
+   *  Set by the page when in experiments mode. Used for group highlighting. */
+  experimentRunIdsMapRef: React.RefObject<Map<string, string[]> | null>;
 }
 
 // ============================
@@ -167,6 +171,8 @@ interface ChartSyncProviderProps {
   initialGlobalXRange?: [number, number] | null;
   /** Series name to highlight from the runs table (external to chart hover system) */
   tableHighlightedSeries?: string | null;
+  /** Experiment run ID lookup for group highlighting. Maps runId → all runIds in same experiment. */
+  experimentRunIdsMap?: Map<string, string[]> | null;
 }
 
 /**
@@ -183,6 +189,7 @@ export function ChartSyncProvider({
   syncKey = "chart-sync-default",
   initialGlobalXRange = null,
   tableHighlightedSeries: tableHighlightedSeriesProp = null,
+  experimentRunIdsMap: experimentRunIdsMapProp = null,
 }: ChartSyncProviderProps) {
   // Use refs for registries to avoid re-renders when charts register/unregister
   const uplotInstancesRef = useRef(new Map<string, uPlot>());
@@ -197,6 +204,12 @@ export function ChartSyncProvider({
   // Use BOTH ref (synchronous) and state (async) for proper React/event handling
   const hoveredChartIdRef = useRef<string | null>(null);
   const [hoveredChartId, setHoveredChartId] = useState<string | null>(null);
+
+  // Experiment run ID lookup: maps a single runId → all runIds in the same experiment.
+  // Set by the page component when in experiments mode. Used by highlightUPlotSeries
+  // to expand a single hovered run to the full experiment for group highlighting.
+  const experimentRunIdsMapRef = useRef<Map<string, string[]> | null>(experimentRunIdsMapProp);
+  experimentRunIdsMapRef.current = experimentRunIdsMapProp;
 
   // Track which series is highlighted across all charts (for uPlot cross-chart highlighting)
   // Refs instead of state — only read synchronously by tooltip/stroke code, never triggers re-renders.
@@ -307,25 +320,51 @@ export function ChartSyncProvider({
   // changes that would remount table cell components (closing open popovers).
   useEffect(() => {
     function handleRunTableHover(e: Event) {
-      const runId = (e as CustomEvent).detail as string | null;
-      tableHighlightedSeriesRef.current = runId;
+      const detail = (e as CustomEvent).detail as string | string[] | null;
+      // Normalize to single ID for backward compatibility
+      const primaryRunId = Array.isArray(detail) ? detail[0] ?? null : detail;
+      const allRunIds = Array.isArray(detail) ? detail : (detail ? [detail] : []);
+      tableHighlightedSeriesRef.current = primaryRunId;
 
       // Only apply if no chart is actively being hovered
       if (hoveredChartIdRef.current !== null) return;
 
       const lw = getStoredLineWidth();
       uplotInstancesRef.current.forEach((chart) => {
-        // Store on instance so stroke function can read it synchronously
-        (chart as any)._tableHighlightRunId = runId;
-        applySeriesHighlight(chart, runId, '_seriesId', lw);
+        (chart as any)._tableHighlightRunId = primaryRunId;
+        (chart as any)._tableHighlightRunIds = allRunIds;
+
+        if (allRunIds.length === 0) {
+          // Clear highlight
+          applySeriesHighlight(chart, null, '_seriesId', lw);
+        } else {
+          // Highlight all matching run IDs (experiments mode sends multiple)
+          const highlightedWidth = Math.max(1, lw * 1.25);
+          const dimmedWidth = Math.max(0.4, lw * 0.85);
+          const hasAnyMatch = allRunIds.some((id) =>
+            chart.series.some((s: any) => seriesKeyMatches(s._seriesId, id, '_seriesId')),
+          );
+          if (hasAnyMatch) {
+            for (let i = 1; i < chart.series.length; i++) {
+              const s = chart.series[i];
+              const match = allRunIds.some((id) => seriesKeyMatches((s as any)._seriesId, id, '_seriesId'));
+              s.width = match ? highlightedWidth : dimmedWidth;
+            }
+          } else {
+            for (let i = 1; i < chart.series.length; i++) {
+              chart.series[i].width = (chart.series[i] as any)._baseWidth ?? lw;
+            }
+          }
+        }
         chart.redraw(false);
 
-        // Expose highlight state on the DOM for testability (only if chart contains the series)
         const container = chart.root?.closest('[data-testid="line-chart-container"]');
         if (container) {
-          const hasMatch = runId && chart.series.some((s: any) => seriesKeyMatches(s._seriesId, runId, '_seriesId'));
+          const hasMatch = allRunIds.some((id) =>
+            chart.series.some((s: any) => seriesKeyMatches(s._seriesId, id, '_seriesId')),
+          );
           if (hasMatch) {
-            container.setAttribute('data-table-highlighted-run', runId!);
+            container.setAttribute('data-table-highlighted-run', primaryRunId!);
           } else {
             container.removeAttribute('data-table-highlighted-run');
           }
@@ -339,6 +378,11 @@ export function ChartSyncProvider({
   // uPlot registration
   const registerUPlot = useCallback((id: string, chart: uPlot) => {
     uplotInstancesRef.current.set(id, chart);
+    // In experiments mode, attach the experiment lookup map for group highlighting.
+    // The cursor hook reads this to expand a hovered run to all experiment runs.
+    if (experimentRunIdsMapRef.current) {
+      (chart as any)._experimentRunIdsMap = experimentRunIdsMapRef.current;
+    }
   }, []);
 
   const unregisterUPlot = useCallback((id: string) => {
@@ -403,17 +447,24 @@ export function ChartSyncProvider({
         }
         lastHighlightedRef.current = { sourceChartId: srcId, runId: id };
 
+        // In experiments mode, expand a single run ID to all runs in the experiment
+        const expMap = experimentRunIdsMapRef.current;
+        const allExpRunIds = id && expMap ? (expMap.get(id) ?? [id]) : (id ? [id] : []);
+
         // Notify the runs table which run is being hovered in the chart
-        document.dispatchEvent(new CustomEvent("chart-hover-run", { detail: id }));
+        // Send all experiment run IDs so the table can highlight the experiment row
+        document.dispatchEvent(new CustomEvent("chart-hover-run", {
+          detail: allExpRunIds.length > 1 ? allExpRunIds : id,
+        }));
 
         uplotInstancesRef.current.forEach((chart, chartMapId) => {
           if (chartMapId === srcId) return; // Skip source chart
 
           const lw = getStoredLineWidth();
 
-          // Store the run ID directly on the chart instance so the stroke function
-          // can read it synchronously during redraw (avoids React state timing issues)
+          // Store run IDs on chart instance for the stroke function
           (chart as any)._crossHighlightRunId = id;
+          (chart as any)._crossHighlightRunIds = allExpRunIds.length > 0 ? allExpRunIds : null;
 
           if (id !== null) {
             // Clear local focus on target charts so cross-chart highlight takes priority
@@ -429,8 +480,26 @@ export function ChartSyncProvider({
             // Fall back to table highlight if active, otherwise reset to default
             const tableId = tableHighlightedSeriesRef.current;
             applySeriesHighlight(chart, tableId, '_seriesId', lw);
+          } else if (allExpRunIds.length > 1) {
+            // Experiment mode: highlight all runs in the experiment
+            const highlightedWidth = Math.max(1, lw * 1.25);
+            const dimmedWidth = Math.max(0.4, lw * 0.85);
+            const hasAnyMatch = allExpRunIds.some((rid) =>
+              chart.series.some((s: any) => seriesKeyMatches(s._seriesId, rid, '_seriesId')),
+            );
+            if (hasAnyMatch) {
+              for (let i = 1; i < chart.series.length; i++) {
+                const s = chart.series[i];
+                const match = allExpRunIds.some((rid) => seriesKeyMatches((s as any)._seriesId, rid, '_seriesId'));
+                s.width = match ? highlightedWidth : dimmedWidth;
+              }
+            } else {
+              for (let i = 1; i < chart.series.length; i++) {
+                chart.series[i].width = (chart.series[i] as any)._baseWidth ?? lw;
+              }
+            }
           } else {
-            // Match by _seriesId prefix — handles both "runId" and "runId:metric" formats
+            // Single run highlight
             applySeriesHighlight(chart, id, '_seriesId', lw);
           }
           // Redraw without rebuildPaths to preserve Y-axis zoom
@@ -622,6 +691,7 @@ export function ChartSyncProvider({
       stepTimeMappingRef,
       setStepTimeMapping,
       crossGroupZoomRef,
+      experimentRunIdsMapRef,
     }),
     [
       registerUPlot,

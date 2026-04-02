@@ -16,6 +16,8 @@ import { getFieldValuesProcedure } from "./procs/get-field-values";
 import { distinctMetricNamesProcedure } from "./procs/distinct-metric-names";
 import { distinctFileLogNamesProcedure } from "./procs/distinct-file-log-names";
 import { metricSummariesProcedure } from "./procs/metric-summaries";
+import { forkRunProcedure } from "./procs/fork-run";
+import { getLineageProcedure } from "./procs/get-lineage";
 
 export const runsRouter = router({
   // Procedures
@@ -34,6 +36,8 @@ export const runsRouter = router({
   distinctMetricNames: distinctMetricNamesProcedure,
   distinctFileLogNames: distinctFileLogNamesProcedure,
   metricSummaries: metricSummariesProcedure,
+  fork: forkRunProcedure,
+  getLineage: getLineageProcedure,
   // Routers
   data: dataRouter,
   trigger: triggerRouter,

@@ -62,6 +62,8 @@ export interface LineChartProps extends React.HTMLAttributes<HTMLDivElement> {
   yZoomRange?: [number, number] | null;
   /** Called when the user drags to zoom the Y axis, or null when Y zoom is reset. */
   onYZoomRangeChange?: (range: [number, number] | null) => void;
+  /** Map of runId → forkStep for drawing vertical fork annotations */
+  forkSteps?: Map<string, number>;
 }
 
 /** Ref handle exposed to parent components */

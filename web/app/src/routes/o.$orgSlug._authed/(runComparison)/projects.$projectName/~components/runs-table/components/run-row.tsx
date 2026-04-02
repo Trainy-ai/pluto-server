@@ -10,9 +10,11 @@ interface RunRowProps {
   pinnedColumnMap: Record<string, { left: number; isLast: boolean }>;
   tableBodyRef: React.RefObject<HTMLTableSectionElement | null>;
   isHidden?: boolean;
+  /** In experiments mode, all run IDs belonging to this experiment (for group highlight) */
+  experimentRunIds?: string[];
 }
 
-export function RunRow({ row, pinnedColumnMap, tableBodyRef, isHidden }: RunRowProps) {
+export function RunRow({ row, pinnedColumnMap, tableBodyRef, isHidden, experimentRunIds }: RunRowProps) {
   return (
     <TableRow
       className={cn("group/row", isHidden && "opacity-60")}
@@ -36,7 +38,9 @@ export function RunRow({ row, pinnedColumnMap, tableBodyRef, isHidden }: RunRowP
             )?.setAttribute("data-hover-highlight", "true");
           }
           document.dispatchEvent(
-            new CustomEvent("run-table-hover", { detail: row.original.id }),
+            new CustomEvent("run-table-hover", {
+              detail: experimentRunIds ?? row.original.id,
+            }),
           );
         }
       }}

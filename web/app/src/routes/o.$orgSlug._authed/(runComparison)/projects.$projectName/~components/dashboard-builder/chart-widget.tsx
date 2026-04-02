@@ -45,6 +45,8 @@ export function ChartWidget({
       color,
       displayId: getDisplayIdForRun(run),
       createdAt: run.createdAt,
+      forkStep: (run as any).forkStep != null ? Number((run as any).forkStep) : null,
+      forkedFromRunId: (run as any).forkedFromRunId != null ? String((run as any).forkedFromRunId) : null,
     }));
   }, [selectedRuns]);
 

@@ -27,6 +27,8 @@ export interface RunDetails {
   statusUpdated: Date | null;
   projectName: string;
   externalId: string | null;
+  forkedFromRunId: number | null;
+  forkStep: number | null;
   logNames: {
     logName: string;
     logType: string;
@@ -93,6 +95,8 @@ export async function queryRunDetails(
     statusUpdated: run.statusUpdated,
     projectName: run.project.name,
     externalId: run.externalId,
+    forkedFromRunId: run.forkedFromRunId != null ? Number(run.forkedFromRunId) : null,
+    forkStep: run.forkStep != null ? Number(run.forkStep) : null,
     logNames: run.logs.map((log) => ({
       logName: log.logName,
       logType: log.logType,

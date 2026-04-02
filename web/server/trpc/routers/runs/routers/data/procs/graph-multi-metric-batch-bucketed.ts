@@ -4,6 +4,7 @@ import { resolveRunId } from "../../../../../../lib/resolve-run-id";
 import { queryRunMetricsMultiMetricBatchBucketed, toColumnar } from "../../../../../../lib/queries";
 import type { ColumnarBucketedSeries, DownsamplingAlgorithm } from "../../../../../../lib/queries";
 import { withBatchCache } from "../../../../../../lib/cache";
+import { queryLineageBucketed } from "./lineage-helpers";
 
 // Type for multi-metric batch bucketed graph data: logName → encoded runId → columnar series
 type GraphMultiMetricBatchBucketedData = Record<string, Record<string, ColumnarBucketedSeries>>;
@@ -18,6 +19,7 @@ export const graphMultiMetricBatchBucketedProcedure = protectedOrgProcedure
       stepMin: z.number().int().nonnegative().optional(),
       stepMax: z.number().int().nonnegative().optional(),
       preview: z.boolean().optional(),
+      includeLineage: z.boolean().optional(),
       algorithm: z.enum(["avg", "lttb"]).optional(),
     })
   )
@@ -31,6 +33,7 @@ export const graphMultiMetricBatchBucketedProcedure = protectedOrgProcedure
       stepMin,
       stepMax,
       preview,
+      includeLineage,
       algorithm,
     } = input;
 
@@ -45,9 +48,12 @@ export const graphMultiMetricBatchBucketedProcedure = protectedOrgProcedure
       numericToEncoded.set(numericRunIds[i], encoded);
     });
 
+    // For preview/zoom, use the fast batch query (no lineage stitching)
+    const isZoomOrPreview = !includeLineage || preview || (stepMin !== undefined && stepMax !== undefined);
+
     const result = await withBatchCache<GraphMultiMetricBatchBucketedData>(
       ctx,
-      "graphMultiMetricBatchBucketed",
+      isZoomOrPreview ? "graphMultiMetricBatchBucketed" : "graphMultiMetricBatchBucketedLineage",
       {
         runIds: numericRunIds,
         organizationId,
@@ -60,30 +66,53 @@ export const graphMultiMetricBatchBucketedProcedure = protectedOrgProcedure
         algorithm: algorithm ?? "avg",
       },
       async () => {
-        const grouped = await queryRunMetricsMultiMetricBatchBucketed(ctx.clickhouse, {
-          organizationId,
-          projectName,
-          runIds: numericRunIds,
-          logNames,
-          buckets,
-          stepMin,
-          stepMax,
-          preview,
-          algorithm,
-        });
+        if (isZoomOrPreview) {
+          // Fast path: single ClickHouse query, no lineage stitching
+          const grouped = await queryRunMetricsMultiMetricBatchBucketed(ctx.clickhouse, {
+            organizationId,
+            projectName,
+            runIds: numericRunIds,
+            logNames,
+            buckets,
+            stepMin,
+            stepMax,
+            preview,
+            algorithm,
+          });
 
-        // Re-key results by encoded runId and convert to columnar format
-        const data: GraphMultiMetricBatchBucketedData = {};
-        for (const [logName, byNumericRun] of Object.entries(grouped)) {
-          const byEncodedRun: Record<string, ColumnarBucketedSeries> = {};
-          for (const [numericId, points] of Object.entries(byNumericRun)) {
-            const encoded = numericToEncoded.get(Number(numericId));
-            if (encoded) {
-              byEncodedRun[encoded] = toColumnar(points);
+          const data: GraphMultiMetricBatchBucketedData = {};
+          for (const [logName, byNumericRun] of Object.entries(grouped)) {
+            const byEncodedRun: Record<string, ColumnarBucketedSeries> = {};
+            for (const [numericId, points] of Object.entries(byNumericRun)) {
+              const encoded = numericToEncoded.get(Number(numericId));
+              if (encoded) {
+                byEncodedRun[encoded] = toColumnar(points);
+              }
             }
+            data[logName] = byEncodedRun;
           }
-          data[logName] = byEncodedRun;
+          return data;
         }
+
+        // Normal path: lineage-aware per-run queries for inherited metric stitching
+        const data: GraphMultiMetricBatchBucketedData = {};
+        await Promise.all(
+          logNames.flatMap((logName) =>
+            numericRunIds.map(async (numericId) => {
+              const encoded = numericToEncoded.get(numericId);
+              if (!encoded) return;
+              const points = await queryLineageBucketed(
+                ctx.clickhouse,
+                ctx.prisma,
+                { organizationId, projectName, runId: numericId, logName, buckets },
+              );
+              if (points.length > 0) {
+                if (!data[logName]) data[logName] = {};
+                data[logName][encoded] = toColumnar(points);
+              }
+            }),
+          ),
+        );
         return data;
       },
     );

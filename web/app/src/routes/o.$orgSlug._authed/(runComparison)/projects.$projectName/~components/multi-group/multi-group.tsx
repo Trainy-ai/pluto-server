@@ -35,6 +35,8 @@ interface MultiGroupProps {
       status: RunStatus;
       displayId?: string | null;
       createdAt?: string;
+      forkStep?: number | null;
+      forkedFromRunId?: string | null;
     }[];
   }[];
   className?: string;
@@ -83,6 +85,8 @@ export const MultiGroup = ({
         color: line.color,
         createdAt: line.createdAt,
         displayId: line.displayId,
+        forkStep: line.forkStep,
+        forkedFromRunId: line.forkedFromRunId,
       }));
     });
   }, [metrics]);

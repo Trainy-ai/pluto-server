@@ -1,4 +1,4 @@
-import { useMemo, useRef, useEffect, useState, useCallback, memo } from "react";
+import { useMemo, useRef, useEffect, useState, memo } from "react";
 import { RefreshButton } from "@/components/core/refresh-button";
 import { LogSearch } from "./run-comparison/search";
 import { MemoizedMultiGroup } from "./multi-group/multi-group";
@@ -30,6 +30,10 @@ interface MetricsDisplayProps {
   selectedRuns?: Record<string, SelectedRunWithColor>;
   selectedViewId?: string | null;
   onViewChange?: (viewId: string | null) => void;
+  showInheritedMetrics?: boolean;
+  onInheritedChange?: (value: boolean) => void;
+  /** Experiment run ID lookup for group highlighting in experiments mode */
+  experimentRunIdsMap?: Map<string, string[]> | null;
 }
 
 /**
@@ -46,6 +50,9 @@ export const MetricsDisplay = memo(function MetricsDisplay({
   selectedRuns = {},
   selectedViewId: externalSelectedViewId,
   onViewChange: externalOnViewChange,
+  showInheritedMetrics: externalShowInherited,
+  onInheritedChange,
+  experimentRunIdsMap,
 }: MetricsDisplayProps) {
   const [searchState, setSearchState] = useState<SearchState>({
     query: "",
@@ -68,6 +75,27 @@ export const MetricsDisplay = memo(function MetricsDisplay({
     updateSmoothingSettings,
     getSmoothingConfig,
   } = useLineSettings(organizationId, projectName, "full");
+
+  // Sync inherited metrics: URL param → setting (on load)
+  useEffect(() => {
+    if (externalShowInherited !== undefined && externalShowInherited !== settings.showInheritedMetrics) {
+      updateSettings("showInheritedMetrics", externalShowInherited);
+    }
+  }, [externalShowInherited]);
+
+  // Sync inherited metrics: setting → URL param (on toggle in drawer)
+  // Skip the initial render to avoid overwriting the URL param on load
+  const inheritedInitRef = useRef(true);
+  useEffect(() => {
+    if (inheritedInitRef.current) {
+      inheritedInitRef.current = false;
+      return;
+    }
+    if (onInheritedChange) {
+      onInheritedChange(settings.showInheritedMetrics);
+    }
+  }, [settings.showInheritedMetrics, onInheritedChange]);
+
 
   const uniqueLogNames = Object.keys(groupedMetrics)
     .map((group) =>
@@ -138,7 +166,7 @@ export const MetricsDisplay = memo(function MetricsDisplay({
   // If a custom view is selected, render the DashboardBuilder
   if (selectedViewId && selectedView) {
     return (
-      <ChartSyncProvider syncKey={`dashboard-${selectedViewId}`}>
+      <ChartSyncProvider syncKey={`dashboard-${selectedViewId}`} experimentRunIdsMap={experimentRunIdsMap}>
         <FullscreenProvider>
         <div className="flex-1 space-y-4">
           <div className="sticky top-0 z-20 flex items-center gap-4 bg-background pb-2">
@@ -191,7 +219,7 @@ export const MetricsDisplay = memo(function MetricsDisplay({
 
   // Default "All Metrics" view
   return (
-    <ChartSyncProvider syncKey={`all-metrics-${projectName}`}>
+    <ChartSyncProvider syncKey={`all-metrics-${projectName}`} experimentRunIdsMap={experimentRunIdsMap}>
       <FullscreenProvider>
       <div className="flex-1 space-y-4">
         <div className="sticky top-0 z-20 flex items-center gap-4 bg-background pb-2">

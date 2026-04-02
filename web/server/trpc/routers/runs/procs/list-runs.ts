@@ -210,6 +210,7 @@ async function defaultCursorQuery(
   const selectClause = {
     id: true, name: true, number: true, status: true, statusUpdated: true,
     createdAt: true, updatedAt: true, tags: true, notes: true, externalId: true,
+    forkedFromRunId: true, forkStep: true,
     creator: { select: { name: true, email: true } },
     project: { select: { runPrefix: true } },
   };
@@ -239,7 +240,7 @@ async function defaultCursorQuery(
     const enriched = await attachFieldValues(ctx.prisma, runs);
     const nextOffset = runs.length === input.limit ? input.offset! + runs.length : null;
     return {
-      runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id) })),
+      runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id), forkedFromRunId: r.forkedFromRunId ? sqidEncode(r.forkedFromRunId) : null })),
       nextCursor: null,
       nextOffset,
     };
@@ -257,7 +258,7 @@ async function defaultCursorQuery(
   const enriched = await attachFieldValues(ctx.prisma, runs);
   const nextCursor = runs.length === input.limit ? runs[runs.length - 1].id : null;
   return {
-    runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id) })),
+    runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id), forkedFromRunId: r.forkedFromRunId ? sqidEncode(r.forkedFromRunId) : null })),
     nextCursor,
     nextOffset: null,
   };
@@ -401,6 +402,7 @@ async function defaultCursorQueryWithFieldFilters(
     select: {
       id: true, name: true, number: true, status: true, statusUpdated: true,
       createdAt: true, updatedAt: true, tags: true, notes: true, externalId: true,
+      forkedFromRunId: true, forkStep: true,
       creator: { select: { name: true, email: true } },
       project: { select: { runPrefix: true } },
     },
@@ -414,7 +416,7 @@ async function defaultCursorQueryWithFieldFilters(
   if (useOffset) {
     const nextOffset = runs.length === input.limit ? input.offset! + runs.length : null;
     return {
-      runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id) })),
+      runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id), forkedFromRunId: r.forkedFromRunId ? sqidEncode(r.forkedFromRunId) : null })),
       nextCursor: null,
       nextOffset,
     };
@@ -422,7 +424,7 @@ async function defaultCursorQueryWithFieldFilters(
 
   const nextCursor = runs.length === input.limit ? runs[runs.length - 1].id : null;
   return {
-    runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id) })),
+    runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id), forkedFromRunId: r.forkedFromRunId ? sqidEncode(r.forkedFromRunId) : null })),
     nextCursor,
     nextOffset: null,
   };
@@ -589,6 +591,7 @@ async function systemColumnSortQuery(
     select: {
       id: true, name: true, number: true, status: true, statusUpdated: true,
       createdAt: true, updatedAt: true, tags: true, notes: true, externalId: true,
+      forkedFromRunId: true, forkStep: true,
       creator: { select: { name: true, email: true } },
       project: { select: { runPrefix: true } },
     },
@@ -603,7 +606,7 @@ async function systemColumnSortQuery(
   if (useOffset) {
     const nextOffset = runs.length === input.limit ? input.offset! + runs.length : null;
     return {
-      runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id) })),
+      runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id), forkedFromRunId: r.forkedFromRunId ? sqidEncode(r.forkedFromRunId) : null })),
       nextCursor: null,
       nextOffset,
       sortCursor: null,
@@ -617,7 +620,7 @@ async function systemColumnSortQuery(
     : null;
 
   return {
-    runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id) })),
+    runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id), forkedFromRunId: r.forkedFromRunId ? sqidEncode(r.forkedFromRunId) : null })),
     nextCursor: null,
     nextOffset: null,
     sortCursor: nextSortCursor,
@@ -772,6 +775,7 @@ async function jsonFieldSortQuery(
     select: {
       id: true, name: true, number: true, status: true, statusUpdated: true,
       createdAt: true, updatedAt: true, tags: true, notes: true, externalId: true,
+      forkedFromRunId: true, forkStep: true,
       creator: { select: { name: true, email: true } },
       project: { select: { runPrefix: true } },
     },
@@ -787,7 +791,7 @@ async function jsonFieldSortQuery(
 
   const enriched = await attachFieldValues(ctx.prisma, runs);
   return {
-    runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id) })),
+    runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id), forkedFromRunId: r.forkedFromRunId ? sqidEncode(r.forkedFromRunId) : null })),
     nextCursor: null,
     nextOffset,
   };
@@ -858,6 +862,7 @@ async function metricSortQuery(
     select: {
       id: true, name: true, number: true, status: true, statusUpdated: true,
       createdAt: true, updatedAt: true, tags: true, notes: true, externalId: true,
+      forkedFromRunId: true, forkStep: true,
       creator: { select: { name: true, email: true } },
       project: { select: { runPrefix: true } },
     },
@@ -878,7 +883,7 @@ async function metricSortQuery(
   console.log(`[metricSortQuery] ${input.projectName} sort=${sortLogName} — PG candidates: ${(t1-t0).toFixed(0)}ms, CH sort: ${(t2-t1).toFixed(0)}ms, PG hydrate: ${(t3-t2).toFixed(0)}ms, fieldValues: ${(t4-t3).toFixed(0)}ms, total: ${(t4-t0).toFixed(0)}ms (${sortedRows.length} sorted, ${runs.length} hydrated)`);
 
   return {
-    runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id) })),
+    runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id), forkedFromRunId: r.forkedFromRunId ? sqidEncode(r.forkedFromRunId) : null })),
     nextCursor: null,
     nextOffset,
   };

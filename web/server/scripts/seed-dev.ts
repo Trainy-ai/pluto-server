@@ -1949,6 +1949,248 @@ async function main() {
   });
   console.log(`   Created dashboard view: "Sine Crossing Stress"`);
 
+  // ===================================================================
+  // 9. Seed forked runs for Neptune-style fork visualization testing
+  // ===================================================================
+  console.log('\n9. Seeding forked runs for fork visualization...');
+
+  const FORK_PROJECT = 'fork-demo';
+
+  // Ensure fork-demo project exists
+  let forkProject = await prisma.projects.findFirst({
+    where: { name: FORK_PROJECT, organizationId: org.id },
+  });
+  if (!forkProject) {
+    forkProject = await prisma.projects.create({
+      data: {
+        name: FORK_PROJECT,
+        organizationId: org.id,
+        nextRunNumber: 1,
+        runPrefix: 'FRK',
+      },
+    });
+    console.log(`   Created project: ${FORK_PROJECT}`);
+  }
+
+  // Check if fork runs already exist
+  const existingForkRuns = await prisma.runs.count({
+    where: { projectId: forkProject.id, organizationId: org.id },
+  });
+
+  if (existingForkRuns === 0) {
+    const forkBaseTime = new Date(Date.now() - 24 * 60 * 60 * 1000); // 24h ago
+
+    // Create root run: "llm_train-v945" steps 0-1000 (full training)
+    const rootRun = await prisma.runs.create({
+      data: {
+        name: 'llm_train-v945',
+        number: 1,
+        organizationId: org.id,
+        projectId: forkProject.id,
+        createdById: user.id,
+        creatorApiKeyId: apiKey.id,
+        status: 'COMPLETED',
+        tags: ['baseline'],
+        config: { model: 'llama-7b', lr: 0.0003, epochs: 50, optimizer: 'AdamW' },
+        createdAt: forkBaseTime,
+        updatedAt: forkBaseTime,
+      },
+    });
+
+    // Fork A: from root at step 500, continues to step 800
+    const forkA = await prisma.runs.create({
+      data: {
+        name: 'llm_train-v945',
+        number: 2,
+        organizationId: org.id,
+        projectId: forkProject.id,
+        createdById: user.id,
+        creatorApiKeyId: apiKey.id,
+        status: 'COMPLETED',
+        tags: ['fork-a'],
+        config: { model: 'llama-7b', lr: 0.0001, epochs: 50, optimizer: 'AdamW' },
+        forkedFromRunId: rootRun.id,
+        forkStep: BigInt(500),
+        createdAt: new Date(forkBaseTime.getTime() + 6 * 3600_000),
+        updatedAt: new Date(forkBaseTime.getTime() + 6 * 3600_000),
+      },
+    });
+
+    // Fork B: from root at step 300, continues to step 700
+    const forkB = await prisma.runs.create({
+      data: {
+        name: 'llm_train-v945',
+        number: 3,
+        organizationId: org.id,
+        projectId: forkProject.id,
+        createdById: user.id,
+        creatorApiKeyId: apiKey.id,
+        status: 'COMPLETED',
+        tags: ['fork-b'],
+        config: { model: 'llama-7b', lr: 0.0005, epochs: 50, optimizer: 'SGD' },
+        forkedFromRunId: rootRun.id,
+        forkStep: BigInt(300),
+        createdAt: new Date(forkBaseTime.getTime() + 8 * 3600_000),
+        updatedAt: new Date(forkBaseTime.getTime() + 8 * 3600_000),
+      },
+    });
+
+    // Fork C: from Fork A at step 700, continues to step 1000 (deep chain)
+    const forkC = await prisma.runs.create({
+      data: {
+        name: 'llm_train-v945',
+        number: 4,
+        organizationId: org.id,
+        projectId: forkProject.id,
+        createdById: user.id,
+        creatorApiKeyId: apiKey.id,
+        status: 'RUNNING',
+        tags: ['fork-c', 'deep-chain'],
+        config: { model: 'llama-7b', lr: 0.00005, epochs: 100, optimizer: 'AdamW' },
+        forkedFromRunId: forkA.id,
+        forkStep: BigInt(700),
+        createdAt: new Date(forkBaseTime.getTime() + 12 * 3600_000),
+        updatedAt: new Date(forkBaseTime.getTime() + 12 * 3600_000),
+      },
+    });
+
+    // A separate root run (different experiment) for "Experiments" tab testing
+    const rootRun2 = await prisma.runs.create({
+      data: {
+        name: 'llm_train-v816',
+        number: 5,
+        organizationId: org.id,
+        projectId: forkProject.id,
+        createdById: user.id,
+        creatorApiKeyId: apiKey.id,
+        status: 'COMPLETED',
+        tags: ['v816'],
+        config: { model: 'llama-13b', lr: 0.0002, epochs: 30 },
+        createdAt: new Date(forkBaseTime.getTime() + 2 * 3600_000),
+        updatedAt: new Date(forkBaseTime.getTime() + 2 * 3600_000),
+      },
+    });
+
+    // Update project counter
+    await prisma.projects.update({
+      where: { id: forkProject.id },
+      data: { nextRunNumber: 6 },
+    });
+
+    // Register metric log entries in PostgreSQL
+    const forkRuns = [rootRun, forkA, forkB, forkC, rootRun2];
+    const forkMetrics = ['eval/metrics/loss', 'eval/metrics/accuracy', 'train/loss'];
+    await prisma.runLogs.createMany({
+      data: forkRuns.flatMap((run) =>
+        forkMetrics.map((name) => ({
+          runId: run.id,
+          logGroup: name.split('/').slice(0, -1).join('/'),
+          logName: name,
+          logType: 'METRIC' as const,
+        })),
+      ),
+      skipDuplicates: true,
+    });
+
+    // Seed ClickHouse metrics for fork runs
+    const clickhouseUrl = process.env.CLICKHOUSE_URL;
+    const clickhouseUser = process.env.CLICKHOUSE_USER || 'default';
+    const clickhousePassword = process.env.CLICKHOUSE_PASSWORD || '';
+
+    if (clickhouseUrl) {
+      const ch = createClient({
+        url: clickhouseUrl,
+        username: clickhouseUser,
+        password: clickhousePassword,
+      });
+
+      const forkMetricRows: Record<string, unknown>[] = [];
+
+      // Helper: generate decaying loss curve with slight noise
+      const lossValue = (step: number, lr: number, seed: number) =>
+        12 * Math.exp(-step * lr * 0.005) * (1 + 0.03 * Math.sin(step * 0.1 + seed)) + 0.3;
+      const accValue = (step: number, lr: number, seed: number) =>
+        1 - lossValue(step, lr, seed) / 13;
+
+      // Root run: steps 0-1000
+      for (let step = 0; step <= 1000; step++) {
+        const t = new Date(forkBaseTime.getTime() + step * 60_000)
+          .toISOString().replace('T', ' ').replace('Z', '');
+        forkMetricRows.push(
+          { tenantId: org.id, projectName: FORK_PROJECT, runId: Number(rootRun.id), logGroup: 'eval/metrics', logName: 'eval/metrics/loss', time: t, step, value: lossValue(step, 0.0003, 0) },
+          { tenantId: org.id, projectName: FORK_PROJECT, runId: Number(rootRun.id), logGroup: 'eval/metrics', logName: 'eval/metrics/accuracy', time: t, step, value: accValue(step, 0.0003, 0) },
+          { tenantId: org.id, projectName: FORK_PROJECT, runId: Number(rootRun.id), logGroup: 'train', logName: 'train/loss', time: t, step, value: lossValue(step, 0.0003, 1) * 0.9 },
+        );
+      }
+
+      // Fork A: own data steps 501-800 (diverges with lower lr)
+      for (let step = 501; step <= 800; step++) {
+        const t = new Date(forkBaseTime.getTime() + (6 * 3600_000) + (step - 501) * 60_000)
+          .toISOString().replace('T', ' ').replace('Z', '');
+        forkMetricRows.push(
+          { tenantId: org.id, projectName: FORK_PROJECT, runId: Number(forkA.id), logGroup: 'eval/metrics', logName: 'eval/metrics/loss', time: t, step, value: lossValue(step, 0.0001, 10) },
+          { tenantId: org.id, projectName: FORK_PROJECT, runId: Number(forkA.id), logGroup: 'eval/metrics', logName: 'eval/metrics/accuracy', time: t, step, value: accValue(step, 0.0001, 10) },
+          { tenantId: org.id, projectName: FORK_PROJECT, runId: Number(forkA.id), logGroup: 'train', logName: 'train/loss', time: t, step, value: lossValue(step, 0.0001, 11) * 0.85 },
+        );
+      }
+
+      // Fork B: own data steps 301-700 (diverges with higher lr)
+      for (let step = 301; step <= 700; step++) {
+        const t = new Date(forkBaseTime.getTime() + (8 * 3600_000) + (step - 301) * 60_000)
+          .toISOString().replace('T', ' ').replace('Z', '');
+        forkMetricRows.push(
+          { tenantId: org.id, projectName: FORK_PROJECT, runId: Number(forkB.id), logGroup: 'eval/metrics', logName: 'eval/metrics/loss', time: t, step, value: lossValue(step, 0.0005, 20) },
+          { tenantId: org.id, projectName: FORK_PROJECT, runId: Number(forkB.id), logGroup: 'eval/metrics', logName: 'eval/metrics/accuracy', time: t, step, value: accValue(step, 0.0005, 20) },
+          { tenantId: org.id, projectName: FORK_PROJECT, runId: Number(forkB.id), logGroup: 'train', logName: 'train/loss', time: t, step, value: lossValue(step, 0.0005, 21) * 0.95 },
+        );
+      }
+
+      // Fork C: own data steps 701-1000 (from Fork A, very low lr)
+      for (let step = 701; step <= 1000; step++) {
+        const t = new Date(forkBaseTime.getTime() + (12 * 3600_000) + (step - 701) * 60_000)
+          .toISOString().replace('T', ' ').replace('Z', '');
+        forkMetricRows.push(
+          { tenantId: org.id, projectName: FORK_PROJECT, runId: Number(forkC.id), logGroup: 'eval/metrics', logName: 'eval/metrics/loss', time: t, step, value: lossValue(step, 0.00005, 30) },
+          { tenantId: org.id, projectName: FORK_PROJECT, runId: Number(forkC.id), logGroup: 'eval/metrics', logName: 'eval/metrics/accuracy', time: t, step, value: accValue(step, 0.00005, 30) },
+          { tenantId: org.id, projectName: FORK_PROJECT, runId: Number(forkC.id), logGroup: 'train', logName: 'train/loss', time: t, step, value: lossValue(step, 0.00005, 31) * 0.8 },
+        );
+      }
+
+      // Root run 2: steps 0-800 (separate experiment)
+      for (let step = 0; step <= 800; step++) {
+        const t = new Date(forkBaseTime.getTime() + (2 * 3600_000) + step * 60_000)
+          .toISOString().replace('T', ' ').replace('Z', '');
+        forkMetricRows.push(
+          { tenantId: org.id, projectName: FORK_PROJECT, runId: Number(rootRun2.id), logGroup: 'eval/metrics', logName: 'eval/metrics/loss', time: t, step, value: lossValue(step, 0.0002, 40) },
+          { tenantId: org.id, projectName: FORK_PROJECT, runId: Number(rootRun2.id), logGroup: 'eval/metrics', logName: 'eval/metrics/accuracy', time: t, step, value: accValue(step, 0.0002, 40) },
+          { tenantId: org.id, projectName: FORK_PROJECT, runId: Number(rootRun2.id), logGroup: 'train', logName: 'train/loss', time: t, step, value: lossValue(step, 0.0002, 41) * 0.88 },
+        );
+      }
+
+      // Insert all fork metrics
+      console.log(`   Inserting ${forkMetricRows.length.toLocaleString()} fork metric rows...`);
+      for (let i = 0; i < forkMetricRows.length; i += 50000) {
+        await ch.insert({
+          table: 'mlop_metrics',
+          values: forkMetricRows.slice(i, i + 50000),
+          format: 'JSONEachRow',
+        });
+      }
+
+      await ch.close();
+      console.log(`   Seeded fork metrics for ${forkRuns.length} runs`);
+    }
+
+    console.log(`   Created fork lineage:`);
+    console.log(`     Root (llm_train-v945): steps 0-1000`);
+    console.log(`     ├─ Fork A (lr=0.0001): forked@500, own steps 501-800`);
+    console.log(`     │  └─ Fork C (lr=0.00005): forked@700, own steps 701-1000`);
+    console.log(`     └─ Fork B (lr=0.0005): forked@300, own steps 301-700`);
+    console.log(`     Root2 (llm_train-v816): steps 0-800 (separate experiment)`);
+  } else {
+    console.log(`   Fork runs already exist (${existingForkRuns} runs)`);
+  }
+
   console.log('\n' + '='.repeat(50));
   console.log('Development data seeded successfully!\n');
   console.log('Login credentials:');

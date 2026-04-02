@@ -3,7 +3,7 @@ import { protectedOrgProcedure } from "../../../../../../lib/trpc";
 import { resolveRunId } from "../../../../../../lib/resolve-run-id";
 import { getLogGroupName } from "../../../../../../lib/utilts";
 import { withCache } from "../../../../../../lib/cache";
-import { queryRunMetricsBucketedByLogName } from "../../../../../../lib/queries";
+import { queryRunMetricsBucketedByLogName, queryLineageMetricsBucketedByLogName } from "../../../../../../lib/queries";
 import type { BucketedMetricDataPoint } from "../../../../../../lib/queries";
 
 export const graphBucketedProcedure = protectedOrgProcedure
@@ -45,7 +45,7 @@ export const graphBucketedProcedure = protectedOrgProcedure
       "graphBucketed",
       { runId, organizationId, projectName, logName, logGroup, buckets, algorithm },
       async () => {
-        return queryRunMetricsBucketedByLogName(ctx.clickhouse, {
+        return queryLineageMetricsBucketedByLogName(ctx.clickhouse, ctx.prisma, {
           organizationId,
           projectName,
           runId,

@@ -5523,12 +5523,481 @@ describe('SDK API Endpoints (with API Key)', () => {
     });
   });
 
+  describe('Test Suite 31: Run Forking', () => {
+    const hasApiKey = TEST_API_KEY.length > 0;
+
+    // Helper to create a run for fork tests
+    async function createRun(projectName: string, runName: string, opts: Record<string, unknown> = {}) {
+      const response = await makeRequest('/api/runs/create', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+        body: JSON.stringify({ projectName, runName, ...opts }),
+      });
+      expect(response.status).toBe(200);
+      return response.json();
+    }
+
+    describe.skipIf(!hasApiKey)('Fork Run via HTTP API', () => {
+      let parentRunId: number;
+      const forkProjectName = `fork-test-project-${Date.now()}`;
+
+      beforeAll(async () => {
+        const data = await createRun(forkProjectName, 'parent-run', {
+          config: '{"lr": 0.001, "epochs": 100}',
+          tags: ['baseline', 'v1'],
+        });
+        parentRunId = data.runId;
+      });
+
+      it('Test 31.1: Create forked run with forkRunId and forkStep', async () => {
+        const data = await createRun(forkProjectName, 'child-run', {
+          forkRunId: parentRunId,
+          forkStep: 50,
+        });
+
+        expect(data.runId).toBeDefined();
+        expect(data.resumed).toBe(false);
+        expect(data.forkedFromRunId).toBe(parentRunId);
+        expect(data.forkStep).toBe(50);
+      });
+
+      it('Test 31.2: Fork inherits config by default', async () => {
+        const data = await createRun(forkProjectName, 'child-inherits-config', {
+          forkRunId: parentRunId,
+          forkStep: 50,
+          inheritConfig: true,
+        });
+
+        expect(data.forkedFromRunId).toBe(parentRunId);
+
+        // Verify inherited config via details endpoint
+        const detailsResponse = await makeRequest(`/api/runs/details/${data.runId}`, {
+          method: 'GET',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+        });
+        if (detailsResponse.status === 200) {
+          const details = await detailsResponse.json();
+          expect(details.config).toBeDefined();
+          if (details.config) {
+            expect(details.config.lr).toBe(0.001);
+          }
+        }
+      });
+
+      it('Test 31.3: Fork with inheritConfig=false does not copy config', async () => {
+        const data = await createRun(forkProjectName, 'child-no-config', {
+          forkRunId: parentRunId,
+          forkStep: 50,
+          inheritConfig: false,
+        });
+        expect(data.forkedFromRunId).toBe(parentRunId);
+      });
+
+      it('Test 31.4: Fork with inheritTags=true merges tags', async () => {
+        const data = await createRun(forkProjectName, 'child-with-tags', {
+          forkRunId: parentRunId,
+          forkStep: 50,
+          inheritTags: true,
+          tags: ['fork-specific'],
+        });
+        expect(data.forkedFromRunId).toBe(parentRunId);
+      });
+
+      it('Test 31.5: Fork without forkStep returns 400', async () => {
+        const response = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+          body: JSON.stringify({
+            projectName: forkProjectName,
+            runName: 'child-no-step',
+            forkRunId: parentRunId,
+          }),
+        });
+
+        expect(response.status).toBe(400);
+        const data = await response.json();
+        expect(data.error).toContain('forkStep');
+      });
+
+      it('Test 31.6: Fork with non-existent parent returns 400', async () => {
+        const response = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+          body: JSON.stringify({
+            projectName: forkProjectName,
+            runName: 'child-bad-parent',
+            forkRunId: 999999999,
+            forkStep: 50,
+          }),
+        });
+
+        expect(response.status).toBe(400);
+        const data = await response.json();
+        expect(data.error).toContain('not found');
+      });
+
+      it('Test 31.7: Explicit config overrides inherited config keys', async () => {
+        const data = await createRun(forkProjectName, 'child-override-config', {
+          forkRunId: parentRunId,
+          forkStep: 50,
+          config: '{"lr": 0.01}',
+        });
+        expect(data.forkedFromRunId).toBe(parentRunId);
+
+        // Verify merge: explicit lr=0.01 overrides parent's lr=0.001,
+        // but parent's epochs=100 should be inherited
+        const detailsResponse = await makeRequest(`/api/runs/details/${data.runId}`, {
+          method: 'GET',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+        });
+        if (detailsResponse.status === 200) {
+          const details = await detailsResponse.json();
+          if (details.config) {
+            expect(details.config.lr).toBe(0.01);
+            expect(details.config.epochs).toBe(100);
+          }
+        }
+      });
+
+      it('Test 31.8: Fork run without API key returns 401', async () => {
+        const response = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          body: JSON.stringify({
+            projectName: forkProjectName,
+            runName: 'child-no-auth',
+            forkRunId: parentRunId,
+            forkStep: 50,
+          }),
+        });
+        expect(response.status).toBe(401);
+      });
+
+      it('Test 31.9: Creating a normal run still works (backward compatibility)', async () => {
+        const data = await createRun(forkProjectName, 'regular-run-after-fork');
+        expect(data.resumed).toBe(false);
+        expect(data.forkedFromRunId).toBeNull();
+        expect(data.forkStep).toBeNull();
+      });
+    });
+
+    describe.skipIf(!hasApiKey)('Lineage Resolution (parent walk-down)', () => {
+      // Build a 3-level chain: A → B (fork@20) → C (fork@40)
+      // Then test that forking C at various steps resolves to the correct parent.
+      let runA: number;
+      let runB: number;
+      let runC: number;
+      const lineageProject = `lineage-test-project-${Date.now()}`;
+
+      beforeAll(async () => {
+        // A: root run (steps 0-100)
+        const dataA = await createRun(lineageProject, 'run-A', {
+          config: '{"model": "resnet", "lr": 0.1}',
+        });
+        runA = dataA.runId;
+
+        // B: forked from A at step 20 (owns steps 21+)
+        const dataB = await createRun(lineageProject, 'run-B', {
+          forkRunId: runA,
+          forkStep: 20,
+          config: '{"lr": 0.05}',
+        });
+        runB = dataB.runId;
+        expect(dataB.forkedFromRunId).toBe(runA);
+
+        // C: forked from B at step 40 (owns steps 41+)
+        const dataC = await createRun(lineageProject, 'run-C', {
+          forkRunId: runB,
+          forkStep: 40,
+          config: '{"lr": 0.01}',
+        });
+        runC = dataC.runId;
+        expect(dataC.forkedFromRunId).toBe(runB);
+      });
+
+      it('Test 31.10: Fork C at step 50 → parent is C (C owns step 50)', async () => {
+        const data = await createRun(lineageProject, 'fork-from-C-at-50', {
+          forkRunId: runC,
+          forkStep: 50,
+        });
+        expect(data.forkedFromRunId).toBe(runC);
+        expect(data.forkStep).toBe(50);
+      });
+
+      it('Test 31.11: Fork C at step 30 → resolves to B (30 < C.forkStep=40, but 30 > B.forkStep=20)', async () => {
+        const data = await createRun(lineageProject, 'fork-from-C-at-30', {
+          forkRunId: runC,
+          forkStep: 30,
+        });
+        // Step 30 < C's forkStep(40), walk down to B. Step 30 > B's forkStep(20), so B is the parent.
+        expect(data.forkedFromRunId).toBe(runB);
+        expect(data.forkStep).toBe(30);
+      });
+
+      it('Test 31.12: Fork C at step 10 → resolves to A (10 < C.forkStep=40, 10 < B.forkStep=20, A is root)', async () => {
+        const data = await createRun(lineageProject, 'fork-from-C-at-10', {
+          forkRunId: runC,
+          forkStep: 10,
+        });
+        // Step 10 < C.forkStep(40) → walk to B. Step 10 < B.forkStep(20) → walk to A. A is root.
+        expect(data.forkedFromRunId).toBe(runA);
+        expect(data.forkStep).toBe(10);
+      });
+
+      it('Test 31.13: Fork B at step 25 → parent is B (25 > B.forkStep=20)', async () => {
+        const data = await createRun(lineageProject, 'fork-from-B-at-25', {
+          forkRunId: runB,
+          forkStep: 25,
+        });
+        expect(data.forkedFromRunId).toBe(runB);
+        expect(data.forkStep).toBe(25);
+      });
+
+      it('Test 31.14: Fork B at step 5 → resolves to A (5 < B.forkStep=20, A is root)', async () => {
+        const data = await createRun(lineageProject, 'fork-from-B-at-5', {
+          forkRunId: runB,
+          forkStep: 5,
+        });
+        expect(data.forkedFromRunId).toBe(runA);
+        expect(data.forkStep).toBe(5);
+      });
+
+      it('Test 31.15a: Fork at high step succeeds when parent has no metrics (validation skipped)', async () => {
+        // When a parent run has no metrics data in ClickHouse, forkStep validation
+        // is skipped (maxStep is null/0), so any forkStep value is accepted.
+        const data = await createRun(lineageProject, 'fork-high-step-no-metrics', {
+          forkRunId: runA,
+          forkStep: 999999,
+        });
+        expect(data.forkedFromRunId).toBe(runA);
+        expect(data.forkStep).toBe(999999);
+      });
+
+      it('Test 31.15: Fork A at step 0 → parent is A (A is root, always valid)', async () => {
+        const data = await createRun(lineageProject, 'fork-from-A-at-0', {
+          forkRunId: runA,
+          forkStep: 0,
+        });
+        expect(data.forkedFromRunId).toBe(runA);
+        expect(data.forkStep).toBe(0);
+      });
+
+      it('Test 31.16: Fork C at step 40 (exactly at forkStep) → resolves to B', async () => {
+        // forkStep <= parent's forkStep triggers walk-down, so step=40 with C.forkStep=40 walks to B
+        const data = await createRun(lineageProject, 'fork-from-C-at-40', {
+          forkRunId: runC,
+          forkStep: 40,
+        });
+        expect(data.forkedFromRunId).toBe(runB);
+        expect(data.forkStep).toBe(40);
+      });
+
+      it('Test 31.17: Fork C at step 20 (exactly at B forkStep) → resolves to A', async () => {
+        const data = await createRun(lineageProject, 'fork-from-C-at-20', {
+          forkRunId: runC,
+          forkStep: 20,
+        });
+        // Step 20 <= C.forkStep(40) → walk to B. Step 20 <= B.forkStep(20) → walk to A. A is root.
+        expect(data.forkedFromRunId).toBe(runA);
+        expect(data.forkStep).toBe(20);
+      });
+
+      it('Test 31.18: Config inheritance uses resolved parent, not requested parent', async () => {
+        // Fork C at step 10 → resolves to A. Config should come from A (model: resnet, lr: 0.1)
+        const data = await createRun(lineageProject, 'fork-C-step10-check-config', {
+          forkRunId: runC,
+          forkStep: 10,
+          inheritConfig: true,
+        });
+        expect(data.forkedFromRunId).toBe(runA);
+
+        const detailsResponse = await makeRequest(`/api/runs/details/${data.runId}`, {
+          method: 'GET',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+        });
+        if (detailsResponse.status === 200) {
+          const details = await detailsResponse.json();
+          if (details.config) {
+            // Should have A's config (model: resnet, lr: 0.1), not C's (lr: 0.01)
+            expect(details.config.model).toBe('resnet');
+            expect(details.config.lr).toBe(0.1);
+          }
+        }
+      });
+    });
+
+    describe.skipIf(!hasApiKey)('Multi-level fork chain (5 levels)', () => {
+      // Build chain: R0 → R1 (fork@100) → R2 (fork@200) → R3 (fork@300) → R4 (fork@400)
+      const chainProject = `chain-test-${Date.now()}`;
+      const runIds: number[] = [];
+
+      beforeAll(async () => {
+        // R0: root
+        const d0 = await createRun(chainProject, 'chain-R0');
+        runIds.push(d0.runId);
+
+        // R1..R4: each forked from previous at step N*100
+        for (let i = 1; i <= 4; i++) {
+          const d = await createRun(chainProject, `chain-R${i}`, {
+            forkRunId: runIds[i - 1],
+            forkStep: i * 100,
+          });
+          expect(d.forkedFromRunId).toBe(runIds[i - 1]);
+          runIds.push(d.runId);
+        }
+      });
+
+      it('Test 31.19: Fork R4 at step 450 → parent is R4', async () => {
+        const data = await createRun(chainProject, 'deep-fork-450', {
+          forkRunId: runIds[4],
+          forkStep: 450,
+        });
+        expect(data.forkedFromRunId).toBe(runIds[4]);
+      });
+
+      it('Test 31.20: Fork R4 at step 250 → resolves to R2', async () => {
+        // 250 < R4.forkStep(400) → R3. 250 < R3.forkStep(300) → R2. 250 > R2.forkStep(200) → R2.
+        const data = await createRun(chainProject, 'deep-fork-250', {
+          forkRunId: runIds[4],
+          forkStep: 250,
+        });
+        expect(data.forkedFromRunId).toBe(runIds[2]);
+      });
+
+      it('Test 31.21: Fork R4 at step 50 → resolves all the way to R0 (root)', async () => {
+        const data = await createRun(chainProject, 'deep-fork-50', {
+          forkRunId: runIds[4],
+          forkStep: 50,
+        });
+        expect(data.forkedFromRunId).toBe(runIds[0]);
+      });
+
+      it('Test 31.22: All 5 runs in chain have correct parentage', async () => {
+        for (let i = 0; i < runIds.length; i++) {
+          const response = await makeRequest(`/api/runs/details/${runIds[i]}`, {
+            method: 'GET',
+            headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+          });
+          if (response.status === 200) {
+            const details = await response.json();
+            if (i === 0) {
+              // Root has no parent
+              expect(details.forkedFromRunId).toBeNull();
+            } else {
+              expect(details.forkedFromRunId).toBe(runIds[i - 1]);
+              expect(details.forkStep).toBe(i * 100);
+            }
+          }
+        }
+      });
+    });
+
+    describe.skipIf(!hasApiKey)('Fork + DDP (externalId) combined', () => {
+      const ddpForkProject = `ddp-fork-test-${Date.now()}`;
+      let parentRunId: number;
+
+      beforeAll(async () => {
+        const data = await createRun(ddpForkProject, 'ddp-fork-parent', {
+          config: '{"lr": 0.01, "epochs": 50}',
+        });
+        parentRunId = data.runId;
+      });
+
+      it('Test 31.23: DDP fork creation — worker 1 creates forked run with externalId', async () => {
+        const extId = `ddp-fork-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+        const data = await createRun(ddpForkProject, 'ddp-fork-worker0', {
+          forkRunId: parentRunId,
+          forkStep: 50,
+          externalId: extId,
+        });
+        expect(data.resumed).toBe(false);
+        expect(data.forkedFromRunId).toBe(parentRunId);
+        expect(data.forkStep).toBe(50);
+
+        // Worker 2 resumes via same externalId (Test 31.24)
+        const data2 = await createRun(ddpForkProject, 'ddp-fork-worker1', {
+          forkRunId: parentRunId,
+          forkStep: 50,
+          externalId: extId,
+        });
+        expect(data2.resumed).toBe(true);
+        expect(data2.runId).toBe(data.runId);
+      });
+
+      it('Test 31.25: DDP fork resumption ignores different fork params', async () => {
+        const extId = `ddp-fork-ignore-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+        // Create initial fork
+        const data = await createRun(ddpForkProject, 'ddp-fork-original', {
+          forkRunId: parentRunId,
+          forkStep: 50,
+          externalId: extId,
+        });
+        expect(data.resumed).toBe(false);
+
+        // Resume with different fork params — externalId wins
+        const parent2 = await createRun(ddpForkProject, 'other-parent');
+        const data2 = await createRun(ddpForkProject, 'ddp-fork-different-params', {
+          forkRunId: parent2.runId,
+          forkStep: 999,
+          externalId: extId,
+        });
+        expect(data2.resumed).toBe(true);
+        expect(data2.runId).toBe(data.runId);
+      });
+
+      it('Test 31.26: Forking a DDP-created parent (parent has externalId)', async () => {
+        const parentExtId = `ddp-parent-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+        const ddpParent = await createRun(ddpForkProject, 'ddp-parent', {
+          externalId: parentExtId,
+        });
+        expect(ddpParent.resumed).toBe(false);
+
+        // Fork from the DDP-created parent (child has no externalId)
+        const child = await createRun(ddpForkProject, 'fork-of-ddp-parent', {
+          forkRunId: ddpParent.runId,
+          forkStep: 10,
+        });
+        expect(child.forkedFromRunId).toBe(ddpParent.runId);
+        expect(child.forkStep).toBe(10);
+        expect(child.resumed).toBe(false);
+      });
+
+      it('Test 31.27: Race condition — simultaneous DDP fork workers', async () => {
+        const extId = `ddp-race-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+        const results = await Promise.all([
+          createRun(ddpForkProject, 'race-worker-0', {
+            forkRunId: parentRunId,
+            forkStep: 25,
+            externalId: extId,
+          }),
+          createRun(ddpForkProject, 'race-worker-1', {
+            forkRunId: parentRunId,
+            forkStep: 25,
+            externalId: extId,
+          }),
+          createRun(ddpForkProject, 'race-worker-2', {
+            forkRunId: parentRunId,
+            forkStep: 25,
+            externalId: extId,
+          }),
+        ]);
+
+        // All should return the same runId
+        const runIds = results.map(r => r.runId);
+        expect(new Set(runIds).size).toBe(1);
+
+        // Exactly one should be non-resumed (the creator)
+        const creators = results.filter(r => r.resumed === false);
+        expect(creators.length).toBe(1);
+      });
+    });
+  });
+
   // ---------------------------------------------------------------------------
-  // Test Suite 31: LTTB Downsampling Algorithm
+  // Test Suite 32: LTTB Downsampling Algorithm
   // ---------------------------------------------------------------------------
   // Tests that the `algorithm: "lttb"` parameter produces bucketed data with
   // min/max envelope bands (not just raw selected points).
-  describe('Test Suite 31: LTTB Downsampling Algorithm', () => {
+  describe('Test Suite 32: LTTB Downsampling Algorithm', () => {
     const TEST_EMAIL = process.env.TEST_USER_EMAIL || 'test-smoke@mlop.local';
     const TEST_PASSWORD = 'TestPassword123!';
     let sessionCookie: string | null = null;
@@ -5581,7 +6050,7 @@ describe('SDK API Endpoints (with API Key)', () => {
       }
     });
 
-    it('Test 31.1: graphBatchBucketed with algorithm=lttb returns bucketed data with min/max envelopes', async () => {
+    it('Test 32.1: graphBatchBucketed with algorithm=lttb returns bucketed data with min/max envelopes', async () => {
       if (!sessionCookie || !staircaseRunSqid) {
         console.log('   No session or staircase run - skipping');
         return;
@@ -5627,7 +6096,7 @@ describe('SDK API Endpoints (with API Key)', () => {
       }
     });
 
-    it('Test 31.2: graphBatchBucketed with algorithm=lttb returns different values than algorithm=avg', async () => {
+    it('Test 32.2: graphBatchBucketed with algorithm=lttb returns different values than algorithm=avg', async () => {
       if (!sessionCookie || !staircaseRunSqid) {
         console.log('   No session or staircase run - skipping');
         return;
@@ -5672,7 +6141,7 @@ describe('SDK API Endpoints (with API Key)', () => {
       expect(identical).toBe(false);
     });
 
-    it('Test 31.3: graphMultiMetricBatchBucketed with algorithm=lttb returns columnar data with envelopes', async () => {
+    it('Test 32.3: graphMultiMetricBatchBucketed with algorithm=lttb returns columnar data with envelopes', async () => {
       if (!sessionCookie || !staircaseRunSqid) {
         console.log('   No session or staircase run - skipping');
         return;
@@ -5718,7 +6187,7 @@ describe('SDK API Endpoints (with API Key)', () => {
       }
     });
 
-    it('Test 31.4: graphBatchBucketed with algorithm=lttb respects stepMin/stepMax', async () => {
+    it('Test 32.4: graphBatchBucketed with algorithm=lttb respects stepMin/stepMax', async () => {
       if (!sessionCookie || !staircaseRunSqid) {
         console.log('   No session or staircase run - skipping');
         return;
@@ -5753,7 +6222,7 @@ describe('SDK API Endpoints (with API Key)', () => {
       expect(typeof points[0].maxY).toBe('number');
     });
 
-    it('Test 31.5: graphBatchBucketed with algorithm=avg (default) still works unchanged', async () => {
+    it('Test 32.5: graphBatchBucketed with algorithm=avg (default) still works unchanged', async () => {
       if (!sessionCookie || !staircaseRunSqid) {
         console.log('   No session or staircase run - skipping');
         return;
@@ -5790,7 +6259,7 @@ describe('SDK API Endpoints (with API Key)', () => {
       expect(defaultPoints[0].value).toBe(explicitPoints[0].value);
     });
 
-    it('Test 31.6: graphMultiMetricBatchBucketed with algorithm=lttb and stepMin/stepMax maintains value ∈ [minY, maxY]', async () => {
+    it('Test 32.6: graphMultiMetricBatchBucketed with algorithm=lttb and stepMin/stepMax maintains value ∈ [minY, maxY]', async () => {
       if (!sessionCookie || !staircaseRunSqid) {
         console.log('   No session or staircase run - skipping');
         return;

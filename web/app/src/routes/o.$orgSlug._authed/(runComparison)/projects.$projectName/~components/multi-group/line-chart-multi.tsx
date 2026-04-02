@@ -2,6 +2,7 @@
 
 import { default as LineChart } from "@/components/charts/line-wrapper";
 import { memo, useEffect, useMemo } from "react";
+import { computeExperimentSegments } from "@/lib/experiment-data-utils";
 import { useQueries, keepPreviousData } from "@tanstack/react-query";
 import { trpc, trpcClient } from "@/utils/trpc";
 import { useCheckDatabaseSize } from "@/lib/db/local-cache";
@@ -65,6 +66,8 @@ interface MultiLineChartProps {
     color: string;
     createdAt?: string;
     displayId?: string | null;
+    forkStep?: number | null;
+    forkedFromRunId?: string | null;
   }[];
   title: string;
   /** Subtitle shown in tooltip header (e.g. chip/pattern names) */
@@ -147,6 +150,30 @@ const MultiLineChartInner = memo(
 
     // Use run-specific settings when available, otherwise fall back to "full"
     const { settings } = useLineSettings(organizationId, projectName, settingsRunId ?? "full");
+
+    // Read view settings from URL params, falling back to persisted settings.
+    const urlParams = typeof window !== "undefined"
+      ? new URLSearchParams(window.location.search) : null;
+    const isExperimentsMode = urlParams?.get("listMode") === "experiments";
+    // In experiments mode, enable lineage so forks inherit parent data to fill gaps.
+    // The experiment segment filter will then truncate each run to its exclusive range.
+    const showInheritedMetrics = isExperimentsMode ? true : (() => {
+      const v = urlParams?.get("inherited");
+      if (v === "true") return true;
+      if (v === "false") return false;
+      return settings.showInheritedMetrics;
+    })();
+
+    // Build forkSteps map for chart annotations (runId → forkStep)
+    const forkSteps = useMemo(() => {
+      const map = new Map<string, number>();
+      for (const line of lines) {
+        if (line.forkStep != null) {
+          map.set(line.runId, line.forkStep);
+        }
+      }
+      return map;
+    }, [lines]);
 
     // Resolve bucket count from user settings — auto mode boosts when smoothing is off
     const standardBuckets = useMemo(
@@ -234,6 +261,7 @@ const MultiLineChartInner = memo(
               logNames: chunk,
               runIds,
               buckets: standardBuckets,
+              includeLineage: showInheritedMetrics && forkSteps.size > 0,
               algorithm: algorithm !== "avg" ? algorithm : undefined,
             };
             return {
@@ -258,6 +286,7 @@ const MultiLineChartInner = memo(
               logName: metric,
               runIds,
               buckets: standardBuckets,
+              includeLineage: showInheritedMetrics && forkSteps.size > 0,
               algorithm: algorithm !== "avg" ? algorithm : undefined,
             };
             return {
@@ -465,6 +494,34 @@ const MultiLineChartInner = memo(
         .filter((item) => item.data.length > 0);
     }, [standardDataMap, queryPairs]);
 
+    // In experiments mode, apply piecewise segmentation: each run only shows its
+    // exclusive step range so the experiment graph has no overlapping data.
+    // Uses parent-child relationships to correctly determine truncation points.
+    const experimentSegments = useMemo(() => {
+      if (!isExperimentsMode) return null;
+      const segmentInfos = lines.map((l) => ({
+        runId: l.runId,
+        forkStep: l.forkStep ?? null,
+        forkedFromRunId: l.forkedFromRunId ?? null,
+      }));
+      return computeExperimentSegments(segmentInfos);
+    }, [isExperimentsMode, lines]);
+
+    const filteredAllData = useMemo(() => {
+      if (!experimentSegments || allData.length === 0) return allData;
+      const segmentMap = new Map(experimentSegments.map((s) => [s.runId, s]));
+      return allData.map((item) => {
+        const seg = segmentMap.get(item.pair.line.runId);
+        if (!seg) return item;
+        const filtered = item.data.filter((d) => {
+          if (d.step < seg.minStep) return false;
+          if (seg.maxStep != null && d.step > seg.maxStep) return false;
+          return true;
+        });
+        return { ...item, data: filtered };
+      });
+    }, [allData, experimentSegments]);
+
     // Also get custom log data if applicable - memoized
     const customLogData = useMemo(() => {
       return customLogQueries.map((query, index) => ({
@@ -473,7 +530,7 @@ const MultiLineChartInner = memo(
       }));
     }, [customLogQueries, lines]);
 
-    const hasAnyData = allData.some((item) => item.data?.length > 0);
+    const hasAnyData = filteredAllData.some((item) => item.data?.length > 0);
     const allQueriesDone = isMultiMetricQuery
       ? standardMultiQueries.every((q) => !q.isLoading)
       : standardSingleQueries.every((query) => !query.isLoading);
@@ -544,7 +601,7 @@ const MultiLineChartInner = memo(
         // Keep x-values in raw seconds — the axis formatter picks display units
         // dynamically based on the visible range. This ensures system charts use
         // the same numeric scale as regular relative time charts for zoom sync.
-        const chartData = allData
+        const chartData = filteredAllData
           .filter((item) => item.data.length > 0)
           .flatMap(({ data, pair }) => {
             const sortedData = [...data].sort(
@@ -575,7 +632,7 @@ const MultiLineChartInner = memo(
       // Handle different chart types based on effective x-axis
       switch (effectiveXAxis) {
         case "Absolute Time": {
-          const data = allData
+          const data = filteredAllData
             .filter((item) => item.data.length > 0)
             .flatMap(({ data, pair }) => {
               const props = seriesProps(pair);
@@ -601,7 +658,7 @@ const MultiLineChartInner = memo(
           // time charts (including system charts) share the same numeric scale
           // and can sync zoom correctly.
           // Priority: zoom refetch data > standard data (same as Step mode)
-          const data = allData
+          const data = filteredAllData
             .filter((item) => item.data.length > 0)
             .flatMap(({ data: tierData, pair }) => {
               const key = zoomKey(pair.line.runId, pair.metric);
@@ -634,7 +691,7 @@ const MultiLineChartInner = memo(
         case "Step": {
           // Default step-based chart
           // Priority: zoom refetch data > standard data
-          const data = allData
+          const data = filteredAllData
             .filter((item) => item.data.length > 0)
             .flatMap(({ data: tierData, pair }) => {
               const key = zoomKey(pair.line.runId, pair.metric);
@@ -671,7 +728,7 @@ const MultiLineChartInner = memo(
           const validChartData: {
             pair: typeof queryPairs[0];
             alignedData: { x: number[]; y: number[] } | null;
-          }[] = allData
+          }[] = filteredAllData
             .filter((item) => item.data.length > 0)
             .map(({ data, pair }) => {
               // Find matching custom log data for this run
@@ -736,7 +793,7 @@ const MultiLineChartInner = memo(
           };
         }
       }
-    }, [allData, customLogData, settings, effectiveXAxis, title, xlabel, hasAnyData, queryPairs, getSeriesLabel, zoomDataMap, isMultiMetric, isMultiRun, chartColors, metricNames, lines, runBaselineMap]);
+    }, [filteredAllData, customLogData, settings, effectiveXAxis, title, xlabel, hasAnyData, queryPairs, getSeriesLabel, zoomDataMap, isMultiMetric, isMultiRun, chartColors, metricNames, lines, runBaselineMap]);
 
     // Too many series warning
     if (tooManySeries) {
@@ -853,6 +910,7 @@ const MultiLineChartInner = memo(
           onZoomRangeChange={onZoomRangeChange}
           yZoomRange={yZoomRange}
           onYZoomRangeChange={onYZoomRangeChange}
+          forkSteps={showInheritedMetrics ? forkSteps : undefined}
         />
       </div>
     );

@@ -40,6 +40,8 @@ interface LineChartWrapperProps extends React.HTMLAttributes<HTMLDivElement> {
   yZoomRange?: [number, number] | null;
   /** Called when user drags to zoom Y axis, or null on reset */
   onYZoomRangeChange?: (range: [number, number] | null) => void;
+  /** Map of runId → forkStep for drawing vertical fork annotations */
+  forkSteps?: Map<string, number>;
 }
 
 // Loading fallback for lazy-loaded charts
@@ -61,7 +63,7 @@ function ChartLoadingFallback() {
  * - Cross-chart series highlighting
  */
 const LineChartWrapper = forwardRef<LineChartUPlotRef, LineChartWrapperProps>(
-  ({ syncKey, className, tooltipInterpolation, onZoomRangeChange, outlierDetection, spanGaps, yZoom, yZoomRange, onYZoomRangeChange, ...props }, ref) => {
+  ({ syncKey, className, tooltipInterpolation, onZoomRangeChange, outlierDetection, spanGaps, yZoom, yZoomRange, onYZoomRangeChange, forkSteps, ...props }, ref) => {
     // Use title as key to force remount when switching between different charts
     // This ensures each chart gets a clean uPlot instance with correct data
     const chartKey = props.title || "uplot-chart";
@@ -89,6 +91,7 @@ const LineChartWrapper = forwardRef<LineChartUPlotRef, LineChartWrapperProps>(
             yZoom={yZoom}
             yZoomRange={yZoomRange}
             onYZoomRangeChange={onYZoomRangeChange}
+            forkSteps={forkSteps}
             {...props}
           />
         </Suspense>

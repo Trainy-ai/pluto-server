@@ -24,6 +24,8 @@ export interface GroupedMetrics {
         status: RunStatus;
         displayId?: string | null;
         createdAt?: string;
+        forkStep?: number | null;
+        forkedFromRunId?: string | null;
       }>;
     }>;
     groupName: LogGroupName;

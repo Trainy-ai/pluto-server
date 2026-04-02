@@ -1,6 +1,6 @@
 import React from "react";
 import { Button } from "@/components/ui/button";
-import { Columns, PanelLeft, PanelRight, Search } from "lucide-react";
+import { Columns, PanelLeft, PanelRight, Search, GitFork } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -10,6 +10,7 @@ import { VisibilityOptions } from "../visibility-options";
 import { ColumnPicker } from "../column-picker";
 import { FilterButton } from "../filter-button";
 import type { RunFilter, FilterableField } from "@/lib/run-filters";
+import { ExperimentRunsToggle, type ListMode } from "./experiment-runs-toggle";
 
 type ViewMode = "charts" | "side-by-side";
 
@@ -59,6 +60,12 @@ interface TableToolbarProps {
   isSearchingColumns?: boolean;
   // View selector slot
   viewSelector?: React.ReactNode;
+  // Experiments/Runs list mode
+  listMode: ListMode;
+  onListModeChange: (mode: ListMode) => void;
+  // Inherited datapoints toggle
+  showInherited: boolean;
+  onInheritedToggle: () => void;
 }
 
 export function TableToolbar({
@@ -103,23 +110,60 @@ export function TableToolbar({
   onColumnSearch,
   isSearchingColumns,
   viewSelector,
+  listMode,
+  onListModeChange,
+  showInherited,
+  onInheritedToggle,
 }: TableToolbarProps) {
   return (
     <div className="mb-2 shrink-0 space-y-2">
       <div className="mt-2 flex items-center justify-between gap-x-3">
+        <ExperimentRunsToggle mode={listMode} onChange={onListModeChange} />
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="outline"
+              size="icon"
+              className={cn(
+                "relative h-8 w-8 shrink-0",
+                showInherited && "border-primary bg-accent"
+              )}
+              onClick={onInheritedToggle}
+            >
+              <GitFork className="h-4 w-4" />
+              {showInherited && (
+                <span className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-primary" />
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {showInherited ? "Hide inherited datapoints" : "Show inherited datapoints"}
+          </TooltipContent>
+        </Tooltip>
         <div className="min-w-0 truncate pl-1 text-sm text-muted-foreground">
-          <span className="font-medium">{Object.keys(selectedRunsWithColors).length}</span>
-          {" of "}
-          <span className="font-medium">{totalRunCount}</span>
-          {" runs selected"}
-          {runCount < totalRunCount && (
+          {listMode === "experiments" ? (
             <>
-              {" "}
-              <span className="text-muted-foreground/50">·</span>
-              {" "}
-              <span className="text-muted-foreground/80">
-                Filtered to {runCount} runs
-              </span>
+              <span className="font-medium">{runCount}</span>
+              {" of "}
+              <span className="font-medium">{totalRunCount}</span>
+              {totalRunCount === 1 ? " experiment" : " experiments"}
+            </>
+          ) : (
+            <>
+              <span className="font-medium">{Object.keys(selectedRunsWithColors).length}</span>
+              {" of "}
+              <span className="font-medium">{totalRunCount}</span>
+              {" runs selected"}
+              {runCount < totalRunCount && (
+                <>
+                  {" "}
+                  <span className="text-muted-foreground/50">·</span>
+                  {" "}
+                  <span className="text-muted-foreground/80">
+                    Filtered to {runCount} runs
+                  </span>
+                </>
+              )}
             </>
           )}
         </div>

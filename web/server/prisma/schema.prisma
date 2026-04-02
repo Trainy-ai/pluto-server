@@ -315,15 +315,21 @@ model Runs {
   createdById     String
   creatorApiKeyId String
 
-  creator      User           @relation(fields: [createdById], references: [id])
-  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  project      Projects       @relation(fields: [projectId], references: [id])
-  logs         RunLogs[]
-  triggers     RunTriggers[]
-  Notification Notification[]
-  RunGraphNode RunGraphNode[]
-  RunGraphEdge RunGraphEdge[]
-  ApiKey       ApiKey         @relation(fields: [creatorApiKeyId], references: [id])
+  // Forking fields (Neptune-style run forking)
+  forkedFromRunId BigInt?   // Parent run ID (null = root run, not forked)
+  forkStep        BigInt?   // Step at which the fork occurred
+
+  creator        User           @relation(fields: [createdById], references: [id])
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  project        Projects       @relation(fields: [projectId], references: [id])
+  forkedFromRun  Runs?          @relation("RunForks", fields: [forkedFromRunId], references: [id], onDelete: SetNull)
+  forks          Runs[]         @relation("RunForks")
+  logs           RunLogs[]
+  triggers       RunTriggers[]
+  Notification   Notification[]
+  RunGraphNode   RunGraphNode[]
+  RunGraphEdge   RunGraphEdge[]
+  ApiKey         ApiKey         @relation(fields: [creatorApiKeyId], references: [id])
 
   // Unique constraint for external run ID within a project (allows multi-node to share same run)
   @@unique([organizationId, projectId, externalId])
@@ -333,6 +339,7 @@ model Runs {
   @@index([projectId, organizationId])
   @@index([status])
   @@index([createdById])
+  @@index([forkedFromRunId])
   RunFieldValue RunFieldValue[]
 
   // Covering indexes for server-side sorting (avoids seq scans on sort queries)

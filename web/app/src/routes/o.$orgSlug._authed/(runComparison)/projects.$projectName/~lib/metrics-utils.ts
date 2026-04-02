@@ -158,6 +158,8 @@ export const groupMetrics = (
         status: run.status,
         displayId: getDisplayIdForRun(run),
         createdAt: run.createdAt instanceof Date ? run.createdAt.toISOString() : String(run.createdAt),
+        forkStep: (run as any).forkStep != null ? Number((run as any).forkStep) : null,
+        forkedFromRunId: (run as any).forkedFromRunId != null ? String((run as any).forkedFromRunId) : null,
       });
     });
   });
@@ -180,6 +182,8 @@ export const groupMetrics = (
               status: run.status,
               displayId: getDisplayIdForRun(run),
               createdAt: run.createdAt instanceof Date ? run.createdAt.toISOString() : String(run.createdAt),
+              forkStep: (run as any).forkStep != null ? Number((run as any).forkStep) : null,
+              forkedFromRunId: (run as any).forkedFromRunId != null ? String((run as any).forkedFromRunId) : null,
             });
           }
         });

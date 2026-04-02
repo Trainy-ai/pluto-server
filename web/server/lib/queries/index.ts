@@ -8,4 +8,5 @@ export * from "./run-logs";
 export * from "./run-metrics";
 export * from "./run-files";
 export * from "./run-details";
+export * from "./run-metrics-lineage";
 export * from "./projects";

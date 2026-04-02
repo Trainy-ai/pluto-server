@@ -41,6 +41,8 @@ interface RunComparisonSearchParams {
   chart?: string;
   runs?: string;  // Comma-separated run IDs (e.g., "id1,id2,id3")
   hidden?: string; // Comma-separated IDs of hidden-but-selected runs
+  listMode?: "experiments" | "runs";
+  inherited?: "true" | "false"; // Show inherited metrics from fork parents
 }
 
 export const Route = createFileRoute(
@@ -63,6 +65,16 @@ export const Route = createFileRoute(
     // Support ?hidden=id1,id2 to hide specific selected runs from charts
     if (typeof search.hidden === "string" && search.hidden.trim()) {
       result.hidden = search.hidden.trim();
+    }
+
+    // Support ?listMode=experiments|runs to toggle between grouped and flat views
+    if (search.listMode === "experiments" || search.listMode === "runs") {
+      result.listMode = search.listMode;
+    }
+
+    // Support ?inherited=true|false to show/hide inherited fork metrics
+    if (search.inherited === "true" || search.inherited === "false") {
+      result.inherited = search.inherited;
     }
 
     return result;
@@ -94,7 +106,7 @@ type ViewMode = "charts" | "side-by-side";
 function RouteComponent() {
   const { organizationId, projectName, organizationSlug } =
     Route.useRouteContext();
-  const { chart, runs: urlRunsParam, hidden: urlHiddenParam } = Route.useSearch();
+  const { chart, runs: urlRunsParam, hidden: urlHiddenParam, listMode: urlListMode, inherited: urlInherited } = Route.useSearch();
   const navigate = useNavigate();
 
   // Parse comma-separated run IDs from URL into array (may be display IDs like "MMP-1" or SQIDs)
@@ -227,6 +239,43 @@ function RouteComponent() {
 
   // View mode state - "charts" (default) or "side-by-side"
   const [viewMode, setViewMode] = useState<ViewMode>("charts");
+
+  // List mode state - "experiments" (grouped by lineage root) or "runs" (all individual runs)
+  // Persisted via URL param ?listMode=experiments|runs
+  type ListMode = "experiments" | "runs";
+  const listMode: ListMode = urlListMode ?? "runs";
+  const handleListModeChange = useCallback((mode: ListMode) => {
+    navigate({
+      search: (prev: RunComparisonSearchParams) => ({
+        ...prev,
+        listMode: mode === "runs" ? undefined : mode,
+      }),
+      replace: true,
+    });
+  }, [navigate]);
+
+  // Inherited metrics — synced via URL param. Default is ON (Neptune behavior).
+  // ?inherited=false explicitly disables; absent = enabled.
+  const handleInheritedToggle = useCallback(() => {
+    const current = urlInherited !== "false"; // default true
+    navigate({
+      search: (prev: RunComparisonSearchParams) => ({
+        ...prev,
+        inherited: current ? "false" : undefined, // remove param when true (default)
+      }),
+      replace: true,
+    });
+  }, [urlInherited, navigate]);
+
+  const handleInheritedChange = useCallback((value: boolean) => {
+    navigate({
+      search: (prev: RunComparisonSearchParams) => ({
+        ...prev,
+        inherited: value ? undefined : "false", // remove param when true (default)
+      }),
+      replace: true,
+    });
+  }, [navigate]);
 
   // Panel layout state - which panels are visible
   type PanelLayout = "both" | "list-only" | "graphs-only";
@@ -928,13 +977,50 @@ function RouteComponent() {
     organizationId
   );
 
+  // In experiments mode, unify colors so all runs in the same experiment
+  // (same name) share one color. Keep ALL runs for chart data — the table
+  // handles collapsing to one row per experiment, but charts show all branches.
+  const effectiveRunsWithColors = useMemo(() => {
+    if (listMode !== "experiments") return selectedRunsWithColors;
+    const nameToColor = new Map<string, string>();
+    const result: typeof selectedRunsWithColors = {};
+    for (const [id, entry] of Object.entries(selectedRunsWithColors)) {
+      const name = entry.run.name;
+      if (!nameToColor.has(name)) {
+        nameToColor.set(name, entry.color);
+      }
+      result[id] = { ...entry, color: nameToColor.get(name)! };
+    }
+    return result;
+  }, [selectedRunsWithColors, listMode]);
+
   // Process metrics data from ALL selected runs (including hidden)
   // Hidden runs are toggled via imperative uPlot setSeries() in chart-sync-context,
   // keeping series count stable to avoid chart destroy/recreate flash
   const groupedMetrics = useMemo(() => {
-    const metrics = groupMetrics(selectedRunsWithColors, logsByRunId, organizationId, projectName);
+    const metrics = groupMetrics(effectiveRunsWithColors, logsByRunId, organizationId, projectName);
     return metrics;
-  }, [selectedRunsWithColors, logsByRunId, organizationId, projectName]);
+  }, [effectiveRunsWithColors, logsByRunId, organizationId, projectName]);
+
+  // Build experiment run ID lookup: runId → all runIds with the same name.
+  // Used by chart sync context for experiment-level group highlighting.
+  const experimentRunIdsMap = useMemo(() => {
+    if (listMode !== "experiments") return null;
+    const nameToIds = new Map<string, string[]>();
+    for (const [id, { run }] of Object.entries(selectedRunsWithColors)) {
+      const ids = nameToIds.get(run.name) ?? [];
+      ids.push(id);
+      nameToIds.set(run.name, ids);
+    }
+    // Build reverse map: runId → all runIds in same experiment
+    const map = new Map<string, string[]>();
+    for (const ids of nameToIds.values()) {
+      for (const id of ids) {
+        map.set(id, ids);
+      }
+    }
+    return map;
+  }, [selectedRunsWithColors, listMode]);
 
   // Dispatch DOM event when hidden runs change — chart-sync-context listens
   // and imperatively toggles uPlot series visibility (no React re-render)
@@ -1072,6 +1158,10 @@ function RouteComponent() {
                   />
                 }
                 activeChartViewId={chart ?? null}
+                listMode={listMode}
+                onListModeChange={handleListModeChange}
+                showInherited={urlInherited !== "false"}
+                onInheritedToggle={handleInheritedToggle}
               />
             </div>
           </ResizablePanel>
@@ -1110,9 +1200,12 @@ function RouteComponent() {
                       organizationId={organizationId}
                       projectName={projectName}
                       lastRefreshed={lastRefreshed}
-                      selectedRuns={selectedRunsWithColors}
+                      selectedRuns={effectiveRunsWithColors}
                       selectedViewId={chart ?? null}
                       onViewChange={handleViewChange}
+                      showInheritedMetrics={urlInherited === "false" ? false : true}
+                      onInheritedChange={handleInheritedChange}
+                      experimentRunIdsMap={experimentRunIdsMap}
                     />
                   </div>
                 </>

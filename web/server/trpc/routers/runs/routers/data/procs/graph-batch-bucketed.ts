@@ -4,6 +4,7 @@ import { resolveRunId } from "../../../../../../lib/resolve-run-id";
 import { queryRunMetricsBatchBucketedByLogName } from "../../../../../../lib/queries";
 import type { BucketedMetricDataPoint } from "../../../../../../lib/queries";
 import { withBatchCache } from "../../../../../../lib/cache";
+import { queryLineageBucketed } from "./lineage-helpers";
 
 // Type for batch bucketed graph data: map of encoded runId → bucketed data points
 type GraphBatchBucketedData = Record<string, BucketedMetricDataPoint[]>;
@@ -18,6 +19,7 @@ export const graphBatchBucketedProcedure = protectedOrgProcedure
       stepMin: z.number().int().nonnegative().optional(),
       stepMax: z.number().int().nonnegative().optional(),
       preview: z.boolean().optional(),
+      includeLineage: z.boolean().optional(),
       algorithm: z.enum(["avg", "lttb"]).optional(),
     })
   )
@@ -31,6 +33,7 @@ export const graphBatchBucketedProcedure = protectedOrgProcedure
       stepMin,
       stepMax,
       preview,
+      includeLineage,
       algorithm,
     } = input;
 
@@ -45,31 +48,58 @@ export const graphBatchBucketedProcedure = protectedOrgProcedure
       numericToEncoded.set(numericRunIds[i], encoded);
     });
 
+    // Use lineage stitching only when explicitly requested (showInheritedMetrics toggle)
+    // For preview/zoom queries, always use the fast batch query
+    if (!includeLineage || preview || (stepMin !== undefined && stepMax !== undefined)) {
+      return withBatchCache(
+        ctx,
+        "graphBatchBucketed",
+        { runIds: numericRunIds, organizationId, projectName, logName, buckets, stepMin, stepMax, preview, algorithm },
+        async () => {
+          const grouped = await queryRunMetricsBatchBucketedByLogName(ctx.clickhouse, {
+            organizationId,
+            projectName,
+            runIds: numericRunIds,
+            logName,
+            buckets,
+            stepMin,
+            stepMax,
+            preview,
+            algorithm,
+          });
+
+          const result: GraphBatchBucketedData = {};
+          for (const [numericId, points] of Object.entries(grouped)) {
+            const encoded = numericToEncoded.get(Number(numericId));
+            if (encoded) {
+              result[encoded] = points;
+            }
+          }
+          return result;
+        },
+      );
+    }
+
+    // Normal path: lineage-aware queries per run so forked runs
+    // include inherited metrics from parent runs.
     return withBatchCache(
       ctx,
-      "graphBatchBucketed",
-      { runIds: numericRunIds, organizationId, projectName, logName, buckets, stepMin, stepMax, preview, algorithm },
+      "graphBatchBucketedLineage",
+      { runIds: numericRunIds, organizationId, projectName, logName, buckets },
       async () => {
-        const grouped = await queryRunMetricsBatchBucketedByLogName(ctx.clickhouse, {
-          organizationId,
-          projectName,
-          runIds: numericRunIds,
-          logName,
-          buckets,
-          stepMin,
-          stepMax,
-          preview,
-          algorithm,
-        });
-
-        // Re-key results by encoded runId
         const result: GraphBatchBucketedData = {};
-        for (const [numericId, points] of Object.entries(grouped)) {
-          const encoded = numericToEncoded.get(Number(numericId));
-          if (encoded) {
+        await Promise.all(
+          numericRunIds.map(async (numericId) => {
+            const encoded = numericToEncoded.get(numericId);
+            if (!encoded) return;
+            const points = await queryLineageBucketed(
+              ctx.clickhouse,
+              ctx.prisma,
+              { organizationId, projectName, runId: numericId, logName, buckets },
+            );
             result[encoded] = points;
-          }
-        }
+          }),
+        );
         return result;
       },
     );

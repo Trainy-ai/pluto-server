@@ -26,6 +26,7 @@ import { buildBandsConfig } from "./lib/bands-config";
 import { buildDrawHook } from "./lib/draw-hook";
 import { buildSetScaleHook, buildSetSelectHook } from "./lib/set-scale-hook";
 import { nonFiniteMarkersPlugin } from "./lib/non-finite-markers-plugin";
+import { forkStepPlugin } from "./lib/fork-step-plugin";
 import { useContainerSize } from "./hooks/use-container-size";
 import { useChartLifecycle } from "./hooks/use-chart-lifecycle";
 import { useZoomSync } from "./hooks/use-zoom-sync";
@@ -115,6 +116,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       yZoom = true,
       yZoomRange,
       onYZoomRangeChange,
+      forkSteps,
       className,
       ...rest
     },
@@ -259,7 +261,21 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           if (u) {
             delete (u as any)._lastFocusedSeriesIdx;
             (u as any)._crossHighlightRunId = null;
-            applySeriesHighlight(u, tableHighlightRef.current, '_seriesId', chartLineWidthRef.current);
+            (u as any)._crossHighlightRunIds = null;
+            // Fall back to table highlight — use _tableHighlightRunIds for experiment group support
+            const tableRunIds: string[] | null = (u as any)._tableHighlightRunIds;
+            if (tableRunIds && tableRunIds.length > 1) {
+              const lw = chartLineWidthRef.current;
+              const highlightedWidth = Math.max(1, lw * 1.25);
+              const dimmedWidth = Math.max(0.4, lw * 0.85);
+              for (let i = 1; i < u.series.length; i++) {
+                const sid = (u.series[i] as any)?._seriesId;
+                const match = tableRunIds.some((id: string) => sid === id || (sid && sid.startsWith(id + ':')));
+                u.series[i].width = match ? highlightedWidth : dimmedWidth;
+              }
+            } else {
+              applySeriesHighlight(u, tableHighlightRef.current, '_seriesId', chartLineWidthRef.current);
+            }
             u.redraw(false);
           }
           ctx.highlightUPlotSeries(chartId, null);
@@ -306,7 +322,20 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           lastFocusedSeriesRef.current = null;
           delete (u as any)._lastFocusedSeriesIdx;
           (u as any)._crossHighlightRunId = null;
-          applySeriesHighlight(u, tableHighlightRef.current, '_seriesId', chartLineWidthRef.current);
+          (u as any)._crossHighlightRunIds = null;
+          const tRunIds: string[] | null = (u as any)._tableHighlightRunIds;
+          if (tRunIds && tRunIds.length > 1) {
+            const lw2 = chartLineWidthRef.current;
+            const hw = Math.max(1, lw2 * 1.25);
+            const dw = Math.max(0.4, lw2 * 0.85);
+            for (let si = 1; si < u.series.length; si++) {
+              const sid = (u.series[si] as any)?._seriesId;
+              const m = tRunIds.some((id: string) => sid === id || (sid && sid.startsWith(id + ':')));
+              u.series[si].width = m ? hw : dw;
+            }
+          } else {
+            applySeriesHighlight(u, tableHighlightRef.current, '_seriesId', chartLineWidthRef.current);
+          }
           u.redraw(false);
           ctx?.highlightUPlotSeries(chartId, null);
         }
@@ -330,6 +359,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
 
       const series = buildSeriesConfig(processedLines, xlabel, chartLineWidth, {
         lastFocusedSeriesRef, crossChartRunIdRef, tableHighlightRef,
+        experimentRunIdsMapRef: chartSyncContext?.experimentRunIdsMapRef,
       }, {
         spanGaps, theme,
         xLegendValue: isDateTime
@@ -349,6 +379,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         lastFocusedSeriesRef, highlightedSeriesRef, highlightedRunIdRef,
         highlightedSeriesIdRef, chartLineWidthRef,
         chartId, chartSyncContextRef: chartSyncContextRef as any,
+        experimentRunIdsMapRef: chartSyncContext?.experimentRunIdsMapRef,
       });
       const interpolationDotsHook = buildInterpolationDotsHook({ processedLines, tooltipInterpolation, spanGaps, isActiveChart });
       const setScaleHook = buildSetScaleHook({
@@ -383,6 +414,9 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             lines: processedLines,
             theme: theme,
           }),
+          ...(forkSteps && forkSteps.size > 0
+            ? [forkStepPlugin({ forkSteps, theme: theme ?? "light" })]
+            : []),
         ],
         hooks: {
           ready: [(u) => {

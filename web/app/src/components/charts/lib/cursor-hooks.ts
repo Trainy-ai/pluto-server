@@ -24,6 +24,8 @@ export interface FocusDetectionDeps {
       setHighlightedRunId: (runId: string | null) => void;
     } | null;
   };
+  /** Experiment run ID lookup for group highlighting */
+  experimentRunIdsMapRef?: { current: Map<string, string[]> | null };
 }
 
 /**
@@ -118,11 +120,21 @@ export function buildFocusDetectionHook(deps: FocusDetectionDeps): (u: uPlot) =>
       (u as any)._crossHighlightRunId = null;
 
       // Apply width emphasis on this chart (matches cross-chart applySeriesHighlight)
+      // In experiments mode, highlight all series in the same experiment
       const lw = deps.chartLineWidthRef.current;
       const highlightedWidth = Math.max(1, lw * 1.25);
       const dimmedWidth = Math.max(0.4, lw * 0.85);
+      const closestRunId = deps.processedLines[closestSeriesIdx - 1]?.seriesId?.split(':')[0] ?? null;
+      const expMap: Map<string, string[]> | null = deps.experimentRunIdsMapRef?.current ?? null;
+      const expRunIds: string[] | null = closestRunId && expMap ? (expMap.get(closestRunId) ?? null) : null;
       for (let si = 1; si < u.series.length; si++) {
-        u.series[si].width = si === closestSeriesIdx ? highlightedWidth : dimmedWidth;
+        if (expRunIds) {
+          const sid = (u.series[si] as any)?._seriesId;
+          const match = expRunIds.some((rid: string) => sid === rid || (sid && sid.startsWith(rid + ':')));
+          u.series[si].width = match ? highlightedWidth : dimmedWidth;
+        } else {
+          u.series[si].width = si === closestSeriesIdx ? highlightedWidth : dimmedWidth;
+        }
       }
 
       // Trigger redraw so stroke functions re-evaluate with new focus.

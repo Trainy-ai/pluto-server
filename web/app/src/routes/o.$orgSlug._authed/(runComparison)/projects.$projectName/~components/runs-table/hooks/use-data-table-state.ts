@@ -29,6 +29,7 @@ interface UseDataTableStateParams {
   pinnedColumnIds: Set<string>;
   orgSlug: string;
   projectName: string;
+  listMode?: "experiments" | "runs";
 }
 
 /**
@@ -121,7 +122,10 @@ export function useDataTableState({
   pinnedColumnIds,
   orgSlug,
   projectName,
+  listMode,
 }: UseDataTableStateParams) {
+  const isExperiments = listMode === "experiments";
+
   // Internal pagination state (pageIndex only — pageSize is controlled by parent)
   const [pageIndex, setPageIndex] = useState(0);
 
@@ -177,6 +181,23 @@ export function useDataTableState({
     }
     return ensureSelectedRunsIncluded(runs, selectedRunsWithColors);
   }, [runs, showOnlySelected, isPinningActive, selectedRunsWithColors]);
+
+  // In "experiments" mode, collapse same-name runs into one row per experiment.
+  // Keeps the first occurrence (most recent) as the representative.
+  const finalDisplayedRuns = useMemo(() => {
+    if (!isExperiments) return displayedRuns;
+    const seen = new Set<string>();
+    return displayedRuns.filter((r) => {
+      if (seen.has(r.name)) return false;
+      seen.add(r.name);
+      return true;
+    });
+  }, [displayedRuns, isExperiments]);
+
+  // Total unique experiment count across all loaded runs
+  const totalExperimentCount = useMemo(() => {
+    return new Set(runs.map((r) => r.name)).size;
+  }, [runs]);
 
   // Keep track of previous data length to maintain pagination position
   const prevDataLengthRef = useRef(runs.length);
@@ -235,7 +256,7 @@ export function useDataTableState({
   }, [filters, searchQuery, sorting]);
 
   const table = useReactTable({
-    data: displayedRuns,
+    data: finalDisplayedRuns,
     columns: memoizedColumns,
     getRowId: (row) => row.id,
     getCoreRowModel: getCoreRowModel(),
@@ -328,6 +349,8 @@ export function useDataTableState({
     // Derived data
     pinnedRuns,
     displayedRuns,
+    displayedRunCount: finalDisplayedRuns.length,
+    totalExperimentCount,
     pageRunIds,
     pinnedColumnMap,
     tableWidth,

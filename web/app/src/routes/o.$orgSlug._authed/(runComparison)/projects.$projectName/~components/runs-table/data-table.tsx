@@ -19,6 +19,7 @@ import { columns } from "./columns";
 import type { Run } from "../../~queries/list-runs";
 import type { ColumnConfig, BaseColumnOverrides } from "../../~hooks/use-column-config";
 import type { RunFilter, FilterableField } from "@/lib/run-filters";
+import type { ListMode } from "./components/experiment-runs-toggle";
 import type { Header } from "@tanstack/react-table";
 import { computePinnedColumnIds, BASE_PINNED_IDS } from "./lib/pinned-columns";
 import { MIN_COL_WIDTH } from "./hooks/use-column-resize";
@@ -96,6 +97,10 @@ interface DataTableProps {
   viewSelector?: React.ReactNode;
   activeChartViewId?: string | null;
   onToggleColumnPin?: (colId: string, source: string, aggregation?: string) => void;
+  listMode: ListMode;
+  onListModeChange: (mode: ListMode) => void;
+  showInherited: boolean;
+  onInheritedToggle: () => void;
 }
 
 export function DataTable({
@@ -165,6 +170,10 @@ export function DataTable({
   viewSelector,
   activeChartViewId,
   onToggleColumnPin,
+  listMode,
+  onListModeChange,
+  showInherited,
+  onInheritedToggle,
 }: DataTableProps) {
   const tableBodyRef = useRef<HTMLTableSectionElement>(null);
   const theadRef = useRef<HTMLTableSectionElement>(null);
@@ -191,16 +200,32 @@ export function DataTable({
   useEffect(() => { hiddenRunIdsRef.current = hiddenRunIds; }, [hiddenRunIds]);
   const getIsHidden = useCallback((runId: string) => hiddenRunIdsRef.current.has(runId), []);
 
+  // In experiments mode, build name→runIds map for group highlighting
+  const experimentRunIdsMap = useMemo(() => {
+    if (listMode !== "experiments") return null;
+    const map = new Map<string, string[]>();
+    for (const run of runs) {
+      const existing = map.get(run.name) ?? [];
+      existing.push(run.id);
+      map.set(run.name, existing);
+    }
+    return map;
+  }, [runs, listMode]);
+
+  const getExperimentRunIds = useCallback((runName: string): string[] | undefined => {
+    return experimentRunIdsMap?.get(runName);
+  }, [experimentRunIdsMap]);
+
   // Listen for chart hover events to highlight the corresponding run row
   useEffect(() => {
     let lastHighlightedRow: HTMLElement | null = null;
 
     const handler = (e: Event) => {
-      const runId = (e as CustomEvent).detail as string | null;
+      const detail = (e as CustomEvent).detail as string | string[] | null;
       const container = mainScrollRef.current;
       if (!container) return;
 
-      // Clear previous highlight using cached reference (avoids querySelectorAll)
+      // Clear previous highlight
       if (lastHighlightedRow) {
         lastHighlightedRow.querySelectorAll("td").forEach((td) => {
           td.style.boxShadow = "";
@@ -209,7 +234,9 @@ export function DataTable({
         lastHighlightedRow = null;
       }
 
-      if (runId) {
+      // In experiments mode, detail may be an array — find the first matching row
+      const runIds = Array.isArray(detail) ? detail : (detail ? [detail] : []);
+      for (const runId of runIds) {
         const row = container.querySelector(`[data-run-id="${runId}"]`) as HTMLElement | null;
         if (row) {
           row.setAttribute("data-chart-highlight", "true");
@@ -217,6 +244,7 @@ export function DataTable({
             td.style.boxShadow = "inset 0 0 0 1000px rgba(59, 130, 246, 0.15)";
           });
           lastHighlightedRow = row;
+          break; // highlight first visible row (experiment representative)
         }
       }
     };
@@ -291,6 +319,8 @@ export function DataTable({
     isPinningActive,
     pinnedRuns,
     displayedRuns,
+    displayedRunCount,
+    totalExperimentCount,
     pageRunIds,
     pinnedColumnMap,
     tableWidth,
@@ -310,6 +340,7 @@ export function DataTable({
     pinnedColumnIds,
     orgSlug,
     projectName,
+    listMode,
   });
 
   // Handle fetching more data without resetting pagination
@@ -419,8 +450,8 @@ export function DataTable({
     <div className="relative flex h-full min-h-0 w-full min-w-[200px] flex-col overflow-hidden">
       <TableToolbar
         selectedRunsWithColors={selectedRunsWithColors}
-        runCount={runCount}
-        totalRunCount={totalRunCount}
+        runCount={listMode === "experiments" ? displayedRunCount : runCount}
+        totalRunCount={listMode === "experiments" ? totalExperimentCount : totalRunCount}
         searchQuery={searchQuery}
         onSearchChange={onSearchChange}
         onKeyDown={handleKeyDown}
@@ -459,6 +490,10 @@ export function DataTable({
         onColumnSearch={onColumnSearch}
         isSearchingColumns={isSearchingColumns}
         viewSelector={viewSelector}
+        listMode={listMode}
+        onListModeChange={onListModeChange}
+        showInherited={showInherited}
+        onInheritedToggle={onInheritedToggle}
       />
 
       <div className="min-h-0 flex-1 flex flex-col overflow-hidden rounded-md border">
@@ -477,7 +512,7 @@ export function DataTable({
                 </TableHeader>
                 <TableBody>
                   {pinnedTable.getRowModel().rows.map((row) => (
-                    <RunRow key={row.id} row={row} pinnedColumnMap={pinnedColumnMap} tableBodyRef={tableBodyRef} isHidden={hiddenRunIds.has(row.original.id)} />
+                    <RunRow key={row.id} row={row} pinnedColumnMap={pinnedColumnMap} tableBodyRef={tableBodyRef} isHidden={hiddenRunIds.has(row.original.id)} experimentRunIds={getExperimentRunIds(row.original.name)} />
                   ))}
                 </TableBody>
               </Table>
@@ -490,7 +525,7 @@ export function DataTable({
               <TableBody ref={tableBodyRef}>
                 {table.getRowModel().rows.length ? (
                   table.getRowModel().rows.map((row) => (
-                    <RunRow key={row.id} row={row} pinnedColumnMap={pinnedColumnMap} tableBodyRef={tableBodyRef} isHidden={hiddenRunIds.has(row.original.id)} />
+                    <RunRow key={row.id} row={row} pinnedColumnMap={pinnedColumnMap} tableBodyRef={tableBodyRef} isHidden={hiddenRunIds.has(row.original.id)} experimentRunIds={getExperimentRunIds(row.original.name)} />
                   ))
                 ) : (
                   <TableRow>
@@ -514,7 +549,7 @@ export function DataTable({
               <TableBody ref={tableBodyRef}>
                 {table.getRowModel().rows.length ? (
                   table.getRowModel().rows.map((row) => (
-                    <RunRow key={row.id} row={row} pinnedColumnMap={pinnedColumnMap} tableBodyRef={tableBodyRef} isHidden={hiddenRunIds.has(row.original.id)} />
+                    <RunRow key={row.id} row={row} pinnedColumnMap={pinnedColumnMap} tableBodyRef={tableBodyRef} isHidden={hiddenRunIds.has(row.original.id)} experimentRunIds={getExperimentRunIds(row.original.name)} />
                   ))
                 ) : (
                   <TableRow>
