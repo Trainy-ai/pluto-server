@@ -426,6 +426,81 @@ export function useChartLifecycle({
     // Register with context
     chartSyncContextRef.current?.registerUPlot(chartId, chart);
 
+    // Attach Y-zoom reset so chart-sync-context can clear it on visibility changes
+    (chart as any)._resetYZoom = () => {
+      userHasZoomedYRef.current = false;
+      userYZoomRangeRef.current = null;
+      onYZoomRangeChangeRef.current?.(null);
+    };
+
+    // Force X+Y auto-range recalculation after series visibility changes.
+    // uPlot's setSeries() only adds Y to pendScales but doesn't invalidate
+    // per-series data caches (s.min/s.max), so the Y range stays stale.
+    // The X range also doesn't shrink when the only series using high X values
+    // are hidden (data[0] still spans the full range). We scan visible data
+    // and call setScale for both axes.
+    (chart as any)._forceYRecalc = () => {
+      const xData = chart.data[0] as number[];
+      if (!xData || xData.length === 0) return;
+
+      // First pass: find the X range where at least one visible series has data.
+      // This determines the actual extent of visible data on the X axis.
+      let visibleXMinIdx = -1;
+      let visibleXMaxIdx = -1;
+      for (let i = 0; i < xData.length; i++) {
+        for (let si = 1; si < chart.data.length; si++) {
+          if (chart.series[si]?.show === false) continue;
+          const y = (chart.data[si] as (number | null)[])[i];
+          if (y != null && Number.isFinite(y)) {
+            if (visibleXMinIdx === -1) visibleXMinIdx = i;
+            visibleXMaxIdx = i;
+            break; // Found a visible value at this x — no need to check more series
+          }
+        }
+      }
+
+      if (visibleXMinIdx === -1) return; // No visible data at all
+
+      const newXMin = xData[visibleXMinIdx];
+      const newXMax = xData[visibleXMaxIdx];
+
+      // Second pass: compute Y range within the visible X range
+      let visibleYMin = Infinity;
+      let visibleYMax = -Infinity;
+      const skipY = chart.scales.y?.distr === 3; // log-scale Y uses uPlot's built-in range
+      if (!skipY) {
+        for (let i = visibleXMinIdx; i <= visibleXMaxIdx; i++) {
+          for (let si = 1; si < chart.data.length; si++) {
+            if (chart.series[si]?.show === false) continue;
+            const y = (chart.data[si] as (number | null)[])[i];
+            if (y != null && Number.isFinite(y)) {
+              if (y < visibleYMin) visibleYMin = y;
+              if (y > visibleYMax) visibleYMax = y;
+            }
+          }
+        }
+      }
+
+      try {
+        isProgrammaticScaleRef.current = true;
+
+        // Set X scale to visible data range
+        chart.setScale("x", { min: newXMin, max: newXMax });
+
+        // Set Y scale with padding (same algorithm as set-scale-hook.ts)
+        if (!skipY && visibleYMin !== Infinity && visibleYMax !== -Infinity) {
+          const range = visibleYMax - visibleYMin;
+          const dataMagnitude = Math.max(Math.abs(visibleYMax), Math.abs(visibleYMin));
+          const padding = Math.max(range * 0.05, dataMagnitude * 0.02, 1e-9);
+          const newYMin = visibleYMin >= 0 ? Math.max(0, visibleYMin - padding) : visibleYMin - padding;
+          const newYMax = visibleYMax + padding;
+          chart.setScale("y", { min: newYMin, max: newYMax });
+        }
+      } finally {
+        isProgrammaticScaleRef.current = false;
+      }
+    };
+
     // Register reset callback
     chartSyncContextRef.current?.registerResetCallback(chartId, () => {
       if (zoomRangeTimerRef.current) {

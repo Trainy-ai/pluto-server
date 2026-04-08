@@ -33,8 +33,32 @@ export function buildScalesConfig({
     y: logYAxis
       ? { distr: 3 }
       : {
-          auto: false,
-          range: (): uPlot.Range.MinMax => [yRange[0], yRange[1]],
+          // auto:true makes uPlot recompute Y range from visible (shown)
+          // series on every commit — including after setSeries toggles.
+          // The range callback adds padding to the auto-computed min/max.
+          auto: true,
+          range: (_self: uPlot, dataMin: number | null, dataMax: number | null): uPlot.Range.MinMax => {
+            // No visible data — fall back to pre-computed range
+            if (dataMin == null || dataMax == null) return [yRange[0], yRange[1]];
+
+            const range = dataMax - dataMin;
+            const mag = Math.max(Math.abs(dataMax), Math.abs(dataMin), 0.1);
+            const minRange = mag * 0.1;
+
+            let yMin: number, yMax: number;
+            if (range < minRange) {
+              const center = (dataMin + dataMax) / 2;
+              yMin = center - minRange / 2;
+              yMax = center + minRange / 2;
+              if (dataMin >= 0 && yMin < 0) { yMin = 0; yMax = minRange; }
+            } else {
+              const padding = range * 0.05;
+              yMin = dataMin - padding;
+              yMax = dataMax + padding;
+              if (dataMin >= 0 && yMin < 0) yMin = 0;
+            }
+            return [yMin, yMax];
+          },
         },
   };
 }
@@ -55,12 +79,15 @@ export function buildCursorConfig(
       // syncXScale handles zoom sync with proper group filtering.
       scales: [null, null],
       setSeries: false, // DISABLED - was causing seriesIdx to always be null due to cross-chart sync
-      // Filter out drag events on the receiving side to avoid uPlot bug:
-      // src.scales[xKeySrc].ori crashes when xKeySrc is null (from scales above).
-      // Cursor position sync still works; drag/zoom sync is handled by our syncXScale.
+      // Block mousedown/mouseup sync to prevent receivers from entering drag
+      // mode, which would crash at src.scales[null].ori (scales: [null, null]).
+      // Cursor position sync (mousemove) still works; drag/zoom is handled by
+      // our custom syncXScale. NOTE: the old filter checked drag._x/._y, but
+      // uPlot initializes those from drag.x (the config boolean, e.g. true),
+      // so before the first mousedown they incorrectly blocked ALL sync events.
       filters: {
         pub: () => true,
-        sub: (_type: string, src: uPlot) => !(src?.cursor?.drag as any)?._x && !(src?.cursor?.drag as any)?._y,
+        sub: (type: string) => type !== "mousedown" && type !== "mouseup",
       },
     },
     focus: {

@@ -132,6 +132,9 @@ export function useDynamicSectionWidgets(
 
   const dynamicWidgets = useMemo(() => {
     if (!hasPattern) return [];
+    // No runs selected → no metrics to resolve, return empty (prevents stale
+    // cached data from generating widgets after the last run is deselected)
+    if (!hasRuns) return [];
 
     let filteredMetrics: string[];
     let filteredFiles: { logName: string; logType: string }[];
@@ -225,7 +228,7 @@ export function useDynamicSectionWidgets(
     widgets.sort((a, b) => a.id.localeCompare(b.id));
     return widgets.slice(0, MAX_DYNAMIC_WIDGETS);
   }, [
-    hasPattern, trimmed, isGlob, patternMode, sectionId,
+    hasPattern, hasRuns, trimmed, isGlob, patternMode, sectionId,
     initialMetrics.data, initialFiles.data,
     searchMetrics.data, searchFiles.data,
     regexMetrics.data, regexFiles.data,
@@ -321,6 +324,7 @@ export function useDynamicWidgetCount(
 
   const count = useMemo(() => {
     if (!hasPattern) return 0;
+    if (!hasRuns) return 0;
 
     let metricCount: number;
     let fileCount: number;
@@ -367,7 +371,7 @@ export function useDynamicWidgetCount(
 
     return Math.min(metricCount + fileCount, MAX_DYNAMIC_WIDGETS);
   }, [
-    hasPattern, trimmed, isGlob, patternMode,
+    hasPattern, hasRuns, trimmed, isGlob, patternMode,
     initialMetrics.data, initialFiles.data,
     searchMetrics.data, searchFiles.data,
     regexMetrics.data, regexFiles.data,

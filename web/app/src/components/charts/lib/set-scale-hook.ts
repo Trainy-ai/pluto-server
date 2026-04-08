@@ -120,6 +120,8 @@ export function buildSetScaleHook({
             const x = xData[i];
             if (x > xMax) break; // Past visible range
             for (let si = 1; si < u.data.length; si++) {
+              // Skip hidden series so Y-range auto-adjusts when runs are hidden
+              if (u.series[si]?.show === false) continue;
               const y = (u.data[si] as (number | null)[])[i];
               if (y != null) {
                 hasVisibleData = true;

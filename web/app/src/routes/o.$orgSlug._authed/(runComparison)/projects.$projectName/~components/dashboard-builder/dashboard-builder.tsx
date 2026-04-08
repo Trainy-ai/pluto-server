@@ -196,6 +196,19 @@ export function DashboardBuilder({
       return config.sections;
     }
 
+    // Check if a dynamic section's name or pattern matches the search query.
+    // Used for collapsed dynamic sections where the grid hasn't reported a
+    // search-filtered widget count — the unfiltered count from
+    // useDynamicWidgetCount would incorrectly keep non-matching sections visible.
+    const doesDynamicSectionMatch = (section: Section): boolean => {
+      const query = searchState.query.toLowerCase();
+      const nameMatch = section.name.toLowerCase().includes(query);
+      const patternMatch = section.dynamicPattern
+        ? section.dynamicPattern.toLowerCase().includes(query)
+        : false;
+      return nameMatch || patternMatch;
+    };
+
     const filterSection = (section: Section): Section => ({
       ...section,
       widgets: section.widgets.filter((widget) =>
@@ -207,6 +220,11 @@ export function DashboardBuilder({
               .map(filterSection)
               .filter((child) => {
                 if (child.dynamicPattern) {
+                  // Collapsed dynamic sections only have unfiltered counts.
+                  // Fall back to name/pattern match to avoid false positives.
+                  if (child.collapsed) {
+                    return doesDynamicSectionMatch(child);
+                  }
                   return (dynamicWidgetCounts[child.id] ?? 0) > 0;
                 }
                 return child.widgets.length > 0;
@@ -219,6 +237,9 @@ export function DashboardBuilder({
       .map(filterSection)
       .filter((section) => {
         if (section.dynamicPattern) {
+          if (section.collapsed) {
+            return doesDynamicSectionMatch(section);
+          }
           return (dynamicWidgetCounts[section.id] ?? 0) > 0;
         }
         // Keep folders that still have children or direct widgets

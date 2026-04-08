@@ -151,6 +151,18 @@ interface ChartSyncContextValue {
   /** Experiment run ID lookup: maps runId → all runIds in the same experiment.
    *  Set by the page when in experiments mode. Used for group highlighting. */
   experimentRunIdsMapRef: React.RefObject<Map<string, string[]> | null>;
+
+  // Shared tooltip — single DOM element for all charts in this sync group
+  /** Get or lazily create the single shared tooltip element */
+  getOrCreateTooltipEl: (theme: string) => HTMLDivElement;
+  /** The shared tooltip element ref (null until first chart mounts) */
+  sharedTooltipElRef: React.RefObject<HTMLDivElement | null>;
+  /** The shared tooltip content container ref */
+  sharedTooltipContentRef: React.RefObject<HTMLDivElement | null>;
+  /** Move the shared tooltip into a different container (e.g. fullscreen dialog) */
+  reparentTooltip: (container: HTMLElement | null) => void;
+  /** The chartId that currently "owns" the shared tooltip (last active chart) */
+  activeTooltipChartRef: React.RefObject<string | null>;
 }
 
 // ============================
@@ -297,18 +309,38 @@ export function ChartSyncProvider({
       const hiddenIds = (e as CustomEvent).detail as Set<string>;
       hiddenRunIdsRef.current = hiddenIds;
 
-      uplotInstancesRef.current.forEach((chart) => {
-        chart.batch(() => {
-          for (let i = 1; i < chart.series.length; i++) {
-            const seriesId = (chart.series[i] as any)?._seriesId as string | undefined;
-            if (!seriesId) continue;
-            const runId = seriesId.includes(':') ? seriesId.split(':')[0] : seriesId;
-            const shouldShow = !hiddenIds.has(runId);
-            if (chart.series[i].show !== shouldShow) {
-              chart.setSeries(i, { show: shouldShow });
+      // Snapshot the map to avoid issues with mutation during iteration.
+      // Processing Chart 0 can trigger React state updates (e.g. onYZoomRangeChange)
+      // that cause chart recreation, which unregisters old instances from the Map.
+      const chartsSnapshot = Array.from(uplotInstancesRef.current.entries());
+      chartsSnapshot.forEach(([chartId, chart]) => {
+        // Clear any manual Y zoom so auto-range takes effect after hiding
+        (chart as any)._resetYZoom?.();
+
+        let anyChanged = false;
+        try {
+          chart.batch(() => {
+            for (let i = 1; i < chart.series.length; i++) {
+              const seriesId = (chart.series[i] as any)?._seriesId as string | undefined;
+              if (!seriesId) continue;
+              const runId = seriesId.includes(':') ? seriesId.split(':')[0] : seriesId;
+              const shouldShow = !hiddenIds.has(runId);
+              if (chart.series[i].show !== shouldShow) {
+                chart.setSeries(i, { show: shouldShow });
+                anyChanged = true;
+              }
             }
-          }
-        });
+          });
+        } catch {
+          // Chart may have been destroyed during iteration — skip silently
+        }
+
+        // Force X+Y auto-range recalculation when series visibility changed.
+        // uPlot doesn't shrink the X range when hidden series had wider data,
+        // and Y range stays stale because setSeries doesn't invalidate caches.
+        if (anyChanged) {
+          (chart as any)._forceYRecalc?.();
+        }
       });
     }
     document.addEventListener('run-visibility-change', handleVisibilityChange);
@@ -504,6 +536,10 @@ export function ChartSyncProvider({
           }
           // Redraw without rebuildPaths to preserve Y-axis zoom
           chart.redraw(false);
+          // If this chart has a pinned tooltip, refresh its highlight state.
+          // This runs inside the same rAF as _crossHighlightRunId update,
+          // so the value is current. No extra listeners needed.
+          (chart as any)._refreshTooltipHighlight?.();
         });
       });
     },
@@ -654,6 +690,51 @@ export function ChartSyncProvider({
     globalXRangeStateRef.current = globalXRange;
   }, [globalXRange]);
 
+  // ── Shared tooltip element (single instance for all charts) ──
+  const sharedTooltipElRef = useRef<HTMLDivElement | null>(null);
+  const sharedTooltipContentRef = useRef<HTMLDivElement | null>(null);
+  const activeTooltipChartRef = useRef<string | null>(null);
+
+  const getOrCreateTooltipEl = useCallback((theme: string) => {
+    if (sharedTooltipElRef.current) return sharedTooltipElRef.current;
+    const el = document.createElement("div");
+    el.className = "uplot-tooltip";
+    el.dataset.testid = "uplot-tooltip";
+    el.setAttribute("data-tooltip", "true");
+    el.style.cssText = `
+      position: fixed;
+      display: none;
+      pointer-events: none;
+      z-index: 9999;
+      left: -9999px;
+      top: -9999px;
+      font-family: ui-monospace, monospace;
+      font-size: 11px;
+      background: ${theme === "dark" ? "#161619" : "#fff"};
+      border: 1px solid ${theme === "dark" ? "#333" : "#e0e0e0"};
+      border-radius: 4px;
+      padding: 4px;
+      width: fit-content;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    `;
+    const content = document.createElement("div");
+    content.style.cssText = "display: flex; flex-direction: column; height: 100%; overflow: hidden";
+    el.appendChild(content);
+    document.body.appendChild(el);
+    sharedTooltipElRef.current = el;
+    sharedTooltipContentRef.current = content;
+    return el;
+  }, []);
+
+  const reparentTooltip = useCallback((container: HTMLElement | null) => {
+    const el = sharedTooltipElRef.current;
+    if (!el) return;
+    const target = container || document.body;
+    if (el.parentElement !== target) {
+      target.appendChild(el);
+    }
+  }, []);
+
   // Memoize context value to prevent unnecessary re-renders
   // OPTIMIZATION: State values that change frequently (syncedZoomRange, globalXRange)
   // are also exposed via refs for synchronous access. This way, consumers that only
@@ -692,6 +773,12 @@ export function ChartSyncProvider({
       setStepTimeMapping,
       crossGroupZoomRef,
       experimentRunIdsMapRef,
+      // Shared tooltip
+      getOrCreateTooltipEl,
+      sharedTooltipElRef,
+      sharedTooltipContentRef,
+      reparentTooltip,
+      activeTooltipChartRef,
     }),
     [
       registerUPlot,
@@ -722,6 +809,12 @@ export function ChartSyncProvider({
       uplotInstancesRef.current.clear();
       resetCallbacksRef.current.clear();
       zoomCallbacksRef.current.clear();
+      // Remove shared tooltip element
+      if (sharedTooltipElRef.current?.parentNode) {
+        sharedTooltipElRef.current.parentNode.removeChild(sharedTooltipElRef.current);
+        sharedTooltipElRef.current = null;
+        sharedTooltipContentRef.current = null;
+      }
       // Cancel any pending highlight rAF to avoid post-unmount work
       if (highlightRafRef.current !== null) {
         cancelAnimationFrame(highlightRafRef.current);

@@ -421,10 +421,21 @@ export interface TooltipPluginOpts {
   /** Callback when user hovers over a series row in the pinned tooltip.
    *  seriesIdx is the uPlot series index — use it directly instead of searching by label. */
   onSeriesHover?: (seriesLabel: string | null, runId: string | null, seriesIdx?: number) => void;
+  /** Shared tooltip element from ChartSyncProvider (single instance for all charts) */
+  sharedTooltipEl?: HTMLDivElement | null;
+  /** Shared tooltip content container */
+  sharedContentContainer?: HTMLDivElement | null;
+  /** This chart's unique ID (for tracking which chart owns the tooltip) */
+  chartId?: string;
+  /** Ref tracking which chart currently owns the shared tooltip */
+  activeTooltipChartRef?: { current: string | null };
+  /** Move shared tooltip into a container (for fullscreen dialogs) */
+  reparentTooltip?: (container: HTMLElement | null) => void;
 }
 
 export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
-  const { theme, isDateTime, timeRange, lines, hoverStateRef, onHoverChange, isActiveChart, highlightedSeriesRef, highlightedRunIdRef, highlightedSeriesIdRef, tooltipInterpolation = "none", spanGaps = true, xlabel, title, subtitle, onSeriesHover } = opts;
+  const { theme, isDateTime, timeRange, lines, hoverStateRef, onHoverChange, isActiveChart, highlightedSeriesRef, highlightedRunIdRef, highlightedSeriesIdRef, tooltipInterpolation = "none", spanGaps = true, xlabel, title, subtitle, onSeriesHover, sharedTooltipEl, sharedContentContainer, chartId: pluginChartId, activeTooltipChartRef, reparentTooltip } = opts;
+  const isSharedMode = !!sharedTooltipEl;
 
   // DEBUG: Temporary logging to diagnose tooltip persistence issue
   const DEBUG_TOOLTIP = false; // Set to true for debugging
@@ -442,12 +453,43 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
   let lastLeft: number | null = hoverStateRef?.current.lastLeft ?? null;
   let lastTop: number | null = hoverStateRef?.current.lastTop ?? null;
   let isHovering = hoverStateRef?.current.isHovering ?? false;
-  let isPinned = hoverStateRef?.current.isPinned ?? false;
+  // In shared mode, pin state lives on the shared tooltip element so all chart
+  // instances see the same value. We use a property wrapper so all existing
+  // `isPinned` reads/writes go through the shared state transparently.
+  let _isPinnedLocal = hoverStateRef?.current.isPinned ?? false;
+  const _pinState = {
+    get isPinned(): boolean {
+      if (isSharedMode && sharedTooltipEl) return !!(sharedTooltipEl as any)._isPinned;
+      return _isPinnedLocal;
+    },
+    set isPinned(val: boolean) {
+      _isPinnedLocal = val;
+      if (isSharedMode && sharedTooltipEl) {
+        (sharedTooltipEl as any)._isPinned = val;
+        (sharedTooltipEl as any)._pinnedChartId = val ? pluginChartId : null;
+        (sharedTooltipEl as any)._pinnedChartInstance = val ? null : undefined; // set in pinTooltip
+      }
+    },
+    /** Which chartId owns the pin (shared mode only) */
+    get pinnedChartId(): string | null {
+      if (isSharedMode && sharedTooltipEl) return (sharedTooltipEl as any)._pinnedChartId ?? null;
+      return _isPinnedLocal ? (pluginChartId ?? null) : null;
+    },
+  };
   let hideTimeoutId: ReturnType<typeof setTimeout> | null = null;
   let pinTimerId: ReturnType<typeof setTimeout> | null = null;
   let resizeObserver: ResizeObserver | null = null;
-  /** Timestamp of last unpin — prevents click event from immediately re-pinning */
-  let lastUnpinTime = 0;
+  /** Timestamp of last unpin — prevents click event from immediately re-pinning.
+   *  In shared mode, stored on the element so all instances see it. */
+  let _lastUnpinTimeLocal = 0;
+  const getLastUnpinTime = (): number => {
+    if (isSharedMode && sharedTooltipEl) return (sharedTooltipEl as any)._lastUnpinTime ?? 0;
+    return _lastUnpinTimeLocal;
+  };
+  const setLastUnpinTime = (t: number) => {
+    _lastUnpinTimeLocal = t;
+    if (isSharedMode && sharedTooltipEl) (sharedTooltipEl as any)._lastUnpinTime = t;
+  };
   /** True while updateTooltipContent is rebuilding DOM — suppresses ResizeObserver localStorage writes */
   let isRebuilding = false;
   /** Last cursor index for which tooltip content was built — skip rebuild when unchanged */
@@ -508,7 +550,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
   let chartInstance: uPlot | null = null;
 
   const handleDragMouseDown = (e: MouseEvent) => {
-    if (!tooltipEl || !isPinned) return;
+    if (!tooltipEl || !_pinState.isPinned) return;
     // Only drag from header area
     const target = e.target as HTMLElement;
     if (!target.closest("[data-tooltip-header]")) return;
@@ -536,7 +578,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
   // Sync local state to external ref (includes cursor position now)
   const syncHoverState = () => {
     if (hoverStateRef) {
-      hoverStateRef.current = { isHovering, isPinned, lastIdx, lastLeft, lastTop };
+      hoverStateRef.current = { isHovering, isPinned: _pinState.isPinned, lastIdx, lastLeft, lastTop };
     }
   };
 
@@ -551,7 +593,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
   const handleColumnsChanged = () => {
     tooltipStructureDirty = true;
     cachedRows.clear();
-    if (isPinned && chartInstance && lastIdx != null) {
+    if (_pinState.isPinned && chartInstance && lastIdx != null) {
       updateTooltipContent(chartInstance, lastIdx);
     }
   };
@@ -559,37 +601,45 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
   function init(u: uPlot) {
     chartInstance = u;
     overEl = u.over;
-    tooltipEl = document.createElement("div");
-    tooltipEl.className = "uplot-tooltip";
-    tooltipEl.dataset.testid = "uplot-tooltip";
-    tooltipEl.setAttribute("data-tooltip", "true");
-    tooltipEl.style.cssText = `
-      position: fixed;
-      display: none;
-      pointer-events: none;
-      z-index: 9999;
-      left: -9999px;
-      top: -9999px;
-      font-family: ui-monospace, monospace;
-      font-size: 11px;
-      background: ${theme === "dark" ? "#161619" : "#fff"};
-      border: 1px solid ${theme === "dark" ? "#333" : "#e0e0e0"};
-      border-radius: 4px;
-      padding: 4px;
-      width: fit-content;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-    `;
-    applySavedSize(tooltipEl);
-    // Flex column: header stays pinned, only rows scroll
-    contentContainer = document.createElement("div");
-    contentContainer.style.cssText = "display: flex; flex-direction: column; height: 100%; overflow: hidden";
-    tooltipEl.appendChild(contentContainer);
-    // Append tooltip to the nearest dialog content (if chart is inside a fullscreen dialog)
-    // so pinned tooltip stays within Radix's focus scope and search input can receive keystrokes.
-    // If not in a dialog, append to body so tooltip can overflow chart boundaries.
-    // position:fixed works relative to viewport regardless of parent, so positioning is unaffected.
-    const dialogContent = overEl.closest("[data-slot='dialog-content']");
-    (dialogContent || document.body).appendChild(tooltipEl);
+
+    if (isSharedMode && sharedTooltipEl && sharedContentContainer) {
+      // Shared mode: reuse the single tooltip element from ChartSyncProvider.
+      tooltipEl = sharedTooltipEl;
+      contentContainer = sharedContentContainer;
+      applySavedSize(tooltipEl);
+      // Safety: ensure the shared element is in the DOM
+      if (!tooltipEl.parentNode) {
+        document.body.appendChild(tooltipEl);
+      }
+    } else {
+      // Legacy mode: create own tooltip element (fallback when no context)
+      tooltipEl = document.createElement("div");
+      tooltipEl.className = "uplot-tooltip";
+      tooltipEl.dataset.testid = "uplot-tooltip";
+      tooltipEl.setAttribute("data-tooltip", "true");
+      tooltipEl.style.cssText = `
+        position: fixed;
+        display: none;
+        pointer-events: none;
+        z-index: 9999;
+        left: -9999px;
+        top: -9999px;
+        font-family: ui-monospace, monospace;
+        font-size: 11px;
+        background: ${theme === "dark" ? "#161619" : "#fff"};
+        border: 1px solid ${theme === "dark" ? "#333" : "#e0e0e0"};
+        border-radius: 4px;
+        padding: 4px;
+        width: fit-content;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+      `;
+      applySavedSize(tooltipEl);
+      contentContainer = document.createElement("div");
+      contentContainer.style.cssText = "display: flex; flex-direction: column; height: 100%; overflow: hidden";
+      tooltipEl.appendChild(contentContainer);
+      const dialogContent = overEl.closest("[data-slot='dialog-content']");
+      (dialogContent || document.body).appendChild(tooltipEl);
+    }
 
     // Following uPlot's official tooltips.html demo pattern EXACTLY:
     // mouseenter -> show tooltip (cancel any pending hide)
@@ -597,7 +647,15 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     // setCursor -> just update content, never control visibility
     const handleMouseEnter = () => {
       log(`mouseenter - was isHovering=${isHovering}, hideTimeoutId=${hideTimeoutId !== null}`);
-      // Cancel any pending hide
+      // Cancel any pending hide — in shared mode, the hide timer is stored on the
+      // tooltip element so cross-chart mouseenter (different plugin instance) can cancel it.
+      if (isSharedMode && tooltipEl) {
+        const sharedTimer = (tooltipEl as any)._hideTimer as ReturnType<typeof setTimeout> | null;
+        if (sharedTimer) {
+          clearTimeout(sharedTimer);
+          (tooltipEl as any)._hideTimer = null;
+        }
+      }
       if (hideTimeoutId !== null) {
         clearTimeout(hideTimeoutId);
         hideTimeoutId = null;
@@ -609,23 +667,30 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       onHoverChange?.(true);
       // Show tooltip immediately on mouseenter (uPlot demo pattern)
       // But suppress if any other tooltip is currently pinned
-      if (tooltipEl && !isAnyTooltipPinnedGlobal()) {
-        tooltipEl.style.display = "block";
+      // In shared mode, skip the pinned-global check since there's only one tooltip
+      const suppressForPin = isSharedMode ? _pinState.isPinned : isAnyTooltipPinnedGlobal();
+      if (tooltipEl && !suppressForPin) {
+        // In shared mode, don't show if content is empty (e.g. after a chart
+        // was destroyed and a new chart scrolled under the cursor). The next
+        // setCursor will populate content and then show the tooltip.
+        if (isSharedMode && contentContainer && !contentContainer.hasChildNodes()) {
+          tooltipStructureDirty = true;
+        } else {
+          tooltipEl.style.display = "block";
+        }
         log("  set display=block");
       }
     };
 
     const handleMouseLeave = () => {
-      log(`mouseleave - isHovering=${isHovering}, isPinned=${isPinned}, pendingHide=${hideTimeoutId !== null}`);
+      log(`mouseleave - isHovering=${isHovering}, _pinState.isPinned=${_pinState.isPinned}, pendingHide=${hideTimeoutId !== null}`);
       // When tooltip is pinned, keep it visible on mouseleave
-      if (isPinned) return;
+      if (_pinState.isPinned) return;
       // Small debounce to prevent spurious mouseleave events from hiding tooltip
-      // This protects against edge cases like cursor sync updates or scroll events
-      // that might trigger false mouseleave events
       if (hideTimeoutId !== null) {
         clearTimeout(hideTimeoutId);
       }
-      hideTimeoutId = setTimeout(() => {
+      const hideCallback = () => {
         log("  hide timeout fired - hiding tooltip");
         isHovering = false;
         lastIdx = null;
@@ -634,13 +699,18 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
         lastLeft = null;
         lastTop = null;
         syncHoverState();
-        // Notify context that this chart is no longer hovered
         onHoverChange?.(false);
         if (tooltipEl) {
           tooltipEl.style.display = "none";
         }
         hideTimeoutId = null;
-      }, 50); // 50ms debounce - enough to filter spurious events but not noticeable to user
+        if (isSharedMode && tooltipEl) (tooltipEl as any)._hideTimer = null;
+      };
+      hideTimeoutId = setTimeout(hideCallback, 50);
+      // In shared mode, also store on the element so other instances can cancel it
+      if (isSharedMode && tooltipEl) {
+        (tooltipEl as any)._hideTimer = hideTimeoutId;
+      }
     };
 
     overEl.addEventListener("mouseenter", handleMouseEnter);
@@ -648,10 +718,16 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
 
     // Safety net: shared module-level mousemove listener hides tooltip when mouse is
     // outside chart bounds. Uses a single document listener for all chart instances.
+    // In shared mode, skip registering — only one tooltip exists and it's managed
+    // by the active chart's mouseenter/mouseleave. Multiple safety entries for the
+    // same element would cause the non-hovered charts to hide the active tooltip.
+    if (isSharedMode) {
+      safetyEntry = null;
+    } else {
     safetyEntry = {
       overEl: overEl!,
       tooltipEl,
-      isPinned: () => isPinned,
+      isPinned: () => _pinState.isPinned,
       isHovering: () => isHovering,
       hide: () => {
         if (hideTimeoutId !== null) {
@@ -668,6 +744,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       },
     };
     registerSafetyEntry(safetyEntry);
+    } // end else (non-shared mode)
 
     // --- Pin / Unpin logic ---
     const borderDefault = `1px solid ${theme === "dark" ? "#333" : "#e0e0e0"}`;
@@ -698,7 +775,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       if (!resizeObserver && tooltipEl) {
         const el = tooltipEl;
         resizeObserver = new ResizeObserver(() => {
-          if (!isPinned || isRebuilding) return;
+          if (!_pinState.isPinned || isRebuilding) return;
           // Use offsetWidth/Height to include padding + border
           const w = el.offsetWidth;
           const h = el.offsetHeight;
@@ -740,11 +817,26 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     /** Pin the tooltip at its current position */
     const pinTooltip = () => {
       if (!tooltipEl || !chartInstance) return;
-      isPinned = true;
+      _pinState.isPinned = true;
       tooltipStructureDirty = true;
       cachedRows.clear();
       syncHoverState();
+      // If inside a fullscreen dialog, move tooltip into the dialog so Radix's
+      // focus scope allows the search input to receive keystrokes.
+      // unpinTooltip() moves it back to body.
+      if (isSharedMode && overEl) {
+        const dialogContent = overEl.closest("[data-slot='dialog-content']");
+        if (dialogContent && tooltipEl.parentElement !== dialogContent) {
+          dialogContent.appendChild(tooltipEl);
+        }
+      }
+      // Store pinned chart reference so destroy() can clean up if chart unmounts
+      if (isSharedMode && sharedTooltipEl) {
+        (sharedTooltipEl as any)._pinnedChartInstance = chartInstance;
+      }
       applyPinnedStyle();
+      // Ensure tooltip is visible (it may have been hidden by a prior mouseleave)
+      tooltipEl.style.display = "block";
       // Rebuild content with pinned UI (search input, settings button)
       if (lastIdx != null) {
         savedPinnedLeft = tooltipEl.style.left;
@@ -760,10 +852,14 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     const unpinTooltip = () => {
       if (!tooltipEl) return;
       tooltipEl.removeAttribute("data-pinned");
-      isPinned = false;
+      // Move tooltip back to body if it was reparented into a fullscreen dialog
+      if (isSharedMode && tooltipEl.parentElement !== document.body) {
+        document.body.appendChild(tooltipEl);
+      }
+      _pinState.isPinned = false;
       tooltipStructureDirty = true;
       cachedRows.clear();
-      lastUnpinTime = Date.now();
+      setLastUnpinTime(Date.now());
       // Reset UI state but preserve search query (filter stays active when unpinned)
       if (searchInputRef) {
         searchInputRef.focused = false;
@@ -799,10 +895,15 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       if (closeBtn) {
         closeBtn.remove();
       }
-      // Check if mouse is actually over the chart right now.
+      // Check if mouse is actually over a chart right now.
       // isHovering may be stale because handleMouseLeave returned early while pinned.
-      const mouseOverChart = overEl ? overEl.matches(":hover") : false;
-      if (!mouseOverChart) {
+      // In shared mode, check all chart overlays (the user may have moved to a different chart).
+      let mouseOverAnyChart = overEl ? overEl.matches(":hover") : false;
+      if (!mouseOverAnyChart && isSharedMode) {
+        // Check if any .u-over element is being hovered
+        mouseOverAnyChart = !!document.querySelector(".u-over:hover");
+      }
+      if (!mouseOverAnyChart) {
         isHovering = false;
         tooltipEl.style.display = "none";
         onHoverChange?.(false);
@@ -814,16 +915,16 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     // Click on chart area → toggle pin (with debounce to avoid double-click conflict)
     const handleOverClick = () => {
       // If already pinned, unpin (toggle behavior)
-      if (isPinned) {
+      if (_pinState.isPinned) {
         unpinTooltip();
         return;
       }
       // Skip if we just unpinned — the mousedown handler may have unpinned,
       // and this click event from the same interaction would immediately re-pin
-      if (Date.now() - lastUnpinTime < 300) return;
+      if (Date.now() - getLastUnpinTime() < 300) return;
       // If tooltip isn't visible or has no content, don't pin
       if (!tooltipEl || tooltipEl.style.display === "none" || lastIdx == null) return;
-      // Start a 300ms timer; if dblclick fires before, we cancel
+      // Start a 200ms timer; if dblclick fires before, we cancel
       pinTimerId = setTimeout(() => {
         pinTimerId = null;
         pinTooltip();
@@ -841,14 +942,14 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
 
     // Escape key unpins
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && isPinned) {
+      if (e.key === "Escape" && _pinState.isPinned) {
         unpinTooltip();
       }
     };
 
     // Click outside pinned tooltip unpins
     const handleDocumentMouseDown = (e: MouseEvent) => {
-      if (!isPinned || !tooltipEl) return;
+      if (!_pinState.isPinned || !tooltipEl) return;
       if (!tooltipEl.contains(e.target as Node)) {
         unpinTooltip();
       }
@@ -859,6 +960,19 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     document.addEventListener("keydown", handleKeyDown);
     document.addEventListener("mousedown", handleDocumentMouseDown);
     document.addEventListener("tooltip-columns-changed", handleColumnsChanged);
+
+    // Expose a lightweight callback for cross-chart highlight refresh.
+    // Called directly by highlightUPlotSeries (in chart-sync-context) inside its
+    // rAF, so _crossHighlightRunId is already set when this runs.
+    // Calls updateTooltipValues directly (not via scheduleTooltipUpdate) to avoid
+    // rAF coalescing skipping the update when only the highlight changed.
+    (u as any)._refreshTooltipHighlight = () => {
+      if (!_pinState.isPinned || _pinState.pinnedChartId !== pluginChartId) return;
+      if (!chartInstance || lastIdx == null || !cachedRowContainer) return;
+      // Force the fast-path to re-evaluate by clearing the cached highlight
+      lastContentHighlight = null;
+      updateTooltipValues(chartInstance, lastIdx);
+    };
 
     // Store cleanup function on the element for later removal
     (overEl as HTMLElement & { _tooltipCleanup?: () => void })._tooltipCleanup = () => {
@@ -888,7 +1002,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     // This handles the case where chart is recreated while mouse is stationary over it
     // The external hoverStateRef preserves the hover state AND cursor position
     if (isHovering && tooltipEl && lastIdx != null) {
-      log(`init: restoring hover state - idx=${lastIdx}, left=${lastLeft}, top=${lastTop}, isPinned=${isPinned}`);
+      log(`init: restoring hover state - idx=${lastIdx}, left=${lastLeft}, top=${lastTop}, _pinState.isPinned=${_pinState.isPinned}`);
       tooltipEl.style.display = "block";
       // Immediately update tooltip content with restored state
       // Use requestAnimationFrame to ensure uPlot is fully initialized
@@ -897,7 +1011,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
           updateTooltipContent(u, lastIdx);
         }
         // Re-apply pinned style after chart recreation (border, resize, close button)
-        if (isPinned) {
+        if (_pinState.isPinned) {
           applyPinnedStyle();
         }
       });
@@ -1075,9 +1189,11 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       }
     }
 
-    // Get highlighted series/run IDs for tooltip row matching
-    const highlightedRunId = highlightedRunIdRef?.current ?? null;
-    const highlightedSId = highlightedSeriesIdRef?.current ?? null;
+    // Get highlighted series/run IDs for tooltip row matching.
+    // In shared mode, prefer cross-chart highlight from the uPlot instance.
+    const crossRunIdFull = isSharedMode ? ((u as any)._crossHighlightRunId as string | null ?? null) : null;
+    const highlightedRunId = crossRunIdFull ?? (highlightedRunIdRef?.current ?? null);
+    const highlightedSId = crossRunIdFull ?? (highlightedSeriesIdRef?.current ?? null);
     // Sort: visible series first (highlighted → value desc), hidden series at bottom
     seriesItems.sort((a, b) => {
       // Hidden-from-chart series always sort to the bottom
@@ -1124,11 +1240,11 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     // Header doubles as drag handle when pinned
     const header = document.createElement("div");
     header.setAttribute("data-tooltip-header", "true");
-    header.style.cssText = `font-weight: bold; color: ${textColor}; padding: 3px 4px; border-bottom: 1px solid ${theme === "dark" ? "#333" : "#eee"}; margin-bottom: 2px; font-size: 12px; cursor: ${isPinned ? "grab" : "default"}; user-select: none; flex-shrink: 0`;
+    header.style.cssText = `font-weight: bold; color: ${textColor}; padding: 3px 4px; border-bottom: 1px solid ${theme === "dark" ? "#333" : "#eee"}; margin-bottom: 2px; font-size: 12px; cursor: ${_pinState.isPinned ? "grab" : "default"}; user-select: none; flex-shrink: 0`;
 
     // First row: step/time label + series count + settings button
     const topRow = document.createElement("div");
-    topRow.style.cssText = `display: flex; align-items: center; gap: 8px${isPinned ? "; padding-right: 18px" : ""}`;
+    topRow.style.cssText = `display: flex; align-items: center; gap: 8px${_pinState.isPinned ? "; padding-right: 18px" : ""}`;
 
     const xLabel = document.createElement("span");
     const xAxisLabel = isDateTime
@@ -1200,7 +1316,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
               (entry.runNameSpan?.textContent?.toLowerCase().includes(query)) ||
               (entry.runIdSpan?.textContent?.toLowerCase().includes(query)) ||
               (entry.metricSpan?.textContent?.toLowerCase().includes(query));
-            entry.row.style.display = matchesSearch ? "" : "none";
+            entry.row.style.display = matchesSearch ? "grid" : "none";
             if (matchesSearch) visibleCount++;
           }
           if (cachedCountLabel) {
@@ -1305,7 +1421,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       cellWrapper.appendChild(labelSpan);
 
       // Drag-to-reorder (pinned only, when >1 column)
-      if (isPinned && enabledColumns.length > 1) {
+      if (_pinState.isPinned && enabledColumns.length > 1) {
         cellWrapper.draggable = true;
         cellWrapper.dataset.colId = col.id;
         cellWrapper.style.cursor = "grab";
@@ -1368,7 +1484,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       }
 
       // Resize handle on the right edge of each column (pinned only)
-      if (isPinned) {
+      if (_pinState.isPinned) {
         const resizeHandle = document.createElement("div");
         resizeHandle.style.cssText = `position: absolute; right: -3px; top: 0; bottom: 0; width: 6px; cursor: col-resize; z-index: 1`;
         // Visual indicator on hover
@@ -1446,7 +1562,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       const isHighlighted = highlightedSId !== null && s.seriesId === highlightedSId;
 
       // Add a subtle separator before the first hidden series
-      if (s.seriesHidden && !addedSeparator && isPinned) {
+      if (s.seriesHidden && !addedSeparator && _pinState.isPinned) {
         addedSeparator = true;
         const sep = document.createElement("div");
         sep.style.cssText = `border-top: 1px dashed ${theme === "dark" ? "#444" : "#ccc"}; margin: 4px 4px 2px; opacity: 0.5`;
@@ -1500,7 +1616,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       row.style.order = String(filteredItems.indexOf(s));
 
       // Hover emphasis and click-to-toggle on tooltip rows (pinned only)
-      if (isPinned) {
+      if (_pinState.isPinned) {
         row.style.cursor = "pointer";
         if (onSeriesHover && !s.seriesHidden) {
           row.addEventListener("mouseenter", () => {
@@ -1564,7 +1680,15 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     cachedTipH = tooltipEl.offsetHeight || 100;
     // Reset cached maxHeight so repositionTooltip re-applies it to the new content element
     cachedMaxH = 0;
-    repositionTooltip(u);
+    // Reposition tooltip (skip when pinned — caller handles position restoration)
+    if (!_pinState.isPinned) {
+      repositionTooltip(u);
+    }
+    // In shared mode, ensure tooltip is visible after successful content build.
+    // mouseenter may have deferred display when content was empty.
+    if (isSharedMode && isHovering && !_pinState.isPinned && tooltipEl.style.display === "none") {
+      tooltipEl.style.display = "block";
+    }
   }
 
   /**
@@ -1632,8 +1756,12 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
   function updateTooltipValues(u: uPlot, idx: number) {
     if (!tooltipEl || !contentContainer || !cachedRowContainer) return;
 
-    const highlightedSId = highlightedSeriesIdRef?.current ?? null;
-    const highlightedRunId = highlightedRunIdRef?.current ?? null;
+    // In shared mode, read cross-chart highlight directly from the uPlot instance.
+    // Both updateTooltipValues and highlightUPlotSeries run inside rAF, so the
+    // value is always current — no extra events or listeners needed.
+    const crossRunId = isSharedMode ? ((u as any)._crossHighlightRunId as string | null ?? null) : null;
+    const highlightedSId = crossRunId ?? (highlightedSeriesIdRef?.current ?? null);
+    const highlightedRunId = crossRunId ?? (highlightedRunIdRef?.current ?? null);
 
     // Skip if nothing changed (same index AND same highlight)
     if (idx === lastRenderedIdx && highlightedSId === lastContentHighlight) return;
@@ -1726,11 +1854,19 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
         return;
       }
 
-      const isHighlighted = !isSeriesHidden && highlightedSId !== null && lineData?.seriesId === highlightedSId;
+      // Match by exact seriesId first. Only fall back to runId prefix matching
+      // for cross-chart highlights (crossRunId set) — otherwise multi-metric
+      // charts highlight ALL series for a run instead of just the hovered one.
+      const isHighlighted = !isSeriesHidden && highlightedSId !== null && (
+        lineData?.seriesId === highlightedSId ||
+        (crossRunId !== null && highlightedRunId !== null && lineData?.seriesId?.split(':')[0] === highlightedRunId)
+      );
       const sqid = lineData?.seriesId?.split(':')[0];
 
-      // Handle hidden series — show greyed out row with "hidden" text
-      if (isSeriesHidden) {
+      // Handle hidden series — show greyed out row with "hidden" text,
+      // but only if the series has data at this step. Series that ended
+      // before this step (null data) should not appear in the tooltip.
+      if (isSeriesHidden && u.data[i][idx] != null) {
         const vk = "hidden";
         if (cached.lastValueKey !== vk) {
           cached.valueSpan.textContent = "";
@@ -1915,7 +2051,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     lastContentHighlight = highlightedSId;
 
     // Reposition tooltip (skip when pinned — position is locked)
-    if (!isPinned) {
+    if (!_pinState.isPinned) {
       repositionTooltip(u);
     }
   }
@@ -1955,17 +2091,48 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     }
   }
 
+  /** Track which chart last owned the shared tooltip for dirty detection */
+  let lastActiveChartId: string | null = pluginChartId ?? null;
+
   function setCursor(u: uPlot) {
     if (!tooltipEl || !overEl) return;
+
+    // ── Ultra-fast early return for non-active charts (shared mode) ──
+    // In shared mode, only the active chart (or the pinned chart) processes setCursor.
+    // This is the critical performance optimization: N-1 charts do a single
+    // comparison and return, with zero DOM access or state checks.
+    if (isSharedMode) {
+      if (_pinState.isPinned) {
+        // When pinned, only the chart that owns the pin should process
+        if (_pinState.pinnedChartId !== pluginChartId) return;
+      } else {
+        // Don't process unless mouseenter has fired on this chart.
+        // Prevents showing empty/stale tooltip when charts mount under a
+        // stationary mouse (e.g. after scrolling) and receive cursor sync.
+        if (!isHovering) return;
+        const isActive = isActiveChart?.() ?? true;
+        if (!isActive) return; // Zero work — no DOM access, no state mutation
+      }
+    }
 
     // Check if this chart is the one being directly hovered
     // This prevents synced charts from showing tooltips
     const isActive = isActiveChart?.() ?? true; // Default to true if no context
 
+    // In shared mode, detect chart switch → force full rebuild
+    if (isSharedMode && pluginChartId && !_pinState.isPinned) {
+      if (activeTooltipChartRef && activeTooltipChartRef.current !== pluginChartId) {
+        activeTooltipChartRef.current = pluginChartId;
+        tooltipStructureDirty = true;
+        cachedRows.clear();
+        lastRenderedIdx = null;
+      }
+    }
+
     // For non-active (synced) charts, HIDE the tooltip (unless pinned)
     // This prevents multiple tooltips from appearing on different charts
     // With synchronous ref tracking in chart-sync-context, this is now safe
-    if (!isActive && !isPinned) {
+    if (!isActive && !_pinState.isPinned) {
       log(`setCursor - hiding tooltip (not active chart)`);
       tooltipEl.style.display = "none";
       return;
@@ -1973,23 +2140,37 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
 
     // If any other tooltip is pinned, suppress this chart's tooltip
     // This prevents a second tooltip from appearing when hovering after pinning
-    if (!isPinned && isAnyTooltipPinnedGlobal()) {
+    if (!_pinState.isPinned && !isSharedMode && isAnyTooltipPinnedGlobal()) {
       tooltipEl.style.display = "none";
       return;
     }
 
     // When pinned, update values to match synced cursor but keep position fixed.
     // Close button is safe — it lives on tooltipEl, outside contentContainer.
-    if (isPinned) {
+    if (_pinState.isPinned) {
       const syncIdx = u.cursor.idx ?? lastIdx;
-      // Track highlighted series — fast path handles this incrementally
-      const pinnedHighlightCheck = highlightedSeriesIdRef?.current ?? null;
-      if (pinnedHighlightCheck !== lastHighlightedSeriesId) {
+      // Track highlighted series — detect changes for fast-path highlight update.
+      // Check both local focus (highlightedSeriesIdRef) and cross-chart highlight
+      // (_crossHighlightRunId) so the pinned tooltip updates when hovering other charts.
+      const localHighlight = highlightedSeriesIdRef?.current ?? null;
+      const crossHighlightRunId = (u as any)._crossHighlightRunId as string | null ?? null;
+      // Use cross-chart run ID if it differs from local (user moved to another chart)
+      const pinnedHighlightCheck = crossHighlightRunId ?? localHighlight;
+      const highlightChanged = pinnedHighlightCheck !== lastHighlightedSeriesId;
+      if (highlightChanged) {
         lastHighlightedSeriesId = pinnedHighlightCheck;
+        // Sync the local refs so fast-path row highlighting picks up cross-chart changes
+        if (crossHighlightRunId && highlightedRunIdRef) {
+          highlightedRunIdRef.current = crossHighlightRunId;
+        }
+        if (crossHighlightRunId && highlightedSeriesIdRef) {
+          highlightedSeriesIdRef.current = crossHighlightRunId;
+        }
       }
       const indexChanged = syncIdx != null && syncIdx !== lastIdx;
-      const needsUpdate = indexChanged || tooltipStructureDirty;
-      // Only rebuild when cursor moves to a different step OR highlight changed.
+      const needsUpdate = indexChanged || tooltipStructureDirty || highlightChanged;
+      // Only rebuild when cursor moves to a different step, highlight changed
+      // (vertical mouse movement), OR structure is dirty.
       // Rebuilding on every setCursor call destroys row DOM elements,
       // breaking mouseenter/mouseleave handlers and stealing search focus.
       if (needsUpdate && tooltipEl) {
@@ -2065,7 +2246,37 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       init,
       setCursor,
       destroy(u: uPlot) {
-        log(`destroy called - isHovering=${isHovering}, isPinned=${isPinned}, hideTimeoutId=${hideTimeoutId !== null}`);
+        log(`destroy called - isHovering=${isHovering}, _pinState.isPinned=${_pinState.isPinned}, hideTimeoutId=${hideTimeoutId !== null}`);
+        // If this chart owned the pinned tooltip, unpin and hide it
+        if (isSharedMode && _pinState.pinnedChartId === pluginChartId) {
+          _pinState.isPinned = false;
+          // Move tooltip back to body BEFORE the dialog unmounts — otherwise
+          // the tooltip element gets removed with the dialog content and
+          // non-fullscreen charts can never show it again.
+          reparentTooltip?.(null);
+          if (tooltipEl) {
+            tooltipEl.removeAttribute("data-pinned");
+            tooltipEl.style.display = "none";
+            tooltipEl.style.pointerEvents = "none";
+            tooltipEl.style.border = `1px solid ${theme === "dark" ? "#333" : "#e0e0e0"}`;
+            tooltipEl.style.resize = "none";
+            const closeBtn = tooltipEl.querySelector("[data-tooltip-close]");
+            if (closeBtn) closeBtn.remove();
+          }
+        }
+        // Clear stale content and reset active chart so the next chart that mounts
+        // under the cursor can take over cleanly without flashing old data.
+        if (isSharedMode) {
+          if (contentContainer) contentContainer.textContent = "";
+          if (tooltipEl) tooltipEl.style.display = "none";
+          if (activeTooltipChartRef && activeTooltipChartRef.current === pluginChartId) {
+            activeTooltipChartRef.current = null;
+          }
+          tooltipStructureDirty = true;
+          cachedRows.clear();
+          lastRenderedIdx = null;
+          isHovering = false;
+        }
         // Cleanup event listeners
         const cleanup = (overEl as HTMLElement & { _tooltipCleanup?: () => void })?._tooltipCleanup;
         cleanup?.();
@@ -2086,8 +2297,8 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
         // Remove any body-appended dropdown
         closeAddDropdown();
 
-        // Remove tooltip element
-        if (tooltipEl && tooltipEl.parentNode) {
+        // Remove tooltip element (skip in shared mode — element is owned by the context)
+        if (!isSharedMode && tooltipEl && tooltipEl.parentNode) {
           tooltipEl.parentNode.removeChild(tooltipEl);
         }
 

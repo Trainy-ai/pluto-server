@@ -61,6 +61,7 @@ export function ChartFullscreenDialog({
     if (!open) return;
 
     let currentLegend: Element | null = null;
+    let lastFocusedSeriesId: string | null = null;
 
     function moveLegend() {
       const chartArea = chartAreaRef.current;
@@ -74,6 +75,37 @@ export function ChartFullscreenDialog({
         }
         currentLegend = legend;
         sidebar.appendChild(legend);
+      }
+
+      // Highlight the focused series row in the legend sidebar.
+      // Track by _focusedSeriesId (not _focusedRunId) so the highlight
+      // updates on IR pages where all series share the same runId.
+      const uplotEl = chartArea.querySelector(".uplot") as HTMLElement | null;
+      const uplot = (uplotEl as any)?._uplot;
+      const focusedSeriesId = uplot?._focusedSeriesId as string | null ?? null;
+      const focusedRunId = uplot?._focusedRunId as string | null ?? null;
+      if (focusedSeriesId !== lastFocusedSeriesId && sidebar) {
+        lastFocusedSeriesId = focusedSeriesId;
+        // uPlot's .u-series includes the x-axis header at index 0.
+        // Skip it — only highlight data series (index 1+).
+        const rows = sidebar.querySelectorAll<HTMLElement>(".u-series");
+        // Detect multi-metric: seriesId contains ":" when there are
+        // multiple metrics per run. Use exact match to avoid
+        // highlighting ALL series for the same run.
+        const isMultiMetric = focusedSeriesId?.includes(":") ?? false;
+        for (let i = 0; i < rows.length; i++) {
+          // .u-series rows map 1:1 to uplot.series — row 0 is the x-axis header
+          const seriesId = (uplot?.series?.[i] as any)?._seriesId as string | undefined;
+          if (i === 0 || !seriesId) {
+            // x-axis header row — never highlight
+            rows[i].classList.remove("u-legend-focused");
+            continue;
+          }
+          const match = isMultiMetric
+            ? (!!focusedSeriesId && seriesId === focusedSeriesId)
+            : (!!focusedRunId && seriesId.split(":")[0] === focusedRunId);
+          rows[i].classList.toggle("u-legend-focused", match);
+        }
       }
     }
 

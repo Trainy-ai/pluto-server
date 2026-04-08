@@ -324,6 +324,11 @@ input[type="number"] {
   flex-shrink: 0;
 }
 
+/* Highlight the focused series row in the fullscreen legend sidebar */
+.fullscreen-legend-sidebar .u-series.u-legend-focused {
+  background: rgba(59, 130, 246, 0.15) !important;
+}
+
 /* Reduce padding inside series cells */
 .fullscreen-legend-sidebar .u-series > * {
   padding: 1px 0 !important;
@@ -347,6 +352,14 @@ input[type="number"] {
   min-width: 7.5rem;
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+/* Hide background charts when fullscreen dialog is open — uses a CSS class toggle
+   on the FullscreenProvider wrapper instead of React state to avoid re-rendering
+   every VirtualizedChart component (dozens of them) when fullscreen opens/closes. */
+.fullscreen-active [data-testid="virtualized-chart"] {
+  visibility: hidden;
+  content-visibility: hidden;
 }
 
 /* Hide companion series (smoothing originals) from sidebar — already hidden via inline style */

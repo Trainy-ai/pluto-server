@@ -409,6 +409,12 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             highlightedSeriesIdRef, tooltipInterpolation,
             spanGaps, xlabel, title, subtitle,
             onSeriesHover: handleTooltipSeriesHover,
+            // Shared tooltip: single DOM element from ChartSyncProvider
+            sharedTooltipEl: chartSyncContext?.getOrCreateTooltipEl(theme ?? "dark") ?? null,
+            sharedContentContainer: chartSyncContext?.sharedTooltipContentRef?.current ?? null,
+            chartId,
+            activeTooltipChartRef: chartSyncContext?.activeTooltipChartRef,
+            reparentTooltip: chartSyncContext?.reparentTooltip,
           }),
           nonFiniteMarkersPlugin({
             lines: processedLines,

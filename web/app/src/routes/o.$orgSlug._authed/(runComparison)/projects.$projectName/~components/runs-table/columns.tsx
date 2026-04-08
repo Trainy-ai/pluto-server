@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useState, useEffect, useCallback, memo, type MutableRefObject } from "react";
 import { flushSync } from "react-dom";
+import { useHiddenRunIds } from "@/hooks/use-hidden-run-ids";
 import { ColumnHeaderMenu } from "./column-header-menu";
 import { getRowRange, getCustomColumnValue, formatCellValue } from "./columns-utils";
 
@@ -37,7 +38,6 @@ interface SelectionCellProps {
   totalSelected: number;
   onSelectionChange: (runId: RunId, isSelected: boolean) => void;
   onToggleVisibility: (runId: RunId) => void;
-  isHidden: boolean;
   runColor?: string;
   lastSelectedIdRef: MutableRefObject<string>;
 }
@@ -48,13 +48,17 @@ const SelectionCell = memo(function SelectionCell({
   totalSelected,
   onSelectionChange,
   onToggleVisibility,
-  isHidden,
   runColor,
   lastSelectedIdRef,
 }: SelectionCellProps) {
   const isSelected = row.getIsSelected();
   const isDisabled = totalSelected >= SELECTED_RUNS_LIMIT && !isSelected;
   const runId = row.original.id;
+
+  // Read hidden state directly via hook so the icon stays in sync
+  // (the memoized column definition can't pass a reactive isHidden prop)
+  const hiddenRunIds = useHiddenRunIds();
+  const isHidden = hiddenRunIds.has(runId);
 
   // Local optimistic state for immediate visual feedback
   const [optimisticSelected, setOptimisticSelected] = useState(isSelected);
@@ -96,7 +100,7 @@ const SelectionCell = memo(function SelectionCell({
       }
     }
     lastSelectedIdRef.current = row.id;
-  }, [optimisticSelected, isDisabled, isHidden, runId, row, table, onSelectionChange, onToggleVisibility, lastSelectedIdRef]);
+  }, [optimisticSelected, isDisabled, runId, row, table, onSelectionChange, onToggleVisibility, lastSelectedIdRef]);
 
   const handleDeselect = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
@@ -267,7 +271,6 @@ export const columns = ({
             totalSelected={totalSelected}
             onSelectionChange={onSelectionChange}
             onToggleVisibility={onToggleVisibility}
-            isHidden={getIsHidden(runId)}
             runColor={getRunColor(runId)}
             lastSelectedIdRef={lastSelectedIdRef}
           />

@@ -2559,6 +2559,124 @@ async function setupTestData(): Promise<TestData> {
   });
   console.log('   ✓ Created Dedup Test dashboard view');
 
+  // --- Zoom Visibility Test dashboard ---
+  const zoomVisibilityDashboardConfig = {
+    version: 1,
+    sections: [
+      {
+        id: 'zoom-vis-static-section',
+        name: 'Zoom Visibility Charts (Static)',
+        collapsed: false,
+        widgets: [
+          {
+            id: 'zoom-vis-loss-widget',
+            type: 'chart',
+            config: {
+              title: 'train/loss (different step counts)',
+              metrics: ['train/loss'],
+              xAxis: 'step',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+            },
+            layout: { x: 0, y: 0, w: 12, h: 4 },
+          },
+        ],
+      },
+      {
+        id: 'zoom-vis-dynamic-section',
+        name: 'Zoom Visibility Metrics (Dynamic)',
+        collapsed: false,
+        widgets: [],
+        dynamicPattern: 'train/*',
+        dynamicPatternMode: 'search',
+      },
+    ],
+    settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
+  };
+
+  await prisma.dashboardView.upsert({
+    where: {
+      organizationId_projectId_name: {
+        organizationId: org.id,
+        projectId: project.id,
+        name: 'Zoom Visibility Test',
+      },
+    },
+    update: { config: zoomVisibilityDashboardConfig },
+    create: {
+      name: 'Zoom Visibility Test',
+      organizationId: org.id,
+      projectId: project.id,
+      createdById: user.id,
+      isDefault: false,
+      config: zoomVisibilityDashboardConfig,
+    },
+  });
+  console.log('   ✓ Created Zoom Visibility Test dashboard view');
+
+  // --- Search False Positive Test dashboard ---
+  const searchFalsePositiveDashboardConfig = {
+    version: 1,
+    sections: [
+      {
+        id: 'search-fp-unique-section',
+        name: 'Unique Metric Section',
+        collapsed: false,
+        widgets: [
+          {
+            id: 'search-fp-unique-widget',
+            type: 'chart',
+            config: {
+              title: 'train/metric_49 (unique)',
+              metrics: ['train/metric_49'],
+              xAxis: 'step',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+            },
+            layout: { x: 0, y: 0, w: 12, h: 4 },
+          },
+        ],
+      },
+      {
+        id: 'search-fp-dynamic-train',
+        name: 'Train Metrics (Dynamic)',
+        collapsed: false,
+        widgets: [],
+        dynamicPattern: 'train/metric_0*',
+        dynamicPatternMode: 'search',
+      },
+      {
+        id: 'search-fp-dynamic-other',
+        name: 'Other Metrics (Dynamic)',
+        collapsed: false,
+        widgets: [],
+        dynamicPattern: 'train/metric_1*',
+        dynamicPatternMode: 'search',
+      },
+    ],
+    settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
+  };
+
+  await prisma.dashboardView.upsert({
+    where: {
+      organizationId_projectId_name: {
+        organizationId: org.id,
+        projectId: project.id,
+        name: 'Search False Positive Test',
+      },
+    },
+    update: { config: searchFalsePositiveDashboardConfig },
+    create: {
+      name: 'Search False Positive Test',
+      organizationId: org.id,
+      projectId: project.id,
+      createdById: user.id,
+      isDefault: false,
+      config: searchFalsePositiveDashboardConfig,
+    },
+  });
+  console.log('   ✓ Created Search False Positive Test dashboard view');
+
   // 13. Seed image and file data for file-viewer and step-sync E2E tests
   console.log('\n1️⃣3️⃣ Seeding image and file data...');
 

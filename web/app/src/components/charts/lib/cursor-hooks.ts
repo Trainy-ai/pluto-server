@@ -142,6 +142,13 @@ export function buildFocusDetectionHook(deps: FocusDetectionDeps): (u: uPlot) =>
       // causing Y auto-range to recalculate and overwrite any user Y-axis zoom).
       u.redraw(false);
 
+      // Store focused run ID and full series ID on the chart instance for the
+      // fullscreen legend sidebar to pick up via its polling interval.
+      // _focusedRunId is used for run-level matching (single-metric charts).
+      // _focusedSeriesId is used for exact matching (multi-metric charts).
+      (u as any)._focusedRunId = closestRunId;
+      (u as any)._focusedSeriesId = deps.processedLines[closestSeriesIdx - 1]?.seriesId ?? null;
+
       // CROSS-CHART highlighting
       const seriesLabel = deps.processedLines[closestSeriesIdx - 1]?.label ?? null;
       if (seriesLabel) {

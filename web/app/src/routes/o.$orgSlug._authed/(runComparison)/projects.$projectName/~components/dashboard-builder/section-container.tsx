@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { cn } from "@/lib/utils";
 import {
   ChevronDownIcon,
@@ -47,6 +47,7 @@ import { DynamicPatternPreview } from "./dynamic-pattern-preview";
 import { useDynamicWidgetCount } from "./use-dynamic-section";
 import { REGEX_MAX_LENGTH } from "./regex-search-panel";
 import { isValidRe2Regex } from "../../~lib/validate-re2-regex";
+import { useHiddenRunIds } from "@/hooks/use-hidden-run-ids";
 import type { Section } from "../../~types/dashboard-types";
 
 interface SectionDragProps {
@@ -120,13 +121,23 @@ export function SectionContainer({
 
   const isDynamic = !!section.dynamicPattern;
 
+  // Exclude hidden runs so count matches what DynamicSectionGrid actually renders
+  const hiddenRunIds = useHiddenRunIds();
+  const visibleRunIds = useMemo(
+    () =>
+      hiddenRunIds.size === 0
+        ? selectedRunIds
+        : selectedRunIds.filter((id) => !hiddenRunIds.has(id)),
+    [selectedRunIds, hiddenRunIds],
+  );
+
   // Lightweight count for dynamic sections — shares query cache, no widget creation
   const { count: dynamicCount, isLoading: dynamicCountLoading } = useDynamicWidgetCount(
     isDynamic ? section.dynamicPattern : undefined,
     section.dynamicPatternMode ?? "search",
     organizationId,
     projectName,
-    selectedRunIds,
+    visibleRunIds,
   );
 
   // Report lightweight count upward so folder totals work even when collapsed
@@ -516,12 +527,22 @@ function DynamicChildCounter({
   selectedRunIds: string[];
   onCount: (sectionId: string, count: number, isLoading: boolean) => void;
 }) {
+  // Exclude hidden runs so folder totals match rendered widget counts
+  const hiddenRunIds = useHiddenRunIds();
+  const visibleRunIds = useMemo(
+    () =>
+      hiddenRunIds.size === 0
+        ? selectedRunIds
+        : selectedRunIds.filter((id) => !hiddenRunIds.has(id)),
+    [selectedRunIds, hiddenRunIds],
+  );
+
   const { count, isLoading } = useDynamicWidgetCount(
     section.dynamicPattern,
     section.dynamicPatternMode ?? "search",
     organizationId,
     projectName,
-    selectedRunIds,
+    visibleRunIds,
   );
 
   useEffect(() => {
@@ -587,8 +608,10 @@ export function FolderContainer({
     });
   }, []);
 
-  // Merge: prefer parent-provided counts (from mounted grids) over local counts
-  const mergedCounts = { ...localDynamicCounts, ...dynamicWidgetCounts };
+  // Merge: prefer local counts (from always-mounted DynamicChildCounter) over
+  // parent-provided counts. Parent counts come from DynamicSectionGrid which is
+  // unmounted when the folder is collapsed, so they go stale when runs are hidden.
+  const mergedCounts = { ...dynamicWidgetCounts, ...localDynamicCounts };
 
   const dynamicChildren = (section.children ?? []).filter((c) => !!c.dynamicPattern);
   const anyDynamicChildLoading = dynamicChildren.length > 0 &&
