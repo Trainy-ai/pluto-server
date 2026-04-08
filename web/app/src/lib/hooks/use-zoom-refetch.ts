@@ -39,6 +39,8 @@ interface UseZoomRefetchOptions {
   buckets: number;
   /** Server-side downsampling algorithm ("avg" or "lttb"). */
   algorithm?: "avg" | "lttb";
+  /** When true, deduplicate metric values at the same step before bucketing. */
+  dedup?: boolean;
 }
 
 /** Build a composite key for the zoom data map: "runId\0metricName" */
@@ -81,6 +83,7 @@ export function useZoomRefetch({
   timeStepMapping,
   buckets: zoomBuckets,
   algorithm,
+  dedup,
 }: UseZoomRefetchOptions): UseZoomRefetchReturn {
   const [localZoomRange, setLocalZoomRange] = useState<[number, number] | null>(null);
   const queryClient = useQueryClient();
@@ -139,6 +142,7 @@ export function useZoomRefetch({
               stepMin: zoomStepRange[0],
               stepMax: zoomStepRange[1],
               algorithm: algorithm !== "avg" ? algorithm : undefined,
+              dedup,
             };
             return {
               queryKey: [...trpc.runs.data.graphMultiMetricBatchBucketed.queryOptions(opts).queryKey, "zoom"],
@@ -164,6 +168,7 @@ export function useZoomRefetch({
               stepMin: zoomStepRange[0],
               stepMax: zoomStepRange[1],
               algorithm: algorithm !== "avg" ? algorithm : undefined,
+              dedup,
             };
             return {
               queryKey: [...trpc.runs.data.graphBatchBucketed.queryOptions(opts).queryKey, "zoom"],
@@ -190,6 +195,7 @@ export function useZoomRefetch({
                 stepMin: zoomStepRange[0],
                 stepMax: zoomStepRange[1],
                 algorithm: algorithm !== "avg" ? algorithm : undefined,
+              dedup,
               };
               return {
                 queryKey: [...trpc.runs.data.graphBucketed.queryOptions(opts).queryKey, "zoom"],
@@ -293,6 +299,7 @@ export function useZoomRefetch({
                 stepMin: stepRange[0],
                 stepMax: stepRange[1],
                 algorithm: algorithm !== "avg" ? algorithm : undefined,
+              dedup,
               };
               queryClient.prefetchQuery({
                 queryKey: [...trpc.runs.data.graphMultiMetricBatchBucketed.queryOptions(opts).queryKey, "zoom"],

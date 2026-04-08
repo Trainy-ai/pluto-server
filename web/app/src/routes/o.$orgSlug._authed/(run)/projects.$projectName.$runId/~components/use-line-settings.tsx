@@ -53,6 +53,10 @@ export interface LineChartSettings {
    *  envelopes (default). "lttb" = Largest Triangle Three Buckets for better
    *  visual shape preservation. */
   downsamplingAlgorithm: DownsamplingAlgorithm;
+  /** When true, deduplicate metric values at the same step before bucketing.
+   *  Takes the last-logged value (by timestamp) per step per run.
+   *  Useful for distributed training where multiple ranks log the same step. */
+  deduplicateSteps: boolean;
 }
 
 export const DEFAULT_SETTINGS: LineChartSettings = {
@@ -76,6 +80,7 @@ export const DEFAULT_SETTINGS: LineChartSettings = {
   chartResolution: "auto",
   showInheritedMetrics: true,
   downsamplingAlgorithm: "avg",
+  deduplicateSteps: false,
 };
 
 const lineSettingsDb = new LocalCache<LineChartSettings>(

@@ -250,6 +250,7 @@ const MultiLineChartInner = memo(
 
     // Downsampling algorithm — "avg" (default) or "lttb"
     const algorithm = settings.downsamplingAlgorithm ?? "avg";
+    const dedup = settings.deduplicateSteps || undefined;
 
     // Multi-metric path: one query per chunk
     const standardMultiQueries = useQueries({
@@ -263,6 +264,7 @@ const MultiLineChartInner = memo(
               buckets: standardBuckets,
               includeLineage: showInheritedMetrics && forkSteps.size > 0,
               algorithm: algorithm !== "avg" ? algorithm : undefined,
+              dedup,
             };
             return {
               queryKey: trpc.runs.data.graphMultiMetricBatchBucketed.queryOptions(opts).queryKey,
@@ -288,6 +290,7 @@ const MultiLineChartInner = memo(
               buckets: standardBuckets,
               includeLineage: showInheritedMetrics && forkSteps.size > 0,
               algorithm: algorithm !== "avg" ? algorithm : undefined,
+              dedup,
             };
             return {
               queryKey: trpc.runs.data.graphBatchBucketed.queryOptions(opts).queryKey,
@@ -461,6 +464,7 @@ const MultiLineChartInner = memo(
       timeStepMapping,
       buckets: standardBuckets,
       algorithm: algorithm !== "avg" ? algorithm : undefined,
+      dedup,
     });
 
     // Check error states and get data

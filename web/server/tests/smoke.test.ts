@@ -6402,4 +6402,217 @@ describe('SDK API Endpoints (with API Key)', () => {
       }
     });
   });
+
+  // Test Suite 33: Step Deduplication
+  // Uses dedup-test run seeded with 200 steps × 2 values each:
+  //   Wrong value (10x, earlier timestamp) and correct value (1x, later timestamp)
+  // With dedup ON, argMax(value, time) should pick the correct (later) value.
+  describe('Test Suite 33: Step Deduplication', () => {
+    const TEST_EMAIL = process.env.TEST_USER_EMAIL || 'test-smoke@mlop.local';
+    const TEST_PASSWORD = 'TestPassword123!';
+    let sessionCookie: string | null = null;
+    let serverAvailable = false;
+    let dedupRunSqid: string | null = null;
+
+    beforeAll(async () => {
+      try {
+        const healthCheck = await makeRequest('/api/health');
+        serverAvailable = healthCheck.status === 200;
+      } catch {
+        serverAvailable = false;
+      }
+
+      if (!serverAvailable) return;
+
+      try {
+        const signInResponse = await makeRequest('/api/auth/sign-in/email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: TEST_EMAIL, password: TEST_PASSWORD }),
+        });
+
+        const setCookie = signInResponse.headers.get('set-cookie');
+        if (setCookie) {
+          const match = setCookie.match(/better_auth\.session_token=([^;]+)/);
+          if (match) {
+            sessionCookie = `better_auth.session_token=${match[1]}`;
+          }
+        }
+      } catch (e) {
+        console.log('   Sign in failed:', e);
+      }
+
+      if (!sessionCookie) return;
+
+      const listResponse = await makeTrpcRequest('runs.list', {
+        projectName: TEST_PROJECT_NAME,
+        search: 'dedup-test',
+        limit: 5,
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      if (listResponse.status === 200) {
+        const listData = await listResponse.json();
+        const runs = listData.result?.data?.runs;
+        const dedupRun = runs?.find((r: { name: string }) => r.name === 'dedup-test');
+        if (dedupRun) {
+          dedupRunSqid = dedupRun.id;
+        }
+      }
+    });
+
+    it('Test 33.1: graphBucketed without dedup returns averaged duplicates', async () => {
+      if (!sessionCookie || !dedupRunSqid) {
+        console.log('   No session or dedup run - skipping');
+        return;
+      }
+
+      const response = await makeTrpcRequest('runs.data.graphBucketed', {
+        runId: dedupRunSqid,
+        projectName: TEST_PROJECT_NAME,
+        logName: 'test/dedup_metric',
+        buckets: 200,
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      const points = data.result?.data;
+      expect(points).toBeDefined();
+      expect(points.length).toBeGreaterThan(0);
+
+      // Without dedup, each bucket has 2 values (wrong + correct), so count >= 2
+      // and value should be avg(step*10, step) = step*5.5
+      const midPoint = points[Math.floor(points.length / 2)];
+      expect(midPoint.count).toBeGreaterThanOrEqual(2);
+      // The value should be well above the true value (1x)
+      expect(midPoint.value).toBeGreaterThan(midPoint.step * 3);
+    });
+
+    it('Test 33.2: graphBucketed with dedup returns only last-logged value', async () => {
+      if (!sessionCookie || !dedupRunSqid) {
+        console.log('   No session or dedup run - skipping');
+        return;
+      }
+
+      const response = await makeTrpcRequest('runs.data.graphBucketed', {
+        runId: dedupRunSqid,
+        projectName: TEST_PROJECT_NAME,
+        logName: 'test/dedup_metric',
+        buckets: 200,
+        dedup: true,
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      const points = data.result?.data;
+      expect(points).toBeDefined();
+      expect(points.length).toBeGreaterThan(0);
+
+      // With dedup, each bucket has 1 value (the correct one), so count = 1
+      const midPoint = points[Math.floor(points.length / 2)];
+      expect(midPoint.count).toBe(1);
+      // The value should be close to the step number (true value = step)
+      expect(midPoint.value).toBeLessThan(midPoint.step * 2);
+      // Min and max should be equal (single value per bucket)
+      expect(midPoint.minY).toBeCloseTo(midPoint.maxY, 1);
+    });
+
+    it('Test 33.3: graphMultiMetricBatchBucketed with dedup works', async () => {
+      if (!sessionCookie || !dedupRunSqid) {
+        console.log('   No session or dedup run - skipping');
+        return;
+      }
+
+      const response = await makeTrpcRequest('runs.data.graphMultiMetricBatchBucketed', {
+        runIds: [dedupRunSqid],
+        projectName: TEST_PROJECT_NAME,
+        logNames: ['test/dedup_metric'],
+        buckets: 200,
+        dedup: true,
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      const result = data.result?.data;
+      expect(result).toBeDefined();
+      expect(result['test/dedup_metric']).toBeDefined();
+
+      const series = result['test/dedup_metric'][dedupRunSqid!];
+      expect(series).toBeDefined();
+      expect(series.steps.length).toBeGreaterThan(0);
+
+      // Dedup should produce count=1 per bucket
+      expect(series.counts[0]).toBe(1);
+
+      // Values should be close to step (true value), not 5.5× step
+      const midIdx = Math.floor(series.steps.length / 2);
+      const midStep = series.steps[midIdx];
+      const midValue = series.values[midIdx];
+      expect(midValue).toBeLessThan(midStep * 2);
+    });
+
+    it('Test 33.4: graphBucketed zoom query with dedup works', async () => {
+      if (!sessionCookie || !dedupRunSqid) {
+        console.log('   No session or dedup run - skipping');
+        return;
+      }
+
+      const response = await makeTrpcRequest('runs.data.graphBucketed', {
+        runId: dedupRunSqid,
+        projectName: TEST_PROJECT_NAME,
+        logName: 'test/dedup_metric',
+        buckets: 100,
+        stepMin: 50,
+        stepMax: 60,
+        dedup: true,
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      const points = data.result?.data;
+      expect(points).toBeDefined();
+      expect(points.length).toBeGreaterThan(0);
+
+      // All steps should be within requested range
+      for (const point of points) {
+        expect(point.step).toBeGreaterThanOrEqual(50);
+        expect(point.step).toBeLessThanOrEqual(60);
+      }
+
+      // With 100 buckets for 11 steps, each bucket should have count=1
+      for (const point of points) {
+        expect(point.count).toBe(1);
+        // Single value per bucket means no band
+        expect(point.minY).toBeCloseTo(point.maxY, 5);
+      }
+    });
+
+    it('Test 33.5: dedup with graphBatchBucketed (multi-run) works', async () => {
+      if (!sessionCookie || !dedupRunSqid) {
+        console.log('   No session or dedup run - skipping');
+        return;
+      }
+
+      const response = await makeTrpcRequest('runs.data.graphBatchBucketed', {
+        runIds: [dedupRunSqid],
+        projectName: TEST_PROJECT_NAME,
+        logName: 'test/dedup_metric',
+        buckets: 200,
+        dedup: true,
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      const result = data.result?.data;
+      expect(result).toBeDefined();
+      expect(result[dedupRunSqid!]).toBeDefined();
+
+      const points = result[dedupRunSqid!];
+      expect(points.length).toBeGreaterThan(0);
+
+      // Each bucket should have count=1 (deduped to single value)
+      const midPoint = points[Math.floor(points.length / 2)];
+      expect(midPoint.count).toBe(1);
+      expect(midPoint.value).toBeLessThan(midPoint.step * 2);
+    });
+  });
 });

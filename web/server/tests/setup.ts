@@ -1088,6 +1088,96 @@ async function setupTestData(): Promise<TestData> {
     console.log(`   ✓ Ensured display ID: ${project.runPrefix}-999`);
   }
 
+  // 5d-dedup. Create dedup-test run for step deduplication tests
+  console.log('\n5️⃣d-dedup Creating dedup-test run...');
+
+  let dedupRun = await prisma.runs.findFirst({
+    where: { organizationId: org.id, projectId: project.id, name: 'dedup-test' },
+  });
+
+  if (!dedupRun) {
+    const dedupCreatedAt = new Date(Date.now() - 364 * 24 * 60 * 60 * 1000);
+    dedupRun = await prisma.runs.create({
+      data: {
+        name: 'dedup-test',
+        organizationId: org.id,
+        projectId: project.id,
+        createdById: user.id,
+        creatorApiKeyId: apiKey.id,
+        status: 'COMPLETED',
+        createdAt: dedupCreatedAt,
+        updatedAt: dedupCreatedAt,
+      },
+    });
+    console.log(`   ✓ Created dedup-test run (ID: ${dedupRun.id})`);
+
+    // Register metric in run_logs
+    await prisma.runLogs.createMany({
+      data: [
+        { runId: dedupRun.id, logName: 'test/dedup_metric', logGroup: 'test', logType: 'METRIC' },
+      ],
+      skipDuplicates: true,
+    });
+
+    const clickhouseUrl = process.env.CLICKHOUSE_URL;
+    const clickhouseUser = process.env.CLICKHOUSE_USER || 'default';
+    const clickhousePassword = process.env.CLICKHOUSE_PASSWORD || '';
+
+    if (clickhouseUrl) {
+      const clickhouse = createClient({
+        url: clickhouseUrl,
+        username: clickhouseUser,
+        password: clickhousePassword,
+      });
+
+      // Seed 200 steps with 2 values each:
+      //   Value 1 (wrong, logged first):  step * 10  (huge)
+      //   Value 2 (correct, logged second): step      (true curve)
+      // Timestamps differ by 1 second so argMax(value, time) picks the correct one.
+      const DEDUP_STEPS = 200;
+      const baseTime = dedupRun.createdAt.getTime();
+      const dedupRows: Record<string, unknown>[] = [];
+
+      for (let step = 0; step < DEDUP_STEPS; step++) {
+        // Wrong value — earlier timestamp
+        dedupRows.push({
+          tenantId: org.id,
+          projectName: project.name,
+          runId: Number(dedupRun.id),
+          logGroup: 'test',
+          logName: 'test/dedup_metric',
+          time: new Date(baseTime + step * 2000).toISOString().replace('T', ' ').replace('Z', ''),
+          step,
+          value: step * 10, // 10x the correct value
+        });
+        // Correct value — later timestamp (1 second later)
+        dedupRows.push({
+          tenantId: org.id,
+          projectName: project.name,
+          runId: Number(dedupRun.id),
+          logGroup: 'test',
+          logName: 'test/dedup_metric',
+          time: new Date(baseTime + step * 2000 + 1000).toISOString().replace('T', ' ').replace('Z', ''),
+          step,
+          value: step, // true value
+        });
+      }
+
+      await clickhouse.insert({
+        table: 'mlop_metrics',
+        values: dedupRows,
+        format: 'JSONEachRow',
+      });
+      console.log(`   ✓ Seeded ${DEDUP_STEPS * 2} dedup metric datapoints (${DEDUP_STEPS} steps × 2 duplicates)`);
+
+      await clickhouse.close();
+    } else {
+      console.log('   ⚠ CLICKHOUSE_URL not set, skipping dedup ClickHouse seeding');
+    }
+  } else {
+    console.log(`   ✓ dedup-test run already exists (ID: ${dedupRun.id})`);
+  }
+
   // 5d. Create multi-metric-test run for single-run multi-metric tooltip E2E tests
   console.log('\n5️⃣d Creating multi-metric-test run...');
 
@@ -2409,6 +2499,65 @@ async function setupTestData(): Promise<TestData> {
     },
   });
   console.log('   ✓ Created Line Chart Variants Test dashboard view');
+
+  // 11d. Create "Dedup Test" dashboard view for step deduplication E2E tests
+  console.log('\n1️⃣1️⃣d Creating Dedup Test dashboard view...');
+
+  const dedupDashboardConfig = {
+    version: 1,
+    sections: [
+      {
+        id: 'dedup-static-section',
+        name: 'Dedup Metrics (Static)',
+        collapsed: false,
+        widgets: [
+          {
+            id: 'dedup-static-widget',
+            type: 'chart',
+            config: {
+              title: 'Dedup metric',
+              metrics: ['test/dedup_metric'],
+              xAxis: 'step',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+              aggregation: 'LAST',
+              showOriginal: false,
+            },
+            layout: { x: 0, y: 0, w: 12, h: 4 },
+          },
+        ],
+      },
+      {
+        id: 'dedup-dynamic-section',
+        name: 'Dedup Metrics (Dynamic)',
+        collapsed: false,
+        widgets: [],
+        dynamicPattern: 'test/dedup*',
+        dynamicPatternMode: 'search',
+      },
+    ],
+    settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
+  };
+
+  await prisma.dashboardView.upsert({
+    where: {
+      organizationId_projectId_name: {
+        organizationId: org.id,
+        projectId: project.id,
+        name: 'Dedup Test',
+      },
+    },
+    update: { config: dedupDashboardConfig },
+    create: {
+      name: 'Dedup Test',
+      organizationId: org.id,
+      projectId: project.id,
+      createdById: user.id,
+      isDefault: false,
+      config: dedupDashboardConfig,
+    },
+  });
+  console.log('   ✓ Created Dedup Test dashboard view');
 
   // 13. Seed image and file data for file-viewer and step-sync E2E tests
   console.log('\n1️⃣3️⃣ Seeding image and file data...');

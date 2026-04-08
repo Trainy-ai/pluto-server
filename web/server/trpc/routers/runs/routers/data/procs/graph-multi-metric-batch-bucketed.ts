@@ -21,6 +21,7 @@ export const graphMultiMetricBatchBucketedProcedure = protectedOrgProcedure
       preview: z.boolean().optional(),
       includeLineage: z.boolean().optional(),
       algorithm: z.enum(["avg", "lttb"]).optional(),
+      dedup: z.boolean().optional(),
     })
   )
   .query(async ({ ctx, input }) => {
@@ -35,6 +36,7 @@ export const graphMultiMetricBatchBucketedProcedure = protectedOrgProcedure
       preview,
       includeLineage,
       algorithm,
+      dedup,
     } = input;
 
     // Resolve run identifiers (display IDs like "MMP-7" or SQIDs) → numeric IDs
@@ -64,6 +66,7 @@ export const graphMultiMetricBatchBucketedProcedure = protectedOrgProcedure
         stepMax: stepMax ?? -1,
         preview: preview ?? false,
         algorithm: algorithm ?? "avg",
+        dedup: dedup ?? false,
       },
       async () => {
         if (isZoomOrPreview) {
@@ -78,6 +81,7 @@ export const graphMultiMetricBatchBucketedProcedure = protectedOrgProcedure
             stepMax,
             preview,
             algorithm,
+            dedup,
           });
 
           const data: GraphMultiMetricBatchBucketedData = {};

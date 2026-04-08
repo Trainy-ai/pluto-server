@@ -6,7 +6,7 @@ import {
   PagePrimaryBar,
   PageBody,
 } from "@/components/ui/page";
-import React from "react";
+import React, { useState } from "react";
 import { InviteUser } from "@/components/layout/common/invite-user-button";
 import { NotificationsDropdown } from "@/components/layout/common/notifications-list";
 import { Feedback } from "@/components/layout/common/feedback";
@@ -71,6 +71,43 @@ const AtLimitBar = () => {
   );
 };
 
+const MAINTENANCE_DISMISS_KEY = "maintenance-banner-dismissed-2026-04-08";
+
+const MaintenanceBanner = () => {
+  const [dismissed, setDismissed] = useState(() => {
+    try { return localStorage.getItem(MAINTENANCE_DISMISS_KEY) === "1"; } catch { return false; }
+  });
+  const maintenanceEnd = new Date("2026-04-08T23:00:00Z"); // Apr 8 3PM PST = 11PM UTC
+  if (dismissed || Date.now() > maintenanceEnd.getTime()) {
+    return null;
+  }
+
+  return (
+    <div data-testid="maintenance-banner" className="relative flex w-full flex-col items-center gap-0.5 bg-blue-600 px-8 py-1.5 font-mono text-[11px] text-white dark:bg-blue-900">
+      <button
+        onClick={() => { setDismissed(true); try { localStorage.setItem(MAINTENANCE_DISMISS_KEY, "1"); } catch {} }}
+        data-testid="maintenance-banner-dismiss"
+        className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 hover:bg-blue-500"
+        aria-label="Dismiss banner"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+        </svg>
+      </button>
+      <div className="flex items-center gap-1.5">
+        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
+          <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
+        </svg>
+        <span className="font-semibold">Scheduled Maintenance: Wednesday April 8th, 2:00–3:00 PM PST</span>
+      </div>
+      <p className="text-center text-blue-100">
+        Postgres migrations — write operations (new runs, tags) may be disrupted. Reads and metric ingestion unaffected.{" "}
+        <a href="https://status.trainy.ai/status/trainy" target="_blank" rel="noopener noreferrer" className="text-white underline underline-offset-2 hover:text-blue-200">Track status →</a>
+      </p>
+    </div>
+  );
+};
+
 const AlertBar = () => {
   const { data: auth } = useAuth();
   const activeOrg = auth?.activeOrganization;
@@ -104,6 +141,7 @@ const PageLayout = ({
   return (
     <Page>
       <PageHeader>
+        <MaintenanceBanner />
         <AlertBar />
         <PagePrimaryBar showSidebarTrigger={showSidebarTrigger}>
           <div className="flex items-center gap-4">{headerLeft}</div>

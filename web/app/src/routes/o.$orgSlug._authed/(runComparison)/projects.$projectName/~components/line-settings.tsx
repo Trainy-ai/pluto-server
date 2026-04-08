@@ -575,6 +575,34 @@ const LineSettings = ({
               </div>
             </SettingsSection>
 
+            <SettingsSection
+              title="Step Deduplication"
+              description="Remove duplicate values at the same step before charting"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Label
+                    htmlFor="deduplicate-steps"
+                    className="flex cursor-pointer items-center gap-1.5 text-sm"
+                  >
+                    Deduplicate steps
+                    <InfoTooltip
+                      title="Step Deduplication"
+                      description="When multiple values are logged at the same step (e.g., from distributed training ranks or resumed runs), this takes the last-logged value per step instead of averaging all values. Eliminates artificial min/max spread in confidence bands caused by duplicate logging."
+                    />
+                  </Label>
+                </div>
+                <Switch
+                  id="deduplicate-steps"
+                  checked={settings.deduplicateSteps}
+                  onCheckedChange={(checked) =>
+                    updateSettings("deduplicateSteps", checked)
+                  }
+                  className={SETTINGS_SWITCH_CLASS}
+                />
+              </div>
+            </SettingsSection>
+
             <Card
               className={cn(
                 "rounded-lg border p-4 transition-all duration-200",

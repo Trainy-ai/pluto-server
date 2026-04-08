@@ -21,6 +21,7 @@ export const graphBatchBucketedProcedure = protectedOrgProcedure
       preview: z.boolean().optional(),
       includeLineage: z.boolean().optional(),
       algorithm: z.enum(["avg", "lttb"]).optional(),
+      dedup: z.boolean().optional(),
     })
   )
   .query(async ({ ctx, input }) => {
@@ -35,6 +36,7 @@ export const graphBatchBucketedProcedure = protectedOrgProcedure
       preview,
       includeLineage,
       algorithm,
+      dedup,
     } = input;
 
     // Resolve run identifiers (display IDs like "MMP-7" or SQIDs) → numeric IDs
@@ -54,7 +56,7 @@ export const graphBatchBucketedProcedure = protectedOrgProcedure
       return withBatchCache(
         ctx,
         "graphBatchBucketed",
-        { runIds: numericRunIds, organizationId, projectName, logName, buckets, stepMin, stepMax, preview, algorithm },
+        { runIds: numericRunIds, organizationId, projectName, logName, buckets, stepMin, stepMax, preview, algorithm, dedup },
         async () => {
           const grouped = await queryRunMetricsBatchBucketedByLogName(ctx.clickhouse, {
             organizationId,
@@ -66,6 +68,7 @@ export const graphBatchBucketedProcedure = protectedOrgProcedure
             stepMax,
             preview,
             algorithm,
+            dedup,
           });
 
           const result: GraphBatchBucketedData = {};

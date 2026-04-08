@@ -124,9 +124,10 @@ export async function queryLineageMetricsBucketedByLogName(
     buckets?: number;
     preview?: boolean;
     algorithm?: DownsamplingAlgorithm;
+    dedup?: boolean;
   }
 ): Promise<BucketedMetricDataPoint[]> {
-  const { organizationId, projectName, runId, logName, buckets, preview, algorithm } =
+  const { organizationId, projectName, runId, logName, buckets, preview, algorithm, dedup } =
     params;
 
   const segments = await resolveLineageChain(prisma, runId, organizationId);
@@ -141,6 +142,7 @@ export async function queryLineageMetricsBucketedByLogName(
       buckets,
       preview,
       algorithm,
+      dedup,
     });
   }
 
@@ -172,17 +174,33 @@ export async function queryLineageMetricsBucketedByLogName(
       stepFilter += ` AND step <= {stepMax_${i}: UInt64}`;
     }
 
-    unionParts.push(`
-      SELECT step, time, value
-      FROM mlop_metrics
-      WHERE tenantId = {tenantId: String}
-        AND projectName = {projectName: String}
-        AND runId = {runId_${i}: UInt64}
-        AND logName = {logName: String}
-        AND logGroup = {logGroup: String}
-        ${stepFilter}
-    `);
+    if (dedup) {
+      unionParts.push(`
+        SELECT step, argMax(value, time) AS value, max(time) AS ts
+        FROM mlop_metrics
+        WHERE tenantId = {tenantId: String}
+          AND projectName = {projectName: String}
+          AND runId = {runId_${i}: UInt64}
+          AND logName = {logName: String}
+          AND logGroup = {logGroup: String}
+          ${stepFilter}
+        GROUP BY step
+      `);
+    } else {
+      unionParts.push(`
+        SELECT step, time, value
+        FROM mlop_metrics
+        WHERE tenantId = {tenantId: String}
+          AND projectName = {projectName: String}
+          AND runId = {runId_${i}: UInt64}
+          AND logName = {logName: String}
+          AND logGroup = {logGroup: String}
+          ${stepFilter}
+      `);
+    }
   }
+
+  const timeAgg = dedup ? "min(c.ts)" : "argMin(c.time, c.step)";
 
   const query = `
     WITH
@@ -194,7 +212,7 @@ export async function queryLineageMetricsBucketedByLogName(
     SELECT
       intDiv(c.step - b.minStep, greatest(toUInt64(1), intDiv(b.maxStep - b.minStep + 1, toUInt64({numBuckets: UInt32})))) AS bucket,
       min(c.step) AS step,
-      argMin(c.time, c.step) AS time,
+      ${timeAgg} AS time,
       avg(c.value) AS value,
       min(c.value) AS minY,
       max(c.value) AS maxY,

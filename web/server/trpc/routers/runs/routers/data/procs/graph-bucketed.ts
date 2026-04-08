@@ -17,10 +17,11 @@ export const graphBucketedProcedure = protectedOrgProcedure
       stepMax: z.number().int().nonnegative().optional(),
       preview: z.boolean().optional(),
       algorithm: z.enum(["avg", "lttb"]).optional(),
+      dedup: z.boolean().optional(),
     })
   )
   .query(async ({ ctx, input }) => {
-    const { runId: encodedRunId, projectName, organizationId, logName, buckets, stepMin, stepMax, preview, algorithm } = input;
+    const { runId: encodedRunId, projectName, organizationId, logName, buckets, stepMin, stepMax, preview, algorithm, dedup } = input;
 
     const runId = await resolveRunId(ctx.prisma, encodedRunId, organizationId, projectName);
     const logGroup = getLogGroupName(logName);
@@ -37,13 +38,14 @@ export const graphBucketedProcedure = protectedOrgProcedure
         stepMax,
         preview,
         algorithm,
+        dedup,
       });
     }
 
     return withCache<BucketedMetricDataPoint[]>(
       ctx,
       "graphBucketed",
-      { runId, organizationId, projectName, logName, logGroup, buckets, algorithm },
+      { runId, organizationId, projectName, logName, logGroup, buckets, algorithm, dedup: dedup ? 1 : undefined },
       async () => {
         return queryLineageMetricsBucketedByLogName(ctx.clickhouse, ctx.prisma, {
           organizationId,
@@ -52,6 +54,7 @@ export const graphBucketedProcedure = protectedOrgProcedure
           logName,
           buckets,
           algorithm,
+          dedup,
         });
       }
     );
