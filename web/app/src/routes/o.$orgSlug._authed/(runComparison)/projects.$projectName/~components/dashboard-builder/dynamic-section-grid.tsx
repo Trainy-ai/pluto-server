@@ -13,12 +13,12 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { ImageStepSyncProvider } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~context/image-step-sync-context";
 import { useHiddenRunIds } from "@/hooks/use-hidden-run-ids";
 import type { Widget, ChartWidgetConfig } from "../../~types/dashboard-types";
 import type { GroupedMetrics } from "@/lib/grouping/types";
 import type { SelectedRunWithColor } from "../../~hooks/use-selected-runs";
 import { searchUtils, type SearchState } from "../../~lib/search-utils";
+import { ImageStepSyncProvider, useImageStepSyncContext } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~context/image-step-sync-context";
 import { useFullscreenContext } from "@/components/charts/context/fullscreen-context";
 
 interface DynamicSectionGridProps {
@@ -55,6 +55,9 @@ export function DynamicSectionGrid({
   settingsRunId,
 }: DynamicSectionGridProps) {
   const hiddenRunIds = useHiddenRunIds();
+
+  // Check if a parent sync provider exists (comparison page has one at page level)
+  const parentSyncContext = useImageStepSyncContext();
 
   // Exclude hidden runs so dynamic widgets are only generated for metrics/files
   // that exist on visible runs (matching deselect behavior).
@@ -125,9 +128,6 @@ export function DynamicSectionGrid({
       </div>
     );
   }
-
-  // Wrap in ImageStepSyncProvider so all image widgets in this dynamic section sync steps
-  const hasFileWidgets = filteredWidgets.some((w) => w.type === "file-group");
 
   const gridContent = (
     <>
@@ -257,8 +257,12 @@ export function DynamicSectionGrid({
     </>
   );
 
-  if (hasFileWidgets) {
-    return <ImageStepSyncProvider>{gridContent}</ImageStepSyncProvider>;
+  // Wrap in ImageStepSyncProvider only if no parent provider exists (e.g., individual run pages)
+  if (!parentSyncContext) {
+    const hasFileWidgets = filteredWidgets.some((w) => w.type === "file-group");
+    if (hasFileWidgets) {
+      return <ImageStepSyncProvider>{gridContent}</ImageStepSyncProvider>;
+    }
   }
 
   return gridContent;

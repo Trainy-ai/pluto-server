@@ -28,6 +28,7 @@ import {
   Pin,
   PinOff,
   X,
+  ImageIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -51,6 +52,10 @@ export interface ColumnHeaderMenuProps {
   onRename: (newName: string) => void;
   onSetColor: (color: string | undefined) => void;
   onRemove?: () => void;
+  /** Whether this is a metric column (shows "Pin images to best step" option) */
+  isMetric?: boolean;
+  /** Callback to pin images at the argmin/argmax step for this metric */
+  onPinImagesToBestStep?: (mode: "argmin" | "argmax") => void;
 }
 
 export function ColumnHeaderMenu({
@@ -65,6 +70,8 @@ export function ColumnHeaderMenu({
   onRename,
   onSetColor,
   onRemove,
+  isMetric,
+  onPinImagesToBestStep,
 }: ColumnHeaderMenuProps) {
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState(label);
@@ -152,6 +159,27 @@ export function ColumnHeaderMenu({
                     Clear sort
                   </DropdownMenuItem>
                 )}
+                <DropdownMenuSeparator />
+              </>
+            )}
+            {isMetric && onPinImagesToBestStep && (
+              <>
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>
+                    <ImageIcon className="mr-2 h-4 w-4" />
+                    Pin images to best step
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent>
+                    <DropdownMenuItem onClick={() => onPinImagesToBestStep("argmin")}>
+                      <span className="mr-2 w-4 text-center">★</span>
+                      Pin at min value
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => onPinImagesToBestStep("argmax")}>
+                      <span className="mr-2 w-4 text-center">★</span>
+                      Pin at max value
+                    </DropdownMenuItem>
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
                 <DropdownMenuSeparator />
               </>
             )}

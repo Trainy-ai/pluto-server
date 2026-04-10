@@ -6,16 +6,20 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
-import { SlidersHorizontalIcon } from "lucide-react";
+import { SlidersHorizontalIcon, PinOff } from "lucide-react";
 
 interface ImageSettingsPopoverProps {
   syncZoom: boolean;
   onSyncZoomChange: (value: boolean) => void;
+  pinnedRunCount?: number;
+  onClearAllPins?: () => void;
 }
 
 export function ImageSettingsPopover({
   syncZoom,
   onSyncZoomChange,
+  pinnedRunCount = 0,
+  onClearAllPins,
 }: ImageSettingsPopoverProps) {
   return (
     <Popover>
@@ -48,6 +52,21 @@ export function ImageSettingsPopover({
           <p className="text-xs text-muted-foreground">
             Zoom level persists across image fullscreen views within this group.
           </p>
+          {pinnedRunCount > 0 && onClearAllPins && (
+            <>
+              <div className="border-t pt-3">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full gap-2 text-xs"
+                  onClick={onClearAllPins}
+                >
+                  <PinOff className="h-3.5 w-3.5" />
+                  Clear all pins ({pinnedRunCount})
+                </Button>
+              </div>
+            </>
+          )}
         </div>
       </PopoverContent>
     </Popover>

@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { findNearestStep as findNearestStepUtil } from "../~lib/step-utils";
 
 interface StepData {
@@ -32,6 +32,15 @@ export function useStepNavigation<T extends StepData>(
   }, [data]);
 
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
+
+  // Default to the last (max) step when steps first become available
+  const hasInitializedRef = useRef(false);
+  useEffect(() => {
+    if (!hasInitializedRef.current && availableSteps.length > 0) {
+      hasInitializedRef.current = true;
+      setCurrentStepIndex(availableSteps.length - 1);
+    }
+  }, [availableSteps]);
 
   // Get current step value from index
   const currentStepValue = availableSteps[currentStepIndex] ?? 0;

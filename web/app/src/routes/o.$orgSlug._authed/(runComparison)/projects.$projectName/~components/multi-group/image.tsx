@@ -1,10 +1,11 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useCallback, useEffect } from "react";
 import { trpc } from "@/utils/trpc";
 import { useQueries } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { StepNavigator } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/shared/step-navigator";
 import { useSyncedStepNavigation } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~hooks/use-synced-step-navigation";
+import { useImageStepSyncContext, type PinSource, type PinInfo } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~context/image-step-sync-context";
 import { ImageCard } from "@/components/core/image-viewer";
 import { MediaCardWrapper } from "@/components/core/media-card-wrapper";
 import { ImageSettingsPopover } from "@/components/core/image-viewer/image-settings-popover";
@@ -79,26 +80,88 @@ export const MultiGroupImage = ({
     hasSyncContext,
   } = useSyncedStepNavigation(allImages);
 
+  const syncContext = useImageStepSyncContext();
+  const [localPins, setLocalPins] = useState<Map<string, PinInfo>>(new Map());
+
+  // Clean up pins for runs that are no longer in the comparison
+  const runIdSet = useMemo(() => new Set(runs.map((r) => r.runId)), [runs]);
+  useEffect(() => {
+    setLocalPins((prev) => {
+      let changed = false;
+      const next = new Map(prev);
+      for (const runId of next.keys()) {
+        if (!runIdSet.has(runId)) {
+          next.delete(runId);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [runIdSet]);
+
+  const getPinInfo = useCallback(
+    (runId: string): PinInfo | null => {
+      const crossPanel = syncContext?.pinnedRuns.get(runId);
+      if (crossPanel) return crossPanel;
+      const local = localPins.get(runId);
+      if (local) return local;
+      return null;
+    },
+    [syncContext?.pinnedRuns, localPins],
+  );
+
+  const handlePin = useCallback(
+    (runId: string, step: number, scope: "local" | "all-panels") => {
+      if (scope === "all-panels" && syncContext) {
+        syncContext.pinRun(runId, step, "cross-panel");
+        setLocalPins((prev) => {
+          const next = new Map(prev);
+          next.delete(runId);
+          return next;
+        });
+      } else {
+        setLocalPins((prev) => new Map(prev).set(runId, { step, source: "local" }));
+      }
+    },
+    [syncContext],
+  );
+
+  const handleUnpin = useCallback(
+    (runId: string) => {
+      syncContext?.unpinRun(runId);
+      setLocalPins((prev) => {
+        const next = new Map(prev);
+        next.delete(runId);
+        return next;
+      });
+    },
+    [syncContext],
+  );
+
   const imagesByRun = useMemo(() => {
-    const currentStepImages = allImages.filter(
-      (image) => image.step === currentStepValue,
-    );
+    const imageLookup = new Map<string, any>();
+    for (const img of allImages) {
+      imageLookup.set(`${img.runId}-${img.step}`, img);
+    }
 
     return runs.map((run) => {
-      const runImages = currentStepImages.filter(
-        (image: any) => image.runId === run.runId,
-      );
+      const pinInfo = getPinInfo(run.runId);
+      const effectiveStep = pinInfo?.step ?? currentStepValue;
+      const image = imageLookup.get(`${run.runId}-${effectiveStep}`);
+      const runImages = image ? [image] : [];
+
       return {
         run,
         images: runImages,
+        isPinned: pinInfo !== null,
+        pinnedStep: pinInfo?.step ?? null,
+        pinSource: pinInfo?.source ?? null,
+        effectiveStep,
       };
     });
-  }, [allImages, currentStepValue, runs]);
+  }, [allImages, currentStepValue, runs, getPinInfo]);
 
-  const runsWithImages = useMemo(
-    () => imagesByRun.filter(({ images }) => images.length > 0).length,
-    [imagesByRun],
-  );
+  const runsWithImages = imagesByRun.length;
 
   const [syncZoom, setSyncZoom] = useState(false);
   const [sharedScale, setSharedScale] = useState(1);
@@ -109,7 +172,7 @@ export const MultiGroupImage = ({
         <h3 className="text-center font-mono text-sm font-medium text-muted-foreground">
           {logName}
         </h3>
-        <div className="grid flex-1 grid-cols-1 gap-4 overflow-hidden sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid flex-1 grid-cols-1 gap-4 overflow-hidden sm:grid-cols-2">
           {runs.map((run) => (
             <div key={run.runId} className="flex flex-col gap-1.5">
               <div className="flex items-center justify-center gap-1.5">
@@ -145,6 +208,11 @@ export const MultiGroupImage = ({
         <ImageSettingsPopover
           syncZoom={syncZoom}
           onSyncZoomChange={setSyncZoom}
+          pinnedRunCount={(syncContext?.pinnedRuns.size ?? 0) + localPins.size}
+          onClearAllPins={() => {
+            syncContext?.unpinAllRuns();
+            setLocalPins(new Map());
+          }}
         />
       }
     >
@@ -154,22 +222,29 @@ export const MultiGroupImage = ({
         </h3>
         <div
           className={cn(
-            "grid flex-1 grid-cols-1 gap-4 overflow-auto",
+            "grid flex-1 grid-cols-1 gap-4 overflow-auto px-1",
             runsWithImages > 1 && "sm:grid-cols-2",
-            runsWithImages === 2 && "lg:grid-cols-2",
-            runsWithImages >= 3 && "lg:grid-cols-3",
           )}
         >
-          {imagesByRun.map(({ run, images }) => {
+          {imagesByRun.map((entry) => {
+            const { run, images, isPinned, pinnedStep, pinSource, effectiveStep } = entry;
             const image = images[0];
-            if (!image) return null;
 
             return (
               <ImageCard
                 key={run.runId}
-                url={image.url}
-                fileName={image.fileName}
+                url={image?.url}
+                fileName={image?.fileName}
                 runLabel={{ name: run.runName, color: run.color }}
+                isPinned={isPinned}
+                pinnedStep={pinnedStep}
+                pinSource={pinSource}
+                currentStepValue={effectiveStep}
+                onPin={(scope) =>
+                  handlePin(run.runId, effectiveStep, scope)
+                }
+                onUnpin={() => handleUnpin(run.runId)}
+                hasSyncContext={hasSyncContext}
                 stepNavigation={
                   hasMultipleSteps()
                     ? {

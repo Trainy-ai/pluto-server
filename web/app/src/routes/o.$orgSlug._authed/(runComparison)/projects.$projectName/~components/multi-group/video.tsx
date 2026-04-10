@@ -160,8 +160,9 @@ export const MultiGroupVideo = ({
                   style={{ backgroundColor: run.color }}
                 />
                 <span
-                  className="text-sm font-medium"
+                  className="truncate text-xs font-medium"
                   style={{ color: run.color }}
+                  title={run.runName}
                 >
                   {run.runName}
                 </span>

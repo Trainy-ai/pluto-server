@@ -245,8 +245,9 @@ export const MultiHistogramView: React.FC<{
                 style={{ backgroundColor: run.color }}
               />
               <span
-                className="truncate text-sm font-medium"
+                className="truncate text-xs font-medium"
                 style={{ color: run.color }}
+                title={run.runName}
               >
                 {run.runName}
               </span>

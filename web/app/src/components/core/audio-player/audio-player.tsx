@@ -144,7 +144,7 @@ export function AudioPlayer({ url, fileName, runLabel }: AudioPlayerProps) {
             className="h-2 w-2 rounded-full"
             style={{ backgroundColor: runLabel.color }}
           />
-          <span className="text-sm font-medium" style={{ color: runLabel.color }}>
+          <span className="truncate text-xs font-medium" style={{ color: runLabel.color }} title={runLabel.name}>
             {runLabel.name}
           </span>
         </div>

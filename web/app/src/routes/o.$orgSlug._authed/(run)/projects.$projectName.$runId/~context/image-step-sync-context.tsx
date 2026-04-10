@@ -4,11 +4,20 @@ import React, {
   useCallback,
   useRef,
   useState,
+  useEffect,
 } from "react";
 
 // ============================
 // Types
 // ============================
+
+/** Distinguishes how a pin was created for visual styling */
+export type PinSource = "local" | "cross-panel" | "best-step";
+
+export interface PinInfo {
+  step: number;
+  source: PinSource;
+}
 
 interface ImageStepSyncContextValue {
   /** Current synced step value (the shared step for all locked panels) */
@@ -23,6 +32,14 @@ interface ImageStepSyncContextValue {
   registerListener: (id: string, callback: (stepValue: number) => void) => void;
   /** Unregister a listener */
   unregisterListener: (id: string) => void;
+  /** Runs pinned at a specific step across all panels (runId → pin info) */
+  pinnedRuns: Map<string, PinInfo>;
+  /** Pin a run at a step across all panels */
+  pinRun: (runId: string, step: number, source?: PinSource) => void;
+  /** Unpin a run across all panels */
+  unpinRun: (runId: string) => void;
+  /** Clear all cross-panel pins at once */
+  unpinAllRuns: () => void;
 }
 
 // ============================
@@ -50,6 +67,7 @@ interface ImageStepSyncProviderProps {
 export function ImageStepSyncProvider({ children }: ImageStepSyncProviderProps) {
   const [isSyncEnabled, setIsSyncEnabled] = useState(true);
   const [syncedStepValue, setSyncedStepValue] = useState<number | null>(null);
+  const [pinnedRuns, setPinnedRuns] = useState<Map<string, PinInfo>>(new Map());
   const listenersRef = useRef(new Map<string, (stepValue: number) => void>());
 
   const registerListener = useCallback(
@@ -76,6 +94,40 @@ export function ImageStepSyncProvider({ children }: ImageStepSyncProviderProps) 
     [isSyncEnabled],
   );
 
+  const pinRun = useCallback((runId: string, step: number, source: PinSource = "cross-panel") => {
+    setPinnedRuns((prev) => {
+      const next = new Map(prev);
+      next.set(runId, { step, source });
+      return next;
+    });
+  }, []);
+
+  const unpinRun = useCallback((runId: string) => {
+    setPinnedRuns((prev) => {
+      const next = new Map(prev);
+      next.delete(runId);
+      return next;
+    });
+  }, []);
+
+  const unpinAllRuns = useCallback(() => {
+    setPinnedRuns(new Map());
+  }, []);
+
+  // Listen for DOM events to pin runs from outside the provider tree (e.g., runs table)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { pins } = (e as CustomEvent<{ pins: Record<string, number> }>).detail;
+      const pinMap = new Map<string, PinInfo>();
+      for (const [runId, step] of Object.entries(pins)) {
+        pinMap.set(runId, { step, source: "best-step" });
+      }
+      setPinnedRuns(pinMap);
+    };
+    document.addEventListener("pin-runs-to-best-step", handler);
+    return () => document.removeEventListener("pin-runs-to-best-step", handler);
+  }, []);
+
   const contextValue = React.useMemo<ImageStepSyncContextValue>(
     () => ({
       syncedStepValue,
@@ -84,6 +136,10 @@ export function ImageStepSyncProvider({ children }: ImageStepSyncProviderProps) 
       broadcastStep,
       registerListener,
       unregisterListener,
+      pinnedRuns,
+      pinRun,
+      unpinRun,
+      unpinAllRuns,
     }),
     [
       syncedStepValue,
@@ -91,6 +147,10 @@ export function ImageStepSyncProvider({ children }: ImageStepSyncProviderProps) 
       broadcastStep,
       registerListener,
       unregisterListener,
+      pinnedRuns,
+      pinRun,
+      unpinRun,
+      unpinAllRuns,
     ],
   );
 

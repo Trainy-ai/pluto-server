@@ -35,6 +35,7 @@ import type { PanelImperativeHandle } from "react-resizable-panels";
 import { useDebouncedCallback } from "@/lib/hooks/use-debounced-callback";
 import { RunTableViewSelector } from "./~components/runs-table/run-table-view-selector";
 import { DEFAULT_PAGE_SIZE } from "./~components/runs-table/config";
+import { ImageStepSyncProvider } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~context/image-step-sync-context";
 
 // Search params type for the route
 // Note: runs is stored as comma-separated string in URL for cleaner URLs
@@ -982,6 +983,39 @@ function RouteComponent() {
     organizationId
   );
 
+  // Pin images to best step handler
+  const handlePinImagesToBestStep = useCallback(
+    async (logName: string, mode: "argmin" | "argmax") => {
+      if (selectedRunIds.length === 0) return;
+
+      try {
+        const result = await queryClient.fetchQuery(
+          trpc.runs.metricBestSteps.queryOptions({
+            organizationId,
+            projectName,
+            logName,
+            runIds: selectedRunIds,
+          }),
+        );
+
+        if (result.bestSteps && result.bestSteps.length > 0) {
+          const pins: Record<string, number> = {};
+          for (const entry of result.bestSteps) {
+            if (entry) {
+              pins[entry.runId] = mode === "argmin" ? entry.argminStep : entry.argmaxStep;
+            }
+          }
+          document.dispatchEvent(
+            new CustomEvent("pin-runs-to-best-step", { detail: { pins } }),
+          );
+        }
+      } catch (error) {
+        console.error("Failed to fetch best steps:", error);
+      }
+    },
+    [selectedRunIds, organizationId, projectName],
+  );
+
   // In experiments mode, unify colors so all runs in the same experiment
   // (same name) share one color. Keep ALL runs for chart data — the table
   // handles collapsing to one row per experiment, but charts show all branches.
@@ -1051,6 +1085,7 @@ function RouteComponent() {
           />
         }
       >
+        <ImageStepSyncProvider>
         <ResizablePanelGroup
           orientation="horizontal"
           className="h-[calc(100vh-4rem)] w-full p-2"
@@ -1141,6 +1176,7 @@ function RouteComponent() {
                 onNameSetColor={handleNameSetColor}
                 onReorderColumns={reorderColumns}
                 onToggleColumnPin={toggleColumnPin}
+                onPinImagesToBestStep={handlePinImagesToBestStep}
                 sorting={sorting}
                 onSortingChange={setSorting}
                 pageSize={pageSize}
@@ -1218,6 +1254,7 @@ function RouteComponent() {
             </div>
           </ResizablePanel>
         </ResizablePanelGroup>
+        </ImageStepSyncProvider>
       </PageLayout>
     </RunComparisonLayout>
   );

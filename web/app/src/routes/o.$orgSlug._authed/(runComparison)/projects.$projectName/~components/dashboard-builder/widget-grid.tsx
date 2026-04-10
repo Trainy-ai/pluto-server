@@ -5,10 +5,10 @@ import "react-resizable/css/styles.css";
 import "./widget-grid.css";
 import { cn } from "@/lib/utils";
 import { VirtualizedChart } from "@/components/core/virtualized-chart";
-import { ImageStepSyncProvider } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~context/image-step-sync-context";
 import type { Widget } from "../../~types/dashboard-types";
 import { WidgetCard } from "./widget-card";
 import type { SectionLocation } from "./use-dashboard-config";
+import { ImageStepSyncProvider, useImageStepSyncContext } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~context/image-step-sync-context";
 
 interface WidgetGridProps {
   widgets: Widget[];
@@ -46,6 +46,9 @@ export function WidgetGrid({
   containerWidth = 1200,
 }: WidgetGridProps) {
   const cols = coarseMode ? 6 : colsProp;
+
+  // Check if a parent sync provider exists (comparison page has one at page level)
+  const parentSyncContext = useImageStepSyncContext();
 
   // Refs for stable callback closures
   const widgetsRef = useRef(widgets);
@@ -182,11 +185,6 @@ export function WidgetGrid({
     [coarseMode, cols, uniformW, uniformH]
   );
 
-  const hasFileWidgets = useMemo(
-    () => widgets.some((w) => w.type === "file-group"),
-    [widgets],
-  );
-
   if (widgets.length === 0) {
     return null;
   }
@@ -250,8 +248,13 @@ export function WidgetGrid({
     </GridLayout>
   );
 
-  if (hasFileWidgets) {
-    return <ImageStepSyncProvider>{grid}</ImageStepSyncProvider>;
+  // Wrap in ImageStepSyncProvider only if no parent provider exists (e.g., individual run pages).
+  // On the comparison page, the page-level provider is already present.
+  if (!parentSyncContext) {
+    const hasFileWidgets = widgets.some((w) => w.type === "file-group");
+    if (hasFileWidgets) {
+      return <ImageStepSyncProvider>{grid}</ImageStepSyncProvider>;
+    }
   }
 
   return grid;

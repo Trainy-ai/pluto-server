@@ -17,7 +17,6 @@ import { trpc } from "@/utils/trpc";
 import { useQuery } from "@tanstack/react-query";
 import { arePropsEqual } from "./props-comparison";
 import { formatRunLabel } from "@/lib/format-run-label";
-import { ImageStepSyncProvider } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~context/image-step-sync-context";
 
 // Re-export for backwards compatibility
 export { arePropsEqual } from "./props-comparison";
@@ -201,22 +200,9 @@ export const MultiGroup = ({
     ],
   );
 
-  // Wrap in ImageStepSyncProvider if the group contains any file types with step navigation
-  const STEP_NAV_TYPES = new Set(["IMAGE", "VIDEO", "AUDIO", "HISTOGRAM"]);
-  const hasStepNavLogs = useMemo(
-    () => metrics.some((m) => STEP_NAV_TYPES.has(m.type)),
-    [metrics],
-  );
-
-  const content = (
+  return (
     <DropdownRegion title={title} components={components} groupId={groupId} />
   );
-
-  if (hasStepNavLogs) {
-    return <ImageStepSyncProvider>{content}</ImageStepSyncProvider>;
-  }
-
-  return content;
 };
 
 

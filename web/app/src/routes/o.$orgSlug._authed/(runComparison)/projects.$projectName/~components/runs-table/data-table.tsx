@@ -97,6 +97,7 @@ interface DataTableProps {
   viewSelector?: React.ReactNode;
   activeChartViewId?: string | null;
   onToggleColumnPin?: (colId: string, source: string, aggregation?: string) => void;
+  onPinImagesToBestStep?: (logName: string, mode: "argmin" | "argmax") => void;
   listMode: ListMode;
   onListModeChange: (mode: ListMode) => void;
   showInherited: boolean;
@@ -170,6 +171,7 @@ export function DataTable({
   viewSelector,
   activeChartViewId,
   onToggleColumnPin,
+  onPinImagesToBestStep,
   listMode,
   onListModeChange,
   showInherited,
@@ -285,6 +287,7 @@ export function DataTable({
         activeChartViewId,
         pinnedColumnIds,
         onToggleColumnPin,
+        onPinImagesToBestStep,
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
@@ -294,7 +297,7 @@ export function DataTable({
       onColumnRename, onColumnSetColor, onColumnRemove,
       nameOverrides, onNameRename, onNameSetColor,
       sorting, onSortingChange, activeChartViewId,
-      pinnedColumnIds, onToggleColumnPin,
+      pinnedColumnIds, onToggleColumnPin, onPinImagesToBestStep,
       colorVersion, // trigger cell re-render when colors first populate
     ],
   );

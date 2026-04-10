@@ -205,6 +205,8 @@ interface ColumnsProps {
   pinnedColumnIds?: Set<string>;
   /** Callback to toggle pin on a custom column */
   onToggleColumnPin?: (colId: string, source: string, aggregation?: string) => void;
+  /** Callback to pin images at the best step for a metric */
+  onPinImagesToBestStep?: (logName: string, mode: "argmin" | "argmax") => void;
 }
 
 // Shared ref for tracking last selected row ID (for shift-click range selection)
@@ -234,6 +236,7 @@ export const columns = ({
   activeChartViewId,
   pinnedColumnIds,
   onToggleColumnPin,
+  onPinImagesToBestStep,
 }: ColumnsProps): ColumnDef<Run>[] => {
   // Helper to get sort direction for a column
   const getSortDirection = (colId: string): "asc" | "desc" | false => {
@@ -466,6 +469,12 @@ export const columns = ({
           onRename={(newName) => onColumnRename?.(col.id, col.source, newName, col.aggregation)}
           onSetColor={(color) => onColumnSetColor?.(col.id, col.source, color, col.aggregation)}
           onRemove={() => onColumnRemove?.(col.id, col.source, col.aggregation)}
+          isMetric={col.source === "metric"}
+          onPinImagesToBestStep={
+            col.source === "metric" && onPinImagesToBestStep
+              ? (mode) => onPinImagesToBestStep(col.id, mode)
+              : undefined
+          }
         />
       ),
       meta: { backgroundColor: col.backgroundColor },

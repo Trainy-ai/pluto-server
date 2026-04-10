@@ -133,6 +133,64 @@ export async function queryMetricSummariesBatch(
 }
 
 // ---------------------------------------------------------------------------
+// Argmin/argmax step — find the step where a metric's value is min/max
+// ---------------------------------------------------------------------------
+
+/**
+ * For each run, find the step where a metric reaches its min and max value.
+ * Uses ClickHouse's built-in argMin/argMax aggregate functions on mlop_metrics.
+ * Returns Map<runId, { argminStep, argmaxStep }>.
+ */
+export async function queryArgminArgmaxSteps(
+  ch: typeof clickhouse,
+  params: {
+    organizationId: string;
+    projectName: string;
+    logName: string;
+    runIds: number[];
+  },
+): Promise<Map<number, { argminStep: number; argmaxStep: number }>> {
+  const { organizationId, projectName, logName, runIds } = params;
+
+  if (runIds.length === 0) return new Map();
+
+  const query = `
+    SELECT
+      runId,
+      argMin(step, value) AS argmin_step,
+      argMax(step, value) AS argmax_step
+    FROM mlop_metrics
+    WHERE tenantId = {tenantId: String}
+      AND projectName = {projectName: String}
+      AND logName = {logName: String}
+      AND runId IN ({runIds: Array(UInt64)})
+    GROUP BY runId
+  `;
+
+  const result = await ch.query(query, {
+    tenantId: organizationId,
+    projectName,
+    logName,
+    runIds,
+  });
+
+  const rows = (await result.json()) as {
+    runId: number;
+    argmin_step: number;
+    argmax_step: number;
+  }[];
+
+  const resultMap = new Map<number, { argminStep: number; argmaxStep: number }>();
+  for (const row of rows) {
+    resultMap.set(row.runId, {
+      argminStep: row.argmin_step,
+      argmaxStep: row.argmax_step,
+    });
+  }
+  return resultMap;
+}
+
+// ---------------------------------------------------------------------------
 // Distinct metric names in a project
 // ---------------------------------------------------------------------------
 
