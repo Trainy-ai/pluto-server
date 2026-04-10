@@ -28,7 +28,7 @@ import {
   Pin,
   PinOff,
   X,
-  ImageIcon,
+  Target,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -55,7 +55,9 @@ export interface ColumnHeaderMenuProps {
   /** Whether this is a metric column (shows "Pin images to best step" option) */
   isMetric?: boolean;
   /** Callback to pin images at the argmin/argmax step for this metric */
-  onPinImagesToBestStep?: (mode: "argmin" | "argmax") => void;
+  onPinImagesToBestStep?: (
+    mode: "argmin" | "argmax" | "argmin-with-image" | "argmax-with-image",
+  ) => void;
 }
 
 export function ColumnHeaderMenu({
@@ -166,17 +168,26 @@ export function ColumnHeaderMenu({
               <>
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger>
-                    <ImageIcon className="mr-2 h-4 w-4" />
-                    Pin images to best step
+                    <Target className="mr-2 h-4 w-4" />
+                    Find best step
                   </DropdownMenuSubTrigger>
-                  <DropdownMenuSubContent>
+                  <DropdownMenuSubContent className="min-w-[280px]">
                     <DropdownMenuItem onClick={() => onPinImagesToBestStep("argmin")}>
                       <span className="mr-2 w-4 text-center">★</span>
-                      Pin at min value
+                      Pin steppers at min value
                     </DropdownMenuItem>
                     <DropdownMenuItem onClick={() => onPinImagesToBestStep("argmax")}>
                       <span className="mr-2 w-4 text-center">★</span>
-                      Pin at max value
+                      Pin steppers at max value
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={() => onPinImagesToBestStep("argmin-with-image")}>
+                      <span className="mr-2 w-4 text-center">★</span>
+                      Pin steppers at min value (with image)
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => onPinImagesToBestStep("argmax-with-image")}>
+                      <span className="mr-2 w-4 text-center">★</span>
+                      Pin steppers at max value (with image)
                     </DropdownMenuItem>
                   </DropdownMenuSubContent>
                 </DropdownMenuSub>

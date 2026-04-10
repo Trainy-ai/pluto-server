@@ -13,6 +13,7 @@ export const metricBestStepsProcedure = protectedOrgProcedure
       projectName: z.string(),
       logName: z.string(),
       runIds: z.array(z.string()), // SQID-encoded run IDs
+      requireImage: z.boolean().optional(),
     })
   )
   .query(async ({ ctx, input }) => {
@@ -27,6 +28,7 @@ export const metricBestStepsProcedure = protectedOrgProcedure
       projectName: input.projectName,
       logName: input.logName,
       runIds: numericRunIds,
+      requireImage: input.requireImage,
     });
 
     const bestSteps = input.runIds

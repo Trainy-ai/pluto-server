@@ -985,8 +985,15 @@ function RouteComponent() {
 
   // Pin images to best step handler
   const handlePinImagesToBestStep = useCallback(
-    async (logName: string, mode: "argmin" | "argmax") => {
+    async (
+      logName: string,
+      mode: "argmin" | "argmax" | "argmin-with-image" | "argmax-with-image",
+    ) => {
       if (selectedRunIds.length === 0) return;
+
+      const useMin = mode === "argmin" || mode === "argmin-with-image";
+      const requireImage =
+        mode === "argmin-with-image" || mode === "argmax-with-image";
 
       try {
         const result = await queryClient.fetchQuery(
@@ -995,6 +1002,7 @@ function RouteComponent() {
             projectName,
             logName,
             runIds: selectedRunIds,
+            requireImage,
           }),
         );
 
@@ -1002,7 +1010,7 @@ function RouteComponent() {
           const pins: Record<string, number> = {};
           for (const entry of result.bestSteps) {
             if (entry) {
-              pins[entry.runId] = mode === "argmin" ? entry.argminStep : entry.argmaxStep;
+              pins[entry.runId] = useMin ? entry.argminStep : entry.argmaxStep;
             }
           }
           document.dispatchEvent(

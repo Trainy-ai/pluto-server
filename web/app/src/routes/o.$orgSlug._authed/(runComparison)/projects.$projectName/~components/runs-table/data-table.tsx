@@ -97,7 +97,10 @@ interface DataTableProps {
   viewSelector?: React.ReactNode;
   activeChartViewId?: string | null;
   onToggleColumnPin?: (colId: string, source: string, aggregation?: string) => void;
-  onPinImagesToBestStep?: (logName: string, mode: "argmin" | "argmax") => void;
+  onPinImagesToBestStep?: (
+    logName: string,
+    mode: "argmin" | "argmax" | "argmin-with-image" | "argmax-with-image",
+  ) => void;
   listMode: ListMode;
   onListModeChange: (mode: ListMode) => void;
   showInherited: boolean;

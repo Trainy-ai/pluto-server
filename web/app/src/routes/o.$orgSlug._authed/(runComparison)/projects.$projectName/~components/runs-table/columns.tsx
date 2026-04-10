@@ -206,7 +206,10 @@ interface ColumnsProps {
   /** Callback to toggle pin on a custom column */
   onToggleColumnPin?: (colId: string, source: string, aggregation?: string) => void;
   /** Callback to pin images at the best step for a metric */
-  onPinImagesToBestStep?: (logName: string, mode: "argmin" | "argmax") => void;
+  onPinImagesToBestStep?: (
+    logName: string,
+    mode: "argmin" | "argmax" | "argmin-with-image" | "argmax-with-image",
+  ) => void;
 }
 
 // Shared ref for tracking last selected row ID (for shift-click range selection)

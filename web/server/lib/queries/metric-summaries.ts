@@ -139,6 +139,11 @@ export async function queryMetricSummariesBatch(
 /**
  * For each run, find the step where a metric reaches its min and max value.
  * Uses ClickHouse's built-in argMin/argMax aggregate functions on mlop_metrics.
+ *
+ * If `requireImage` is true, the search is restricted to steps where an image
+ * file also exists for that run — useful when pinning images to the "best step"
+ * (otherwise the argmin/argmax step may not have any image to show).
+ *
  * Returns Map<runId, { argminStep, argmaxStep }>.
  */
 export async function queryArgminArgmaxSteps(
@@ -148,11 +153,32 @@ export async function queryArgminArgmaxSteps(
     projectName: string;
     logName: string;
     runIds: number[];
+    requireImage?: boolean;
   },
 ): Promise<Map<number, { argminStep: number; argmaxStep: number }>> {
-  const { organizationId, projectName, logName, runIds } = params;
+  const { organizationId, projectName, logName, runIds, requireImage } = params;
 
   if (runIds.length === 0) return new Map();
+
+  // When requireImage is true, restrict to (runId, step) pairs where an
+  // actual image file exists for the same run+step. mlop_files contains
+  // all file types (png, wav, mp4, md, etc.) — filter to image types only
+  // so we don't match steps that only have e.g. audio or checkpoint files.
+  const imageFilter = requireImage
+    ? `
+        AND (runId, step) IN (
+          SELECT DISTINCT runId, step
+          FROM mlop_files
+          WHERE tenantId = {tenantId: String}
+            AND projectName = {projectName: String}
+            AND runId IN ({runIds: Array(UInt64)})
+            AND (
+              startsWith(fileType, 'image/')
+              OR fileType IN ('png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp')
+            )
+        )
+      `
+    : "";
 
   const query = `
     SELECT
@@ -164,6 +190,7 @@ export async function queryArgminArgmaxSteps(
       AND projectName = {projectName: String}
       AND logName = {logName: String}
       AND runId IN ({runIds: Array(UInt64)})
+      ${imageFilter}
     GROUP BY runId
   `;
 

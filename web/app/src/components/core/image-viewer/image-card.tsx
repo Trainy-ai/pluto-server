@@ -185,7 +185,7 @@ export function ImageCard({
                 </Button>
               </>
             ) : (
-              <span className="text-sm text-muted-foreground">
+              <span className="px-2 text-center text-sm text-muted-foreground">
                 No image at step {currentStepValue}
               </span>
             )}
@@ -223,7 +223,7 @@ export function ImageCard({
                 </div>
               ) : (
                 <div className="flex h-full items-center justify-center">
-                  <span className="text-lg text-muted-foreground">
+                  <span className="px-4 text-center text-lg text-muted-foreground">
                     No image at step {currentStepValue}
                   </span>
                 </div>
