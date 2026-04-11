@@ -63,7 +63,7 @@
     "@types/nanoid": "^3.0.0",
     "better-auth": "^1.4.10",
     "dotenv-cli": "^8.0.0",
-    "drizzle-orm": "^0.41.0",
+    "drizzle-orm": "^0.45.2",
     "hono": "^4.12.4",
     "lru-cache": "^10.4.3",
     "nanoid": "^5.1.5",

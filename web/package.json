@@ -32,13 +32,21 @@
       "sharp"
     ],
     "overrides": {
-      "fast-xml-parser": "^5.3.6",
+      "fast-xml-parser": "^5.5.7",
       "diff": "^8.0.3",
       "seroval": "^1.4.1",
       "seroval-plugins": "^1.4.1",
       "axios": "^1.9.0",
       "rollup": "^4.59.0",
-      "minimatch": "^9.0.7"
+      "minimatch": "^9.0.7",
+      "@xmldom/xmldom": "^0.8.12",
+      "defu": "^6.1.5",
+      "flatted": "^3.4.2",
+      "kysely": "^0.28.14",
+      "node-forge": "^1.4.0",
+      "picomatch@2": "^2.3.2",
+      "picomatch@4": "^4.0.4",
+      "undici": "^7.24.0"
     }
   }
 }
