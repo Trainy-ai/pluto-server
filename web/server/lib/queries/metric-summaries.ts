@@ -295,7 +295,9 @@ export async function queryDistinctMetrics(
   `;
 
   try {
-    const result = await ch.query(query, queryParams);
+    const result = await ch.query(query, queryParams, {
+      label: `queryDistinctMetrics:${table}`,
+    });
     const rows = (await result.json()) as { logName: string }[];
     return rows.map((r) => r.logName);
   } catch (error: unknown) {

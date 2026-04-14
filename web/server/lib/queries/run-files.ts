@@ -140,14 +140,18 @@ export async function queryRunFilesByLogName(
     LIMIT {maxFiles: UInt32}
   `;
 
-  const result = await ch.query(query, {
-    tenantId: organizationId,
-    projectName,
-    runId,
-    logName,
-    logGroup,
-    maxFiles: MAX_FILES,
-  });
+  const result = await ch.query(
+    query,
+    {
+      tenantId: organizationId,
+      projectName,
+      runId,
+      logName,
+      logGroup,
+      maxFiles: MAX_FILES,
+    },
+    { label: "queryRunFilesByLogName" }
+  );
 
   const files = (await result.json()) as {
     time: string;
@@ -208,12 +212,16 @@ export async function queryRunFileTree(
     LIMIT {limit: UInt32}
   `;
 
-  const result = await ch.query(query, {
-    tenantId: organizationId,
-    projectName,
-    runId,
-    limit,
-  });
+  const result = await ch.query(
+    query,
+    {
+      tenantId: organizationId,
+      projectName,
+      runId,
+      limit,
+    },
+    { label: "queryRunFileTree" }
+  );
 
   return (await result.json()) as RunFileMetadata[];
 }
