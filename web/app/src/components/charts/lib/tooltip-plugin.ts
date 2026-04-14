@@ -1,6 +1,6 @@
 import type uPlot from "uplot";
 import type { LineData } from "../line-uplot";
-import { formatAxisLabel, formatRelativeTimeValue, formatStepValue, smartDateFormatter } from "./format";
+import { formatAbsoluteTimeTooltip, formatAxisLabel, formatRelativeTimeValue, formatStepValue } from "./format";
 import { interpolateValue, isInsideDataGap, type TooltipInterpolation } from "@/lib/math/interpolation";
 
 // ============================
@@ -434,7 +434,7 @@ export interface TooltipPluginOpts {
 }
 
 export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
-  const { theme, isDateTime, timeRange, lines, hoverStateRef, onHoverChange, isActiveChart, highlightedSeriesRef, highlightedRunIdRef, highlightedSeriesIdRef, tooltipInterpolation = "none", spanGaps = true, xlabel, title, subtitle, onSeriesHover, sharedTooltipEl, sharedContentContainer, chartId: pluginChartId, activeTooltipChartRef, reparentTooltip } = opts;
+  const { theme, isDateTime, lines, hoverStateRef, onHoverChange, isActiveChart, highlightedSeriesRef, highlightedRunIdRef, highlightedSeriesIdRef, tooltipInterpolation = "none", spanGaps = true, xlabel, title, subtitle, onSeriesHover, sharedTooltipEl, sharedContentContainer, chartId: pluginChartId, activeTooltipChartRef, reparentTooltip } = opts;
   const isSharedMode = !!sharedTooltipEl;
 
   // DEBUG: Temporary logging to diagnose tooltip persistence issue
@@ -1028,7 +1028,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     // Format x value — show exact step for non-datetime axes, human-readable time for relative time
     const isRelTime = xlabel === "relative time";
     const xFormatted = isDateTime
-      ? smartDateFormatter(xVal, timeRange)
+      ? formatAbsoluteTimeTooltip(xVal)
       : isRelTime
         ? formatRelativeTimeValue(xVal)
         : formatStepValue(xVal);
@@ -1775,7 +1775,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     if (cachedHeaderLabel) {
       const isRelTime = xlabel === "relative time";
       const xFormatted = isDateTime
-        ? smartDateFormatter(xVal, timeRange)
+        ? formatAbsoluteTimeTooltip(xVal)
         : isRelTime
           ? formatRelativeTimeValue(xVal)
           : formatStepValue(xVal);

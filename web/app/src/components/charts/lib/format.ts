@@ -174,6 +174,28 @@ export function formatRelativeTimeValues(vals: (number | null | undefined)[]): s
   return vals.map((v) => (v == null ? "" : formatDuration(v)));
 }
 
+/**
+ * Format an absolute time value for the tooltip header.
+ * Always shows: month day hour:minute:second (e.g., "Apr 14 13:45:07").
+ */
+export function formatAbsoluteTimeTooltip(value: number): string {
+  const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const localDate = new Date(value);
+  const datePart = localDate.toLocaleDateString([], {
+    month: "short",
+    day: "numeric",
+    timeZone: userTimezone,
+  });
+  const timePart = localDate.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+    timeZone: userTimezone,
+  });
+  return `${datePart} ${timePart}`;
+}
+
 /** Smart date formatter based on range */
 export function smartDateFormatter(value: number, range: number): string {
   const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
