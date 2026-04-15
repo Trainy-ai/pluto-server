@@ -36,6 +36,7 @@ import type { ApiKey, Organization, User } from "@prisma/client";
 import { extractAndUpsertColumnKeys } from "../lib/extract-column-keys";
 import { deepMerge } from "../lib/deep-merge";
 import { generateRunPrefix } from "../lib/run-prefix";
+import { transitionRunStatus, recordRunCreatedEvent } from "../lib/run-status";
 
 // Type for API key with relations
 type ApiKeyWithRelations = ApiKey & {
@@ -167,6 +168,7 @@ router.openapi(createRunRoute, async (c) => {
 
   let run: { id: bigint; number: number | null } | null = null;
   let resumed = false;
+  let resumedFromTerminal = false;
 
   // If externalId is provided, check if a run with this ID already exists (Neptune-style resume)
   if (externalId) {
@@ -176,12 +178,13 @@ router.openapi(createRunRoute, async (c) => {
         organizationId: apiKey.organization.id,
         projectId: project.id,
       },
-      select: { id: true, number: true },
+      select: { id: true, number: true, status: true },
     });
 
     if (existingRun) {
-      run = existingRun;
+      run = { id: existingRun.id, number: existingRun.number };
       resumed = true;
+      resumedFromTerminal = existingRun.status !== RunStatus.RUNNING;
     }
   }
 
@@ -286,24 +289,36 @@ router.openapi(createRunRoute, async (c) => {
         ? [...new Set([...inheritedTags, ...explicitTags])]
         : explicitTags;
 
-      run = await ctx.prisma.runs.create({
-        data: {
-          name: runName,
-          number: runNumber,
-          externalId: externalId || null,
-          projectId: project.id,
-          organizationId: apiKey.organization.id,
-          tags: finalTags,
-          status: RunStatus.RUNNING,
-          loggerSettings: parsedLoggerSettings,
-          systemMetadata: parsedSystemMetadata,
-          config: finalConfig,
-          createdById: apiKey.user.id,
-          creatorApiKeyId: apiKey.id,
-          forkedFromRunId: resolvedForkRunId,
-          forkStep: resolvedForkStep,
-        },
-        select: { id: true, number: true },
+      // Create the run and its initial `null -> RUNNING` status event
+      // atomically so the timeline cannot miss the creation event if a
+      // crash happens between the two writes.
+      run = await ctx.prisma.$transaction(async (tx) => {
+        const created = await tx.runs.create({
+          data: {
+            name: runName,
+            number: runNumber,
+            externalId: externalId || null,
+            projectId: project.id,
+            organizationId: apiKey.organization.id,
+            tags: finalTags,
+            status: RunStatus.RUNNING,
+            loggerSettings: parsedLoggerSettings,
+            systemMetadata: parsedSystemMetadata,
+            config: finalConfig,
+            createdById: apiKey.user.id,
+            creatorApiKeyId: apiKey.id,
+            forkedFromRunId: resolvedForkRunId,
+            forkStep: resolvedForkStep,
+          },
+          select: { id: true, number: true },
+        });
+        await recordRunCreatedEvent(tx, {
+          runId: created.id,
+          source: "api",
+          apiKeyId: apiKey.id,
+          actorId: apiKey.user.id,
+        });
+        return created;
       });
     } catch (error) {
       if (error instanceof SyntaxError) {
@@ -324,11 +339,12 @@ router.openapi(createRunRoute, async (c) => {
             organizationId: apiKey.organization.id,
             projectId: project.id,
           },
-          select: { id: true, number: true },
+          select: { id: true, number: true, status: true },
         });
         if (existingRun) {
-          run = existingRun;
+          run = { id: existingRun.id, number: existingRun.number };
           resumed = true;
+          resumedFromTerminal = existingRun.status !== RunStatus.RUNNING;
         }
       }
 
@@ -337,6 +353,20 @@ router.openapi(createRunRoute, async (c) => {
         return c.json({ error: "Failed to create run" }, 500);
       }
     }
+  }
+
+  // Resumed runs coming from a terminal state need to be flipped back to
+  // RUNNING so the SDK can keep logging. This mirrors /api/runs/resume but
+  // covers the Neptune-style externalId path used by DDP multi-node restarts.
+  if (resumed && resumedFromTerminal && run) {
+    await transitionRunStatus(ctx.prisma, {
+      runId: run.id,
+      toStatus: RunStatus.RUNNING,
+      source: "resume",
+      organizationId: apiKey.organization.id,
+      apiKeyId: apiKey.id,
+      actorId: apiKey.user.id,
+    });
   }
 
   // Fire-and-forget: cache column keys for fast search
@@ -535,11 +565,17 @@ router.openapi(resumeRunRoute, async (c) => {
     return c.json({ error: "Run not found" }, 404);
   }
 
-  // Set run status back to RUNNING so the SDK can log new data
+  // Set run status back to RUNNING so the SDK can log new data.
+  // Only terminal-to-RUNNING transitions emit a timeline event; a resume
+  // against an already-RUNNING run is a no-op.
   if (run.status !== RunStatus.RUNNING) {
-    await ctx.prisma.runs.update({
-      where: { id: run.id },
-      data: { status: RunStatus.RUNNING, statusUpdated: new Date() },
+    await transitionRunStatus(ctx.prisma, {
+      runId: run.id,
+      toStatus: RunStatus.RUNNING,
+      source: "resume",
+      organizationId,
+      apiKeyId: apiKey.id,
+      actorId: apiKey.user.id,
     });
   }
 
@@ -607,42 +643,130 @@ router.openapi(updateStatusRoute, async (c) => {
 
   const run = await c.get("prisma").runs.findUnique({
     where: { id: runId, organizationId: apiKey.organization.id },
+    select: { id: true, loggerSettings: true },
   });
 
   if (!run) {
     return c.json({ error: "Run not found" }, 404);
   }
 
-  let updatedLoggerSettings = (run.loggerSettings || {}) as Record<string, any>;
+  let updatedLoggerSettings = (run.loggerSettings || {}) as Record<string, unknown>;
+  let loggerSettingsChanged = false;
   if (loggerSettings && loggerSettings !== "null") {
     try {
-      const newLoggerSettings = JSON.parse(loggerSettings) as Record<string, any>;
-      updatedLoggerSettings = { ...updatedLoggerSettings, ...newLoggerSettings };
+      const newLoggerSettings = JSON.parse(loggerSettings) as Record<string, unknown>;
+      updatedLoggerSettings = deepMerge(updatedLoggerSettings, newLoggerSettings);
+      loggerSettingsChanged = true;
     } catch (error) {
       return c.json({ error: "Invalid loggerSettings JSON" }, 400);
     }
   }
 
-  let parsedStatusMetadata = Prisma.DbNull as any;
+  let parsedStatusMetadata: Prisma.InputJsonValue | null | undefined = undefined;
   if (statusMetadata) {
     try {
-      parsedStatusMetadata = JSON.parse(statusMetadata);
+      parsedStatusMetadata = JSON.parse(statusMetadata) as Prisma.InputJsonValue;
     } catch (error) {
       return c.json({ error: "Invalid statusMetadata JSON" }, 400);
     }
+  } else if (statusMetadata === null) {
+    parsedStatusMetadata = null;
   }
 
-  await c.get("prisma").runs.update({
-    where: { id: runId, organizationId: apiKey.organization.id },
-    data: {
-      status,
-      statusUpdated: new Date(),
-      statusMetadata: parsedStatusMetadata,
-      loggerSettings: Object.keys(updatedLoggerSettings).length > 0 ? updatedLoggerSettings : Prisma.DbNull,
-    },
+  await transitionRunStatus(c.get("prisma"), {
+    runId: BigInt(runId),
+    toStatus: status,
+    source: "api",
+    metadata: parsedStatusMetadata,
+    loggerSettingsPatch: loggerSettingsChanged ? updatedLoggerSettings : undefined,
+    organizationId: apiKey.organization.id,
+    apiKeyId: apiKey.id,
+    actorId: apiKey.user.id,
   });
 
   return c.json({ success: true }, 200);
+});
+
+// ============= Status History =============
+const StatusEventSchema = z.object({
+  id: z.string(),
+  runId: z.number(),
+  fromStatus: z.string().nullable(),
+  toStatus: z.string(),
+  source: z.string(),
+  metadata: z.any().nullable(),
+  actorId: z.string().nullable(),
+  apiKeyId: z.string().nullable(),
+  createdAt: z.string(),
+});
+
+const statusHistoryRoute = createRoute({
+  method: "get",
+  path: "/status/history",
+  tags: ["Runs"],
+  summary: "Get run status transition history",
+  description:
+    "Returns the ordered list of status transition events for a run " +
+    "(oldest first). Includes implicit creation event, API-driven updates, " +
+    "resumes, and backend-driven stale/threshold transitions.",
+  security: [{ bearerAuth: [] }],
+  request: {
+    query: z.object({
+      runId: z.coerce.number().openapi({ description: "Numeric run ID" }),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Status history",
+      content: {
+        "application/json": {
+          schema: z.object({
+            runId: z.number(),
+            events: z.array(StatusEventSchema),
+          }).openapi("RunStatusHistoryResponse"),
+        },
+      },
+    },
+    404: {
+      description: "Run not found",
+      content: { "application/json": { schema: ErrorSchema } },
+    },
+  },
+});
+
+router.use(statusHistoryRoute.path, withApiKey);
+router.openapi(statusHistoryRoute, async (c) => {
+  const apiKey = c.get("apiKey");
+  const { runId } = c.req.valid("query");
+  const prisma = c.get("prisma");
+
+  const run = await prisma.runs.findUnique({
+    where: { id: runId, organizationId: apiKey.organization.id },
+    select: { id: true },
+  });
+  if (!run) {
+    return c.json({ error: "Run not found" }, 404);
+  }
+
+  const events = await prisma.runStatusEvent.findMany({
+    where: { runId: run.id },
+    orderBy: { createdAt: "asc" },
+  });
+
+  return c.json({
+    runId,
+    events: events.map((e) => ({
+      id: e.id.toString(),
+      runId: Number(e.runId),
+      fromStatus: e.fromStatus,
+      toStatus: e.toStatus,
+      source: e.source,
+      metadata: e.metadata,
+      actorId: e.actorId,
+      apiKeyId: e.apiKeyId,
+      createdAt: e.createdAt.toISOString(),
+    })),
+  }, 200);
 });
 
 // ============= Add Log Names =============

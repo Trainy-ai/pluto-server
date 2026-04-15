@@ -18,6 +18,7 @@ from python.models import (
     RunStatus,
     User,
 )
+from python.run_status import transition_run_status
 from python.templates import process_run_email
 from python.utils import get_run_url
 
@@ -107,6 +108,20 @@ def process_runs(session, ch_client, smtp_config, grace=1800):
                 f"last_update={last_update_time.isoformat()}, "
                 f"stale_for={int(time_diff.total_seconds())}s)"
             )
+            transition_run_status(
+                session,
+                run_id=run.id,
+                to_status="FAILED",
+                source="stale-monitor",
+                metadata={
+                    "reason": "stale",
+                    "grace_seconds": grace,
+                    "stale_for_seconds": int(time_diff.total_seconds()),
+                    "last_update_time": last_update_time.isoformat(),
+                },
+            )
+            # Refresh the in-memory ORM copy so downstream code (send_alert)
+            # observes the new status without another round-trip.
             run.status = "FAILED"
             send_alert(
                 session,
@@ -217,7 +232,20 @@ def check_threshold(
         f"Run {run.id} (Project: {project_name}) {log_name} value {violation_value} {operator} {threshold} at {last_update_time}"
     )
 
-    run.status = RunStatus.CANCELLED  # run.status = "FAILED"
+    transition_run_status(
+        session,
+        run_id=run.id,
+        to_status="CANCELLED",
+        source="threshold-trigger",
+        metadata={
+            "reason": "threshold-exceeded",
+            "log_name": log_name,
+            "operator": operator,
+            "threshold": threshold,
+            "violation_value": violation_value,
+        },
+    )
+    run.status = RunStatus.CANCELLED  # keep ORM copy fresh for send_alert
     send_alert(
         session,
         run,
@@ -278,6 +306,18 @@ def check_run_time(session, ch_client, smtp_config, run, grace):
     if timedelta(seconds=grace) < time_diff < timedelta(days=16384):
         logger.info(
             f"Run {run.id} (Project: {project_name}) last update at {last_update_time} is older than {grace} seconds"
+        )
+        transition_run_status(
+            session,
+            run_id=run.id,
+            to_status="FAILED",
+            source="stale-monitor",
+            metadata={
+                "reason": "stale",
+                "grace_seconds": grace,
+                "stale_for_seconds": int(time_diff.total_seconds()),
+                "last_update_time": last_update_time.isoformat(),
+            },
         )
         run.status = "FAILED"
         send_alert(

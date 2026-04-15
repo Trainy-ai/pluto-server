@@ -19,6 +19,7 @@ import { metricSummariesProcedure } from "./procs/metric-summaries";
 import { metricBestStepsProcedure } from "./procs/metric-best-steps";
 import { forkRunProcedure } from "./procs/fork-run";
 import { getLineageProcedure } from "./procs/get-lineage";
+import { statusHistoryProcedure } from "./procs/status-history";
 
 export const runsRouter = router({
   // Procedures
@@ -40,6 +41,7 @@ export const runsRouter = router({
   metricBestSteps: metricBestStepsProcedure,
   fork: forkRunProcedure,
   getLineage: getLineageProcedure,
+  statusHistory: statusHistoryProcedure,
   // Routers
   data: dataRouter,
   trigger: triggerRouter,

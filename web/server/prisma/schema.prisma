@@ -56,6 +56,7 @@ model User {
   DashboardView      DashboardView[]
   RunTableView       RunTableView[]
   Integration        Integration[]
+  RunStatusEvent     RunStatusEvent[]
 
   @@unique([email])
   @@map("user")
@@ -133,7 +134,6 @@ model TwoFactor {
 
   @@map("twoFactor")
 }
-
 
 model OrganizationSubscription {
   id                   String           @id @default(uuid())
@@ -220,36 +220,37 @@ model Invitation {
 }
 
 model ApiKey {
-  id             String       @id
+  id             String           @id
   key            String
   name           String
   // user facing key
-  keyString      String       @default("*********")
+  keyString      String           @default("*********")
   organizationId String
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   userId         String
-  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   createdAt      DateTime
-  isHashed       Boolean      @default(true)
+  isHashed       Boolean          @default(true)
   lastUsed       DateTime?
   expiresAt      DateTime?
   Runs           Runs[]
+  RunStatusEvent RunStatusEvent[]
 
   @@unique([key])
   @@map("api_key")
 }
 
 model Projects {
-  id             BigInt          @id @default(autoincrement())
-  name           String          @db.VarChar(255)
-  organizationId String
-  tags           String[]        @default([])
-  runPrefix      String?         @db.VarChar(10) // Auto-generated short prefix for display IDs (e.g., "MMP")
-  nextRunNumber  Int             @default(1)     // Counter for sequential run numbering
-  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  runs           Runs[]
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
+  id               BigInt             @id @default(autoincrement())
+  name             String             @db.VarChar(255)
+  organizationId   String
+  tags             String[]           @default([])
+  runPrefix        String?            @db.VarChar(10) // Auto-generated short prefix for display IDs (e.g., "MMP")
+  nextRunNumber    Int                @default(1) // Counter for sequential run numbering
+  organization     Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  runs             Runs[]
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
   DashboardView    DashboardView[]
   RunTableView     RunTableView[]
   ProjectColumnKey ProjectColumnKey[]
@@ -299,7 +300,7 @@ model Runs {
   id              BigInt    @id @default(autoincrement())
   externalId      String?   @db.VarChar(255) // User-provided run ID for multi-node distributed training
   name            String    @db.VarChar(255)
-  number          Int?      // Sequential run number within the project (for display IDs like "MMP-1")
+  number          Int? // Sequential run number within the project (for display IDs like "MMP-1")
   organizationId  String
   tags            String[]  @default([])
   loggerSettings  Json?
@@ -316,20 +317,22 @@ model Runs {
   creatorApiKeyId String
 
   // Forking fields (Neptune-style run forking)
-  forkedFromRunId BigInt?   // Parent run ID (null = root run, not forked)
-  forkStep        BigInt?   // Step at which the fork occurred
+  forkedFromRunId BigInt? // Parent run ID (null = root run, not forked)
+  forkStep        BigInt? // Step at which the fork occurred
 
-  creator        User           @relation(fields: [createdById], references: [id])
-  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  project        Projects       @relation(fields: [projectId], references: [id])
-  forkedFromRun  Runs?          @relation("RunForks", fields: [forkedFromRunId], references: [id], onDelete: SetNull)
-  forks          Runs[]         @relation("RunForks")
-  logs           RunLogs[]
-  triggers       RunTriggers[]
-  Notification   Notification[]
-  RunGraphNode   RunGraphNode[]
-  RunGraphEdge   RunGraphEdge[]
-  ApiKey         ApiKey         @relation(fields: [creatorApiKeyId], references: [id])
+  creator       User             @relation(fields: [createdById], references: [id])
+  organization  Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  project       Projects         @relation(fields: [projectId], references: [id])
+  forkedFromRun Runs?            @relation("RunForks", fields: [forkedFromRunId], references: [id], onDelete: SetNull)
+  forks         Runs[]           @relation("RunForks")
+  logs          RunLogs[]
+  triggers      RunTriggers[]
+  statusEvents  RunStatusEvent[]
+  Notification  Notification[]
+  RunGraphNode  RunGraphNode[]
+  RunGraphEdge  RunGraphEdge[]
+  ApiKey        ApiKey           @relation(fields: [creatorApiKeyId], references: [id])
+  RunFieldValue RunFieldValue[]
 
   // Unique constraint for external run ID within a project (allows multi-node to share same run)
   @@unique([organizationId, projectId, externalId])
@@ -340,8 +343,6 @@ model Runs {
   @@index([status])
   @@index([createdById])
   @@index([forkedFromRunId])
-  RunFieldValue RunFieldValue[]
-
   // Covering indexes for server-side sorting (avoids seq scans on sort queries)
   @@index([organizationId, projectId, createdAt(sort: Desc)])
   @@index([organizationId, projectId, name])
@@ -408,6 +409,28 @@ model RunTriggers {
   @@map("run_triggers")
 }
 
+// Append-only log of status transitions. Emitted whenever a run's status
+// actually changes; no-op transitions (toStatus === fromStatus) are elided
+// at the write site via `transitionRunStatus`, so DDP fan-out from N ranks
+// collapses naturally to a single event per real transition.
+model RunStatusEvent {
+  id         BigInt     @id @default(autoincrement())
+  runId      BigInt
+  run        Runs       @relation(fields: [runId], references: [id], onDelete: Cascade)
+  fromStatus RunStatus? // null for the very first event (run creation)
+  toStatus   RunStatus
+  source     String     @db.VarChar(64) // "api" | "resume" | "stale-monitor" | "threshold-trigger"
+  metadata   Json? // snapshot of Runs.statusMetadata at transition time
+  actorId    String?
+  actor      User?      @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  apiKeyId   String?
+  apiKey     ApiKey?    @relation(fields: [apiKeyId], references: [id], onDelete: SetNull)
+  createdAt  DateTime   @default(now())
+
+  @@index([runId, createdAt])
+  @@map("run_status_events")
+}
+
 enum NotificationType {
   RUN_CANCELLED
   RUN_FAILED
@@ -435,15 +458,15 @@ model Notification {
 
 // Dashboard Views for customizable run comparison dashboards
 model DashboardView {
-  id             BigInt       @id @default(autoincrement())
-  name           String       @db.VarChar(255)
+  id             BigInt   @id @default(autoincrement())
+  name           String   @db.VarChar(255)
   organizationId String
   projectId      BigInt
   createdById    String
-  isDefault      Boolean      @default(false)
-  config         Json         // Sections, widgets, layout configuration
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
+  isDefault      Boolean  @default(false)
+  config         Json // Sections, widgets, layout configuration
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   project      Projects     @relation(fields: [projectId], references: [id], onDelete: Cascade)
@@ -456,14 +479,14 @@ model DashboardView {
 
 // Run Table Views for saved table column/filter/sorting configurations
 model RunTableView {
-  id             BigInt       @id @default(autoincrement())
-  name           String       @db.VarChar(255)
+  id             BigInt   @id @default(autoincrement())
+  name           String   @db.VarChar(255)
   organizationId String
   projectId      BigInt
   createdById    String
-  config         Json         // Columns, baseOverrides, filters, sorting configuration
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
+  config         Json // Columns, baseOverrides, filters, sorting configuration
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   project      Projects     @relation(fields: [projectId], references: [id], onDelete: Cascade)
@@ -476,12 +499,12 @@ model RunTableView {
 
 // Cached distinct column keys per project for fast search
 model ProjectColumnKey {
-  id             BigInt       @id @default(autoincrement())
+  id             BigInt @id @default(autoincrement())
   organizationId String
   projectId      BigInt
-  source         String       @db.VarChar(20)  // "config" | "systemMetadata"
-  key            String       @db.VarChar(500)
-  dataType       String       @db.VarChar(10)  // "text" | "number" | "date"
+  source         String @db.VarChar(20) // "config" | "systemMetadata"
+  key            String @db.VarChar(500)
+  dataType       String @db.VarChar(10) // "text" | "number" | "date"
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   project      Projects     @relation(fields: [projectId], references: [id], onDelete: Cascade)
@@ -493,12 +516,12 @@ model ProjectColumnKey {
 
 // Flattened field values for fast server-side sorting and filtering
 model RunFieldValue {
-  id             BigInt    @id @default(autoincrement())
+  id             BigInt  @id @default(autoincrement())
   runId          BigInt
   organizationId String
   projectId      BigInt
-  source         String    @db.VarChar(20)   // "config" | "systemMetadata"
-  key            String    @db.VarChar(500)
+  source         String  @db.VarChar(20) // "config" | "systemMetadata"
+  key            String  @db.VarChar(500)
   textValue      String?
   numericValue   Float?
 
@@ -516,7 +539,7 @@ model Integration {
   id             String       @id @default(uuid())
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  provider       String       // "linear"
+  provider       String // "linear"
   enabled        Boolean      @default(true)
   config         Json         @default("{}")
   encryptedToken String

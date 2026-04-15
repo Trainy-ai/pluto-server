@@ -70,6 +70,7 @@ export function RunStatusBadge({ run }: { run: BaseRun }) {
       <Tooltip>
         <TooltipTrigger asChild>
           <Badge
+            data-testid="run-status-badge"
             variant={config.variant}
             className={cn("font-medium", config.className)}
           >

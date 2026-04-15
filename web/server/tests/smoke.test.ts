@@ -6637,4 +6637,389 @@ describe('SDK API Endpoints (with API Key)', () => {
       expect(midPoint.value).toBeLessThan(midPoint.step * 2);
     });
   });
+
+  // ============================================================================
+  // Test Suite 34: Run Status Transition Events
+  //
+  // These tests exercise the precedence-based state machine for status updates
+  // without relying on wall-clock timing. Invariants:
+  //   1. Every recorded event must connect: events[i].fromStatus === events[i-1].toStatus
+  //   2. The last event's toStatus must equal the run's current status
+  //   3. No two consecutive events have the same toStatus (no-op transitions are elided)
+  //   4. Terminal-to-terminal "downgrades" (e.g. FAILED -> COMPLETED from a late rank)
+  //      are rejected by the precedence rule; no event is recorded.
+  // ============================================================================
+  describe('Test Suite 34: Run Status Transition Events', () => {
+    const hasApiKey = TEST_API_KEY.length > 0;
+
+    type StatusEvent = {
+      id: string;
+      runId: number;
+      fromStatus: string | null;
+      toStatus: string;
+      source: string;
+      metadata: unknown;
+      createdAt: string;
+    };
+
+    async function fetchHistory(runId: number): Promise<StatusEvent[]> {
+      const res = await makeRequest(`/api/runs/status/history?runId=${runId}`, {
+        headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      return body.events as StatusEvent[];
+    }
+
+    async function fetchRunStatus(runId: number): Promise<string> {
+      const res = await makeRequest(`/api/runs/details/${runId}`, {
+        headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      return body.status as string;
+    }
+
+    function assertHistoryInvariants(events: StatusEvent[], finalStatus: string) {
+      // Invariant 1: connected chain
+      for (let i = 1; i < events.length; i++) {
+        expect(events[i].fromStatus).toBe(events[i - 1].toStatus);
+      }
+      // Invariant 2: last event matches current row status
+      if (events.length > 0) {
+        expect(events.at(-1)!.toStatus).toBe(finalStatus);
+      }
+      // Invariant 3: no consecutive dupes
+      for (let i = 1; i < events.length; i++) {
+        expect(events[i].toStatus).not.toBe(events[i - 1].toStatus);
+      }
+    }
+
+    describe.skipIf(!hasApiKey)('Basic lifecycle', () => {
+      it('Test 34.1: Creating a run emits initial RUNNING event', async () => {
+        const createRes = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `status-events-create-${Date.now()}`,
+          }),
+        });
+        expect(createRes.status).toBe(200);
+        const { runId } = await createRes.json();
+
+        const events = await fetchHistory(runId);
+        expect(events).toHaveLength(1);
+        expect(events[0].fromStatus).toBeNull();
+        expect(events[0].toStatus).toBe('RUNNING');
+        expect(events[0].source).toBe('api');
+
+        assertHistoryInvariants(events, await fetchRunStatus(runId));
+      });
+
+      it('Test 34.2: Succeed -> resume -> fail produces 4-event timeline', async () => {
+        const createRes = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `status-events-lifecycle-${Date.now()}`,
+          }),
+        });
+        expect(createRes.status).toBe(200);
+        const { runId } = await createRes.json();
+
+        // 1: complete
+        await makeRequest('/api/runs/status/update', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+          body: JSON.stringify({ runId, status: 'COMPLETED' }),
+        });
+
+        // 2: resume
+        const resumeRes = await makeRequest('/api/runs/resume', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+          body: JSON.stringify({ runId }),
+        });
+        expect(resumeRes.status).toBe(200);
+
+        // 3: fail with metadata
+        await makeRequest('/api/runs/status/update', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+          body: JSON.stringify({
+            runId,
+            status: 'FAILED',
+            statusMetadata: JSON.stringify({ error: 'OOM' }),
+          }),
+        });
+
+        const events = await fetchHistory(runId);
+        const finalStatus = await fetchRunStatus(runId);
+
+        expect(events).toHaveLength(4);
+        expect(events.map(e => `${e.fromStatus ?? 'null'}->${e.toStatus}`)).toEqual([
+          'null->RUNNING',
+          'RUNNING->COMPLETED',
+          'COMPLETED->RUNNING',
+          'RUNNING->FAILED',
+        ]);
+        expect(events[2].source).toBe('resume');
+        expect(events[3].source).toBe('api');
+        expect(events[3].metadata).toEqual({ error: 'OOM' });
+
+        assertHistoryInvariants(events, finalStatus);
+        expect(finalStatus).toBe('FAILED');
+      });
+
+      it('Test 34.3: Repeated COMPLETED updates are elided (no consecutive dupes)', async () => {
+        const createRes = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `status-events-elide-${Date.now()}`,
+          }),
+        });
+        const { runId } = await createRes.json();
+
+        // Send COMPLETED three times in a row
+        for (let i = 0; i < 3; i++) {
+          const res = await makeRequest('/api/runs/status/update', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+            body: JSON.stringify({ runId, status: 'COMPLETED' }),
+          });
+          expect(res.status).toBe(200);
+        }
+
+        const events = await fetchHistory(runId);
+        // Exactly 2: initial RUNNING + single RUNNING->COMPLETED
+        expect(events).toHaveLength(2);
+        assertHistoryInvariants(events, await fetchRunStatus(runId));
+      });
+
+      it('Test 34.4: Resume into a still-RUNNING run does not add an event', async () => {
+        const createRes = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `status-events-running-resume-${Date.now()}`,
+          }),
+        });
+        const { runId } = await createRes.json();
+
+        // Resume immediately (run is still RUNNING)
+        const resumeRes = await makeRequest('/api/runs/resume', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+          body: JSON.stringify({ runId }),
+        });
+        expect(resumeRes.status).toBe(200);
+
+        const events = await fetchHistory(runId);
+        expect(events).toHaveLength(1);
+        expect(events[0].toStatus).toBe('RUNNING');
+      });
+
+      it('Test 34.4b: externalId-based resume of a terminal run emits COMPLETED->RUNNING', async () => {
+        const externalId = `status-events-ext-resume-${Date.now()}`;
+
+        // 1. Create via externalId
+        const createRes = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `ext-resume-${Date.now()}`,
+            externalId,
+          }),
+        });
+        expect(createRes.status).toBe(200);
+        const { runId, resumed } = await createRes.json();
+        expect(resumed).toBe(false);
+
+        // 2. Mark COMPLETED
+        await makeRequest('/api/runs/status/update', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+          body: JSON.stringify({ runId, status: 'COMPLETED' }),
+        });
+
+        // 3. Re-create with same externalId — mirrors SDK string run_id flow
+        const resumeCreateRes = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `ext-resume-ignored-${Date.now()}`,
+            externalId,
+          }),
+        });
+        expect(resumeCreateRes.status).toBe(200);
+        const resumeBody = await resumeCreateRes.json();
+        expect(resumeBody.runId).toBe(runId);
+        expect(resumeBody.resumed).toBe(true);
+
+        const events = await fetchHistory(runId);
+        expect(events).toHaveLength(3); // RUNNING, COMPLETED, RUNNING (resume)
+        expect(events[2].fromStatus).toBe('COMPLETED');
+        expect(events[2].toStatus).toBe('RUNNING');
+        expect(events[2].source).toBe('resume');
+
+        assertHistoryInvariants(events, await fetchRunStatus(runId));
+      });
+
+      it('Test 34.4c: externalId re-create of a still-RUNNING run does not add an event', async () => {
+        const externalId = `status-events-ext-running-${Date.now()}`;
+
+        const createRes = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `ext-running-${Date.now()}`,
+            externalId,
+          }),
+        });
+        const { runId } = await createRes.json();
+
+        // Same externalId while still RUNNING — common DDP fan-out
+        const resumeCreateRes = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `ext-running-ignored-${Date.now()}`,
+            externalId,
+          }),
+        });
+        expect(resumeCreateRes.status).toBe(200);
+
+        const events = await fetchHistory(runId);
+        expect(events).toHaveLength(1);
+        expect(events[0].toStatus).toBe('RUNNING');
+      });
+    });
+
+    describe.skipIf(!hasApiKey)('DDP concurrent writers', () => {
+      it('Test 34.5: 8 ranks posting COMPLETED in parallel produce exactly 1 transition event', async () => {
+        const createRes = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `status-events-ddp-ok-${Date.now()}`,
+          }),
+        });
+        const { runId } = await createRes.json();
+
+        await Promise.all(
+          Array.from({ length: 8 }, () =>
+            makeRequest('/api/runs/status/update', {
+              method: 'POST',
+              headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+              body: JSON.stringify({ runId, status: 'COMPLETED' }),
+            })
+          )
+        );
+
+        const events = await fetchHistory(runId);
+        expect(events).toHaveLength(2); // initial + single COMPLETED
+        expect(events[1].fromStatus).toBe('RUNNING');
+        expect(events[1].toStatus).toBe('COMPLETED');
+        assertHistoryInvariants(events, await fetchRunStatus(runId));
+      });
+
+      it('Test 34.6: One rank fails, others succeed: FAILED wins and timeline is consistent', async () => {
+        const createRes = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `status-events-ddp-one-fails-${Date.now()}`,
+          }),
+        });
+        const { runId } = await createRes.json();
+
+        // 7 successes + 1 failure, fired concurrently
+        const outcomes: Array<'COMPLETED' | 'FAILED'> = [
+          ...Array(7).fill('COMPLETED' as const),
+          'FAILED' as const,
+        ];
+        await Promise.all(
+          outcomes.map(status =>
+            makeRequest('/api/runs/status/update', {
+              method: 'POST',
+              headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+              body: JSON.stringify({ runId, status }),
+            })
+          )
+        );
+
+        const events = await fetchHistory(runId);
+        const finalStatus = await fetchRunStatus(runId);
+
+        // Invariants (regardless of how requests interleaved):
+        // - Final row status is FAILED (precedence rule; failure sticks)
+        // - Timeline last event == final status
+        // - 1-3 events total: initial RUNNING, optional RUNNING->COMPLETED,
+        //   and a terminal FAILED. No consecutive dupes.
+        expect(finalStatus).toBe('FAILED');
+        expect(events.length).toBeGreaterThanOrEqual(2);
+        expect(events.length).toBeLessThanOrEqual(3);
+        assertHistoryInvariants(events, finalStatus);
+        expect(events.at(-1)!.toStatus).toBe('FAILED');
+      });
+
+      it('Test 34.7: Late COMPLETED after FAILED is rejected by precedence', async () => {
+        const createRes = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `status-events-late-ok-${Date.now()}`,
+          }),
+        });
+        const { runId } = await createRes.json();
+
+        // Fail first, then try to "complete" later (straggler rank)
+        await makeRequest('/api/runs/status/update', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+          body: JSON.stringify({ runId, status: 'FAILED' }),
+        });
+        const lateOk = await makeRequest('/api/runs/status/update', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+          body: JSON.stringify({ runId, status: 'COMPLETED' }),
+        });
+        // Request succeeds (200) but mutation is a no-op
+        expect(lateOk.status).toBe(200);
+
+        const events = await fetchHistory(runId);
+        const finalStatus = await fetchRunStatus(runId);
+
+        expect(finalStatus).toBe('FAILED');
+        expect(events.map(e => e.toStatus)).toEqual(['RUNNING', 'FAILED']);
+        assertHistoryInvariants(events, finalStatus);
+      });
+    });
+
+    describe.skipIf(!hasApiKey)('Authorization', () => {
+      it('Test 34.8: History endpoint requires API key', async () => {
+        const res = await makeRequest('/api/runs/status/history?runId=1');
+        expect(res.status).toBe(401);
+      });
+
+      it('Test 34.9: History endpoint returns 404 for unknown run', async () => {
+        const res = await makeRequest('/api/runs/status/history?runId=999999999', {
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+        });
+        expect(res.status).toBe(404);
+      });
+    });
+  });
 });

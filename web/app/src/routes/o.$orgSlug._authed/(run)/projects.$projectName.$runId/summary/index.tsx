@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/tooltip";
 import Loader from "@/components/loader";
 import { RunStatusBadge } from "@/components/core/runs/run-status-badge";
+import { RunStatusTimeline } from "@/components/core/runs/run-status-timeline";
 import { prefetchGetRun, useGetRun } from "../~queries/get-run";
 import { prefetchGetTrigger, useGetTrigger } from "../~queries/get-trigger";
 import { Layout } from "../~components/layout";
@@ -184,6 +185,13 @@ function RouteComponent() {
             </div>
           </CardContent>
         </Card>
+
+        {/* Status History Timeline */}
+        <RunStatusTimeline
+          organizationId={organizationId}
+          runId={runId}
+          projectName={projectName}
+        />
 
         {/* Configuration Section */}
         {currentRun.config && (
