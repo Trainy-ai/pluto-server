@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from "react";
 import { fuzzyFilter } from "@/lib/fuzzy-search";
-import { CheckIcon, ChevronsUpDownIcon, Loader2Icon, TriangleAlertIcon, SparklesIcon, CircleHelpIcon, Code2 } from "lucide-react";
+import { CheckIcon, ChevronsUpDownIcon, Loader2Icon, TriangleAlertIcon, CircleAlertIcon, SparklesIcon, CircleHelpIcon, Code2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -28,6 +28,7 @@ import {
   useSearchMetricNames,
 } from "../../~queries/metric-summaries";
 import { isGlobValue, getGlobPattern, makeGlobValue, globToRegex, isRegexValue, getRegexPattern, isPatternValue } from "./glob-utils";
+import { useLineSettings } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/use-line-settings";
 
 interface MetricSelectorProps {
   organizationId: string;
@@ -75,17 +76,30 @@ export function MetricSelector({
   const { data: initialMetrics, isLoading: isLoadingInitial } =
     useDistinctMetricNames(organizationId, projectName);
 
-  // Fetch metrics scoped to selected runs (for "not present" warnings)
+  // Fetch metrics scoped to selected runs (for "not present" warnings).
+  // Respect the "Include NaN/Inf-only metrics" toggle so metrics that are
+  // entirely NaN/Inf still appear in the list (and get the rose warning icon).
+  const { settings } = useLineSettings(organizationId, projectName, "full");
+  const includeNonFiniteMetrics = settings.includeNonFiniteMetrics ?? false;
   const { data: runMetrics } = useRunMetricNames(
     organizationId,
     projectName,
-    selectedRunIds ?? []
+    selectedRunIds ?? [],
+    includeNonFiniteMetrics,
   );
 
   // Set of metrics that exist in the selected runs
   const runMetricSet = useMemo(() => {
     if (!runMetrics?.metricNames) return null;
     return new Set(runMetrics.metricNames);
+  }, [runMetrics]);
+
+  // Set of metrics whose values are entirely NaN/Inf in the selected runs.
+  // Only populated when includeNonFiniteMetrics is ON (backend can't tell
+  // otherwise since the summaries table pre-filters finite values).
+  const nonFiniteOnlySet = useMemo(() => {
+    if (!runMetrics?.nonFiniteOnlyMetrics) return null;
+    return new Set(runMetrics.nonFiniteOnlyMetrics);
   }, [runMetrics]);
 
   // Server-side ILIKE search when user types
@@ -96,8 +110,12 @@ export function MetricSelector({
   const filteredMetrics = useMemo(() => {
     const initial = initialMetrics?.metricNames ?? [];
     const searched = searchResults?.metricNames ?? [];
+    // Also merge run-scoped metrics so that when the NaN/Inf toggle is ON,
+    // all-NaN/Inf metrics (absent from project-wide summaries queries) still
+    // appear in the dropdown list.
+    const runScoped = runMetrics?.metricNames ?? [];
 
-    const merged = Array.from(new Set([...searched, ...initial]));
+    const merged = Array.from(new Set([...searched, ...initial, ...runScoped]));
 
     const trimmed = search.trim();
     if (!trimmed) {
@@ -117,7 +135,7 @@ export function MetricSelector({
 
     // Normal text: Fuse.js narrows down the loose backend results
     return fuzzyFilter(merged, search);
-  }, [initialMetrics, searchResults, search, isGlob]);
+  }, [initialMetrics, searchResults, runMetrics, search, isGlob]);
 
   const selectedValues = Array.isArray(value) ? value : value ? [value] : [];
 
@@ -235,6 +253,7 @@ export function MetricSelector({
               }>
                 {filteredMetrics.map((metric) => {
                   const notInRuns = runMetricSet != null && !runMetricSet.has(metric);
+                  const isNonFiniteOnly = !notInRuns && nonFiniteOnlySet?.has(metric);
                   return (
                     <CommandItem
                       key={metric}
@@ -250,17 +269,35 @@ export function MetricSelector({
                         )}
                       />
                       <span className={cn("truncate", notInRuns && "text-muted-foreground")}>{metric}</span>
-                      {notInRuns && (
-                        <span
-                          className="group/warn relative ml-auto shrink-0"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <TriangleAlertIcon className="size-3.5 text-amber-500" />
-                          <span className="pointer-events-none absolute bottom-full right-0 z-[999] mb-1.5 hidden whitespace-nowrap rounded-md border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-md group-hover/warn:block">
+                      {notInRuns ? (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span
+                              className="ml-auto flex shrink-0 items-center"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <TriangleAlertIcon className="size-3.5 text-amber-500" />
+                            </span>
+                          </TooltipTrigger>
+                          <TooltipContent side="top" className="text-xs">
                             Field is not present for selected run(s)
-                          </span>
-                        </span>
-                      )}
+                          </TooltipContent>
+                        </Tooltip>
+                      ) : isNonFiniteOnly ? (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span
+                              className="ml-auto flex shrink-0 items-center"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <CircleAlertIcon className="size-3.5 text-rose-500" />
+                            </span>
+                          </TooltipTrigger>
+                          <TooltipContent side="top" className="text-xs">
+                            All values are NaN or Infinity in the selected run(s)
+                          </TooltipContent>
+                        </Tooltip>
+                      ) : null}
                     </CommandItem>
                   );
                 })}

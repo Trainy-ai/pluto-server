@@ -19,7 +19,9 @@ AS SELECT
     sum(value)              AS sum_value,
     toUInt64(count())       AS count_value,
     argMaxState(value, step) AS last_value,
-    sum(value * value)      AS sum_sq_value
+    sum(value * value)      AS sum_sq_value,
+    min(step)               AS min_step,
+    max(step)               AS max_step
 FROM mlop_metrics
 WHERE isFinite(value)
 GROUP BY tenantId, projectName, runId, logName

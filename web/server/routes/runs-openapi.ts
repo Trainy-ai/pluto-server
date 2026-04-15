@@ -2070,7 +2070,7 @@ router.openapi(listMetricNamesRoute, async (c) => {
     }
   }
 
-  const metricNames = await queryDistinctMetrics(clickhouse, {
+  const { metricNames } = await queryDistinctMetrics(clickhouse, {
     organizationId: apiKey.organization.id,
     projectName,
     search: search || undefined,

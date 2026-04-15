@@ -24,14 +24,17 @@ export function useDistinctMetricNames(orgId: string, projectName: string) {
 /**
  * Fetch distinct metric names scoped to specific runs (for side-by-side view).
  * Returns ALL metric names for the given runs — no limit.
+ * By default uses the fast summaries table; set includeNonFiniteMetrics=true
+ * to include metrics whose values are all NaN/Inf (slower).
  */
-export function useRunMetricNames(orgId: string, projectName: string, runIds: string[]) {
+export function useRunMetricNames(orgId: string, projectName: string, runIds: string[], includeNonFiniteMetrics?: boolean) {
   return useQuery(
     trpc.runs.distinctMetricNames.queryOptions(
       {
         organizationId: orgId,
         projectName,
         runIds,
+        ...(includeNonFiniteMetrics ? { includeNonFiniteMetrics } : {}),
       },
       {
         enabled: runIds.length > 0,
@@ -202,5 +205,17 @@ export function usePerMetricSummaries(
     return merged;
   }, [queries]);
 
-  return { summaries };
+  // Per-metric loading state — used by the UI to show skeletons instead of
+  // "-" while a newly-expanded metric is still fetching from the server.
+  const loadingByMetric = useMemo(() => {
+    const map: Record<string, boolean> = {};
+    expandedMetricNames.forEach((name, i) => {
+      const q = queries[i];
+      map[name] = !!q && (q.isPending || (q.isFetching && !q.data));
+    });
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expandedMetricNames, queries.map((q) => `${q.isPending}:${q.isFetching}:${!!q.data}`).join("|")]);
+
+  return { summaries, loadingByMetric };
 }

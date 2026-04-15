@@ -18,6 +18,7 @@ import { CheckIcon, ChevronsUpDownIcon, Loader2Icon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDistinctMetricNames, useRunMetricNames, useSearchMetricNames } from "../../~queries/metric-summaries";
 import { fuzzyFilter } from "@/lib/fuzzy-search";
+import { useLineSettings } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/use-line-settings";
 
 interface XAxisSelectorProps {
   value: string;
@@ -47,8 +48,18 @@ export function XAxisSelector({
     return () => clearTimeout(timer);
   }, [search]);
 
+  // Respect the Line Chart Settings "Include NaN/Inf-only metrics" toggle so
+  // all-NaN/Inf metrics appear in the x-axis picker when the user has opted in.
+  const { settings } = useLineSettings(organizationId, projectName, "full");
+  const includeNonFiniteMetrics = settings.includeNonFiniteMetrics ?? false;
+
   const { data: initialMetrics } = useDistinctMetricNames(organizationId, projectName);
-  const { data: runMetrics } = useRunMetricNames(organizationId, projectName, selectedRunIds ?? []);
+  const { data: runMetrics } = useRunMetricNames(
+    organizationId,
+    projectName,
+    selectedRunIds ?? [],
+    includeNonFiniteMetrics,
+  );
   const { data: searchResults, isFetching: isSearching } =
     useSearchMetricNames(organizationId, projectName, debouncedSearch);
 

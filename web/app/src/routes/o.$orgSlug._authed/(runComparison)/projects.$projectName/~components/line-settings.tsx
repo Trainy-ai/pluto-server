@@ -368,44 +368,6 @@ const LineSettings = ({
               title="Performance"
               description="Settings to improve chart rendering performance"
             >
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Label
-                      htmlFor="max-points"
-                      className="flex items-center gap-1.5 text-sm"
-                    >
-                      Max points displayed
-                      <InfoTooltip
-                        title="Display Resolution"
-                        description="Limits the number of data points drawn per series for faster rendering. Server-side bucketing aggregates data into fixed-width buckets with min/max envelope bands that preserve anomalies (spikes/dips) even at low point counts."
-                      />
-                    </Label>
-                  </div>
-                  <span className="rounded bg-muted px-2 py-0.5 text-sm font-medium">
-                    {settings.maxPointsPerSeries === 0
-                      ? "No limit"
-                      : settings.maxPointsPerSeries}
-                  </span>
-                </div>
-                <Select
-                  value={String(settings.maxPointsPerSeries)}
-                  onValueChange={(value) =>
-                    updateSettings("maxPointsPerSeries", Number(value))
-                  }
-                >
-                  <SelectTrigger id="max-points" className="h-9 rounded-md border border-input text-sm">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="rounded-md border border-input">
-                    <SelectItem value="500">500 points (fastest)</SelectItem>
-                    <SelectItem value="2000">2,000 points (recommended)</SelectItem>
-                    <SelectItem value="5000">5,000 points (detailed)</SelectItem>
-                    <SelectItem value="0">All points (may be slow)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
               {showMaxSeriesCount && (
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
@@ -446,6 +408,26 @@ const LineSettings = ({
                   </Select>
                 </div>
               )}
+
+              <div className="flex items-center justify-between">
+                <Label
+                  htmlFor="non-finite-metrics"
+                  className="flex items-center gap-1.5 text-sm"
+                >
+                  Include NaN/Inf-only metrics
+                  <InfoTooltip
+                    title="Non-Finite Metrics"
+                    description="When enabled, metrics whose values are entirely NaN or Infinity are included in the metric list. This requires a slower query against the raw data table. Leave disabled for faster metric discovery."
+                  />
+                </Label>
+                <Switch
+                  id="non-finite-metrics"
+                  checked={settings.includeNonFiniteMetrics ?? false}
+                  onCheckedChange={(checked) =>
+                    updateSettings("includeNonFiniteMetrics", checked)
+                  }
+                />
+              </div>
             </SettingsSection>
 
             <SettingsSection title="Line Width">

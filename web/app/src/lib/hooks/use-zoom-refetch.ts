@@ -3,7 +3,7 @@ import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { trpc, trpcClient } from "@/utils/trpc";
 import { MULTI_METRIC_CHUNK, chunkArray, fromColumnar, type BucketedChartDataPoint, type ColumnarBucketedSeries } from "@/lib/chart-data-utils";
 import { translateZoomToStepRange, type TimeStepMapping } from "./zoom-translate";
-import { MAX_BUCKETS, computeEffectiveZoomBuckets } from "@/lib/chart-bucket-estimate";
+import { computeEffectiveZoomBuckets } from "@/lib/chart-bucket-estimate";
 
 // Re-export for consumers
 export { translateZoomToStepRange, type TimeStepMapping } from "./zoom-translate";
@@ -284,8 +284,11 @@ export function useZoomRefetch({
         }
 
         // Eagerly prefetch zoom data — fires the network request immediately,
-        // in parallel with React's re-render cycle
+        // in parallel with React's re-render cycle.
+        // Compute effective bucket count here (same logic as useQueries) so the
+        // prefetch warms the exact cache key that useQueries will read.
         if (stepRange && logNames.length > 1 && runIds.length > 0) {
+          const effectiveBuckets = computeEffectiveZoomBuckets(stepRange, zoomBuckets);
           const spanSize = stepRange[1] - stepRange[0] + 1;
           if (spanSize > zoomBuckets) {
             const chunks = chunkArray(logNames, MULTI_METRIC_CHUNK);
@@ -295,11 +298,11 @@ export function useZoomRefetch({
                 projectName,
                 logNames: chunk,
                 runIds,
-                buckets: zoomBuckets,
+                buckets: effectiveBuckets,
                 stepMin: stepRange[0],
                 stepMax: stepRange[1],
                 algorithm: algorithm !== "avg" ? algorithm : undefined,
-              dedup,
+                dedup,
               };
               queryClient.prefetchQuery({
                 queryKey: [...trpc.runs.data.graphMultiMetricBatchBucketed.queryOptions(opts).queryKey, "zoom"],

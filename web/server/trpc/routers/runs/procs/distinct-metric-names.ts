@@ -19,6 +19,9 @@ export const distinctMetricNamesProcedure = protectedOrgProcedure
       search: z.string().optional(),
       regex: z.string().max(500).optional(),
       runIds: z.array(z.string()).optional(),
+      /** When true, query the raw metrics table to include metrics whose values
+       *  are all NaN/Inf. Default false — uses the faster summaries table. */
+      includeNonFiniteMetrics: z.boolean().optional(),
     })
   )
   .query(async ({ ctx, input }) => {
@@ -30,22 +33,26 @@ export const distinctMetricNamesProcedure = protectedOrgProcedure
       search: input.search,
       regex: input.regex,
       runIds: numericRunIds ?? [],
+      // Include the toggle in the cache key so the summaries-table result
+      // (toggle OFF) doesn't mask the raw-table result (toggle ON) — they
+      // return different metric sets and need separate cache entries.
+      includeNonFiniteMetrics: input.includeNonFiniteMetrics ?? false,
     });
 
-    const cached = await getCached<{ metricNames: string[] }>(cacheKey);
+    const cached = await getCached<{ metricNames: string[]; nonFiniteOnlyMetrics: string[] }>(cacheKey);
     if (cached) return cached;
 
-    const metricNames = await queryDistinctMetrics(ctx.clickhouse, {
+    const result = await queryDistinctMetrics(ctx.clickhouse, {
       organizationId: input.organizationId,
       projectName: input.projectName,
       search: input.search,
       regex: input.regex,
       runIds: numericRunIds,
+      includeNonFiniteMetrics: input.includeNonFiniteMetrics,
       // No limit when scoped to specific runs — return all metric names
       ...(numericRunIds && numericRunIds.length > 0 ? { limit: 10000 } : {}),
     });
 
-    const result = { metricNames };
     await setCached(cacheKey, result, DISTINCT_METRICS_TTL);
     return result;
   });

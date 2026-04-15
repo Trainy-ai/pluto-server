@@ -3341,28 +3341,50 @@ describe('SDK API Endpoints (with API Key)', () => {
       // Query distinct metric names scoped to only this run.
       // The nan-inf-metrics run has metrics with all-NaN/all-Inf values that
       // are absent from mlop_metric_summaries (filtered by isFinite in the MV).
-      // PR #236 fix: queryDistinctMetrics queries mlop_metrics when runIds are
-      // provided, so these non-finite-only metrics still appear.
+      // Default (no toggle) queries mlop_metric_summaries → only finite
+      // metrics appear. Passing includeNonFiniteMetrics=true falls back to
+      // mlop_metrics so all metrics appear, AND the response includes a
+      // nonFiniteOnlyMetrics array listing the entirely-NaN/Inf ones.
       const response = await makeTrpcRequest('runs.distinctMetricNames', {
         projectName: TEST_PROJECT_NAME,
         runIds: [nanInfRun.id],
         search: 'train/',
+        includeNonFiniteMetrics: true,
       }, { 'Cookie': sessionCookie }, 'GET');
 
       expect(response.status).toBe(200);
       const data = await response.json();
       const metricNames: string[] = data.result?.data?.metricNames;
+      const nonFiniteOnlyMetrics: string[] = data.result?.data?.nonFiniteOnlyMetrics;
       expect(metricNames).toBeDefined();
+      expect(nonFiniteOnlyMetrics).toBeDefined();
 
       // The run has 14 train/* metrics in mlop_metrics, but only 6 in summaries.
-      // With the fix, all 14 should be returned.
+      // With includeNonFiniteMetrics=true, all 14 should be returned.
       expect(metricNames.length).toBe(14);
+
+      // 14 total − 6 finite = 8 non-finite-only metrics
+      expect(nonFiniteOnlyMetrics.length).toBe(8);
 
       // Verify specific NaN/Inf-only metrics are present (these have no finite
       // values and would be missing if querying mlop_metric_summaries)
       for (const metric of ['train/loss', 'train/accuracy', 'train/lr', 'train/grad_norm']) {
         expect(metricNames).toContain(metric);
       }
+
+      // Default behavior (toggle OFF) should hit summaries table and return
+      // only the 6 finite metrics.
+      const defaultResponse = await makeTrpcRequest('runs.distinctMetricNames', {
+        projectName: TEST_PROJECT_NAME,
+        runIds: [nanInfRun.id],
+        search: 'train/',
+      }, { 'Cookie': sessionCookie }, 'GET');
+      expect(defaultResponse.status).toBe(200);
+      const defaultData = await defaultResponse.json();
+      const defaultMetricNames: string[] = defaultData.result?.data?.metricNames;
+      expect(defaultMetricNames.length).toBe(6);
+      // nonFiniteOnlyMetrics is an empty array when toggle is OFF (can't tell)
+      expect(defaultData.result?.data?.nonFiniteOnlyMetrics).toEqual([]);
     });
 
     it('Test 24.2c: graphBatchBucketed returns null value and nonFiniteFlags for all-NaN metric', async () => {

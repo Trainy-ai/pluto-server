@@ -9,8 +9,14 @@ import {
   CheckIcon,
   TerminalIcon,
   TriangleAlertIcon,
+  CircleAlertIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 /** Shared metric/file results list used by both Search and Regex panels. */
 export function MetricResultsList({
@@ -21,6 +27,7 @@ export function MetricResultsList({
   onToggle,
   onSelectAll,
   runMetricSet,
+  nonFiniteOnlySet,
   footer,
   itemLabel = "metric",
   typeMap,
@@ -32,6 +39,9 @@ export function MetricResultsList({
   onToggle: (metric: string) => void;
   onSelectAll?: () => void;
   runMetricSet?: Set<string> | null;
+  /** Set of metrics whose values are entirely NaN/Inf in the selected runs.
+   *  Only populated when the "Include NaN/Inf-only metrics" toggle is ON. */
+  nonFiniteOnlySet?: Set<string> | null;
   footer?: React.ReactNode;
   itemLabel?: string;
   typeMap?: Map<string, string>;
@@ -64,6 +74,7 @@ export function MetricResultsList({
         ) : (
           metrics.map((metric) => {
             const notInRuns = runMetricSet != null && !runMetricSet.has(metric);
+            const isNonFiniteOnly = !notInRuns && nonFiniteOnlySet?.has(metric);
             return (
               <button
                 key={metric}
@@ -79,14 +90,29 @@ export function MetricResultsList({
                   <LineChartIcon className="size-3.5 shrink-0 text-muted-foreground" />
                 )}
                 <span className={cn("w-0 flex-1 truncate text-left", notInRuns && "text-muted-foreground")} title={metric}>{metric}</span>
-                {notInRuns && (
-                  <span className="group/warn relative ml-auto shrink-0">
-                    <TriangleAlertIcon className="size-3.5 text-amber-500" />
-                    <span className="pointer-events-none absolute bottom-full right-0 z-[999] mb-1.5 hidden whitespace-nowrap rounded-md border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-md group-hover/warn:block">
+                {notInRuns ? (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="ml-auto flex shrink-0 items-center">
+                        <TriangleAlertIcon className="size-3.5 text-amber-500" />
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="text-xs">
                       Not present in selected run(s)
-                    </span>
-                  </span>
-                )}
+                    </TooltipContent>
+                  </Tooltip>
+                ) : isNonFiniteOnly ? (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="ml-auto flex shrink-0 items-center">
+                        <CircleAlertIcon className="size-3.5 text-rose-500" />
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="text-xs">
+                      All values are NaN or Infinity in the selected run(s)
+                    </TooltipContent>
+                  </Tooltip>
+                ) : null}
               </button>
             );
           })

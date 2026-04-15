@@ -807,7 +807,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
         });
         closeBtn.addEventListener("click", (e) => {
           e.stopPropagation();
-          unpinTooltip();
+          unpinTooltip(/* forceHide */ true);
         });
         tooltipEl.style.position = "fixed"; // keep fixed positioning
         tooltipEl.appendChild(closeBtn);
@@ -849,7 +849,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     };
 
     /** Unpin the tooltip and restore normal following behavior */
-    const unpinTooltip = () => {
+    const unpinTooltip = (forceHide = false) => {
       if (!tooltipEl) return;
       tooltipEl.removeAttribute("data-pinned");
       // Move tooltip back to body if it was reparented into a fullscreen dialog
@@ -898,12 +898,18 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       // Check if mouse is actually over a chart right now.
       // isHovering may be stale because handleMouseLeave returned early while pinned.
       // In shared mode, check all chart overlays (the user may have moved to a different chart).
-      let mouseOverAnyChart = overEl ? overEl.matches(":hover") : false;
-      if (!mouseOverAnyChart && isSharedMode) {
-        // Check if any .u-over element is being hovered
-        mouseOverAnyChart = !!document.querySelector(".u-over:hover");
+      // When forceHide is set (e.g. a click hit something outside both the tooltip
+      // AND any chart — like a menu/dialog trigger), skip the heuristic and hide
+      // unconditionally. This avoids the bug where a Radix portal backdrop blocks
+      // the :hover pseudo-class check and leaves the tooltip visible.
+      let mouseOverAnyChart = false;
+      if (!forceHide) {
+        mouseOverAnyChart = overEl ? overEl.matches(":hover") : false;
+        if (!mouseOverAnyChart && isSharedMode) {
+          mouseOverAnyChart = !!document.querySelector(".u-over:hover");
+        }
       }
-      if (!mouseOverAnyChart) {
+      if (forceHide || !mouseOverAnyChart) {
         isHovering = false;
         tooltipEl.style.display = "none";
         onHoverChange?.(false);
@@ -940,19 +946,25 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       }
     };
 
-    // Escape key unpins
+    // Escape key unpins — explicit user dismissal, always hide.
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape" && _pinState.isPinned) {
-        unpinTooltip();
+        unpinTooltip(/* forceHide */ true);
       }
     };
 
-    // Click outside pinned tooltip unpins
+    // Click outside pinned tooltip unpins.
+    // If the click also landed outside any chart overlay (e.g. on a toolbar
+    // button or menu trigger that opens a dialog/popover), force-hide the
+    // tooltip — the :hover heuristic in unpinTooltip can mis-fire when a
+    // Radix portal backdrop covers the chart, leaving the tooltip stuck.
     const handleDocumentMouseDown = (e: MouseEvent) => {
       if (!_pinState.isPinned || !tooltipEl) return;
-      if (!tooltipEl.contains(e.target as Node)) {
-        unpinTooltip();
-      }
+      const target = e.target as Node;
+      if (tooltipEl.contains(target)) return;
+      const targetEl = target as HTMLElement | null;
+      const clickedChart = !!targetEl && !!targetEl.closest?.(".u-over");
+      unpinTooltip(/* forceHide */ !clickedChart);
     };
 
     overEl!.addEventListener("click", handleOverClick);
@@ -987,10 +999,26 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
         unregisterSafetyEntry(safetyEntry);
         safetyEntry = null;
       }
-      // Clear any pending timers
+      // If a mouseleave hide timer is pending, run it synchronously now so
+      // isHovering=false gets persisted to hoverStateRef. Otherwise the next
+      // chart recreation would see stale isHovering=true and re-show the
+      // tooltip at the old cursor position. Don't run if the tooltip is
+      // pinned — pinned state should survive recreation.
       if (hideTimeoutId !== null) {
         clearTimeout(hideTimeoutId);
         hideTimeoutId = null;
+        if (!_pinState.isPinned) {
+          isHovering = false;
+          lastIdx = null;
+          lastContentIdx = null;
+          lastContentHighlight = null;
+          lastLeft = null;
+          lastTop = null;
+          syncHoverState();
+          if (tooltipEl && !isAnyTooltipPinnedGlobal()) {
+            tooltipEl.style.display = "none";
+          }
+        }
       }
       if (pinTimerId !== null) {
         clearTimeout(pinTimerId);
@@ -1000,21 +1028,46 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
 
     // CRITICAL: Check if we were hovering before chart recreation
     // This handles the case where chart is recreated while mouse is stationary over it
-    // The external hoverStateRef preserves the hover state AND cursor position
+    // The external hoverStateRef preserves the hover state AND cursor position.
+    //
+    // But only restore if a pointer is actually over a chart right now. Otherwise
+    // we'd re-show a tooltip that the user thought was long gone — e.g. they
+    // hovered, mouse-left, then clicked "Edit Dashboard" while the mouseleave
+    // hide timer was still pending (cleanup now flushes that, but keep this as
+    // a defensive net in case another path leaves stale state). Pinned tooltips
+    // always restore (their whole purpose is to survive recreation).
     if (isHovering && tooltipEl && lastIdx != null) {
-      log(`init: restoring hover state - idx=${lastIdx}, left=${lastLeft}, top=${lastTop}, _pinState.isPinned=${_pinState.isPinned}`);
-      tooltipEl.style.display = "block";
-      // Immediately update tooltip content with restored state
-      // Use requestAnimationFrame to ensure uPlot is fully initialized
-      requestAnimationFrame(() => {
-        if (lastIdx != null) {
-          updateTooltipContent(u, lastIdx);
+      const pointerOverAnyChart =
+        !!document.querySelector(".u-over:hover") ||
+        (overEl ? overEl.matches(":hover") : false);
+      const shouldRestore = _pinState.isPinned || pointerOverAnyChart;
+      if (!shouldRestore) {
+        log(`init: skipping hover restore — pointer not over any chart`);
+        isHovering = false;
+        lastIdx = null;
+        lastContentIdx = null;
+        lastContentHighlight = null;
+        lastLeft = null;
+        lastTop = null;
+        syncHoverState();
+        if (tooltipEl && !isAnyTooltipPinnedGlobal()) {
+          tooltipEl.style.display = "none";
         }
-        // Re-apply pinned style after chart recreation (border, resize, close button)
-        if (_pinState.isPinned) {
-          applyPinnedStyle();
-        }
-      });
+      } else {
+        log(`init: restoring hover state - idx=${lastIdx}, left=${lastLeft}, top=${lastTop}, _pinState.isPinned=${_pinState.isPinned}`);
+        tooltipEl.style.display = "block";
+        // Immediately update tooltip content with restored state
+        // Use requestAnimationFrame to ensure uPlot is fully initialized
+        requestAnimationFrame(() => {
+          if (lastIdx != null) {
+            updateTooltipContent(u, lastIdx);
+          }
+          // Re-apply pinned style after chart recreation (border, resize, close button)
+          if (_pinState.isPinned) {
+            applyPinnedStyle();
+          }
+        });
+      }
     }
   }
 

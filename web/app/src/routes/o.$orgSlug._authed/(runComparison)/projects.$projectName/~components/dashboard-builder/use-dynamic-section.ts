@@ -10,6 +10,7 @@ import type {
   FileGroupWidgetConfig,
 } from "../../~types/dashboard-types";
 import { SYNTHETIC_CONSOLE_ENTRIES } from "./console-log-constants";
+import { useLineSettings } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/use-line-settings";
 
 const MAX_DYNAMIC_WIDGETS = 100;
 
@@ -60,10 +61,22 @@ export function useDynamicSectionWidgets(
   // Strip glob chars before sending to backend (backend doesn't understand globs)
   const backendSearch = isGlob ? trimmed.replace(/[*?]/g, "") : trimmed;
 
+  // Respect the "Include NaN/Inf-only metrics" toggle from line settings.
+  // When ON, pattern resolution falls back to the raw mlop_metrics table so
+  // all-NaN/Inf metrics still match the pattern (e.g. "train/*" matches a
+  // metric whose values are entirely NaN).
+  const { settings } = useLineSettings(organizationId, projectName, "full");
+  const includeNonFiniteMetrics = settings.includeNonFiniteMetrics ?? false;
+
   // --- Source 1 (search mode): all metrics/files for selected runs ---
   const initialMetrics = useQuery(
     trpc.runs.distinctMetricNames.queryOptions(
-      { organizationId, projectName, runIds: selectedRunIds },
+      {
+        organizationId,
+        projectName,
+        runIds: selectedRunIds,
+        ...(includeNonFiniteMetrics ? { includeNonFiniteMetrics } : {}),
+      },
       {
         enabled: hasPattern && hasRuns && patternMode === "search",
         staleTime: 60_000,
@@ -84,7 +97,13 @@ export function useDynamicSectionWidgets(
   // --- Source 2 (search mode): server-side fuzzy search within selected runs ---
   const searchMetrics = useQuery(
     trpc.runs.distinctMetricNames.queryOptions(
-      { organizationId, projectName, runIds: selectedRunIds, search: backendSearch },
+      {
+        organizationId,
+        projectName,
+        runIds: selectedRunIds,
+        search: backendSearch,
+        ...(includeNonFiniteMetrics ? { includeNonFiniteMetrics } : {}),
+      },
       {
         enabled:
           hasPattern && hasRuns && patternMode === "search" && backendSearch.length > 0,
@@ -110,7 +129,13 @@ export function useDynamicSectionWidgets(
   // Only send if the pattern is re2-compatible to avoid ClickHouse CANNOT_COMPILE_REGEXP errors
   const regexMetrics = useQuery(
     trpc.runs.distinctMetricNames.queryOptions(
-      { organizationId, projectName, runIds: selectedRunIds, regex: trimmed },
+      {
+        organizationId,
+        projectName,
+        runIds: selectedRunIds,
+        regex: trimmed,
+        ...(includeNonFiniteMetrics ? { includeNonFiniteMetrics } : {}),
+      },
       {
         enabled: hasPattern && hasRuns && patternMode === "regex" && isRe2Valid,
         staleTime: 60_000,

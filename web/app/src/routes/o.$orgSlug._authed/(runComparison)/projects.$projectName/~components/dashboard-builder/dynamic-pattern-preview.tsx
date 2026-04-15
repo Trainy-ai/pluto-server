@@ -8,12 +8,19 @@ import {
   LineChartIcon,
   Loader2Icon,
   TerminalIcon,
+  CircleAlertIcon,
 } from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { trpc } from "@/utils/trpc";
 import { useQuery } from "@tanstack/react-query";
 import { globToRegex } from "./glob-utils";
 import { fuzzyFilter } from "@/lib/fuzzy-search";
 import { SYNTHETIC_CONSOLE_ENTRIES } from "./console-log-constants";
+import { useLineSettings } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/use-line-settings";
 
 const MAX_PREVIEW = 100;
 
@@ -29,6 +36,8 @@ interface MatchedItem {
   name: string;
   type: "metric" | "file";
   logType?: string;
+  /** True when this metric's values are entirely NaN/Inf in the selected runs. */
+  isNonFiniteOnly?: boolean;
 }
 
 /**
@@ -70,10 +79,20 @@ export function DynamicPatternPreview({
     return () => clearTimeout(timer);
   }, [trimmed]);
 
+  // Respect the "Include NaN/Inf-only metrics" toggle from shared line settings
+  // so the live preview matches what the dynamic section will actually generate.
+  const { settings } = useLineSettings(organizationId, projectName, "full");
+  const includeNonFiniteMetrics = settings.includeNonFiniteMetrics ?? false;
+
   // --- Source 1 (search mode): all metrics/files for selected runs ---
   const initialMetrics = useQuery(
     trpc.runs.distinctMetricNames.queryOptions(
-      { organizationId, projectName, runIds: selectedRunIds },
+      {
+        organizationId,
+        projectName,
+        runIds: selectedRunIds,
+        ...(includeNonFiniteMetrics ? { includeNonFiniteMetrics } : {}),
+      },
       {
         enabled: hasPattern && hasRuns && mode === "search",
         staleTime: 60_000,
@@ -94,7 +113,13 @@ export function DynamicPatternPreview({
   // --- Source 2 (search mode): debounced server-side fuzzy search ---
   const searchMetrics = useQuery(
     trpc.runs.distinctMetricNames.queryOptions(
-      { organizationId, projectName, runIds: selectedRunIds, search: debouncedSearch },
+      {
+        organizationId,
+        projectName,
+        runIds: selectedRunIds,
+        search: debouncedSearch,
+        ...(includeNonFiniteMetrics ? { includeNonFiniteMetrics } : {}),
+      },
       {
         enabled:
           hasPattern && hasRuns && mode === "search" && debouncedSearch.length > 0,
@@ -119,7 +144,13 @@ export function DynamicPatternPreview({
   // --- Regex mode: debounced server-side regex within selected runs ---
   const regexMetrics = useQuery(
     trpc.runs.distinctMetricNames.queryOptions(
-      { organizationId, projectName, runIds: selectedRunIds, regex: debouncedRegex },
+      {
+        organizationId,
+        projectName,
+        runIds: selectedRunIds,
+        regex: debouncedRegex,
+        ...(includeNonFiniteMetrics ? { includeNonFiniteMetrics } : {}),
+      },
       {
         enabled: hasPattern && hasRuns && mode === "regex" && debouncedRegex.length > 0,
         staleTime: 60_000,
@@ -155,6 +186,14 @@ export function DynamicPatternPreview({
 
     let filteredMetricNames: string[];
     let filteredFileItems: { logName: string; logType: string }[];
+
+    // Build a set of NaN/Inf-only metrics from whichever query populated the
+    // current metric list. Only non-empty when includeNonFiniteMetrics is ON.
+    const nonFiniteOnly = new Set<string>([
+      ...(regexMetrics.data?.nonFiniteOnlyMetrics ?? []),
+      ...(initialMetrics.data?.nonFiniteOnlyMetrics ?? []),
+      ...(searchMetrics.data?.nonFiniteOnlyMetrics ?? []),
+    ]);
 
     if (mode === "regex") {
       // Regex: backend handles filtering, use results directly
@@ -204,7 +243,11 @@ export function DynamicPatternPreview({
     }
 
     const items: MatchedItem[] = [
-      ...filteredMetricNames.map((name) => ({ name, type: "metric" as const })),
+      ...filteredMetricNames.map((name) => ({
+        name,
+        type: "metric" as const,
+        isNonFiniteOnly: nonFiniteOnly.has(name),
+      })),
       ...filteredFileItems.map((f) => ({
         name: f.logName,
         type: "file" as const,
@@ -252,6 +295,18 @@ export function DynamicPatternPreview({
             >
               <ItemTypeIcon type={item.type} logType={item.logType} />
               <span className="w-0 flex-1 truncate" title={item.name}>{item.name}</span>
+              {item.isNonFiniteOnly && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="flex shrink-0 items-center">
+                      <CircleAlertIcon className="size-3.5 text-rose-500" />
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="text-xs">
+                    All values are NaN or Infinity in the selected run(s)
+                  </TooltipContent>
+                </Tooltip>
+              )}
             </div>
           ))
         )}

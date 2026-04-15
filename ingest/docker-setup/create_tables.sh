@@ -101,7 +101,9 @@ if [ "${summaries_count:-0}" = "0" ] && [ "${metrics_count:-0}" != "0" ] && [ "$
                 min(value), max(value), sum(value),
                 toUInt64(count()),
                 argMaxState(value, step),
-                sum(value * value)
+                sum(value * value),
+                min(step),
+                max(step)
             FROM mlop_metrics
             WHERE isFinite(value)
             GROUP BY tenantId, projectName, runId, logName" \

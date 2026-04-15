@@ -351,13 +351,27 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       };
     }, [chartId]);
 
+    // Structural fingerprint of series metadata — only changes when series are
+    // added/removed or their visual config changes (label, color, dash, etc.),
+    // NOT when data values (x/y) change. This keeps `options` stable across
+    // data-only updates (like zoom refetch), enabling the fast setData() path
+    // in use-chart-lifecycle instead of costly chart destroy+recreate.
+    const seriesStructureKey = useMemo(() => {
+      return processedLines.map((l) =>
+        `${l.label}\0${l.seriesId ?? ""}\0${l.color ?? ""}\0${l.dash?.join(",") ?? ""}\0${l.envelopeOf ?? ""}\0${l.envelopeBound ?? ""}\0${l.hideFromLegend ? 1 : 0}\0${l.opacity ?? ""}`
+      ).join("\n");
+    }, [processedLines]);
+
     // Build uPlot options (memoized)
+    // Uses seriesStructureKey instead of processedLines so options stay stable
+    // when only data changes (zoom refetch). Builder functions read the latest
+    // processedLines via processedLinesRef.
     const options = useMemo<uPlot.Options>(() => {
       const isDark = theme === "dark";
       const axisColor = isDark ? "#fff" : "#000";
       const gridColor = isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.1)";
 
-      const series = buildSeriesConfig(processedLines, xlabel, chartLineWidth, {
+      const series = buildSeriesConfig(processedLinesRef.current, xlabel, chartLineWidth, {
         lastFocusedSeriesRef, crossChartRunIdRef, tableHighlightRef,
         experimentRunIdsMapRef: chartSyncContext?.experimentRunIdsMapRef,
       }, {
@@ -372,16 +386,16 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       const scales = buildScalesConfig({ logXAxis, logYAxis, isDateTime, yRange, yZoom });
       const axes = buildAxesConfig({ showXAxis, showYAxis, axisColor, gridColor, isDateTime, isRelativeTime, logXAxis, logYAxis, xlabel, ylabel, timeRange });
       const cursor = buildCursorConfig(effectiveSyncKey, yZoom);
-      const bands = buildBandsConfig(processedLines, lastFocusedSeriesRef, crossChartRunIdRef, tableHighlightRef);
+      const bands = buildBandsConfig(processedLinesRef.current, lastFocusedSeriesRef, crossChartRunIdRef, tableHighlightRef);
       const drawHook = buildDrawHook(processedLinesRef, lastFocusedSeriesRef, crossChartRunIdRef, tableHighlightRef, chartLineWidthRef, theme);
       const focusDetectionHook = buildFocusDetectionHook({
-        processedLines, tooltipInterpolation, spanGaps, isActiveChart,
+        processedLines: processedLinesRef.current, tooltipInterpolation, spanGaps, isActiveChart,
         lastFocusedSeriesRef, highlightedSeriesRef, highlightedRunIdRef,
         highlightedSeriesIdRef, chartLineWidthRef,
         chartId, chartSyncContextRef: chartSyncContextRef as any,
         experimentRunIdsMapRef: chartSyncContext?.experimentRunIdsMapRef,
       });
-      const interpolationDotsHook = buildInterpolationDotsHook({ processedLines, tooltipInterpolation, spanGaps, isActiveChart });
+      const interpolationDotsHook = buildInterpolationDotsHook({ processedLines: processedLinesRef.current, tooltipInterpolation, spanGaps, isActiveChart });
       const setScaleHook = buildSetScaleHook({
         logYAxis, logXAxis,
         isProgrammaticScaleRef, chartSyncContextRef, isZoomSourceChart,
@@ -403,7 +417,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           // when the tooltip reads it to sort/highlight the hovered series
           { hooks: { setCursor: [focusDetectionHook] } },
           tooltipPlugin({
-            theme, isDateTime, timeRange, lines: processedLines,
+            theme, isDateTime, timeRange, lines: processedLinesRef.current,
             hoverStateRef, onHoverChange: handleHoverChange,
             isActiveChart, highlightedSeriesRef, highlightedRunIdRef,
             highlightedSeriesIdRef, tooltipInterpolation,
@@ -417,7 +431,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             reparentTooltip: chartSyncContext?.reparentTooltip,
           }),
           nonFiniteMarkersPlugin({
-            lines: processedLines,
+            lines: processedLinesRef.current,
             theme: theme,
           }),
           ...(forkSteps && forkSteps.size > 0
@@ -466,7 +480,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         },
       };
     }, [
-      processedLines, theme, isDateTime, logXAxis, logYAxis,
+      seriesStructureKey, theme, isDateTime, logXAxis, logYAxis,
       xlabel, ylabel, showXAxis, showYAxis, showLegend,
       effectiveSyncKey, timeRange, chartId,
       handleHoverChange, isActiveChart, isZoomSourceChart,

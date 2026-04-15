@@ -49,9 +49,10 @@ export function buildBandsConfig(
       const baseAlpha = isDashedParent ? 0.22 : 0.15;
       // Use the parent line's color for the band fill so it matches the curve
       const bandColor = parentLine?.color || pair.color || "#888";
-      // Get the run ID from the envelope's seriesId (for emphasis matching)
+      // Get the parent series' seriesId and run ID for emphasis matching
       const envSeriesId = processedLines[pair.minIdx - 1]?.seriesId;
       const envRunId = envSeriesId ? envSeriesId.split(':')[0] : null;
+      const parentSeriesId = parentLine?.seriesId ?? null;
 
       bands.push({
         series: [pair.maxIdx, pair.minIdx],
@@ -69,17 +70,19 @@ export function buildBandsConfig(
             return applyAlpha(bandColor, baseAlpha);
           }
 
-          // For local focus, check if the focused series belongs to this run
+          // For local focus, match the specific series (not just run) so that
+          // hovering one metric only highlights that metric's envelope band,
+          // not all envelopes from the same run.
           if (localFocus !== null) {
             const focusedId = (u.series[localFocus] as any)?._seriesId;
-            const focusedRunId = focusedId ? focusedId.split(':')[0] : null;
-            if (focusedRunId === envRunId) {
+            if (focusedId === parentSeriesId) {
               return applyAlpha(bandColor, baseAlpha);
             }
             return applyAlpha(bandColor, baseAlpha * 0.15);
           }
 
-          // For cross-chart / table emphasis, match by run ID
+          // For cross-chart / table emphasis, match by run ID (highlight all
+          // metrics from the hovered run since the user is selecting a run)
           if (activeId === envRunId) {
             return applyAlpha(bandColor, baseAlpha);
           }

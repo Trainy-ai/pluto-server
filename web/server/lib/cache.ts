@@ -181,6 +181,62 @@ interface BatchCacheParams {
 }
 
 /**
+ * Per-request memoized lookup of run statuses. When multiple withBatchCache
+ * calls fire within the same tRPC HTTP batch, they all want the same status
+ * answer for the same runIds. Without memoization each call independently
+ * fires a Prisma findMany — N batched procedures = N identical PG round trips.
+ *
+ * The cache lives on `ctx.runStatusCache` (created in createContext, scoped
+ * to one HTTP request). We store *promises* keyed by runId so concurrent
+ * callers see the in-flight query instead of racing to fire their own.
+ */
+async function getRunStatusesCached(
+  ctx: { prisma: PrismaClient; runStatusCache?: Map<bigint, Promise<string>> },
+  runIds: number[],
+): Promise<string[]> {
+  if (runIds.length === 0) return [];
+
+  // Dedupe before cache lookup / Prisma query — defends against callers that
+  // pass duplicates and avoids redundant cache.set() overwrites.
+  const uniqueRunIds = [...new Set(runIds)];
+
+  const cache = ctx.runStatusCache;
+  if (!cache) {
+    // Fallback: no cache available (e.g. ctx from non-tRPC code path).
+    const runs = await ctx.prisma.runs.findMany({
+      where: { id: { in: uniqueRunIds } },
+      select: { status: true },
+    });
+    return runs.map((r: { status: string }) => r.status);
+  }
+
+  // Find runIds not yet in the cache; fire ONE Prisma query for the missing
+  // set and store a per-id promise synchronously so concurrent callers in the
+  // same batch see the in-flight lookup instead of starting their own.
+  const missing = uniqueRunIds.filter((id) => !cache.has(BigInt(id)));
+  if (missing.length > 0) {
+    const fetchPromise = ctx.prisma.runs.findMany({
+      where: { id: { in: missing } },
+      select: { id: true, status: true },
+    });
+    for (const id of missing) {
+      const bigIntId = BigInt(id);
+      cache.set(
+        bigIntId,
+        fetchPromise.then((rows) => {
+          const found = (rows as { id: bigint; status: string }[]).find(
+            (r) => r.id === bigIntId,
+          );
+          return found?.status ?? "RUNNING";
+        }),
+      );
+    }
+  }
+
+  return Promise.all(runIds.map((id) => cache.get(BigInt(id)) as Promise<string>));
+}
+
+/**
  * Wrapper that handles caching for ClickHouse procedures.
  *
  * Consolidates caching logic:
@@ -252,7 +308,7 @@ export async function withCache<T>(
  * the entry gets a 5s TTL; if all are COMPLETED, it gets 5 minutes.
  */
 export async function withBatchCache<T>(
-  ctx: { prisma: PrismaClient },
+  ctx: { prisma: PrismaClient; runStatusCache?: Map<bigint, Promise<string>> },
   procedure: string,
   params: BatchCacheParams,
   queryFn: () => Promise<T>,
@@ -274,17 +330,17 @@ export async function withBatchCache<T>(
     return cached;
   }
 
-  // Get worst-case status across all runs for TTL
-  const runs = await ctx.prisma.runs.findMany({
-    where: { id: { in: params.runIds } },
-    select: { status: true },
-  });
-
+  // Get worst-case status across all runs for TTL.
+  // Uses request-scoped memoization so multiple withBatchCache calls within
+  // the same tRPC HTTP batch share one PG lookup instead of firing N copies.
   let ttlMs: number;
-  if (runs.length === 0) {
+  if (params.runIds.length === 0) {
     ttlMs = CACHE_TTL.RUNNING;
   } else {
-    ttlMs = Math.min(...runs.map((r: { status: string }) => getTTLForStatus(r.status as RunStatus)));
+    const statuses = await getRunStatusesCached(ctx, params.runIds);
+    ttlMs = Math.min(
+      ...statuses.map((s: string) => getTTLForStatus(s as RunStatus)),
+    );
   }
 
   if (options?.maxTtlMs) {

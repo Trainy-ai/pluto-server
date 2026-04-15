@@ -32,8 +32,6 @@ export interface LineChartSettings {
     parameter: number;
     showOriginalData: boolean;
   };
-  /** Maximum points to draw per series (client-side only). 0 = draw all points. Does not affect data loading. */
-  maxPointsPerSeries: number;
   /** Tooltip interpolation mode for series with missing values at the hovered step.
    *  "none" = only show exact matches, "linear" = linear interpolation, "last" = forward-fill */
   tooltipInterpolation: TooltipInterpolation;
@@ -53,6 +51,10 @@ export interface LineChartSettings {
    *  envelopes (default). "lttb" = Largest Triangle Three Buckets for better
    *  visual shape preservation. */
   downsamplingAlgorithm: DownsamplingAlgorithm;
+  /** When true, include metrics whose values are all NaN/Inf. Requires a slower
+   *  query against the raw metrics table instead of the pre-aggregated summaries.
+   *  Default false. */
+  includeNonFiniteMetrics: boolean;
   /** When true, deduplicate metric values at the same step before bucketing.
    *  Takes the last-logged value (by timestamp) per step per run.
    *  Useful for distributed training where multiple ranks log the same step. */
@@ -70,16 +72,13 @@ export const DEFAULT_SETTINGS: LineChartSettings = {
     parameter: 2,
     showOriginalData: true,
   },
-  // Default 2000: good balance of performance and visual fidelity.
-  // Min/max envelopes preserve anomalies even with aggressive downsampling.
-  // Set to 0 to disable downsampling (may be slow for 100k+ points).
-  maxPointsPerSeries: 2000,
   tooltipInterpolation: "linear",
   skipMissingValues: false,
   maxSeriesCount: 500,
   chartResolution: "auto",
   showInheritedMetrics: true,
   downsamplingAlgorithm: "avg",
+  includeNonFiniteMetrics: false,
   deduplicateSteps: false,
 };
 

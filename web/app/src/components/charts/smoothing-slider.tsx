@@ -28,9 +28,9 @@ const ALGORITHM_LABELS: Record<string, string> = {
 
 const RESOLUTION_LABELS: Record<ChartResolution, string> = {
   auto: "Auto",
-  high: "High (3k)",
-  max: "Max (5k)",
-  ultra: "Ultra (20k)",
+  high: "High (500)",
+  max: "Max (1k)",
+  ultra: "Ultra (3k)",
 };
 
 const ALGORITHM_LABELS_DS: Record<DownsamplingAlgorithm, string> = {

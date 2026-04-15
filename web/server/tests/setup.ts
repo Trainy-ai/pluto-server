@@ -180,7 +180,9 @@ async function seedClickHouseMetrics(
           sum(value)               AS sum_value,
           toUInt64(count())        AS count_value,
           argMaxState(value, step) AS last_value,
-          sum(value * value)       AS sum_sq_value
+          sum(value * value)       AS sum_sq_value,
+          min(step)                AS min_step,
+          max(step)                AS max_step
         FROM mlop_metrics
         WHERE tenantId = {tenantId: String}
           AND projectName = {projectName: String}
@@ -1045,7 +1047,9 @@ async function setupTestData(): Promise<TestData> {
               sum(value)               AS sum_value,
               toUInt64(count())        AS count_value,
               argMaxState(value, step) AS last_value,
-              sum(value * value)       AS sum_sq_value
+              sum(value * value)       AS sum_sq_value,
+              min(step)                AS min_step,
+              max(step)                AS max_step
             FROM mlop_metrics
             WHERE tenantId = {tenantId: String}
               AND projectName = {projectName: String}
@@ -1276,7 +1280,9 @@ async function setupTestData(): Promise<TestData> {
               sum(value)               AS sum_value,
               toUInt64(count())        AS count_value,
               argMaxState(value, step) AS last_value,
-              sum(value * value)       AS sum_sq_value
+              sum(value * value)       AS sum_sq_value,
+              min(step)                AS min_step,
+              max(step)                AS max_step
             FROM mlop_metrics
             WHERE tenantId = {tenantId: String}
               AND projectName = {projectName: String}
@@ -1415,7 +1421,8 @@ async function setupTestData(): Promise<TestData> {
               SELECT
                 tenantId, projectName, runId, logName,
                 min(value), max(value), sum(value),
-                toUInt64(count()), argMaxState(value, step), sum(value * value)
+                toUInt64(count()), argMaxState(value, step), sum(value * value),
+                min(step), max(step)
               FROM mlop_metrics
               WHERE tenantId = {tenantId: String}
                 AND projectName = {projectName: String}

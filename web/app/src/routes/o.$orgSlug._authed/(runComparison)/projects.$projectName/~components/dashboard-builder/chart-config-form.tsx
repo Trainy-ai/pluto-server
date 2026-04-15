@@ -20,6 +20,7 @@ import { RegexSearchPanel } from "./regex-search-panel";
 import { SelectedBadges } from "./selected-badges";
 import { XAxisSelector } from "./x-axis-selector";
 import { isValidRe2Regex } from "../../~lib/validate-re2-regex";
+import { useLineSettings } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/use-line-settings";
 
 interface ChartConfigFormProps {
   config: Partial<ChartWidgetConfig>;
@@ -233,12 +234,26 @@ function SearchMetricPanel({
     return () => clearTimeout(timer);
   }, [search, isGlob]);
 
+  // Respect the "Include NaN/Inf-only metrics" toggle for the "not present"
+  // and "NaN/Inf only" dropdown warnings.
+  const { settings } = useLineSettings(organizationId, projectName, "full");
+  const includeNonFiniteMetrics = settings.includeNonFiniteMetrics ?? false;
+
   const { data: initialMetrics, isLoading: isLoadingInitial } =
     useDistinctMetricNames(organizationId, projectName);
-  const { data: runMetrics } = useRunMetricNames(organizationId, projectName, selectedRunIds ?? []);
+  const { data: runMetrics } = useRunMetricNames(
+    organizationId,
+    projectName,
+    selectedRunIds ?? [],
+    includeNonFiniteMetrics,
+  );
   const runMetricSet = useMemo(() => {
     if (!runMetrics?.metricNames) return null;
     return new Set(runMetrics.metricNames);
+  }, [runMetrics]);
+  const nonFiniteOnlySet = useMemo(() => {
+    if (!runMetrics?.nonFiniteOnlyMetrics) return null;
+    return new Set(runMetrics.nonFiniteOnlyMetrics);
   }, [runMetrics]);
   const { data: searchResults, isFetching: isSearching } =
     useSearchMetricNames(organizationId, projectName, debouncedSearch);
@@ -246,7 +261,11 @@ function SearchMetricPanel({
   const filteredMetrics = useMemo(() => {
     const initial = initialMetrics?.metricNames ?? [];
     const searched = searchResults?.metricNames ?? [];
-    const merged = Array.from(new Set([...searched, ...initial]));
+    // Also merge run-scoped metrics so that when the NaN/Inf toggle is ON,
+    // all-NaN/Inf metrics (absent from the project-wide summaries queries)
+    // still appear in the dropdown list.
+    const runScoped = runMetrics?.metricNames ?? [];
+    const merged = Array.from(new Set([...searched, ...initial, ...runScoped]));
     const trimmed = search.trim();
     if (!trimmed) return merged.sort((a, b) => a.localeCompare(b));
     if (isGlob) {
@@ -256,7 +275,7 @@ function SearchMetricPanel({
       } catch { return []; }
     }
     return fuzzyFilter(merged, search);
-  }, [initialMetrics, searchResults, search, isGlob]);
+  }, [initialMetrics, searchResults, runMetrics, search, isGlob]);
 
   const isLoading = isLoadingInitial || isSearching;
 
@@ -281,6 +300,7 @@ function SearchMetricPanel({
         onToggle={onToggle}
         onSelectAll={() => onSelectAll(filteredMetrics)}
         runMetricSet={runMetricSet}
+        nonFiniteOnlySet={nonFiniteOnlySet}
         footer={
           isGlob && search.trim() ? (
             <div className="flex items-center gap-2 border-t px-3 py-2">

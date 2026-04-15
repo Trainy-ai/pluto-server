@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useQueries } from "@tanstack/react-query";
 import { trpc } from "@/utils/trpc";
 import { useRunMetricNames } from "../../~queries/metric-summaries";
+import { useLineSettings } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/use-line-settings";
 import {
   isPatternValue,
   isGlobValue,
@@ -87,9 +88,13 @@ export function useHiddenPatternWidgets({
     return { globBases: Array.from(bases), regexPatterns: [...new Set(patterns)] };
   }, [patternWidgets]);
 
+  // Respect the "Include NaN/Inf-only metrics" toggle from shared line settings.
+  const { settings } = useLineSettings(organizationId, projectName, "full");
+  const includeNonFiniteMetrics = settings.includeNonFiniteMetrics ?? false;
+
   // Fetch all metric names for selected runs (shared query)
   const { data: allMetricNames, isLoading: isLoadingMetricNames } =
-    useRunMetricNames(organizationId, projectName, selectedRunIds);
+    useRunMetricNames(organizationId, projectName, selectedRunIds, includeNonFiniteMetrics);
 
   // Fetch glob-base searches scoped to selected runs
   const globSearchResults = useQueries({
@@ -101,6 +106,7 @@ export function useHiddenPatternWidgets({
               projectName,
               search: base,
               runIds: selectedRunIds,
+              ...(includeNonFiniteMetrics ? { includeNonFiniteMetrics } : {}),
             })
           )
         : [],
@@ -122,6 +128,7 @@ export function useHiddenPatternWidgets({
               projectName,
               regex: pattern,
               runIds: selectedRunIds,
+              ...(includeNonFiniteMetrics ? { includeNonFiniteMetrics } : {}),
             })
           )
         : [],

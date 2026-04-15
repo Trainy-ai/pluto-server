@@ -10,6 +10,7 @@ import { useRunMetricNames } from "../../~queries/metric-summaries";
 import { formatRunLabel } from "@/lib/format-run-label";
 import { getDisplayIdForRun } from "../../~lib/metrics-utils";
 import { mapXAxisToDisplayLogName } from "./x-axis-utils";
+import { useLineSettings } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/use-line-settings";
 
 /** Cap parallel pattern-resolution queries per widget to prevent request storms */
 const MAX_PATTERN_QUERIES = 20;
@@ -77,14 +78,22 @@ export function ChartWidget({
       .slice(0, MAX_PATTERN_QUERIES);
   }, [config.metrics]);
 
+  // Respect the "Include NaN/Inf-only metrics" toggle from line settings.
+  // When ON, pattern resolution queries fall back to the raw mlop_metrics
+  // table so metrics whose values are entirely NaN/Inf are included in the
+  // match set.
+  const { settings } = useLineSettings(organizationId, projectName, settingsRunId ?? "full");
+  const includeNonFiniteMetrics = settings.includeNonFiniteMetrics ?? false;
+
   const { data: allMetricNames } = useRunMetricNames(
-    organizationId, projectName, selectedRunIds
+    organizationId, projectName, selectedRunIds, includeNonFiniteMetrics
   );
 
   const globSearchResults = useQueries({
     queries: globBases.map((base) =>
       trpc.runs.distinctMetricNames.queryOptions({
         organizationId, projectName, search: base, runIds: selectedRunIds,
+        ...(includeNonFiniteMetrics ? { includeNonFiniteMetrics } : {}),
       })
     ),
   });
@@ -93,6 +102,7 @@ export function ChartWidget({
     queries: regexPatterns.map((pattern) =>
       trpc.runs.distinctMetricNames.queryOptions({
         organizationId, projectName, regex: pattern, runIds: selectedRunIds,
+        ...(includeNonFiniteMetrics ? { includeNonFiniteMetrics } : {}),
       })
     ),
   });

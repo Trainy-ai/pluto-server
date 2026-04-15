@@ -3,16 +3,16 @@ import type { ChartResolution } from "@/routes/o.$orgSlug._authed/(run)/projects
 const PIXELS_PER_BUCKET = 4; // 4:1 — good fidelity with min/max envelope
 
 /** Server-side bucket limit (must match tRPC validation in graph-bucketed.ts) */
-export const MAX_BUCKETS = 20_000;
+export const MAX_BUCKETS = 3_000;
 
 /** Preview tier bucket count — fixed for fast first paint */
 export const PREVIEW_BUCKETS = 200;
 
 /** Named bucket counts for each resolution preset (excludes "auto" which is screen-based) */
 export const RESOLUTION_PRESETS: Record<Exclude<ChartResolution, "auto">, number> = {
-  high: 3000,
-  max: 5000,
-  ultra: 20000,
+  high: 500,
+  max: 1000,
+  ultra: 3000,
 };
 
 /** Estimate standard bucket count based on screen width and column layout */
@@ -53,7 +53,9 @@ export function resolveChartBuckets(
 
 /**
  * Compute the bucket count for a zoom query.
- * When zoomed, requests 1 bucket per visible step (capped at server max).
+ * When zoomed, requests 1 bucket per visible step (capped at the resolution
+ * setting). This keeps zoom queries consistent with the user's chosen
+ * resolution — "auto" (~200) stays ~200 even when zoomed, "ultra" stays 10K.
  * Falls back to the overview bucket count when not zoomed.
  */
 export function computeEffectiveZoomBuckets(
@@ -61,5 +63,5 @@ export function computeEffectiveZoomBuckets(
   zoomBuckets: number,
 ): number {
   if (zoomStepRange === null) return zoomBuckets;
-  return Math.min(zoomStepRange[1] - zoomStepRange[0] + 1, MAX_BUCKETS);
+  return Math.min(zoomStepRange[1] - zoomStepRange[0] + 1, zoomBuckets);
 }

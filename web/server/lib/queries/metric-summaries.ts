@@ -230,9 +230,10 @@ export async function queryDistinctMetrics(
     regex?: string;
     limit?: number;
     runIds?: number[];
+    includeNonFiniteMetrics?: boolean;
   },
-): Promise<string[]> {
-  const { organizationId, projectName, search, regex, limit = 500, runIds } = params;
+): Promise<{ metricNames: string[]; nonFiniteOnlyMetrics: string[] }> {
+  const { organizationId, projectName, search, regex, limit = 500, runIds, includeNonFiniteMetrics } = params;
 
   const queryParams: Record<string, unknown> = {
     tenantId: organizationId,
@@ -252,7 +253,7 @@ export async function queryDistinctMetrics(
       console.warn(
         `[queryDistinctMetrics] Rejected invalid re2 regex: ${re2Check.reason} — pattern: ${trimmedRegex.slice(0, 100)}`,
       );
-      return [];
+      return { metricNames: [], nonFiniteOnlyMetrics: [] };
     }
     searchFilter = `AND match(logName, {regex: String})`;
     queryParams.regex = trimmedRegex;
@@ -273,33 +274,57 @@ export async function queryDistinctMetrics(
     queryParams.runIds = runIds;
   }
 
-  // When scoped to specific runs, query mlop_metrics (the source table) instead of
-  // mlop_metric_summaries. The materialized view that populates summaries has a
-  // WHERE isFinite(value) filter, so metrics whose values are all non-finite
-  // (NaN/Inf) for a run won't appear in the summaries table even though the
-  // metric data exists. The mlop_metrics primary index on
-  // (tenantId, projectName, runId, logGroup, logName) keeps this efficient.
-  const table = runIds && runIds.length > 0
-    ? "mlop_metrics"
-    : "mlop_metric_summaries";
+  // Use the pre-aggregated summaries table by default — it's orders of magnitude
+  // faster than scanning the raw metrics table. Only fall back to mlop_metrics
+  // when includeNonFiniteMetrics is explicitly requested, since the materialized
+  // view that populates summaries has a WHERE isFinite(value) filter (metrics
+  // whose values are ALL NaN/Inf won't appear in summaries).
+  const useRawTable = !!(includeNonFiniteMetrics && runIds && runIds.length > 0);
 
-  const query = `
-    SELECT DISTINCT logName
-    FROM ${table}
-    WHERE tenantId = {tenantId: String}
-      AND projectName = {projectName: String}
-      ${searchFilter}
-      ${runIdFilter}
-    ${orderClause}
-    LIMIT {limit: UInt32}
-  `;
+  // When hitting the raw table we also compute a `hasFinite` aggregate per
+  // logName in the same pass — metrics with no finite values are entirely
+  // NaN/Inf and get flagged so the UI can mark them with a distinct icon.
+  // On the summaries table path, hasFinite is implicitly true (the MV filters
+  // out non-finite rows), so we return the same column as a constant.
+  const query = useRawTable
+    ? `
+      SELECT logName, countIf(isFinite(value)) > 0 AS hasFinite
+      FROM mlop_metrics
+      WHERE tenantId = {tenantId: String}
+        AND projectName = {projectName: String}
+        ${searchFilter}
+        ${runIdFilter}
+      GROUP BY logName
+      ${orderClause}
+      LIMIT {limit: UInt32}
+    `
+    : `
+      SELECT logName, 1 AS hasFinite
+      FROM mlop_metric_summaries
+      WHERE tenantId = {tenantId: String}
+        AND projectName = {projectName: String}
+        ${searchFilter}
+        ${runIdFilter}
+      GROUP BY logName
+      ${orderClause}
+      LIMIT {limit: UInt32}
+    `;
 
   try {
     const result = await ch.query(query, queryParams, {
-      label: `queryDistinctMetrics:${table}`,
+      label: `queryDistinctMetrics:${useRawTable ? "raw" : "summaries"}`,
     });
-    const rows = (await result.json()) as { logName: string }[];
-    return rows.map((r) => r.logName);
+    const rows = (await result.json()) as { logName: string; hasFinite: number | boolean }[];
+    const metricNames: string[] = [];
+    const nonFiniteOnlyMetrics: string[] = [];
+    for (const r of rows) {
+      metricNames.push(r.logName);
+      // ClickHouse returns UInt8 (0/1) for the boolean comparison — coerce.
+      if (useRawTable && !r.hasFinite) {
+        nonFiniteOnlyMetrics.push(r.logName);
+      }
+    }
+    return { metricNames, nonFiniteOnlyMetrics };
   } catch (error: unknown) {
     // Gracefully handle ClickHouse regex compilation errors (Code 427)
     // instead of propagating 500s to the client.
@@ -308,7 +333,7 @@ export async function queryDistinctMetrics(
       console.warn(
         `[queryDistinctMetrics] ClickHouse regex error: ${message.slice(0, 200)}`,
       );
-      return [];
+      return { metricNames: [], nonFiniteOnlyMetrics: [] };
     }
     throw error;
   }

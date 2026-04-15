@@ -10,7 +10,8 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { ChevronDown, ChevronRight, Eye, EyeOff, Search, X, Code2, Text, GitCompareArrows, Braces } from "lucide-react";
+import { ChevronDown, ChevronRight, Eye, EyeOff, Search, X, Code2, Text, GitCompareArrows, Braces, CircleAlertIcon } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
 import { formatValue } from "@/lib/flatten-object";
 import { computeInlineDiff, type DiffSpan } from "@/lib/inline-diff";
 import { tryPrettyPrintJson } from "@/lib/json-format";
@@ -271,6 +272,7 @@ function MetricSubGroup({
   onToggle,
   selectedRuns,
   summaries,
+  isLoading,
   numRunCols,
   showOnlyDiffs,
   referenceRunIndex,
@@ -280,6 +282,8 @@ function MetricSubGroup({
   onToggle: () => void;
   selectedRuns: { run: Run; color: string }[];
   summaries: Record<string, Record<string, number>> | undefined;
+  /** True while this metric's query is still loading for the first time */
+  isLoading: boolean;
   numRunCols: number;
   showOnlyDiffs: boolean;
   referenceRunIndex: number;
@@ -318,8 +322,12 @@ function MetricSubGroup({
       {/* Aggregation rows (when expanded) */}
       {isExpanded &&
         METRIC_AGGS.map((agg, idx) => {
-          const values = selectedRuns.map(({ run }) => formatMetricValue(summaries?.[run.id]?.[`${metricName}|${agg}`]));
-          const highlights = showOnlyDiffs ? getDiffHighlights(values, referenceRunIndex) : values.map(() => undefined);
+          const values = isLoading
+            ? selectedRuns.map(() => "-")
+            : selectedRuns.map(({ run }) => formatMetricValue(summaries?.[run.id]?.[`${metricName}|${agg}`]));
+          const highlights = !isLoading && showOnlyDiffs
+            ? getDiffHighlights(values, referenceRunIndex)
+            : values.map(() => undefined);
           return (
           <tr
             key={`${metricName}-${agg}`}
@@ -343,13 +351,17 @@ function MetricSubGroup({
                 <td
                   key={run.id}
                   className={`border-r border-border/50 px-3 py-1.5 align-top last:border-r-0 ${
-                    isEmpty ? "text-muted-foreground/50" : "text-foreground"
+                    isLoading || isEmpty ? "text-muted-foreground/50" : "text-foreground"
                   }`}
                   style={highlights[colIdx] ? { background: highlights[colIdx] } : undefined}
                 >
-                  <span className="break-all font-mono text-xs">
-                    {values[colIdx]}
-                  </span>
+                  {isLoading ? (
+                    <Skeleton className="h-3 w-16" />
+                  ) : (
+                    <span className="break-all font-mono text-xs">
+                      {values[colIdx]}
+                    </span>
+                  )}
                 </td>
               );
             })}
@@ -374,6 +386,13 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
 
   // JSON pretty-print toggle (default: on — expanded with indentation)
   const [prettyJson, setPrettyJson] = useState(true);
+
+  // Include all-NaN/Inf metrics toggle. Local to this view — not connected to
+  // the Line Chart Settings toggle because this view isn't about line charts.
+  // Default OFF: the metric list uses mlop_metric_summaries (faster, but
+  // silently hides metrics whose values are entirely NaN/Inf). When ON, falls
+  // back to raw mlop_metrics so those metrics appear.
+  const [includeNonFiniteMetrics, setIncludeNonFiniteMetrics] = useState(false);
 
   // Index of the reference run for diff highlighting (default: first run)
   const [referenceRunIndex, setReferenceRunIndex] = useState(0);
@@ -433,9 +452,16 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
     setExpandedMetrics((prev) => ({ ...prev, [metricName]: !prev[metricName] }));
   }, []);
 
-  // Fetch metric names scoped to selected runs (all names, no limit)
+  // Fetch metric names scoped to selected runs (all names, no limit).
+  // When the NaN/Inf toggle is ON, falls back to raw mlop_metrics so metrics
+  // whose values are entirely NaN/Inf in the selected runs are included.
   const selectedRunIds = useMemo(() => selectedRuns.map(({ run }) => run.id), [selectedRuns]);
-  const { data: metricNamesData } = useRunMetricNames(organizationId, projectName, selectedRunIds);
+  const { data: metricNamesData, isLoading: isLoadingMetricNames } = useRunMetricNames(
+    organizationId,
+    projectName,
+    selectedRunIds,
+    includeNonFiniteMetrics,
+  );
   const allMetricNames = useMemo(() => metricNamesData?.metricNames ?? [], [metricNamesData]);
 
   // One query per expanded metric — each is independently cached so expanding
@@ -445,7 +471,7 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
     [allMetricNames, expandedMetrics],
   );
 
-  const { summaries: mergedSummaries } = usePerMetricSummaries(
+  const { summaries: mergedSummaries, loadingByMetric } = usePerMetricSummaries(
     organizationId,
     projectName,
     selectedRunIds,
@@ -757,19 +783,19 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
             <Button
               variant="outline"
               size="icon"
-              onClick={toggleRegexMode}
-              className={`shrink-0 h-8 w-8 ${isRegexMode ? "bg-accent" : ""}`}
-              aria-label="Toggle regex mode"
+              onClick={() => setIncludeNonFiniteMetrics((prev) => !prev)}
+              className={`shrink-0 h-8 w-8 ${includeNonFiniteMetrics ? "bg-accent" : ""}`}
+              aria-label="Include NaN/Inf-only metrics"
             >
-              {isRegexMode ? (
-                <Text className="h-3.5 w-3.5" />
-              ) : (
-                <Code2 className="h-3.5 w-3.5" />
-              )}
+              <CircleAlertIcon className={`h-3.5 w-3.5 ${includeNonFiniteMetrics ? "text-rose-500" : ""}`} />
             </Button>
           </TooltipTrigger>
           <TooltipContent>
-            <p>{isRegexMode ? "Switch to normal search" : "Switch to regex search"}</p>
+            <p>
+              {includeNonFiniteMetrics
+                ? "Hide NaN/Inf-only metrics"
+                : "Show NaN/Inf-only metrics (slower query)"}
+            </p>
           </TooltipContent>
         </Tooltip>
         <Tooltip>
@@ -803,6 +829,26 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
           </TooltipTrigger>
           <TooltipContent>
             <p>{prettyJson ? "Collapse JSON" : "Expand JSON"}</p>
+          </TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={toggleRegexMode}
+              className={`shrink-0 h-8 w-8 ${isRegexMode ? "bg-accent" : ""}`}
+              aria-label="Toggle regex mode"
+            >
+              {isRegexMode ? (
+                <Text className="h-3.5 w-3.5" />
+              ) : (
+                <Code2 className="h-3.5 w-3.5" />
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>{isRegexMode ? "Switch to normal search" : "Switch to regex search"}</p>
           </TooltipContent>
         </Tooltip>
         <div className="relative min-w-0 flex-1">
@@ -1142,7 +1188,7 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
             )}
 
             {/* ===== METRIC SUMMARIES section ===== */}
-            {filteredMetricNames.length > 0 && (
+            {(filteredMetricNames.length > 0 || isLoadingMetricNames) && (
               <>
                 <SectionHeader
                   numRunCols={numRunCols}
@@ -1150,7 +1196,35 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
                   isCollapsed={!!collapsedSections["metrics"]}
                   onToggle={() => toggleSection("metrics")}
                 />
-                {!collapsedSections["metrics"] &&
+                {!collapsedSections["metrics"] && isLoadingMetricNames && (
+                  // Skeleton placeholder rows while the initial metric-names
+                  // query is loading. Matches the metric sub-header row style.
+                  Array.from({ length: 5 }).map((_, i) => (
+                    <tr
+                      key={`metric-skeleton-${i}`}
+                      className="border-b border-border/50"
+                      style={{ background: METRIC_SUB_BG }}
+                    >
+                      <td
+                        className="sticky left-0 z-10 px-3 py-1.5"
+                        style={{ background: METRIC_SUB_BG, borderRight: KEY_COL_BORDER }}
+                      >
+                        <div className="flex items-center gap-1.5 pl-2">
+                          <ChevronRight className="h-3 w-3 text-muted-foreground/40" />
+                          <Skeleton className="h-3 w-32" />
+                        </div>
+                      </td>
+                      {Array.from({ length: numRunCols }, (_, j) => (
+                        <td
+                          key={j}
+                          className="px-3 py-1.5"
+                          style={{ background: METRIC_SUB_BG }}
+                        />
+                      ))}
+                    </tr>
+                  ))
+                )}
+                {!collapsedSections["metrics"] && !isLoadingMetricNames &&
                   filteredMetricNames.map((metricName) => {
                     const isExpanded = !!expandedMetrics[metricName];
                     return (
@@ -1161,6 +1235,7 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
                         onToggle={() => toggleMetric(metricName)}
                         selectedRuns={selectedRuns}
                         summaries={metricSummariesData?.summaries}
+                        isLoading={isExpanded && !!loadingByMetric[metricName]}
                         numRunCols={numRunCols}
                         showOnlyDiffs={showOnlyDiffs}
                         referenceRunIndex={clampedRefIndex}

@@ -99,6 +99,10 @@ export async function createContext({ hono }: CreateContextOptions) {
     prisma,
     user: session?.user,
     clickhouse,
+    // Per-request memoization for run-status PG lookups. tRPC creates one ctx
+    // per HTTP request and shares it across all batched procedures, so
+    // multiple withBatchCache calls in the same batch dedupe their lookups.
+    runStatusCache: new Map<bigint, Promise<string>>(),
   };
 }
 

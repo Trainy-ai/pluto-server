@@ -8,6 +8,11 @@ CREATE TABLE IF NOT EXISTS mlop_metric_summaries (
     sum_value     SimpleAggregateFunction(sum, Float64),
     count_value   SimpleAggregateFunction(sum, UInt64),
     last_value    AggregateFunction(argMax, Float64, UInt64),
-    sum_sq_value  SimpleAggregateFunction(sum, Float64)
+    sum_sq_value  SimpleAggregateFunction(sum, Float64),
+    -- min/max step for fast bucket-bounds lookup on initial chart loads.
+    -- Lets queryRunMetricsMultiMetricBatchBucketed skip the expensive
+    -- per-step "bounds" CTE on the raw mlop_metrics table.
+    min_step      SimpleAggregateFunction(min, UInt64),
+    max_step      SimpleAggregateFunction(max, UInt64)
 ) ENGINE = AggregatingMergeTree()
 ORDER BY (tenantId, projectName, logName, runId)
