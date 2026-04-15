@@ -136,7 +136,7 @@ export async function queryRunFilesByLogName(
     AND runId = {runId: UInt64}
     AND logName = {logName: String}
     AND logGroup = {logGroup: String}
-    ORDER BY step ASC
+    ORDER BY step ASC, fileName ASC
     LIMIT {maxFiles: UInt32}
   `;
 

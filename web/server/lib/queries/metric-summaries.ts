@@ -94,8 +94,10 @@ export async function queryMetricSummariesBatch(
   `;
 
   const result = await ch.query(query, queryParams);
+  // ClickHouse serializes UInt64 as JSON string (to avoid Number.MAX_SAFE_INTEGER precision loss).
+  // We coerce to number below when building the Map key.
   const rows = (await result.json()) as {
-    runId: number;
+    runId: string;
     metric_name: string;
     min_val: number;
     max_val: number;
@@ -105,7 +107,7 @@ export async function queryMetricSummariesBatch(
   }[];
 
   // Map column names to aggregation types
-  const aggToCol: Record<MetricAggregation, keyof typeof rows[number]> = {
+  const aggToCol: Record<MetricAggregation, "min_val" | "max_val" | "avg_val" | "last_val" | "var_val"> = {
     MIN: "min_val",
     MAX: "max_val",
     AVG: "avg_val",
@@ -115,10 +117,11 @@ export async function queryMetricSummariesBatch(
 
   const resultMap = new Map<number, Map<string, number>>();
   for (const row of rows) {
-    if (!resultMap.has(row.runId)) {
-      resultMap.set(row.runId, new Map());
+    const runId = Number(row.runId);
+    if (!resultMap.has(runId)) {
+      resultMap.set(runId, new Map());
     }
-    const runMap = resultMap.get(row.runId)!;
+    const runMap = resultMap.get(runId)!;
 
     // Only include aggregations that were actually requested for this logName
     const requestedAggs = specsByLogName.get(row.metric_name);
@@ -201,20 +204,106 @@ export async function queryArgminArgmaxSteps(
     runIds,
   });
 
+  // ClickHouse serializes UInt64 as JSON string — coerce to number below.
   const rows = (await result.json()) as {
-    runId: number;
-    argmin_step: number;
-    argmax_step: number;
+    runId: string;
+    argmin_step: string;
+    argmax_step: string;
   }[];
 
   const resultMap = new Map<number, { argminStep: number; argmaxStep: number }>();
   for (const row of rows) {
-    resultMap.set(row.runId, {
-      argminStep: row.argmin_step,
-      argmaxStep: row.argmax_step,
+    resultMap.set(Number(row.runId), {
+      argminStep: Number(row.argmin_step),
+      argmaxStep: Number(row.argmax_step),
     });
   }
   return resultMap;
+}
+
+// ---------------------------------------------------------------------------
+// Per-widget argmin/argmax step — for each (run, imageLogName), find the step
+// where a metric reaches its min/max value AND that specific image log has data.
+// ---------------------------------------------------------------------------
+
+/**
+ * For each (run, image logName) pair, find the step where a given metric
+ * reaches its min/max value constrained to steps where that specific image
+ * log has a file. This enables per-widget pinning: different image widgets
+ * can pin the same run at different steps.
+ *
+ * Returns an array of { runId, imageLogName, argminStep, argmaxStep }.
+ */
+export async function queryArgminArgmaxStepsPerImageLog(
+  ch: typeof clickhouse,
+  params: {
+    organizationId: string;
+    projectName: string;
+    logName: string;
+    runIds: number[];
+  },
+): Promise<
+  Array<{
+    runId: number;
+    imageLogName: string;
+    argminStep: number;
+    argmaxStep: number;
+  }>
+> {
+  const { organizationId, projectName, logName, runIds } = params;
+
+  if (runIds.length === 0) return [];
+
+  // Join mlop_metrics with mlop_files on (runId, step) to find metric values
+  // that have an accompanying image file. Group by (runId, image logName) so
+  // each widget gets its own per-run best step.
+  const query = `
+    SELECT
+      m.runId AS runId,
+      f.logName AS imageLogName,
+      argMin(m.step, m.value) AS argmin_step,
+      argMax(m.step, m.value) AS argmax_step
+    FROM mlop_metrics m
+    INNER JOIN (
+      SELECT DISTINCT runId, step, logName
+      FROM mlop_files
+      WHERE tenantId = {tenantId: String}
+        AND projectName = {projectName: String}
+        AND runId IN ({runIds: Array(UInt64)})
+        AND (
+          startsWith(fileType, 'image/')
+          OR fileType IN ('png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp')
+        )
+    ) f
+      ON f.runId = m.runId AND f.step = m.step
+    WHERE m.tenantId = {tenantId: String}
+      AND m.projectName = {projectName: String}
+      AND m.logName = {logName: String}
+      AND m.runId IN ({runIds: Array(UInt64)})
+    GROUP BY m.runId, f.logName
+  `;
+
+  const result = await ch.query(query, {
+    tenantId: organizationId,
+    projectName,
+    logName,
+    runIds,
+  });
+
+  // ClickHouse serializes UInt64 as JSON string — coerce below.
+  const rows = (await result.json()) as {
+    runId: string;
+    imageLogName: string;
+    argmin_step: string;
+    argmax_step: string;
+  }[];
+
+  return rows.map((r) => ({
+    runId: Number(r.runId),
+    imageLogName: r.imageLogName,
+    argminStep: Number(r.argmin_step),
+    argmaxStep: Number(r.argmax_step),
+  }));
 }
 
 // ---------------------------------------------------------------------------

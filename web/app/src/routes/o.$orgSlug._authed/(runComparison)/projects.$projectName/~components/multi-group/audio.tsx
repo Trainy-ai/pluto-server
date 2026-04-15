@@ -2,11 +2,12 @@ import { trpc } from "@/utils/trpc";
 import { useQueries } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
-import { useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { StepNavigator } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/shared/step-navigator";
 import { useSyncedStepNavigation } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~hooks/use-synced-step-navigation";
 import { AudioPlayer } from "@/components/core/audio-player";
 import { MediaCardWrapper } from "@/components/core/media-card-wrapper";
+import { MultiIndexNav } from "@/components/core/multi-index-nav";
 
 interface MultiGroupAudioProps {
   logName: string;
@@ -82,7 +83,9 @@ export const MultiGroupAudio = ({
     hasSyncContext,
   } = useSyncedStepNavigation(allAudio);
 
-  // Filter audio for current step and group by run
+  // Filter audio for current step and group by run. A run can log multiple
+  // audio samples at the same step (e.g. wandb list-of-audio) so we keep the
+  // full array and expose an index selector below the player.
   const audioByRun = useMemo(() => {
     const currentStepAudio = allAudio.filter(
       (file) => file.step === currentStepValue,
@@ -98,6 +101,15 @@ export const MultiGroupAudio = ({
       };
     });
   }, [allAudio, currentStepValue, runs]);
+
+  // Per-run sample index for multi-sample-per-step. Resets on step change.
+  const [indexByRun, setIndexByRun] = useState<Map<string, number>>(new Map());
+  useEffect(() => {
+    setIndexByRun(new Map());
+  }, [currentStepValue]);
+  const handleIndexChange = useCallback((runId: string, next: number) => {
+    setIndexByRun((prev) => new Map(prev).set(runId, next));
+  }, []);
 
   if (isLoading) {
     return (
@@ -143,16 +155,29 @@ export const MultiGroupAudio = ({
         </h3>
         <div className="grid flex-1 grid-cols-1 gap-4 overflow-auto">
           {audioByRun.map(({ run, audio }) => {
-            const audioFile = audio[0];
-            if (!audioFile) return null;
+            if (audio.length === 0) return null;
+            const rawIndex = indexByRun.get(run.runId) ?? 0;
+            const safeIndex = Math.min(rawIndex, audio.length - 1);
+            const audioFile = audio[safeIndex];
 
             return (
-              <AudioPlayer
+              <div
                 key={run.runId}
-                url={audioFile.url}
-                fileName={audioFile.fileName}
-                runLabel={{ name: run.runName, color: run.color }}
-              />
+                className="flex flex-col gap-1"
+                data-testid="audio-card"
+                data-run-name={run.runName}
+              >
+                <AudioPlayer
+                  url={audioFile.url}
+                  fileName={audioFile.fileName}
+                  runLabel={{ name: run.runName, color: run.color }}
+                />
+                <MultiIndexNav
+                  currentIndex={safeIndex}
+                  totalCount={audio.length}
+                  onIndexChange={(next) => handleIndexChange(run.runId, next)}
+                />
+              </div>
             );
           })}
         </div>

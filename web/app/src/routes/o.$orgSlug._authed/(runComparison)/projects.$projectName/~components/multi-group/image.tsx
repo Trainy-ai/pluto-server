@@ -101,67 +101,157 @@ export const MultiGroupImage = ({
 
   const getPinInfo = useCallback(
     (runId: string): PinInfo | null => {
+      // Per-widget pins (most specific — keyed by runId:logName)
+      const perWidget = syncContext?.pinnedRunsByWidget.get(`${runId}:${logName}`);
+      if (perWidget) return perWidget;
+      // Cross-panel pins (same step for all widgets) — unless this widget is
+      // excluded (user unpinned just this one)
       const crossPanel = syncContext?.pinnedRuns.get(runId);
-      if (crossPanel) return crossPanel;
+      if (crossPanel && !crossPanel.excludedWidgets?.has(logName)) {
+        return crossPanel;
+      }
+      // Local (this panel only)
       const local = localPins.get(runId);
       if (local) return local;
       return null;
     },
-    [syncContext?.pinnedRuns, localPins],
+    [syncContext?.pinnedRuns, syncContext?.pinnedRunsByWidget, localPins, logName],
   );
 
   const handlePin = useCallback(
-    (runId: string, step: number, scope: "local" | "all-panels") => {
+    (
+      runId: string,
+      step: number,
+      currentIndex: number,
+      scope: "local" | "all-panels",
+    ) => {
       if (scope === "all-panels" && syncContext) {
-        syncContext.pinRun(runId, step, "cross-panel");
+        // Cross-panel pin overrides everything (handled in context.pinRun).
+        // Capture the currently-visible sample index so this widget remembers
+        // it even across Charts ↔ Dashboards tab switches. Other widgets that
+        // receive the same cross-panel pin fall back to their own index state.
+        syncContext.pinRun(runId, step, "cross-panel", {
+          originLogName: logName,
+          index: currentIndex,
+        });
         setLocalPins((prev) => {
           const next = new Map(prev);
           next.delete(runId);
           return next;
         });
       } else {
-        setLocalPins((prev) => new Map(prev).set(runId, { step, source: "local" }));
+        // Local pin overrides any pre-existing cross-panel/per-widget pin
+        // FOR THIS WIDGET ONLY (other widgets keep their pins).
+        syncContext?.unpinRunForWidget(runId, logName);
+        setLocalPins((prev) =>
+          new Map(prev).set(runId, {
+            step,
+            source: "local",
+            originLogName: logName,
+            index: currentIndex,
+          }),
+        );
       }
     },
-    [syncContext],
+    [syncContext, logName],
   );
 
   const handleUnpin = useCallback(
-    (runId: string) => {
-      syncContext?.unpinRun(runId);
-      setLocalPins((prev) => {
-        const next = new Map(prev);
-        next.delete(runId);
-        return next;
-      });
+    (runId: string, scope: "this-widget" | "all-widgets") => {
+      if (scope === "all-widgets") {
+        // Remove everywhere — cross-panel + per-widget + local
+        syncContext?.unpinRun(runId);
+        setLocalPins((prev) => {
+          const next = new Map(prev);
+          next.delete(runId);
+          return next;
+        });
+      } else {
+        // Remove only from this widget
+        syncContext?.unpinRunForWidget(runId, logName);
+        setLocalPins((prev) => {
+          const next = new Map(prev);
+          next.delete(runId);
+          return next;
+        });
+      }
     },
-    [syncContext],
+    [syncContext, logName],
   );
 
   const imagesByRun = useMemo(() => {
-    const imageLookup = new Map<string, any>();
+    // Group all images into a (runId, step) → file[] lookup so a run can
+    // expose multiple samples logged at the same step (wandb-style list logging).
+    const imageLookup = new Map<string, typeof allImages>();
     for (const img of allImages) {
-      imageLookup.set(`${img.runId}-${img.step}`, img);
+      const key = `${img.runId}-${img.step}`;
+      const existing = imageLookup.get(key);
+      if (existing) {
+        existing.push(img);
+      } else {
+        imageLookup.set(key, [img]);
+      }
     }
 
-    return runs.map((run) => {
-      const pinInfo = getPinInfo(run.runId);
-      const effectiveStep = pinInfo?.step ?? currentStepValue;
-      const image = imageLookup.get(`${run.runId}-${effectiveStep}`);
-      const runImages = image ? [image] : [];
+    // Only include runs that have AT LEAST ONE image for this logName across
+    // all steps. A run that has data at step 5 but not the current step 3
+    // still gets a cell — it just shows the "No image at step 3" placeholder.
+    // A run with zero files for this logName is excluded entirely.
+    const runIdsWithAnyData = new Set(allImages.map((img) => img.runId));
 
-      return {
-        run,
-        images: runImages,
-        isPinned: pinInfo !== null,
-        pinnedStep: pinInfo?.step ?? null,
-        pinSource: pinInfo?.source ?? null,
-        effectiveStep,
-      };
-    });
-  }, [allImages, currentStepValue, runs, getPinInfo]);
+    return runs
+      .filter((run) => runIdsWithAnyData.has(run.runId))
+      .map((run) => {
+        const pinInfo = getPinInfo(run.runId);
+        const effectiveStep = pinInfo?.step ?? currentStepValue;
+        const runImages = imageLookup.get(`${run.runId}-${effectiveStep}`) ?? [];
+
+        // If this widget is the origin of the pin, the pin's remembered
+        // sample index becomes the default for this cell. Cross-panel pins
+        // that originated elsewhere (or have no originLogName) don't apply.
+        const pinnedIndexForThisWidget =
+          pinInfo?.index != null &&
+          (pinInfo.originLogName == null ||
+            pinInfo.originLogName === logName)
+            ? pinInfo.index
+            : null;
+
+        return {
+          run,
+          images: runImages,
+          isPinned: pinInfo !== null,
+          pinnedStep: pinInfo?.step ?? null,
+          pinSource: pinInfo?.source ?? null,
+          pinnedIndexForThisWidget,
+          effectiveStep,
+        };
+      });
+  }, [allImages, currentStepValue, runs, getPinInfo, logName]);
+
+  // Per-run sample index for multi-sample-per-step logging. Resets to 0 when
+  // the step changes — we don't try to persist across step navigation.
+  const [indexByRun, setIndexByRun] = useState<Map<string, number>>(new Map());
+  useEffect(() => {
+    setIndexByRun(new Map());
+  }, [currentStepValue]);
+  const handleIndexChange = useCallback((runId: string, next: number) => {
+    setIndexByRun((prev) => new Map(prev).set(runId, next));
+  }, []);
 
   const runsWithImages = imagesByRun.length;
+
+  // Count unique runs that have at least one pin applied — not the raw sum
+  // of all pin entries (per-widget pins otherwise inflate the count by N).
+  const pinnedRunCount = useMemo(() => {
+    const pinnedRunIds = new Set<string>();
+    syncContext?.pinnedRuns.forEach((_, runId) => pinnedRunIds.add(runId));
+    syncContext?.pinnedRunsByWidget.forEach((_, key) => {
+      const runId = key.split(":")[0];
+      if (runId) pinnedRunIds.add(runId);
+    });
+    localPins.forEach((_, runId) => pinnedRunIds.add(runId));
+    return pinnedRunIds.size;
+  }, [syncContext?.pinnedRuns, syncContext?.pinnedRunsByWidget, localPins]);
 
   const [syncZoom, setSyncZoom] = useState(false);
   const [sharedScale, setSharedScale] = useState(1);
@@ -208,7 +298,7 @@ export const MultiGroupImage = ({
         <ImageSettingsPopover
           syncZoom={syncZoom}
           onSyncZoomChange={setSyncZoom}
-          pinnedRunCount={(syncContext?.pinnedRuns.size ?? 0) + localPins.size}
+          pinnedRunCount={pinnedRunCount}
           onClearAllPins={() => {
             syncContext?.unpinAllRuns();
             setLocalPins(new Map());
@@ -227,8 +317,23 @@ export const MultiGroupImage = ({
           )}
         >
           {imagesByRun.map((entry) => {
-            const { run, images, isPinned, pinnedStep, pinSource, effectiveStep } = entry;
-            const image = images[0];
+            const {
+              run,
+              images,
+              isPinned,
+              pinnedStep,
+              pinSource,
+              pinnedIndexForThisWidget,
+              effectiveStep,
+            } = entry;
+            // User's local arrow navigation wins. When there's no local
+            // override (initial render or post-step-change reset), fall back
+            // to the pinned index for this widget, then 0.
+            const rawIndex =
+              indexByRun.get(run.runId) ?? pinnedIndexForThisWidget ?? 0;
+            const safeIndex =
+              images.length > 0 ? Math.min(rawIndex, images.length - 1) : 0;
+            const image = images[safeIndex];
 
             return (
               <ImageCard
@@ -240,10 +345,13 @@ export const MultiGroupImage = ({
                 pinnedStep={pinnedStep}
                 pinSource={pinSource}
                 currentStepValue={effectiveStep}
+                totalIndices={images.length}
+                currentImageIndex={safeIndex}
+                onIndexChange={(next) => handleIndexChange(run.runId, next)}
                 onPin={(scope) =>
-                  handlePin(run.runId, effectiveStep, scope)
+                  handlePin(run.runId, effectiveStep, safeIndex, scope)
                 }
-                onUnpin={() => handleUnpin(run.runId)}
+                onUnpin={(scope) => handleUnpin(run.runId, scope)}
                 hasSyncContext={hasSyncContext}
                 stepNavigation={
                   hasMultipleSteps()

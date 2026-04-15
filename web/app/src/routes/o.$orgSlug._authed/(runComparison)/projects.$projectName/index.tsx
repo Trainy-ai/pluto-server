@@ -992,7 +992,7 @@ function RouteComponent() {
       if (selectedRunIds.length === 0) return;
 
       const useMin = mode === "argmin" || mode === "argmin-with-image";
-      const requireImage =
+      const withImage =
         mode === "argmin-with-image" || mode === "argmax-with-image";
 
       try {
@@ -1002,11 +1002,27 @@ function RouteComponent() {
             projectName,
             logName,
             runIds: selectedRunIds,
-            requireImage,
+            // "with image" → per-widget: each image widget gets its own best step
+            perWidget: withImage,
+            // Non-per-widget fallback retains the old single-step-per-run behavior
+            requireImage: withImage,
           }),
         );
 
-        if (result.bestSteps && result.bestSteps.length > 0) {
+        if (withImage && result.perWidgetBestSteps && result.perWidgetBestSteps.length > 0) {
+          // Per-widget pins: key is "runId:imageLogName"
+          const pinsByWidget: Record<string, number> = {};
+          for (const entry of result.perWidgetBestSteps) {
+            if (entry) {
+              const key = `${entry.runId}:${entry.imageLogName}`;
+              pinsByWidget[key] = useMin ? entry.argminStep : entry.argmaxStep;
+            }
+          }
+          document.dispatchEvent(
+            new CustomEvent("pin-runs-to-best-step", { detail: { pinsByWidget } }),
+          );
+        } else if (result.bestSteps && result.bestSteps.length > 0) {
+          // Single step per run (applies to all image widgets)
           const pins: Record<string, number> = {};
           for (const entry of result.bestSteps) {
             if (entry) {

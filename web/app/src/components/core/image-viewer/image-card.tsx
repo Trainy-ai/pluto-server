@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { StepNavigator } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/shared/step-navigator";
 import { PinButton } from "./pin-button";
+import { MultiIndexNav } from "@/components/core/multi-index-nav";
 import type { PinSource } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~context/image-step-sync-context";
 
 interface ImageCardStepNavigation {
@@ -43,14 +44,20 @@ interface ImageCardProps {
   pinnedStep?: number | null;
   /** Callback to pin this run at current step */
   onPin?: (scope: "local" | "all-panels") => void;
-  /** Callback to unpin this run */
-  onUnpin?: () => void;
+  /** Callback to unpin this run — scope controls whether to unpin this widget only or all widgets */
+  onUnpin?: (scope: "this-widget" | "all-widgets") => void;
   /** Whether the sync context is available (enables "pin across all panels") */
   hasSyncContext?: boolean;
   /** The current step value for displaying in pin tooltip */
   currentStepValue?: number;
   /** How the pin was created (affects visual style) */
   pinSource?: PinSource | null;
+  /** Total number of samples at this step — enables prev/next nav when > 1 */
+  totalIndices?: number;
+  /** Current sample index (0-based) */
+  currentImageIndex?: number;
+  /** Called when user clicks the prev/next arrows */
+  onIndexChange?: (next: number) => void;
 }
 
 async function handleDownload(url: string, fileName: string) {
@@ -86,6 +93,9 @@ export function ImageCard({
   hasSyncContext,
   currentStepValue,
   pinSource,
+  totalIndices,
+  currentImageIndex,
+  onIndexChange,
 }: ImageCardProps) {
   const pinRingClass = isPinned
     ? pinSource === "best-step"
@@ -127,12 +137,17 @@ export function ImageCard({
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
       const delta = -e.deltaY || e.deltaX;
-      setScale((s) => Math.min(Math.max(1, s + delta * 0.01), 8));
+      setScale((s) => Math.min(Math.max(0.1, s + delta * 0.01), 8));
     }
   };
 
   return (
-    <div className="flex flex-col gap-1.5">
+    <div
+      className="flex flex-col gap-1.5"
+      data-testid="image-card"
+      data-run-name={runLabel?.name}
+      data-pin-source={pinSource ?? ""}
+    >
       {runLabel && (
         <div className="flex items-center justify-center gap-1 overflow-hidden">
           <div
@@ -143,7 +158,10 @@ export function ImageCard({
             {runLabel.name}
           </span>
           {isPinned && pinnedStep != null && (
-            <span className={cn("shrink-0 whitespace-nowrap rounded px-1 py-0.5 font-mono text-[10px]", pinBadgeClass || "bg-muted text-muted-foreground")}>
+            <span
+              data-testid="pin-step-badge"
+              className={cn("shrink-0 whitespace-nowrap rounded px-1 py-0.5 font-mono text-[10px]", pinBadgeClass || "bg-muted text-muted-foreground")}
+            >
               Step {pinnedStep} {pinSource === "local" ? "◇" : pinSource === "cross-panel" ? "◈" : pinSource === "best-step" ? "★" : ""}
             </span>
           )}
@@ -154,6 +172,7 @@ export function ImageCard({
               onPin={onPin}
               onUnpin={onUnpin}
               hasSyncContext={!!hasSyncContext}
+              pinSource={pinSource}
             />
           )}
         </div>
@@ -195,32 +214,28 @@ export function ImageCard({
           <div className="flex h-full w-full flex-col overflow-hidden">
             <div
               ref={containerRef}
-              className="relative flex-1 min-h-0 overflow-auto bg-background/95 p-4"
+              className="relative flex flex-1 min-h-0 overflow-auto bg-background/95 p-4"
               onWheel={handleWheel}
             >
               {url ? (
-                <div
-                  style={naturalSize ? {
-                    width: Math.round(naturalSize.w * scale),
-                    height: Math.round(naturalSize.h * scale),
-                    position: "relative",
-                    margin: "auto",
-                  } : undefined}
-                >
-                  <img
-                    src={url}
-                    alt={fileName}
-                    className="absolute top-0 left-0 select-none origin-top-left"
-                    draggable={false}
-                    onLoad={(e) => {
-                      const img = e.currentTarget;
-                      setNaturalSize({ w: img.naturalWidth, h: img.naturalHeight });
-                    }}
-                    style={{
-                      transform: `scale(${scale})`,
-                    }}
-                  />
-                </div>
+                <img
+                  src={url}
+                  alt={fileName}
+                  className="m-auto max-w-none shrink-0 select-none"
+                  draggable={false}
+                  onLoad={(e) => {
+                    const img = e.currentTarget;
+                    setNaturalSize({ w: img.naturalWidth, h: img.naturalHeight });
+                  }}
+                  style={
+                    naturalSize
+                      ? {
+                          width: Math.round(naturalSize.w * scale),
+                          height: Math.round(naturalSize.h * scale),
+                        }
+                      : undefined
+                  }
+                />
               ) : (
                 <div className="flex h-full items-center justify-center">
                   <span className="px-4 text-center text-lg text-muted-foreground">
@@ -261,17 +276,24 @@ export function ImageCard({
                   </div>
                 )
               )}
-              <div className="relative flex items-center">
+              <div className="relative flex items-center gap-3">
                 <p className="font-mono text-sm text-muted-foreground">
                   {fileName ?? "No image"}
                 </p>
+                {totalIndices != null && totalIndices > 1 && onIndexChange && (
+                  <MultiIndexNav
+                    currentIndex={currentImageIndex ?? 0}
+                    totalCount={totalIndices}
+                    onIndexChange={onIndexChange}
+                  />
+                )}
                 <div className="absolute left-1/2 flex -translate-x-1/2 items-center gap-2">
                   <Button
                     variant="outline"
                     size="icon"
                     className="h-9 w-9"
-                    onClick={() => setScale(Math.max(1, scale - 0.5))}
-                    disabled={scale <= 1}
+                    onClick={() => setScale(Math.max(0.1, scale - 0.2))}
+                    disabled={scale <= 0.1}
                   >
                     <ZoomOut className="h-4 w-4" />
                   </Button>
@@ -295,7 +317,7 @@ export function ImageCard({
                     variant="outline"
                     size="icon"
                     className="h-9 w-9"
-                    onClick={() => setScale(Math.min(8, scale + 0.5))}
+                    onClick={() => setScale(Math.min(8, scale + 0.2))}
                     disabled={scale >= 8}
                   >
                     <ZoomIn className="h-4 w-4" />
@@ -316,6 +338,13 @@ export function ImageCard({
           </div>
         </DialogContent>
       </Dialog>
+      {totalIndices != null && totalIndices > 1 && onIndexChange && (
+        <MultiIndexNav
+          currentIndex={currentImageIndex ?? 0}
+          totalCount={totalIndices}
+          onIndexChange={onIndexChange}
+        />
+      )}
       {fileName && (
         <div className="flex justify-center">
           <p className="truncate text-center text-xs text-muted-foreground">

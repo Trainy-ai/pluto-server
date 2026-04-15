@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { trpc } from "@/utils/trpc";
 import { useQueries } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -7,6 +7,7 @@ import { VideoPlayer } from "@/routes/o.$orgSlug._authed/(run)/projects.$project
 import { StepNavigator } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/shared/step-navigator";
 import { useSyncedStepNavigation } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~hooks/use-synced-step-navigation";
 import { MediaCardWrapper } from "@/components/core/media-card-wrapper";
+import { MultiIndexNav } from "@/components/core/multi-index-nav";
 
 interface Video {
   url: string;
@@ -96,7 +97,9 @@ export const MultiGroupVideo = ({
     [allVideos, currentStepValue],
   );
 
-  // Group videos by run
+  // Group videos by run. A run can log multiple video samples at the same
+  // step (e.g. wandb list-of-video) so we keep the full array and expose an
+  // index selector below the player.
   const videosByRun = useMemo(() => {
     const result = runs.map((run) => {
       const runVideos = currentStepVideos.filter(
@@ -110,6 +113,15 @@ export const MultiGroupVideo = ({
 
     return result;
   }, [runs, currentStepVideos]);
+
+  // Per-run sample index for multi-sample-per-step. Resets on step change.
+  const [indexByRun, setIndexByRun] = useState<Map<string, number>>(new Map());
+  useEffect(() => {
+    setIndexByRun(new Map());
+  }, [currentStepValue]);
+  const handleIndexChange = useCallback((runId: string, next: number) => {
+    setIndexByRun((prev) => new Map(prev).set(runId, next));
+  }, []);
 
   // Calculate a consistent aspect ratio container height
   const containerHeight = "aspect-video";
@@ -142,7 +154,10 @@ export const MultiGroupVideo = ({
       </h3>
       <div className="grid flex-1 grid-cols-1 gap-4 overflow-auto sm:grid-cols-2">
         {videosByRun.map(({ run, videos }) => {
-          const video = videos[0]; // Take the first video for each run
+          const rawIndex = indexByRun.get(run.runId) ?? 0;
+          const safeIndex =
+            videos.length > 0 ? Math.min(rawIndex, videos.length - 1) : 0;
+          const video = videos[safeIndex];
           const isRunLoading = queriesWithRuns.find(
             (q) => q.run.runId === run.runId,
           )?.isLoading;
@@ -153,7 +168,12 @@ export const MultiGroupVideo = ({
           }
 
           return (
-            <div key={run.runId} className="flex h-full flex-col gap-1.5">
+            <div
+              key={run.runId}
+              className="flex h-full flex-col gap-1.5"
+              data-testid="video-card"
+              data-run-name={run.runName}
+            >
               <div className="flex items-center justify-center gap-1.5">
                 <div
                   className="h-2 w-2 rounded-full"
@@ -186,6 +206,11 @@ export const MultiGroupVideo = ({
                   </div>
                 )}
               </div>
+              <MultiIndexNav
+                currentIndex={safeIndex}
+                totalCount={videos.length}
+                onIndexChange={(next) => handleIndexChange(run.runId, next)}
+              />
             </div>
           );
         })}

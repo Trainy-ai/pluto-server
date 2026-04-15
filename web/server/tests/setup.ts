@@ -166,35 +166,38 @@ async function seedClickHouseMetrics(
   // Populate mlop_metric_summaries directly (the MV may not exist if SQL
   // files were executed in alphabetical order where metric_summaries_mv.sql
   // runs before metrics.sql, causing the MV creation to fail).
-  try {
-    await clickhouse.query({
-      query: `
-        INSERT INTO mlop_metric_summaries
-        SELECT
-          tenantId,
-          projectName,
-          runId,
-          logName,
-          min(value)               AS min_value,
-          max(value)               AS max_value,
-          sum(value)               AS sum_value,
-          toUInt64(count())        AS count_value,
-          argMaxState(value, step) AS last_value,
-          sum(value * value)       AS sum_sq_value,
-          min(step)                AS min_step,
-          max(step)                AS max_step
-        FROM mlop_metrics
-        WHERE tenantId = {tenantId: String}
-          AND projectName = {projectName: String}
-          AND isFinite(value)
-        GROUP BY tenantId, projectName, runId, logName
-      `,
-      query_params: { tenantId, projectName },
-    });
-    console.log('   ✓ Populated mlop_metric_summaries from mlop_metrics');
-  } catch (err) {
-    console.log('   ⚠ Could not populate mlop_metric_summaries:', (err as Error).message);
-  }
+  //
+  // Use .command() (not .query()) for INSERT FROM SELECT — per @clickhouse/client
+  // docs, .query() is reserved for SELECTs and silently fails for INSERT SELECT
+  // in some configurations. This was the root cause of the empty
+  // mlop_metric_summaries table in CI that broke image-pinning tests 7+8.
+  // No try/catch — if seeding fails it should crash the setup, not silently
+  // leave the table empty.
+  await clickhouse.command({
+    query: `
+      INSERT INTO mlop_metric_summaries
+      SELECT
+        tenantId,
+        projectName,
+        runId,
+        logName,
+        min(value)               AS min_value,
+        max(value)               AS max_value,
+        sum(value)               AS sum_value,
+        toUInt64(count())        AS count_value,
+        argMaxState(value, step) AS last_value,
+        sum(value * value)       AS sum_sq_value,
+        min(step)                AS min_step,
+        max(step)                AS max_step
+      FROM mlop_metrics
+      WHERE tenantId = {tenantId: String}
+        AND projectName = {projectName: String}
+        AND isFinite(value)
+      GROUP BY tenantId, projectName, runId, logName
+    `,
+    query_params: { tenantId, projectName },
+  });
+  console.log('   ✓ Populated mlop_metric_summaries from mlop_metrics');
 
   await clickhouse.close();
 }
@@ -1032,41 +1035,39 @@ async function setupTestData(): Promise<TestData> {
       });
       console.log(`   ✓ Seeded ${STAIRCASE_STEPS * 2} staircase metric datapoints (regular + irregular)`);
 
-      // Populate metric summaries for the staircase run
-      try {
-        await clickhouse.query({
-          query: `
-            INSERT INTO mlop_metric_summaries
-            SELECT
-              tenantId,
-              projectName,
-              runId,
-              logName,
-              min(value)               AS min_value,
-              max(value)               AS max_value,
-              sum(value)               AS sum_value,
-              toUInt64(count())        AS count_value,
-              argMaxState(value, step) AS last_value,
-              sum(value * value)       AS sum_sq_value,
-              min(step)                AS min_step,
-              max(step)                AS max_step
-            FROM mlop_metrics
-            WHERE tenantId = {tenantId: String}
-              AND projectName = {projectName: String}
-              AND runId = {runId: UInt64}
-              AND isFinite(value)
-            GROUP BY tenantId, projectName, runId, logName
-          `,
-          query_params: {
-            tenantId: org.id,
-            projectName: project.name,
-            runId: Number(staircaseRun.id),
-          },
-        });
-        console.log('   ✓ Populated metric summaries for staircase run');
-      } catch (err) {
-        console.log('   ⚠ Could not populate staircase metric summaries:', (err as Error).message);
-      }
+      // Populate metric summaries for the staircase run.
+      // Use .command() not .query() for INSERT FROM SELECT (see comment on
+      // line ~165 — .query() silently fails in some CI configurations).
+      await clickhouse.command({
+        query: `
+          INSERT INTO mlop_metric_summaries
+          SELECT
+            tenantId,
+            projectName,
+            runId,
+            logName,
+            min(value)               AS min_value,
+            max(value)               AS max_value,
+            sum(value)               AS sum_value,
+            toUInt64(count())        AS count_value,
+            argMaxState(value, step) AS last_value,
+            sum(value * value)       AS sum_sq_value,
+            min(step)                AS min_step,
+            max(step)                AS max_step
+          FROM mlop_metrics
+          WHERE tenantId = {tenantId: String}
+            AND projectName = {projectName: String}
+            AND runId = {runId: UInt64}
+            AND isFinite(value)
+          GROUP BY tenantId, projectName, runId, logName
+        `,
+        query_params: {
+          tenantId: org.id,
+          projectName: project.name,
+          runId: Number(staircaseRun.id),
+        },
+      });
+      console.log('   ✓ Populated metric summaries for staircase run');
 
       await clickhouse.close();
     } else {
@@ -1265,41 +1266,38 @@ async function setupTestData(): Promise<TestData> {
       });
       console.log(`   ✓ Seeded ${multiMetricRows.length} multi-metric datapoints (${MULTI_METRIC_COUNT} metrics × ${MULTI_METRIC_STEPS} steps)`);
 
-      // Populate metric summaries for the multi-metric run
-      try {
-        await clickhouse.query({
-          query: `
-            INSERT INTO mlop_metric_summaries
-            SELECT
-              tenantId,
-              projectName,
-              runId,
-              logName,
-              min(value)               AS min_value,
-              max(value)               AS max_value,
-              sum(value)               AS sum_value,
-              toUInt64(count())        AS count_value,
-              argMaxState(value, step) AS last_value,
-              sum(value * value)       AS sum_sq_value,
-              min(step)                AS min_step,
-              max(step)                AS max_step
-            FROM mlop_metrics
-            WHERE tenantId = {tenantId: String}
-              AND projectName = {projectName: String}
-              AND runId = {runId: UInt64}
-              AND isFinite(value)
-            GROUP BY tenantId, projectName, runId, logName
-          `,
-          query_params: {
-            tenantId: org.id,
-            projectName: project.name,
-            runId: Number(multiMetricRun.id),
-          },
-        });
-        console.log('   ✓ Populated metric summaries for multi-metric run');
-      } catch (err) {
-        console.log('   ⚠ Could not populate multi-metric metric summaries:', (err as Error).message);
-      }
+      // Populate metric summaries for the multi-metric run.
+      // Use .command() not .query() for INSERT FROM SELECT.
+      await clickhouse.command({
+        query: `
+          INSERT INTO mlop_metric_summaries
+          SELECT
+            tenantId,
+            projectName,
+            runId,
+            logName,
+            min(value)               AS min_value,
+            max(value)               AS max_value,
+            sum(value)               AS sum_value,
+            toUInt64(count())        AS count_value,
+            argMaxState(value, step) AS last_value,
+            sum(value * value)       AS sum_sq_value,
+            min(step)                AS min_step,
+            max(step)                AS max_step
+          FROM mlop_metrics
+          WHERE tenantId = {tenantId: String}
+            AND projectName = {projectName: String}
+            AND runId = {runId: UInt64}
+            AND isFinite(value)
+          GROUP BY tenantId, projectName, runId, logName
+        `,
+        query_params: {
+          tenantId: org.id,
+          projectName: project.name,
+          runId: Number(multiMetricRun.id),
+        },
+      });
+      console.log('   ✓ Populated metric summaries for multi-metric run');
 
       await clickhouse.close();
     } else {
@@ -1412,33 +1410,30 @@ async function setupTestData(): Promise<TestData> {
       });
       console.log(`   ✓ Seeded ${rows.length} zoom-visibility metric datapoints (200 + 1000)`);
 
-      // Populate metric summaries
+      // Populate metric summaries.
+      // Use .command() not .query() for INSERT FROM SELECT.
       for (const run of [shortRun, longRun]) {
-        try {
-          await clickhouse.query({
-            query: `
-              INSERT INTO mlop_metric_summaries
-              SELECT
-                tenantId, projectName, runId, logName,
-                min(value), max(value), sum(value),
-                toUInt64(count()), argMaxState(value, step), sum(value * value),
-                min(step), max(step)
-              FROM mlop_metrics
-              WHERE tenantId = {tenantId: String}
-                AND projectName = {projectName: String}
-                AND runId = {runId: UInt64}
-                AND isFinite(value)
-              GROUP BY tenantId, projectName, runId, logName
-            `,
-            query_params: {
-              tenantId: org.id,
-              projectName: project.name,
-              runId: Number(run.id),
-            },
-          });
-        } catch (err) {
-          console.log(`   ⚠ Could not populate summaries for ${run.name}:`, (err as Error).message);
-        }
+        await clickhouse.command({
+          query: `
+            INSERT INTO mlop_metric_summaries
+            SELECT
+              tenantId, projectName, runId, logName,
+              min(value), max(value), sum(value),
+              toUInt64(count()), argMaxState(value, step), sum(value * value),
+              min(step), max(step)
+            FROM mlop_metrics
+            WHERE tenantId = {tenantId: String}
+              AND projectName = {projectName: String}
+              AND runId = {runId: UInt64}
+              AND isFinite(value)
+            GROUP BY tenantId, projectName, runId, logName
+          `,
+          query_params: {
+            tenantId: org.id,
+            projectName: project.name,
+            runId: Number(run.id),
+          },
+        });
       }
 
       await clickhouse.close();
@@ -1448,6 +1443,646 @@ async function setupTestData(): Promise<TestData> {
   } else {
     console.log('   ✓ zoom-visibility runs already exist');
   }
+
+  // 5f. Create pin-test runs with deterministic train/loss curves + images
+  // at specific steps — used by image-pinning E2E tests for argmin/argmax
+  // and "with image" variants. Each run has:
+  // - train/loss with quadratic curve (clear argmin/argmax)
+  // - images/training_viz and images/attention_maps at specific steps
+  // - the argmin step for the metric does NOT have an image, so the
+  //   "with image" variant picks a different step
+  console.log('\n5️⃣f Creating pin-test runs...');
+
+  const existingPinTestRuns = await prisma.runs.findMany({
+    where: {
+      projectId: project.id,
+      organizationId: org.id,
+      name: { in: ['pin-test-run-A', 'pin-test-run-B', 'pin-test-run-C'] },
+    },
+    select: { id: true, name: true, createdAt: true },
+  });
+
+  // Deterministic test data for pin tests.
+  // Each run has a quadratic loss curve with a different minimum.
+  const pinTestRunConfigs = [
+    {
+      name: 'pin-test-run-A',
+      lossMinStep: 20,
+      trainingVizSteps: [0, 25, 50, 75, 100],
+      attentionMapsSteps: [0, 30, 60, 90],
+    },
+    {
+      name: 'pin-test-run-B',
+      lossMinStep: 50,
+      trainingVizSteps: [0, 10, 45, 80, 100],
+      attentionMapsSteps: [0, 15, 55, 70, 100],
+    },
+    {
+      name: 'pin-test-run-C',
+      lossMinStep: 70,
+      trainingVizSteps: [0, 25, 65, 85, 100],
+      attentionMapsSteps: [0, 35, 75, 90, 100],
+    },
+  ];
+
+  // Create any missing pin-test runs
+  const pinTestCreatedAt = new Date(Date.now() - 362 * 24 * 60 * 60 * 1000);
+  const existingByName = new Map(existingPinTestRuns.map((r) => [r.name, r]));
+  const createdPinTestRuns: { id: bigint; name: string; createdAt: Date; lossMinStep: number; trainingVizSteps: number[]; attentionMapsSteps: number[] }[] = [];
+  for (let i = 0; i < pinTestRunConfigs.length; i++) {
+    const cfg = pinTestRunConfigs[i];
+    let run = existingByName.get(cfg.name);
+    if (!run) {
+      run = await prisma.runs.create({
+        data: {
+          name: cfg.name,
+          organizationId: org.id,
+          projectId: project.id,
+          createdById: user.id,
+          creatorApiKeyId: apiKey.id,
+          status: 'COMPLETED',
+          createdAt: new Date(pinTestCreatedAt.getTime() + i * 1000),
+          updatedAt: new Date(pinTestCreatedAt.getTime() + i * 1000),
+        },
+      });
+    }
+    createdPinTestRuns.push({ ...run, ...cfg });
+  }
+
+  // Always re-register logs (no-op on duplicates)
+  await prisma.runLogs.createMany({
+    data: createdPinTestRuns.flatMap((run) => [
+      { runId: run.id, logName: 'train/loss', logGroup: 'train', logType: 'METRIC' as const },
+      { runId: run.id, logName: 'images/training_viz', logGroup: 'images', logType: 'IMAGE' as const },
+      { runId: run.id, logName: 'images/attention_maps', logGroup: 'images', logType: 'IMAGE' as const },
+    ]),
+    skipDuplicates: true,
+  });
+
+  // Seed ClickHouse + S3 (mirrors the a-bulk-run-011..013 media-rich
+  // seeding pattern — always re-seeds on every setup run).
+  const pinTestClickhouseUrl = process.env.CLICKHOUSE_URL;
+  const pinTestStorageEndpoint = process.env.STORAGE_ENDPOINT;
+  const pinTestStorageAccessKey = process.env.STORAGE_ACCESS_KEY_ID;
+  const pinTestStorageSecretKey = process.env.STORAGE_SECRET_ACCESS_KEY;
+  const pinTestStorageBucket = process.env.STORAGE_BUCKET;
+
+  if (
+    pinTestClickhouseUrl &&
+    pinTestStorageEndpoint &&
+    pinTestStorageAccessKey &&
+    pinTestStorageSecretKey &&
+    pinTestStorageBucket
+  ) {
+    const pinTestS3 = new S3Client({
+      endpoint: pinTestStorageEndpoint,
+      region: process.env.STORAGE_REGION || 'us-east-1',
+      credentials: {
+        accessKeyId: pinTestStorageAccessKey,
+        secretAccessKey: pinTestStorageSecretKey,
+      },
+      forcePathStyle: true,
+    });
+
+    const pinTestCh = createClient({
+      url: pinTestClickhouseUrl,
+      username: process.env.CLICKHOUSE_USER || 'default',
+      password: process.env.CLICKHOUSE_PASSWORD || '',
+    });
+
+    // --- train/loss metric (quadratic curve) ---
+    const metricRows: Record<string, unknown>[] = [];
+    for (const run of createdPinTestRuns) {
+      const baseTime = run.createdAt.getTime();
+      for (let step = 0; step <= 100; step++) {
+        const loss = 0.1 + Math.pow(step - run.lossMinStep, 2) / 200;
+        metricRows.push({
+          tenantId: org.id,
+          projectName: project.name,
+          runId: Number(run.id),
+          logGroup: 'train',
+          logName: 'train/loss',
+          time: new Date(baseTime + step * 1000).toISOString().replace('T', ' ').replace('Z', ''),
+          step,
+          value: loss,
+        });
+      }
+    }
+    if (metricRows.length > 0) {
+      // CRITICAL: disable async insert and force commit-before-return so the
+      // subsequent INSERT INTO mlop_metric_summaries SELECT FROM mlop_metrics
+      // can see these rows. Without this, CI's ClickHouse may have async
+      // inserts enabled (or eventually-consistent buffer flush) and the
+      // SELECT reads empty, yielding zero summary rows. Locally async insert
+      // is off by default so this is invisible — only manifests in CI.
+      await pinTestCh.insert({
+        table: 'mlop_metrics',
+        values: metricRows,
+        format: 'JSONEachRow',
+        clickhouse_settings: {
+          async_insert: 0,
+          wait_for_async_insert: 1,
+        },
+      });
+      console.log(`   ✓ Inserted ${metricRows.length} pin-test train/loss rows`);
+
+      // Belt-and-suspenders: force any in-flight async inserts to flush
+      // before we read back. This is a no-op if async_insert is already off,
+      // but it makes the seed robust to CI ClickHouse configurations that
+      // have async_insert enabled by default.
+      await pinTestCh.command({ query: 'SYSTEM FLUSH ASYNC INSERT QUEUE' });
+
+      // Populate mlop_metric_summaries for the pin-test runs — the runs
+      // table reads aggregated column values from this table, not from
+      // mlop_metrics directly. Without this, train/loss (Max) shows dashes.
+      //
+      // Use .command() (not .query()) for INSERT SELECT per @clickhouse/client
+      // docs: "in case of a custom insert operation (e.g., INSERT FROM SELECT),
+      // consider using ClickHouseClient.command, passing the entire raw query".
+      // No try/catch — any failure here should crash the setup loudly rather
+      // than silently leaving the column empty in CI.
+      const pinTestRunIdsNum = createdPinTestRuns.map((r) => Number(r.id));
+      await pinTestCh.command({
+        query: `
+          INSERT INTO mlop_metric_summaries
+          SELECT
+            tenantId, projectName, runId, logName,
+            min(value)               AS min_value,
+            max(value)               AS max_value,
+            sum(value)               AS sum_value,
+            toUInt64(count())        AS count_value,
+            argMaxState(value, step) AS last_value,
+            sum(value * value)       AS sum_sq_value,
+            min(step)                AS min_step,
+            max(step)                AS max_step
+          FROM mlop_metrics
+          WHERE tenantId = {tenantId: String}
+            AND projectName = {projectName: String}
+            AND runId IN ({runIds: Array(UInt64)})
+            AND isFinite(value)
+          GROUP BY tenantId, projectName, runId, logName
+        `,
+        query_params: {
+          tenantId: org.id,
+          projectName: project.name,
+          runIds: pinTestRunIdsNum,
+        },
+        clickhouse_settings: {
+          async_insert: 0,
+          wait_for_async_insert: 1,
+        },
+      });
+
+      // Verify the summaries actually landed — if not, the UI column will
+      // be empty and every pin-test test fails with "Received: null".
+      const verifyResult = await pinTestCh.query({
+        query: `
+          SELECT runId, sum(count_value) AS cnt
+          FROM mlop_metric_summaries
+          WHERE tenantId = {tenantId: String}
+            AND projectName = {projectName: String}
+            AND logName = 'train/loss'
+            AND runId IN ({runIds: Array(UInt64)})
+          GROUP BY runId
+        `,
+        query_params: {
+          tenantId: org.id,
+          projectName: project.name,
+          runIds: pinTestRunIdsNum,
+        },
+        format: 'JSONEachRow',
+      });
+      const verifyRows = (await verifyResult.json()) as { runId: number; cnt: number }[];
+      const runsMissingSummary = pinTestRunIdsNum.filter(
+        (id) => !verifyRows.some((r) => Number(r.runId) === id && Number(r.cnt) > 0),
+      );
+      if (runsMissingSummary.length > 0) {
+        throw new Error(
+          `pin-test metric_summaries missing for runs: ${runsMissingSummary.join(', ')}. ` +
+          `Found rows: ${JSON.stringify(verifyRows)}`,
+        );
+      }
+      console.log(`   ✓ Populated + verified pin-test metric summaries (${verifyRows.length} runs)`);
+    }
+
+    // --- image files at deterministic steps ---
+    const imageFileRows: Record<string, unknown>[] = [];
+    const pinTestS3Uploads: Promise<unknown>[] = [];
+    for (const run of createdPinTestRuns) {
+      const baseTime = run.createdAt.getTime();
+      const logConfigs = [
+        { logName: 'images/training_viz', steps: run.trainingVizSteps },
+        { logName: 'images/attention_maps', steps: run.attentionMapsSteps },
+      ];
+      for (const { logName, steps } of logConfigs) {
+        for (const step of steps) {
+          const fileName = `step_${String(step).padStart(4, '0')}.png`;
+          const r = (step * 2) % 256;
+          const g = logName.includes('training') ? 100 : 200;
+          const b = (step * 3 + 50) % 256;
+          const png = createSimplePNG(16, 16, r, g, b);
+          const s3Key = `${org.id}/${project.name}/${run.id}/${logName}/${fileName}`;
+          imageFileRows.push({
+            tenantId: org.id,
+            projectName: project.name,
+            runId: Number(run.id),
+            logGroup: 'images',
+            logName,
+            time: new Date(baseTime + step * 1000).toISOString().replace('T', ' ').replace('Z', ''),
+            step,
+            fileName,
+            fileType: 'image/png',
+            fileSize: png.length,
+          });
+          pinTestS3Uploads.push(
+            pinTestS3.send(new PutObjectCommand({
+              Bucket: pinTestStorageBucket,
+              Key: s3Key,
+              Body: png,
+              ContentType: 'image/png',
+            })),
+          );
+        }
+      }
+    }
+    if (imageFileRows.length > 0) {
+      await pinTestCh.insert({
+        table: 'mlop_files',
+        values: imageFileRows,
+        format: 'JSONEachRow',
+      });
+      console.log(`   ✓ Inserted ${imageFileRows.length} pin-test image file rows`);
+    }
+    if (pinTestS3Uploads.length > 0) {
+      await Promise.all(pinTestS3Uploads);
+      console.log(`   ✓ Uploaded ${pinTestS3Uploads.length} pin-test PNGs to S3`);
+    }
+
+    // ── Diagnostic: simulate the EXACT query the runs-table column uses ──
+    // The runs-table calls trpc.runs.metricSummaries which runs
+    // queryMetricSummariesBatch — a `GROUP BY (runId, logName)` over
+    // mlop_metric_summaries with `max(max_value)` for the MAX aggregation.
+    // If this returns an empty/incomplete result, the column shows dashes.
+    // We replicate that query here so CI logs show what the runs table will
+    // actually see for the pin-test runs.
+    const diagPinTestRunIds = createdPinTestRuns.map((r) => Number(r.id));
+    const diagResult = await pinTestCh.query({
+      query: `
+        SELECT
+          runId,
+          logName,
+          min(min_value) AS min_val,
+          max(max_value) AS max_val,
+          sum(sum_value) / sum(count_value) AS avg_val,
+          sum(count_value) AS cnt
+        FROM mlop_metric_summaries
+        WHERE tenantId = {tenantId: String}
+          AND projectName = {projectName: String}
+          AND logName IN ({logNames: Array(String)})
+          AND runId IN ({runIds: Array(UInt64)})
+        GROUP BY runId, logName
+        ORDER BY runId
+      `,
+      query_params: {
+        tenantId: org.id,
+        projectName: project.name,
+        logNames: ['train/loss'],
+        runIds: diagPinTestRunIds,
+      },
+      format: 'JSONEachRow',
+    });
+    const diagRows = (await diagResult.json()) as Array<{
+      runId: number;
+      logName: string;
+      min_val: number;
+      max_val: number;
+      avg_val: number;
+      cnt: number;
+    }>;
+    console.log(
+      `   🔬 Runs-table column simulation for pin-test runs (logName=train/loss MAX):`,
+    );
+    for (const r of diagRows) {
+      console.log(
+        `        runId=${r.runId} logName=${r.logName} min=${r.min_val} max=${r.max_val} avg=${r.avg_val.toFixed(2)} cnt=${r.cnt}`,
+      );
+    }
+    if (diagRows.length !== diagPinTestRunIds.length) {
+      throw new Error(
+        `🔥 Runs-table query returned ${diagRows.length} rows but expected ${diagPinTestRunIds.length}. ` +
+        `Pin-test column will show dashes for missing runs in the UI. ` +
+        `Got: ${JSON.stringify(diagRows)}, expected runIds: ${diagPinTestRunIds.join(', ')}`,
+      );
+    }
+
+    await pinTestCh.close();
+  } else {
+    console.log('   ⚠ Missing CLICKHOUSE_URL or STORAGE_* env vars, skipping pin-test seeding');
+  }
+
+  console.log(`   ✓ Ensured ${createdPinTestRuns.length} pin-test runs are seeded`);
+
+  // 5g. Create multi-index-media runs with wandb-style list-of-media logging.
+  // Each run logs multiple sample files at the same (logName, step) so the
+  // multi-index nav UI can be exercised. Seeds 3 image widgets (one uniform,
+  // two with sparse coverage matrices), 1 audio widget, 1 video widget. Used
+  // by web/e2e/specs/media/multi-index-nav.spec.ts.
+  console.log('\n5️⃣g Creating multi-index-media runs...');
+
+  const multiIndexRunNames = [
+    'multi-index-run-A',
+    'multi-index-run-B',
+    'multi-index-run-C',
+  ];
+  const multiIndexSteps = [0, 1, 2];
+
+  // Sample-count matrices: counts[runIdx][stepIdx] = number of samples to
+  // log for that (run, step). 0 = empty cell (filtered out of the section).
+  // 1 = nav hidden (totalCount === 1). 2+ = nav shows "x / N".
+  const imgGridUniform = [
+    [3, 3, 3],
+    [3, 3, 3],
+    [3, 3, 3],
+  ];
+  const imgGrid2Sparse = [
+    [1, 3, 2],
+    [0, 2, 1],
+    [3, 0, 3],
+  ];
+  const imgGrid3Sparser = [
+    [0, 1, 2],
+    [2, 1, 0],
+    [1, 0, 1],
+  ];
+  const audioGridUniform = [
+    [3, 3, 3],
+    [3, 3, 3],
+    [3, 3, 3],
+  ];
+  const videoGridUniform = [
+    [2, 2, 2],
+    [2, 2, 2],
+    [2, 2, 2],
+  ];
+
+  interface MultiIndexMediaPlan {
+    logName: string;
+    logGroup: string;
+    logType: 'IMAGE' | 'AUDIO' | 'VIDEO';
+    mime: string;
+    ext: string;
+    counts: number[][];
+  }
+
+  const multiIndexMediaPlans: MultiIndexMediaPlan[] = [
+    {
+      logName: 'samples/img_grid',
+      logGroup: 'samples',
+      logType: 'IMAGE',
+      mime: 'image/png',
+      ext: 'png',
+      counts: imgGridUniform,
+    },
+    {
+      logName: 'samples/img_grid2',
+      logGroup: 'samples',
+      logType: 'IMAGE',
+      mime: 'image/png',
+      ext: 'png',
+      counts: imgGrid2Sparse,
+    },
+    {
+      logName: 'samples/img_grid3',
+      logGroup: 'samples',
+      logType: 'IMAGE',
+      mime: 'image/png',
+      ext: 'png',
+      counts: imgGrid3Sparser,
+    },
+    {
+      logName: 'samples/audio_grid',
+      logGroup: 'samples',
+      logType: 'AUDIO',
+      mime: 'audio/wav',
+      ext: 'wav',
+      counts: audioGridUniform,
+    },
+    {
+      logName: 'samples/video_grid',
+      logGroup: 'samples',
+      logType: 'VIDEO',
+      mime: 'video/mp4',
+      ext: 'mp4',
+      counts: videoGridUniform,
+    },
+  ];
+
+  const existingMultiIndexRuns = await prisma.runs.findMany({
+    where: {
+      projectId: project.id,
+      organizationId: org.id,
+      name: { in: multiIndexRunNames },
+    },
+    select: { id: true, name: true, createdAt: true },
+  });
+  const existingMultiIndexByName = new Map(
+    existingMultiIndexRuns.map((r) => [r.name, r]),
+  );
+
+  const multiIndexCreatedAt = new Date(Date.now() - 361 * 24 * 60 * 60 * 1000);
+  const createdMultiIndexRuns: { id: bigint; name: string; createdAt: Date; runIdx: number }[] = [];
+  for (let i = 0; i < multiIndexRunNames.length; i++) {
+    const name = multiIndexRunNames[i];
+    let run = existingMultiIndexByName.get(name);
+    if (!run) {
+      run = await prisma.runs.create({
+        data: {
+          name,
+          organizationId: org.id,
+          projectId: project.id,
+          createdById: user.id,
+          creatorApiKeyId: apiKey.id,
+          status: 'COMPLETED',
+          tags: ['multi-index-test'],
+          createdAt: new Date(multiIndexCreatedAt.getTime() + i * 1000),
+          updatedAt: new Date(multiIndexCreatedAt.getTime() + i * 1000),
+        },
+      });
+    }
+    createdMultiIndexRuns.push({ ...run, runIdx: i });
+  }
+
+  // Register RunLogs for each (run, logName) pair where the run has at
+  // least one sample across all steps. Skip empty (run, logName) pairs so
+  // the logs browser doesn't show zero-data entries.
+  const multiIndexLogRows: Array<{
+    runId: bigint;
+    logName: string;
+    logGroup: string;
+    logType: 'IMAGE' | 'AUDIO' | 'VIDEO';
+  }> = [];
+  for (const run of createdMultiIndexRuns) {
+    for (const plan of multiIndexMediaPlans) {
+      const total = plan.counts[run.runIdx].reduce((acc, n) => acc + n, 0);
+      if (total === 0) continue;
+      multiIndexLogRows.push({
+        runId: run.id,
+        logName: plan.logName,
+        logGroup: plan.logGroup,
+        logType: plan.logType,
+      });
+    }
+  }
+  await prisma.runLogs.createMany({
+    data: multiIndexLogRows,
+    skipDuplicates: true,
+  });
+
+  // Seed ClickHouse mlop_files + S3 objects for each (run, logName, step,
+  // sampleIdx). Reuses the env vars from the pin-test block above.
+  if (
+    pinTestClickhouseUrl &&
+    pinTestStorageEndpoint &&
+    pinTestStorageAccessKey &&
+    pinTestStorageSecretKey &&
+    pinTestStorageBucket
+  ) {
+    const multiIndexS3 = new S3Client({
+      endpoint: pinTestStorageEndpoint,
+      region: process.env.STORAGE_REGION || 'us-east-1',
+      credentials: {
+        accessKeyId: pinTestStorageAccessKey,
+        secretAccessKey: pinTestStorageSecretKey,
+      },
+      forcePathStyle: true,
+    });
+
+    const multiIndexCh = createClient({
+      url: pinTestClickhouseUrl,
+      username: process.env.CLICKHOUSE_USER || 'default',
+      password: process.env.CLICKHOUSE_PASSWORD || '',
+    });
+
+    // Minimal silent WAV (44.1kHz mono, 16-bit, 0.05s)
+    function makeMultiIndexWav(): Buffer {
+      const sampleRate = 44100;
+      const numSamples = Math.floor(sampleRate * 0.05);
+      const dataSize = numSamples * 2;
+      const buf = Buffer.alloc(44 + dataSize);
+      buf.write('RIFF', 0);
+      buf.writeUInt32LE(36 + dataSize, 4);
+      buf.write('WAVE', 8);
+      buf.write('fmt ', 12);
+      buf.writeUInt32LE(16, 16);
+      buf.writeUInt16LE(1, 20);
+      buf.writeUInt16LE(1, 22);
+      buf.writeUInt32LE(sampleRate, 24);
+      buf.writeUInt32LE(sampleRate * 2, 28);
+      buf.writeUInt16LE(2, 32);
+      buf.writeUInt16LE(16, 34);
+      buf.write('data', 36);
+      buf.writeUInt32LE(dataSize, 40);
+      return buf;
+    }
+
+    // Minimal MP4 stub (ftyp + mdat) — won't play but the file viewer + nav still render
+    function makeMultiIndexMp4(): Buffer {
+      const ftyp = Buffer.from([
+        0x00, 0x00, 0x00, 0x14,
+        0x66, 0x74, 0x79, 0x70,
+        0x69, 0x73, 0x6f, 0x6d,
+        0x00, 0x00, 0x02, 0x00,
+        0x69, 0x73, 0x6f, 0x6d,
+      ]);
+      const mdat = Buffer.alloc(8);
+      mdat.writeUInt32BE(8, 0);
+      mdat.write('mdat', 4);
+      return Buffer.concat([ftyp, mdat]);
+    }
+
+    const multiIndexFileRows: Record<string, unknown>[] = [];
+    const multiIndexS3Uploads: Promise<unknown>[] = [];
+
+    for (const run of createdMultiIndexRuns) {
+      const baseTime = run.createdAt.getTime();
+      for (const plan of multiIndexMediaPlans) {
+        for (let stepIdx = 0; stepIdx < multiIndexSteps.length; stepIdx++) {
+          const step = multiIndexSteps[stepIdx];
+          const count = plan.counts[run.runIdx][stepIdx];
+          for (let sampleIdx = 0; sampleIdx < count; sampleIdx++) {
+            // Deterministic file name so we can compute it from the test side
+            // if needed, and it lets us assert that next/prev actually changes
+            // the displayed src.
+            const shortLog = plan.logName.split('/').pop();
+            const fileName = `${shortLog}-r${run.runIdx}-s${step}-i${sampleIdx}.${plan.ext}`;
+            let bytes: Buffer;
+            if (plan.logType === 'IMAGE') {
+              // Distinct color per (run, step, sampleIdx) so visual changes are obvious
+              const r = (run.runIdx * 80 + step * 30 + sampleIdx * 60) % 256;
+              const g = (run.runIdx * 30 + step * 60 + sampleIdx * 90) % 256;
+              const b = (run.runIdx * 60 + step * 90 + sampleIdx * 30) % 256;
+              bytes = createSimplePNG(16, 16, r, g, b);
+            } else if (plan.logType === 'AUDIO') {
+              bytes = makeMultiIndexWav();
+            } else {
+              bytes = makeMultiIndexMp4();
+            }
+            const s3Key = `${org.id}/${project.name}/${run.id}/${plan.logName}/${fileName}`;
+            multiIndexFileRows.push({
+              tenantId: org.id,
+              projectName: project.name,
+              runId: Number(run.id),
+              logGroup: plan.logGroup,
+              logName: plan.logName,
+              // Stagger time by sampleIdx so ORDER BY time gives a stable
+              // sample order — matches the production query's behavior.
+              time: new Date(baseTime + step * 1000 + sampleIdx * 10)
+                .toISOString()
+                .replace('T', ' ')
+                .replace('Z', ''),
+              step,
+              fileName,
+              fileType: plan.mime,
+              fileSize: bytes.length,
+            });
+            multiIndexS3Uploads.push(
+              multiIndexS3.send(
+                new PutObjectCommand({
+                  Bucket: pinTestStorageBucket,
+                  Key: s3Key,
+                  Body: bytes,
+                  ContentType: plan.mime,
+                }),
+              ),
+            );
+          }
+        }
+      }
+    }
+
+    if (multiIndexFileRows.length > 0) {
+      await multiIndexCh.insert({
+        table: 'mlop_files',
+        values: multiIndexFileRows,
+        format: 'JSONEachRow',
+        clickhouse_settings: {
+          async_insert: 0,
+          wait_for_async_insert: 1,
+        },
+      });
+      console.log(`   ✓ Inserted ${multiIndexFileRows.length} multi-index mlop_files rows`);
+    }
+    if (multiIndexS3Uploads.length > 0) {
+      await Promise.all(multiIndexS3Uploads);
+      console.log(`   ✓ Uploaded ${multiIndexS3Uploads.length} multi-index media files to S3`);
+    }
+
+    await multiIndexCh.close();
+  } else {
+    console.log('   ⚠ Missing CLICKHOUSE_URL or STORAGE_* env vars, skipping multi-index seeding');
+  }
+
+  console.log(`   ✓ Ensured ${createdMultiIndexRuns.length} multi-index-media runs are seeded`);
 
   // 6. Create a run in org 2 for org-switching tests
   console.log('\n6️⃣  Creating test run in org 2...');
@@ -2403,6 +3038,148 @@ async function setupTestData(): Promise<TestData> {
     },
   });
   console.log('   ✓ Created Media Widgets Test dashboard view');
+
+  // 11b-bis. Create "Image Pinning Test" dashboard view for image-pinning E2E tests
+  // Has a static section with 2 image widgets (training_viz + attention_maps)
+  // and a dynamic section matching both via regex. Used together with
+  // pin-test-run-A/B/C and a-bulk-run-011/012/013 to test per-widget pinning
+  // across all 6 locations.
+  console.log('\n1️⃣1️⃣b-bis Creating Image Pinning Test dashboard view...');
+
+  const imagePinningDashboardConfig = {
+    version: 1,
+    sections: [
+      {
+        id: 'image-pinning-dynamic-section',
+        name: 'Image Pinning Dynamic',
+        collapsed: false,
+        widgets: [],
+        dynamicPattern: '^images/(training_viz|attention_maps)$',
+        dynamicPatternMode: 'regex',
+      },
+      {
+        id: 'image-pinning-static-section',
+        name: 'Image Pinning Static',
+        collapsed: false,
+        widgets: [
+          {
+            id: 'image-pinning-static-training',
+            type: 'file-group',
+            config: { files: ['images/training_viz'] },
+            layout: { x: 0, y: 0, w: 6, h: 5 },
+          },
+          {
+            id: 'image-pinning-static-attention',
+            type: 'file-group',
+            config: { files: ['images/attention_maps'] },
+            layout: { x: 6, y: 0, w: 6, h: 5 },
+          },
+        ],
+      },
+    ],
+    settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
+  };
+
+  await prisma.dashboardView.upsert({
+    where: {
+      organizationId_projectId_name: {
+        organizationId: org.id,
+        projectId: project.id,
+        name: 'Image Pinning Test',
+      },
+    },
+    update: { config: imagePinningDashboardConfig },
+    create: {
+      name: 'Image Pinning Test',
+      organizationId: org.id,
+      projectId: project.id,
+      createdById: user.id,
+      isDefault: false,
+      config: imagePinningDashboardConfig,
+    },
+  });
+  console.log('   ✓ Created Image Pinning Test dashboard view');
+
+  // 11b-ter. Create "Multi-Index Media Test" dashboard view for the
+  // multi-index-nav E2E tests. Used together with multi-index-run-A/B/C.
+  // Static section: one widget per logName so each test can target a
+  // specific widget. T5 (multi-type independence) needs image + audio +
+  // video widgets co-located in the same section, which is satisfied here.
+  // Dynamic section: regex matching all five samples/* logNames so the
+  // same tests work in AR-DD / IR-DD locations.
+  console.log('\n1️⃣1️⃣b-ter Creating Multi-Index Media Test dashboard view...');
+
+  const multiIndexDashboardConfig = {
+    version: 1,
+    sections: [
+      {
+        id: 'multi-index-dynamic-section',
+        name: 'Multi-Index Media (Dynamic)',
+        collapsed: false,
+        widgets: [],
+        dynamicPattern: '^samples/(img_grid|img_grid2|img_grid3|audio_grid|video_grid)$',
+        dynamicPatternMode: 'regex',
+      },
+      {
+        id: 'multi-index-static-section',
+        name: 'Multi-Index Media (Static)',
+        collapsed: false,
+        widgets: [
+          {
+            id: 'multi-index-static-img-grid',
+            type: 'file-group',
+            config: { files: ['samples/img_grid'] },
+            layout: { x: 0, y: 0, w: 6, h: 5 },
+          },
+          {
+            id: 'multi-index-static-audio-grid',
+            type: 'file-group',
+            config: { files: ['samples/audio_grid'] },
+            layout: { x: 6, y: 0, w: 6, h: 5 },
+          },
+          {
+            id: 'multi-index-static-video-grid',
+            type: 'file-group',
+            config: { files: ['samples/video_grid'] },
+            layout: { x: 0, y: 5, w: 6, h: 5 },
+          },
+          {
+            id: 'multi-index-static-img-grid2',
+            type: 'file-group',
+            config: { files: ['samples/img_grid2'] },
+            layout: { x: 6, y: 5, w: 6, h: 5 },
+          },
+          {
+            id: 'multi-index-static-img-grid3',
+            type: 'file-group',
+            config: { files: ['samples/img_grid3'] },
+            layout: { x: 0, y: 10, w: 6, h: 5 },
+          },
+        ],
+      },
+    ],
+    settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
+  };
+
+  await prisma.dashboardView.upsert({
+    where: {
+      organizationId_projectId_name: {
+        organizationId: org.id,
+        projectId: project.id,
+        name: 'Multi-Index Media Test',
+      },
+    },
+    update: { config: multiIndexDashboardConfig },
+    create: {
+      name: 'Multi-Index Media Test',
+      organizationId: org.id,
+      projectId: project.id,
+      createdById: user.id,
+      isDefault: false,
+      config: multiIndexDashboardConfig,
+    },
+  });
+  console.log('   ✓ Created Multi-Index Media Test dashboard view');
 
   // 11c. Create "Line Chart Variants Test" dashboard view with all metric widget combos
   console.log('\n1️⃣1️⃣c Creating Line Chart Variants Test dashboard view...');
