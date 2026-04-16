@@ -11,6 +11,7 @@ import { clickhouse } from "../lib/clickhouse";
 import { resolveRunId } from "../lib/resolve-run-id";
 import { queryRunMetricsMultiMetricBatchBucketed, toColumnar } from "../lib/queries";
 import { getCached, setCached, getTTLForStatus, type RunStatus } from "../lib/cache";
+import { resolveApiKey } from "./middleware";
 
 const app = new Hono();
 
@@ -25,9 +26,14 @@ const inputSchema = z.object({
 });
 
 app.get("/multi-metric-batch-bucketed", async (c) => {
-  // Session auth
+  // Hybrid auth: session cookie (primary) or Authorization: Bearer <apiKey>
+  // (fallback). Session is tried first so browser traffic is matched by the
+  // first check. The API key path exists for (a) the memory-pressure CI probe
+  // in .github/scripts/memory-pressure-probe.mjs which has no browser, and
+  // (b) external API users who want to query aggregated chart data.
   const session = await auth.api.getSession({ headers: c.req.raw.headers });
-  if (!session?.user) {
+  const apiKey = session?.user ? null : await resolveApiKey(c);
+  if (!session?.user && !apiKey) {
     return c.json({ error: "Unauthorized" }, 401);
   }
 
@@ -46,15 +52,26 @@ app.get("/multi-metric-batch-bucketed", async (c) => {
 
   const { organizationId, projectName, runIds: encodedRunIds, logNames, buckets, stepMin, stepMax } = input;
 
-  // Verify org membership
-  const member = await prisma.member.findFirst({
-    where: {
-      organizationId,
-      userId: session.user.id,
-    },
-  });
-  if (!member) {
-    return c.json({ error: "Not a member of this organization" }, 403);
+  // Authorize access to the requested organization.
+  //   Session path: verify caller is a Member of organizationId.
+  //   API key path: verify the key's bound org MATCHES organizationId exactly.
+  // The API key check is load-bearing: without it, an attacker with a key for
+  // Org A could pass organizationId=B in the query and read Org B's data
+  // (IDOR). Single source of truth: the key's bound org, not the query param.
+  if (session?.user) {
+    const member = await prisma.member.findFirst({
+      where: {
+        organizationId,
+        userId: session.user.id,
+      },
+    });
+    if (!member) {
+      return c.json({ error: "Not a member of this organization" }, 403);
+    }
+  } else if (apiKey) {
+    if (apiKey.organization.id !== organizationId) {
+      return c.json({ error: "API key does not authorize this organization" }, 403);
+    }
   }
 
   // Cache key
