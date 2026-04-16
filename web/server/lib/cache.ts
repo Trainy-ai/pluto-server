@@ -20,9 +20,46 @@ interface CacheEntry<T> {
   expiresAt: number;
 }
 
-// L1 In-memory LRU cache (per-pod)
+/**
+ * L1 In-memory LRU cache (per-pod).
+ *
+ * IMPORTANT — memory safety: we cap BOTH entry count AND total bytes.
+ * Chart responses can be multi-MB each; without maxSize the cache can
+ * grow to many GB long before the 10k entry cap kicks in, blowing a
+ * 1GB pod heap after only a few hundred distinct-key requests.
+ *
+ * maxSize enforces LRU eviction on byte budget. The sizeCalculation
+ * runs only on set() (not on get()) so it's amortized over the cache-fill
+ * cost, and JSON.stringify on a freshly-fetched response is cheap relative
+ * to the ClickHouse query it's caching.
+ *
+ * The *2 multiplier approximates V8's UTF-16 string representation
+ * (each JSON byte becomes 2 bytes in heap) plus rough object overhead.
+ */
+// Sized for a 2 GiB pod memory limit with ~30% safety margin on peak RSS.
+// Empirical fit from local load testing: peak RSS ≈ 200 MB baseline + 1.8 × maxSize.
+// For a 2048 MB limit: (2048 × 0.85 − 200) / 1.8 ≈ 857 MB theoretical max.
+// We pick 384 MB to leave plenty of headroom for GC pauses, Prisma, and burst
+// traffic heavier than the load test covered.
+const L1_MAX_BYTES = 384 * 1024 * 1024; // 384 MB
+
 const l1Cache = new LRUCache<string, CacheEntry<unknown>>({
-  max: 10000, // Max 10k entries
+  max: 10000, // Entry count cap (backstop)
+  maxSize: L1_MAX_BYTES, // Byte budget — primary memory safeguard
+  sizeCalculation: (value) => {
+    // Fast path: pre-serialized strings (routes/chart-data.ts ":raw" entries)
+    // skip a redundant multi-MB stringify + escape pass on every set().
+    if (typeof value.data === "string") {
+      return value.data.length * 2 + 128;
+    }
+    try {
+      return JSON.stringify(value).length * 2;
+    } catch {
+      // Non-serializable fallback: small enough not to dominate, big enough
+      // that many of them will still trigger eviction.
+      return 1024;
+    }
+  },
   ttl: 1000 * 60 * 10, // 10 min max TTL (entries also check expiresAt)
   updateAgeOnGet: true,
 });
