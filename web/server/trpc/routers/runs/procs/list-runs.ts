@@ -56,8 +56,11 @@ const MAX_JSON_SORT_OFFSET = 100_000;
  * Returns runs with `_flatConfig` and `_flatSystemMetadata` attached.
  * This is co-located with runs.list so field values travel with the paginated
  * response — no separate query needed on the client.
+ *
+ * Exported so the V8-heap CI probe (`/api/runs/list?includeFieldValues=true`)
+ * can reuse it and exercise the exact code path the tRPC runs.list uses.
  */
-async function attachFieldValues(
+export async function attachFieldValues(
   prisma: any,
   runs: { id: bigint; [k: string]: any }[],
 ): Promise<typeof runs> {

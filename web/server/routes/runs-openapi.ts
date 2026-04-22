@@ -37,6 +37,7 @@ import { extractAndUpsertColumnKeys } from "../lib/extract-column-keys";
 import { deepMerge } from "../lib/deep-merge";
 import { generateRunPrefix } from "../lib/run-prefix";
 import { transitionRunStatus, recordRunCreatedEvent } from "../lib/run-status";
+import { attachFieldValues } from "../trpc/routers/runs/procs/list-runs";
 
 // Type for API key with relations
 type ApiKeyWithRelations = ApiKey & {
@@ -1051,6 +1052,21 @@ const listRunsRoute = createRoute({
       search: z.string().optional().openapi({ description: "Search term for run names (substring match)", example: "training" }),
       tags: z.string().optional().openapi({ description: "Comma-separated list of tags to filter by (OR logic)", example: "baseline,experiment" }),
       limit: z.coerce.number().min(1).max(200).default(50).openapi({ description: "Maximum number of runs to return", example: 50 }),
+      // Opt-in flag for the V8-heap CI probe. When true, attaches
+      // `_flatConfig` / `_flatSystemMetadata` blobs per run — the same shape
+      // tRPC runs.list produces for the frontend. Default false keeps the
+      // response lean for SDK/MCP callers (back-compat preserved).
+      includeFieldValues: z.coerce.boolean().optional().default(false).openapi({
+        description: "When true, attach _flatConfig and _flatSystemMetadata to each run. Off by default for lean SDK responses.",
+        example: false,
+      }),
+      // JSON-encoded array of {source, key} pairs. Only meaningful when
+      // includeFieldValues=true. Empty array skips field-value fetch entirely.
+      // Mirrors the tRPC runs.list `visibleColumns` input.
+      visibleColumns: z.string().optional().openapi({
+        description: "JSON-encoded array of {source:'config'|'systemMetadata', key:string}. Restricts _flatConfig/_flatSystemMetadata to the listed keys. Empty array = no field values.",
+        example: '[{"source":"config","key":"lr"}]',
+      }),
     }),
   },
   responses: {
@@ -1067,6 +1083,8 @@ const listRunsRoute = createRoute({
               status: z.string().openapi({ description: "Run status" }),
               tags: z.array(z.string()).openapi({ description: "Run tags" }),
               createdAt: z.string().openapi({ description: "Creation timestamp" }),
+              _flatConfig: z.record(z.unknown()).optional().openapi({ description: "Flattened config — only present when includeFieldValues=true" }),
+              _flatSystemMetadata: z.record(z.unknown()).optional().openapi({ description: "Flattened systemMetadata — only present when includeFieldValues=true" }),
             })).openapi("RunListItem"),
             total: z.number().openapi({ description: "Total count of matching runs" }),
           }).openapi("ListRunsResponse"),
@@ -1083,11 +1101,35 @@ const listRunsRoute = createRoute({
 router.use(listRunsRoute.path, withApiKey);
 router.openapi(listRunsRoute, async (c) => {
   const apiKey = c.get("apiKey");
-  const { projectName, search, tags: tagsParam, limit } = c.req.valid("query");
+  const { projectName, search, tags: tagsParam, limit, includeFieldValues, visibleColumns: visibleColumnsRaw } = c.req.valid("query");
   const prisma = c.get("prisma");
 
   // Parse tags from comma-separated string
   const tags = tagsParam ? tagsParam.split(",").map((t) => t.trim()).filter(Boolean) : [];
+
+  // Parse visibleColumns if provided (JSON-encoded array of {source, key}).
+  // Tolerates malformed JSON by treating it as unset — the caller just gets
+  // the legacy full-blob behavior.
+  let visibleColumns: { source: "config" | "systemMetadata"; key: string }[] | undefined;
+  if (includeFieldValues && visibleColumnsRaw) {
+    try {
+      const parsed = JSON.parse(visibleColumnsRaw);
+      if (Array.isArray(parsed)) {
+        visibleColumns = parsed.filter(
+          (v): v is { source: "config" | "systemMetadata"; key: string } =>
+            v && typeof v === "object" &&
+            (v.source === "config" || v.source === "systemMetadata") &&
+            typeof v.key === "string",
+        ).slice(0, 1000);
+        // Defense-in-depth: cap at 1000 entries. Route already requires API
+        // key auth, but a buggy authenticated client passing a huge array
+        // would generate a massive Prisma OR clause and strain the DB.
+        // Real frontend traffic is orders of magnitude below this cap.
+      }
+    } catch {
+      // Ignore malformed input; fall through to unfiltered attach.
+    }
+  }
 
   // Get the project
   const project = await prisma.projects.findFirst({
@@ -1144,8 +1186,34 @@ router.openapi(listRunsRoute, async (c) => {
     },
   });
 
+  // Optional flat-blob enrichment — the failure surface the V8-heap CI probe
+  // exercises. `attachFieldValues` is the same helper tRPC runs.list uses, so
+  // this endpoint reflects whatever trim behavior (or lack thereof) lives
+  // there. Pre-fix: 2-arg signature, visibleColumns silently ignored by JS,
+  // returns full blobs → probe OOMs. Post-fix (once the `visibleColumns`
+  // support lands in attachFieldValues): 3-arg signature, respects the
+  // trim, returns empty blobs when visibleColumns=[] → probe passes.
+  //
+  // The function cast is intentional and CI-only: papers over the pre-fix
+  // TypeScript signature so this code compiles cleanly on main before the
+  // fix lands. JavaScript ignores extra args at runtime — no behavioral risk.
+  type BaseRun = typeof runs extends Array<infer U> ? U : never;
+  type EnrichedRun = BaseRun & {
+    _flatConfig?: Record<string, unknown>;
+    _flatSystemMetadata?: Record<string, unknown>;
+  };
+  type AttachFn = (
+    prisma: unknown,
+    runs: BaseRun[],
+    visibleColumns?: { source: "config" | "systemMetadata"; key: string }[],
+  ) => Promise<EnrichedRun[]>;
+
+  const enriched: EnrichedRun[] = includeFieldValues
+    ? await (attachFieldValues as unknown as AttachFn)(prisma, runs, visibleColumns)
+    : runs;
+
   return c.json({
-    runs: runs.map((run) => ({
+    runs: enriched.map((run) => ({
       id: Number(run.id),
       name: run.name,
       number: run.number,
@@ -1155,6 +1223,12 @@ router.openapi(listRunsRoute, async (c) => {
       status: run.status,
       tags: run.tags,
       createdAt: run.createdAt.toISOString(),
+      ...(includeFieldValues
+        ? {
+            _flatConfig: run._flatConfig as Record<string, unknown> | undefined,
+            _flatSystemMetadata: run._flatSystemMetadata as Record<string, unknown> | undefined,
+          }
+        : {}),
     })),
     total,
   }, 200);
