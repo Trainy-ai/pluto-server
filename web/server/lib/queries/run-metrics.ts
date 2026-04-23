@@ -420,9 +420,20 @@ export async function queryRunMetricsBucketedByLogName(
   // Non-zoom path: read pre-aggregated min/max step from mlop_metric_summaries
   // instead of scanning every row in mlop_metrics. Zoom path keeps the raw scan
   // because the bucket width must reflect the zoomed range.
+  //
+  // SAFETY (see incident 2026-04-15): `max_step` defaults to 0 for rows in
+  // mlop_metric_summaries that pre-date the migration added in PR #408. When a
+  // row returns max_step=0, the naive bucketWidth = intDiv(0-0+1, N) = 0 →
+  // greatest(1, 0) = 1 → every step becomes its own bucket → a 50k-step run
+  // returns 50k rows instead of ~200. That response size blows the backend
+  // heap during JSON serialization, crashing the pod. We substitute a
+  // synthetic large maxStep (1_000_000) when max_step=0 so bucketWidth stays
+  // bounded. Affected metrics display with coarser-than-expected bucketing
+  // rather than crashing the server. Once the migration has been applied and
+  // verified everywhere, this fallback becomes a no-op.
   const boundsCte = stepMin === undefined || stepMax === undefined
     ? `bounds AS (
-        SELECT min(min_step) AS minStep, max(max_step) AS maxStep
+        SELECT min(min_step) AS minStep, if(max(max_step) = 0, toUInt64(1000000), max(max_step)) AS maxStep
         FROM mlop_metric_summaries
         WHERE tenantId = {tenantId: String}
           AND projectName = {projectName: String}
@@ -533,7 +544,7 @@ export async function queryRunMetricsBatchBucketedByLogName(
   // the raw table so the bucket width reflects the zoomed range.
   const boundsCte = stepMin === undefined || stepMax === undefined
     ? `bounds AS (
-        SELECT min(min_step) AS minStep, max(max_step) AS maxStep
+        SELECT min(min_step) AS minStep, if(max(max_step) = 0, toUInt64(1000000), max(max_step)) AS maxStep
         FROM mlop_metric_summaries
         WHERE tenantId = {tenantId: String}
           AND projectName = {projectName: String}
@@ -687,7 +698,7 @@ export async function queryRunMetricsMultiMetricBatchBucketed(
     query = `
       WITH
         bounds AS (
-          SELECT logName, min(min_step) AS minStep, max(max_step) AS maxStep
+          SELECT logName, min(min_step) AS minStep, if(max(max_step) = 0, toUInt64(1000000), max(max_step)) AS maxStep
           FROM mlop_metric_summaries
           WHERE tenantId = {tenantId: String}
             AND projectName = {projectName: String}
@@ -1004,7 +1015,7 @@ async function queryRunMetricsBucketedByLogNameLttb(
   // Non-zoom: use mlop_metric_summaries for bounds. Zoom: raw mlop_metrics.
   const boundsCte = stepMin === undefined || stepMax === undefined
     ? `bounds AS (
-        SELECT min(min_step) AS minStep, max(max_step) AS maxStep
+        SELECT min(min_step) AS minStep, if(max(max_step) = 0, toUInt64(1000000), max(max_step)) AS maxStep
         FROM mlop_metric_summaries
         WHERE tenantId = {tenantId: String}
           AND projectName = {projectName: String}
@@ -1141,7 +1152,7 @@ async function queryRunMetricsBatchBucketedByLogNameLttb(
   // Non-zoom: use mlop_metric_summaries for bounds. Zoom: raw mlop_metrics.
   const boundsCte = stepMin === undefined || stepMax === undefined
     ? `bounds AS (
-        SELECT min(min_step) AS minStep, max(max_step) AS maxStep
+        SELECT min(min_step) AS minStep, if(max(max_step) = 0, toUInt64(1000000), max(max_step)) AS maxStep
         FROM mlop_metric_summaries
         WHERE tenantId = {tenantId: String}
           AND projectName = {projectName: String}
@@ -1370,7 +1381,7 @@ async function queryRunMetricsMultiMetricBatchBucketedLttb(
       WITH
         ${nonZoomDedupCte}
         bounds AS (
-          SELECT logName, min(min_step) AS minStep, max(max_step) AS maxStep
+          SELECT logName, min(min_step) AS minStep, if(max(max_step) = 0, toUInt64(1000000), max(max_step)) AS maxStep
           FROM mlop_metric_summaries
           WHERE tenantId = {tenantId: String}
             AND projectName = {projectName: String}

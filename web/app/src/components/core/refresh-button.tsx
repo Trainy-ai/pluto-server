@@ -140,23 +140,49 @@ export function RefreshButton({
   const handleRefreshRef = useRef(handleRefresh);
   handleRefreshRef.current = handleRefresh;
 
-  // Manage the auto-refresh interval
+  // Manage the auto-refresh interval. Only runs while the tab is
+  // visible — a background (unfocused) tab pauses its timer entirely
+  // instead of firing wasteful backend requests every N seconds when
+  // the user can't see anything. Resumes when the tab regains focus.
   useEffect(() => {
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
+    if (activeInterval === null) {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      return;
     }
 
-    if (activeInterval !== null) {
+    const startTimer = () => {
+      if (timerRef.current) return;
       timerRef.current = setInterval(() => {
         void handleRefreshRef.current();
       }, activeInterval);
-    }
+    };
 
-    return () => {
+    const stopTimer = () => {
       if (timerRef.current) {
         clearInterval(timerRef.current);
+        timerRef.current = null;
       }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        startTimer();
+      } else {
+        stopTimer();
+      }
+    };
+
+    if (document.visibilityState === "visible") {
+      startTimer();
+    }
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      stopTimer();
     };
   }, [activeInterval]);
 

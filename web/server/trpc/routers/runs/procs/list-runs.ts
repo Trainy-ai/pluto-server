@@ -51,23 +51,58 @@ const SYSTEM_SORT_FIELDS: Record<string, string> = {
  *  At 100k rows, OFFSET > 10k + full JSON extract is too slow. */
 const MAX_JSON_SORT_OFFSET = 100_000;
 
+export type VisibleColumn = { source: "config" | "systemMetadata"; key: string };
+
 /**
  * Enrich run objects with pre-flattened field values from run_field_values.
  * Returns runs with `_flatConfig` and `_flatSystemMetadata` attached.
- * This is co-located with runs.list so field values travel with the paginated
+ *
+ * Co-located with runs.list so field values travel with the paginated
  * response — no separate query needed on the client.
  *
  * Exported so the V8-heap CI probe (`/api/runs/list?includeFieldValues=true`)
  * can reuse it and exercise the exact code path the tRPC runs.list uses.
+ *
+ * `visibleColumns` semantics:
+ *   - `undefined`      → fetch ALL (source, key) pairs for the runs (legacy behavior, back-compat)
+ *   - `[]`             → skip DB fetch entirely; attach empty blobs
+ *   - `[{source,key}]` → only fetch matching pairs; other keys stay absent
+ *
+ * The `undefined` case is the unbounded-payload path the `visibleColumns`
+ * input was introduced to eliminate. New callers should pass a concrete
+ * list derived from the user's currently-displayed columns.
  */
 export async function attachFieldValues(
   prisma: any,
   runs: { id: bigint; [k: string]: any }[],
+  visibleColumns?: VisibleColumn[],
 ): Promise<typeof runs> {
   if (runs.length === 0) return runs;
 
+  // Empty array: caller explicitly wants no field values. Attach empty
+  // blobs so consumers can read `_flatConfig`/`_flatSystemMetadata` without
+  // null checks, but skip the DB round-trip entirely.
+  if (visibleColumns && visibleColumns.length === 0) {
+    return runs.map((run) => ({
+      ...run,
+      _flatConfig: {} as Record<string, unknown>,
+      _flatSystemMetadata: {} as Record<string, unknown>,
+    }));
+  }
+
   const rows = await prisma.runFieldValue.findMany({
-    where: { runId: { in: runs.map((r) => r.id) } },
+    where: {
+      runId: { in: runs.map((r) => r.id) },
+      // When visibleColumns is provided, restrict to the requested
+      // (source, key) pairs. Without this filter, we'd still pull every
+      // RunFieldValue row per run and filter in JS — the WHERE clause
+      // pushes the work to PG and uses the (source, key) index.
+      ...(visibleColumns
+        ? {
+            OR: visibleColumns.map((c) => ({ source: c.source, key: c.key })),
+          }
+        : {}),
+    },
     select: { runId: true, source: true, key: true, textValue: true, numericValue: true },
   });
 
@@ -89,7 +124,14 @@ export async function attachFieldValues(
 
   return runs.map((run) => {
     const fv = byRun.get(run.id);
-    if (!fv) return run;
+    if (!fv) {
+      // When visibleColumns is provided, always attach (possibly empty)
+      // blobs for a consistent response shape.
+      if (visibleColumns) {
+        return { ...run, _flatConfig: {}, _flatSystemMetadata: {} };
+      }
+      return run;
+    }
     return { ...run, _flatConfig: fv.config, _flatSystemMetadata: fv.systemMetadata };
   });
 }
@@ -119,6 +161,12 @@ export const listRunsProcedure = protectedOrgProcedure
       metricFilters: z.array(metricFilterSchema).optional(),
       // System filters (name, status, tags, creator.name — full operator semantics)
       systemFilters: z.array(systemFilterSchema).optional(),
+      // Restrict `_flatConfig`/`_flatSystemMetadata` to the columns the
+      // client is actually displaying. Omit → legacy behavior (all keys,
+      // unbounded payload). Empty array → no field values at all.
+      visibleColumns: z
+        .array(z.object({ source: z.enum(["config", "systemMetadata"]), key: z.string() }))
+        .optional(),
     })
   )
   .query(async ({ ctx, input }) => {
@@ -162,6 +210,7 @@ async function defaultCursorQuery(
     fieldFilters?: z.infer<typeof fieldFilterSchema>[];
     metricFilters?: z.infer<typeof metricFilterSchema>[];
     systemFilters?: z.infer<typeof systemFilterSchema>[];
+    visibleColumns?: VisibleColumn[];
     limit: number;
     cursor?: number;
     offset?: number;
@@ -240,7 +289,7 @@ async function defaultCursorQuery(
       cursor: { id: cursorRow.id },
     });
 
-    const enriched = await attachFieldValues(ctx.prisma, runs);
+    const enriched = await attachFieldValues(ctx.prisma, runs, input.visibleColumns);
     const nextOffset = runs.length === input.limit ? input.offset! + runs.length : null;
     return {
       runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id), forkedFromRunId: r.forkedFromRunId ? sqidEncode(r.forkedFromRunId) : null })),
@@ -258,7 +307,7 @@ async function defaultCursorQuery(
     cursor: input.cursor ? { id: input.cursor } : undefined,
   });
 
-  const enriched = await attachFieldValues(ctx.prisma, runs);
+  const enriched = await attachFieldValues(ctx.prisma, runs, input.visibleColumns);
   const nextCursor = runs.length === input.limit ? runs[runs.length - 1].id : null;
   return {
     runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id), forkedFromRunId: r.forkedFromRunId ? sqidEncode(r.forkedFromRunId) : null })),
@@ -283,6 +332,7 @@ async function defaultCursorQueryWithFieldFilters(
     fieldFilters?: z.infer<typeof fieldFilterSchema>[];
     metricFilters?: z.infer<typeof metricFilterSchema>[];
     systemFilters?: z.infer<typeof systemFilterSchema>[];
+    visibleColumns?: VisibleColumn[];
     limit: number;
     cursor?: number;
     offset?: number;
@@ -414,7 +464,7 @@ async function defaultCursorQueryWithFieldFilters(
   const idOrder = new Map(rows.map((r, i) => [r.id, i]));
   runs.sort((a: any, b: any) => (idOrder.get(a.id) ?? 0) - (idOrder.get(b.id) ?? 0));
 
-  const enriched = await attachFieldValues(ctx.prisma, runs);
+  const enriched = await attachFieldValues(ctx.prisma, runs, input.visibleColumns);
 
   if (useOffset) {
     const nextOffset = runs.length === input.limit ? input.offset! + runs.length : null;
@@ -448,6 +498,7 @@ async function systemColumnSortQuery(
     fieldFilters?: z.infer<typeof fieldFilterSchema>[];
     metricFilters?: z.infer<typeof metricFilterSchema>[];
     systemFilters?: z.infer<typeof systemFilterSchema>[];
+    visibleColumns?: VisibleColumn[];
     limit: number;
     offset?: number;
     sortField?: string;
@@ -604,7 +655,7 @@ async function systemColumnSortQuery(
   const idOrder = new Map(rows.map((r, i) => [r.id, i]));
   runs.sort((a: any, b: any) => (idOrder.get(a.id) ?? 0) - (idOrder.get(b.id) ?? 0));
 
-  const enriched = await attachFieldValues(ctx.prisma, runs);
+  const enriched = await attachFieldValues(ctx.prisma, runs, input.visibleColumns);
 
   if (useOffset) {
     const nextOffset = runs.length === input.limit ? input.offset! + runs.length : null;
@@ -645,6 +696,7 @@ async function jsonFieldSortQuery(
     fieldFilters?: z.infer<typeof fieldFilterSchema>[];
     metricFilters?: z.infer<typeof metricFilterSchema>[];
     systemFilters?: z.infer<typeof systemFilterSchema>[];
+    visibleColumns?: VisibleColumn[];
     limit: number;
     sortField?: string;
     sortSource?: "system" | "config" | "systemMetadata" | "metric";
@@ -792,7 +844,7 @@ async function jsonFieldSortQuery(
     ? offset + sortedIds.length
     : null;
 
-  const enriched = await attachFieldValues(ctx.prisma, runs);
+  const enriched = await attachFieldValues(ctx.prisma, runs, input.visibleColumns);
   return {
     runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id), forkedFromRunId: r.forkedFromRunId ? sqidEncode(r.forkedFromRunId) : null })),
     nextCursor: null,
@@ -815,6 +867,7 @@ async function metricSortQuery(
     fieldFilters?: z.infer<typeof fieldFilterSchema>[];
     metricFilters?: z.infer<typeof metricFilterSchema>[];
     systemFilters?: z.infer<typeof systemFilterSchema>[];
+    visibleColumns?: VisibleColumn[];
     limit: number;
     sortField?: string;
     sortAggregation?: string;
@@ -880,7 +933,7 @@ async function metricSortQuery(
     ? offset + sortedRows.length
     : null;
 
-  const enriched = await attachFieldValues(ctx.prisma, runs);
+  const enriched = await attachFieldValues(ctx.prisma, runs, input.visibleColumns);
   const t4 = performance.now();
 
   console.log(`[metricSortQuery] ${input.projectName} sort=${sortLogName} — PG candidates: ${(t1-t0).toFixed(0)}ms, CH sort: ${(t2-t1).toFixed(0)}ms, PG hydrate: ${(t3-t2).toFixed(0)}ms, fieldValues: ${(t4-t3).toFixed(0)}ms, total: ${(t4-t0).toFixed(0)}ms (${sortedRows.length} sorted, ${runs.length} hydrated)`);

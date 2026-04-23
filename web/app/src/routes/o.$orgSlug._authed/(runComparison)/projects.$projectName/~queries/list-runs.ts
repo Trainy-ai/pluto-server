@@ -8,6 +8,11 @@ import type { DateFilterParam, FieldFilterParam, MetricFilterParam, SystemFilter
 export type ListRunResponse = inferOutput<typeof trpc.runs.list>;
 export type Run = ListRunResponse["runs"][number];
 
+/** (source, key) pair identifying a config/systemMetadata field to include
+ *  in the _flatConfig/_flatSystemMetadata blobs returned by runs.list.
+ *  Kept narrow — matches the backend's VisibleColumn shape. */
+export type VisibleColumn = { source: "config" | "systemMetadata"; key: string };
+
 export const useListRuns = (
   orgId: string,
   projectName: string,
@@ -21,6 +26,10 @@ export const useListRuns = (
   systemFilters?: SystemFilterParam[],
   pageSize?: number,
   pageBase?: number,
+  // When provided, server only includes these (source, key) pairs in the
+  // flat field-value blobs on each row. [] → empty blobs (no keys).
+  // omitted → legacy behavior (every key for every run; unbounded payload).
+  visibleColumns?: VisibleColumn[],
 ) => {
   // Fetch at least 2x the display page size so clicking "next" always has data
   const fetchLimit = Math.max(pageSize ? pageSize * 2 : RUNS_FETCH_LIMIT, RUNS_FETCH_LIMIT);
@@ -47,8 +56,9 @@ export const useListRuns = (
   const jumpOffset = jumped ? pageBase * (pageSize || DEFAULT_PAGE_SIZE) : 0;
 
   return useInfiniteQuery({
-    // Include pageBase in queryKey so jumping creates a fresh cache entry
-    queryKey: [...queryOptions.queryKey, { tags, status, search, dateFilters, sort, fieldFilters, metricFilters, systemFilters, pageBase: pageBase || 0 }],
+    // Include pageBase and visibleColumns in queryKey so each distinct
+    // (filter + visible-column set) combination gets its own cache entry.
+    queryKey: [...queryOptions.queryKey, { tags, status, search, dateFilters, sort, fieldFilters, metricFilters, systemFilters, pageBase: pageBase || 0, visibleColumns }],
     queryFn: async ({ pageParam }) => {
       // After a jump, all fetches use offset mode (no cursor/keyset dependency)
       const useOffsetMode = jumped;
@@ -78,6 +88,7 @@ export const useListRuns = (
         fieldFilters: fieldFilters && fieldFilters.length > 0 ? fieldFilters : undefined,
         metricFilters: metricFilters && metricFilters.length > 0 ? metricFilters : undefined,
         systemFilters: systemFilters && systemFilters.length > 0 ? systemFilters : undefined,
+        visibleColumns,
         // Sort params
         ...(sort ? {
           sortField: sort.field,

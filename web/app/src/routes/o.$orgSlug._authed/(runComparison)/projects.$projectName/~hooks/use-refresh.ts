@@ -18,13 +18,14 @@ export function useRefresh({ queries, onRefresh }: UseRefreshOptions) {
     try {
       setIsRefreshing(true);
 
-      // Invalidate all specified queries
+      // Invalidate specified queries. The caller owns `refetchType` per
+      // entry — we don't force a value here, so callers can mix
+      // "active" (only refetch what's currently visible) and "all"
+      // (refetch every cached entry including inactive ones) as needed.
+      // If omitted, React Query's default is "active".
       await Promise.all(
         queries.map((query) =>
-          queryClient.invalidateQueries({
-            ...query,
-            refetchType: "all",
-          }),
+          queryClient.invalidateQueries(query),
         ),
       );
 

@@ -36,12 +36,13 @@ interface CacheEntry<T> {
  * The *2 multiplier approximates V8's UTF-16 string representation
  * (each JSON byte becomes 2 bytes in heap) plus rough object overhead.
  */
-// Sized for a 2 GiB pod memory limit with ~30% safety margin on peak RSS.
-// Empirical fit from local load testing: peak RSS ≈ 200 MB baseline + 1.8 × maxSize.
-// For a 2048 MB limit: (2048 × 0.85 − 200) / 1.8 ≈ 857 MB theoretical max.
-// We pick 384 MB to leave plenty of headroom for GC pauses, Prisma, and burst
-// traffic heavier than the load test covered.
-const L1_MAX_BYTES = 384 * 1024 * 1024; // 384 MB
+// Sized to leave headroom for transient request work within the 1700 MB V8
+// heap cap (set in prod via NODE_OPTIONS=--max-old-space-size=1700). At a
+// full L1, ~1440 MB of V8 heap remains for concurrent request build +
+// serialize scratch. The previous 384 MB cap left less room and was
+// reduced after observing heap-limit OOMs driven by large non-cached
+// responses (e.g. runs.list).
+const L1_MAX_BYTES = 256 * 1024 * 1024; // 256 MB
 
 const l1Cache = new LRUCache<string, CacheEntry<unknown>>({
   max: 10000, // Entry count cap (backstop)

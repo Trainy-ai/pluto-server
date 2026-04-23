@@ -83,16 +83,22 @@ export const Route = createFileRoute(
   },
   beforeLoad: async ({ context, params }) => {
     const auth = context.auth;
+    const organizationId = auth.activeOrganization.id;
 
-    // Pass the queryClient when prefetching
-    // prefetchListRuns(
-    //   context.queryClient,
-    //   context.auth.activeOrganization.id,
-    //   params.projectName,
-    // );
+    // Prefetch run-table-views so the component's useState for pageSize can
+    // read the saved view's value synchronously on first render. Without
+    // this, first render uses a fallback pageSize, useEffect then applies
+    // the view's pageSize, and two runs.list queries fire with different
+    // limits (the "first-load zombie" bug).
+    await context.queryClient.ensureQueryData(
+      trpc.runTableViews.list.queryOptions({
+        organizationId,
+        projectName: params.projectName,
+      }),
+    );
 
     return {
-      organizationId: auth.activeOrganization.id,
+      organizationId,
       projectName: params.projectName,
       organizationSlug: params.orgSlug,
     };
@@ -397,31 +403,42 @@ function RouteComponent() {
     [activeViewStorageKey],
   );
 
-  // Page size state — default view's page size persisted to localStorage
-  const defaultPageSizeKey = `run-table-pageSize-${organizationId}-${projectName}`;
-  const getDefaultPageSize = useCallback(() => {
+  // Page size state — sourced from the saved view in DB (prefetched in
+  // beforeLoad). Resolves on first render: active view → saved "Default"
+  // view → hardcoded DEFAULT_PAGE_SIZE. No localStorage: persistence for
+  // the Default view lives in its RunTableView row. Users wanting the
+  // pageSize to stick across visits save a "Default" view.
+  const getInitialPageSize = useCallback((): number => {
     try {
-      const saved = localStorage.getItem(defaultPageSizeKey);
-      if (saved) {
-        const n = Number(saved);
-        if (Number.isInteger(n) && n > 0) return n;
+      const data = queryClient.getQueryData(
+        trpc.runTableViews.list.queryOptions({
+          organizationId,
+          projectName,
+        }).queryKey,
+      ) as { views: Array<{ id: string; name: string; config: { pageSize?: number } }> } | undefined;
+      const views = data?.views;
+      if (views) {
+        const savedActiveViewId = (() => {
+          try { return localStorage.getItem(activeViewStorageKey); } catch { return null; }
+        })();
+        if (savedActiveViewId) {
+          const active = views.find((v) => v.id === savedActiveViewId);
+          if (active?.config.pageSize != null) return active.config.pageSize;
+        }
+        const defaultView = views.find((v) => v.name === "Default");
+        if (defaultView?.config.pageSize != null) return defaultView.config.pageSize;
       }
     } catch {}
     return DEFAULT_PAGE_SIZE;
-  }, [defaultPageSizeKey]);
-  const [pageSize, setPageSize] = useState<number>(getDefaultPageSize);
+  }, [organizationId, projectName, activeViewStorageKey]);
+  const [pageSize, setPageSize] = useState<number>(getInitialPageSize);
   // Page jump offset: 0-based display page index that table page 0 corresponds to.
   // When pageBase > 0, the infinite query fetches starting from (pageBase * pageSize).
   const [pageBase, setPageBase] = useState(0);
-  const activeViewIdRef = useRef(activeViewId);
-  activeViewIdRef.current = activeViewId;
-  // Called from the page size dropdown in the table — persist only for default view
+  // Called from the page size dropdown in the table.
   const handlePageSizeChange = useCallback((size: number) => {
     setPageSize(size);
-    if (!activeViewIdRef.current) {
-      try { localStorage.setItem(defaultPageSizeKey, String(size)); } catch {}
-    }
-  }, [defaultPageSizeKey]);
+  }, []);
 
   // Known metric aggregation suffixes for parsing column table IDs
   const METRIC_AGGS = new Set(["MIN", "MAX", "AVG", "LAST", "VARIANCE"]);
@@ -513,11 +530,26 @@ function RouteComponent() {
 
   const { refresh, lastRefreshed } = useRefresh({
     queries: [
+      // runs.list only — "active" prevents the pageSize zombie: each
+      // dropdown change leaves inactive cache entries (limit=40,
+      // limit=200, etc.) which would otherwise all refetch on every
+      // refresh tick, stacking concurrent backend requests.
       {
         predicate: (query) => {
           const firstEntry = query.queryKey[0] as string | string[];
-          return firstEntry?.[0] === "runs";
+          return firstEntry?.[0] === "runs" && firstEntry?.[1] === "list";
         },
+        refetchType: "active",
+      },
+      // Every other runs.* query — keep "all" so charts, filters, diff
+      // view, distinct* lookups, metric summaries all refresh eagerly
+      // as before. No behavior change for anything except runs.list.
+      {
+        predicate: (query) => {
+          const firstEntry = query.queryKey[0] as string | string[];
+          return firstEntry?.[0] === "runs" && firstEntry?.[1] !== "list";
+        },
+        refetchType: "all",
       },
     ],
   });
@@ -545,6 +577,29 @@ function RouteComponent() {
     setPageBase(0);
   }, [sortParam, serverFilters, debouncedSearch]);
 
+  // Column configuration (custom columns in runs table).
+  // Declared before useListRuns so we can derive `visibleColumns` from it
+  // and pass that into the list query — the server trims the per-run
+  // config/systemMetadata blobs to exactly what the table is showing.
+  const { columns: customColumns, addColumn, removeColumn, updateColumns, reorderColumns, toggleColumnPin } = useColumnConfig(organizationSlug, projectName);
+
+  // Map the customColumns array to the runs.list visibleColumns input shape.
+  // Only config / systemMetadata columns flow into the flat blobs; system
+  // columns come from system fields and metric columns come from
+  // runs.metricSummaries. ColumnConfig.id carries the `source.` prefix
+  // (e.g. "config.lr") — strip it here to match the backend key shape.
+  const listVisibleColumns = useMemo(() => {
+    const out: { source: "config" | "systemMetadata"; key: string }[] = [];
+    for (const col of customColumns) {
+      if (col.source === "config" || col.source === "systemMetadata") {
+        const prefix = `${col.source}.`;
+        const key = col.id.startsWith(prefix) ? col.id.slice(prefix.length) : col.id;
+        out.push({ source: col.source, key });
+      }
+    }
+    return out;
+  }, [customColumns]);
+
   // Load runs using infinite query with standard TanStack/tRPC v11 approach
   const {
     data,
@@ -555,7 +610,7 @@ function RouteComponent() {
     isFetching,
     isError,
     error,
-  } = useListRuns(organizationId, projectName, serverFilters.tags, serverFilters.status, debouncedSearch, serverFilters.dateFilters, sortParam, serverFilters.fieldFilters as FieldFilterParam[] | undefined, serverFilters.metricFilters as MetricFilterParam[] | undefined, serverFilters.systemFilters as SystemFilterParam[] | undefined, pageSize, pageBase);
+  } = useListRuns(organizationId, projectName, serverFilters.tags, serverFilters.status, debouncedSearch, serverFilters.dateFilters, sortParam, serverFilters.fieldFilters as FieldFilterParam[] | undefined, serverFilters.metricFilters as MetricFilterParam[] | undefined, serverFilters.systemFilters as SystemFilterParam[] | undefined, pageSize, pageBase, listVisibleColumns);
 
   // Mutation for updating tags
   const updateTagsMutation = useUpdateTags(organizationId, projectName);
@@ -567,9 +622,6 @@ function RouteComponent() {
   // This ensures the filter dropdown shows all available tags, not just those from loaded runs
   const { data: distinctTagsData } = useDistinctTags(organizationId, projectName);
   const allTags = distinctTagsData?.tags ?? [];
-
-  // Column configuration (custom columns in runs table)
-  const { columns: customColumns, addColumn, removeColumn, updateColumns, reorderColumns, toggleColumnPin } = useColumnConfig(organizationSlug, projectName);
   const { data: columnKeysData, isLoading: columnKeysLoading } = useDistinctColumnKeys(organizationId, projectName);
 
   // Metric names for column picker and filter dropdown (initial load: last 100)
@@ -690,8 +742,10 @@ function RouteComponent() {
     setAllOverrides({});
     setAllFilters([]);
     setSorting([]);
-    setPageSize(getDefaultPageSize());
-  }, [updateColumns, setAllOverrides, setAllFilters, getDefaultPageSize]);
+    // Reset to the application-hardcoded default, not the user's saved
+    // "Default" view (which is its own view and can be loaded separately).
+    setPageSize(DEFAULT_PAGE_SIZE);
+  }, [updateColumns, setAllOverrides, setAllFilters]);
 
   // Flatten the pages to get all runs, deduplicating by ID.
   // Also merges pre-fetched URL runs that may not be in paginated results.
@@ -723,25 +777,29 @@ function RouteComponent() {
     return Array.from(uniqueRuns.values());
   }, [data, prefetchedUrlRuns]);
 
-  // Pre-fetch selected runs that aren't in the paginated data.
-  // Reads cached selection IDs from IndexedDB (independent of useSelectedRuns)
-  // so old/distant runs appear in the table when "Display only selected" is on.
+  // Pre-fetch selected runs' FULL data via runs.getByIds.
+  //
+  // runs.list now trims its per-run flat blobs to only visibleColumns,
+  // which means rows arriving from the table don't have every config /
+  // systemMetadata key the side-by-side diff view needs. We resolve that
+  // here: always fetch full blobs for every selected run via getByIds
+  // (which is not trimmed), regardless of whether the run also happens
+  // to be on the current table page. Side-by-side then reads from this
+  // source for guaranteed completeness.
+  //
+  // The previous behavior — only fetching runs "missing" from the table
+  // — worked when runs.list carried full blobs. With the trim in place,
+  // it would miss keys on runs that happen to be on the current page.
   const cachedSelectedRunIds = useCachedSelectedRunIds(organizationId, projectName);
-
-  const missingSelectedRunIds = useMemo(() => {
-    if (cachedSelectedRunIds.length === 0) return [];
-    const loadedIds = new Set(allLoadedRuns.map((r) => r.id));
-    return cachedSelectedRunIds.filter((id) => !loadedIds.has(id));
-  }, [cachedSelectedRunIds, allLoadedRuns]);
 
   const { data: prefetchedSelectedRuns } = useQuery(
     trpc.runs.getByIds.queryOptions(
       {
         organizationId,
         projectName,
-        runIds: missingSelectedRunIds,
+        runIds: cachedSelectedRunIds,
       },
-      { enabled: missingSelectedRunIds.length > 0 },
+      { enabled: cachedSelectedRunIds.length > 0 },
     ),
   );
 
@@ -749,24 +807,27 @@ function RouteComponent() {
   // Without merging prefetchedUrlRuns, runs specified via ?runs= that aren't on the
   // current page can't be found by buildSelectionFromUrlParams, causing the URL
   // selection to silently fail and fall back to default auto-select.
+  //
+  // Precedence (highest first):
+  //   prefetchedSelectedRuns  (full `_flatConfig` / `_flatSystemMetadata` blobs)
+  //   prefetchedUrlRuns       (also full blobs — from getByIds)
+  //   allLoadedRuns           (from runs.list; blobs trimmed to visibleColumns)
+  //
+  // Selected runs must use the prefetched (untrimmed) version so downstream
+  // consumers — notably the side-by-side diff view — see every config and
+  // systemMetadata key, not just the runs-table columns. A plain "add if
+  // missing" merge would silently drop to the trimmed version whenever the
+  // selected run happened to also be on the current table page.
   const allVisibleRuns = useMemo(() => {
-    const loadedIds = new Set(allLoadedRuns.map((r) => r.id));
-    const extras: typeof allLoadedRuns = [];
-
-    const mergeExtra = (source?: { runs: typeof allLoadedRuns }) => {
-      if (!source?.runs?.length) return;
-      for (const r of source.runs) {
-        if (!loadedIds.has(r.id)) {
-          loadedIds.add(r.id);
-          extras.push(r);
-        }
-      }
-    };
-
-    mergeExtra(prefetchedSelectedRuns);  // Cache-prefetched (for "Display only selected")
-    mergeExtra(prefetchedUrlRuns);       // URL-prefetched (for ?runs= deep links)
-
-    return extras.length > 0 ? [...allLoadedRuns, ...extras] : allLoadedRuns;
+    const byId = new Map<string, typeof allLoadedRuns[number]>();
+    // Seed with trimmed rows first...
+    for (const r of allLoadedRuns) byId.set(r.id, r);
+    // ...then overwrite with untrimmed rows where they exist.
+    for (const r of prefetchedUrlRuns?.runs ?? []) byId.set(r.id, r);
+    for (const r of prefetchedSelectedRuns?.runs ?? []) byId.set(r.id, r);
+    return byId.size === allLoadedRuns.length
+      ? allLoadedRuns.map((r) => byId.get(r.id) ?? r)
+      : Array.from(byId.values());
   }, [allLoadedRuns, prefetchedSelectedRuns, prefetchedUrlRuns]);
 
   // Extract metric column specs for the summaries query
