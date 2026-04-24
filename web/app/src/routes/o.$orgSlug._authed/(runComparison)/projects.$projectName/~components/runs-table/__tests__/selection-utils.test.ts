@@ -7,18 +7,7 @@ import {
   ensureSelectedRunsIncluded,
 } from "../selection-utils";
 import type { Run } from "../../../~queries/list-runs";
-
-// Minimal Run factory — only `id` matters for selection logic
-function makeRun(id: string): Run {
-  return {
-    id,
-    name: `run-${id}`,
-    status: "COMPLETED",
-    tags: [],
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  } as Run;
-}
+import { makeRun } from "./_fixtures";
 
 function makeSelected(
   runs: Run[],

@@ -25,6 +25,7 @@ import { useRefresh } from "./~hooks/use-refresh";
 import { useRunCount } from "./~queries/run-count";
 import { useRunFilters } from "./~hooks/use-run-filters";
 import { SYSTEM_FILTERABLE_FIELDS, type FilterableField, type FieldFilterParam, type MetricFilterParam, type SystemFilterParam, type SortParam } from "@/lib/run-filters";
+import { buildRefreshQueryFilters } from "./~lib/build-refresh-queries";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   ResizablePanelGroup,
@@ -528,30 +529,13 @@ function RouteComponent() {
     [updateDebouncedSearch, searchStorageKey],
   );
 
+  // Side-by-side narrows the "everything else runs.*" refresh to only the
+  // queries that view observes (runs.getByIds, metricSummaries, distinctTags,
+  // and runIds-scoped distinctMetricNames). MetricsDisplay is fully unmounted
+  // in that mode so its dashboard queries would otherwise refetch needlessly
+  // — refetchType "all" ignores whether a query still has an observer.
   const { refresh, lastRefreshed } = useRefresh({
-    queries: [
-      // runs.list only — "active" prevents the pageSize zombie: each
-      // dropdown change leaves inactive cache entries (limit=40,
-      // limit=200, etc.) which would otherwise all refetch on every
-      // refresh tick, stacking concurrent backend requests.
-      {
-        predicate: (query) => {
-          const firstEntry = query.queryKey[0] as string | string[];
-          return firstEntry?.[0] === "runs" && firstEntry?.[1] === "list";
-        },
-        refetchType: "active",
-      },
-      // Every other runs.* query — keep "all" so charts, filters, diff
-      // view, distinct* lookups, metric summaries all refresh eagerly
-      // as before. No behavior change for anything except runs.list.
-      {
-        predicate: (query) => {
-          const firstEntry = query.queryKey[0] as string | string[];
-          return firstEntry?.[0] === "runs" && firstEntry?.[1] !== "list";
-        },
-        refetchType: "all",
-      },
-    ],
+    queries: useMemo(() => buildRefreshQueryFilters(viewMode), [viewMode]),
   });
 
   const { data: runCount, isLoading: runCountLoading } = useRunCount(
@@ -849,7 +833,7 @@ function RouteComponent() {
   }, [allVisibleRuns, cachedSelectedRunIds]);
 
   // Fetch metric summaries for visible + selected runs
-  const { data: metricSummariesData } = useMetricSummaries(
+  const { data: metricSummariesData, loadedRunIds: metricLoadedRunIds } = useMetricSummaries(
     organizationId,
     projectName,
     metricRunIds,
@@ -859,18 +843,25 @@ function RouteComponent() {
   // Merge metric summaries into runs.
   // Field values (_flatConfig, _flatSystemMetadata) already arrive inline
   // from runs.list and getByIds — no separate fetch needed.
+  //
+  // _metricsLoading is set when the run isn't yet in the fetch
+  // accumulator AND there are metric columns to fetch. Cells in metric
+  // columns use this to render a skeleton instead of "-" so the user
+  // can tell "still loading" apart from "value is genuinely null/NaN".
   const runs = useMemo(() => {
-    if (!metricSummariesData?.summaries || metricColumnSpecs.length === 0) {
-      return allVisibleRuns;
-    }
-
-    const summaries = metricSummariesData.summaries;
+    if (metricColumnSpecs.length === 0) return allVisibleRuns;
+    const summaries = metricSummariesData?.summaries ?? {};
     return allVisibleRuns.map((run) => {
       const runSummaries = summaries[run.id];
-      if (!runSummaries) return run;
-      return { ...run, metricSummaries: runSummaries };
+      const isLoading = !metricLoadedRunIds.has(run.id);
+      if (runSummaries == null && !isLoading) return run;
+      return {
+        ...run,
+        metricSummaries: runSummaries,
+        _metricsLoading: isLoading,
+      } as typeof run & { _metricsLoading?: boolean };
     });
-  }, [allVisibleRuns, metricSummariesData, metricColumnSpecs.length]);
+  }, [allVisibleRuns, metricSummariesData, metricLoadedRunIds, metricColumnSpecs.length]);
 
   // Build filterable fields from system fields + config/systemMetadata keys.
   // When the user is searching, merge results from the cache table so keys
@@ -1019,19 +1010,33 @@ function RouteComponent() {
     return changed ? result : selectedRunsWithColors;
   }, [selectedRunsWithColors, metricSummariesData, metricColumnSpecs.length]);
 
-  // Filter out stale prefetched runs that are no longer selected.
+  // Filter out true phantom runs from prefetchedSelectedRuns.
   // useCachedSelectedRunIds reads from IndexedDB once on mount and doesn't
-  // update within the session, so prefetchedSelectedRuns may contain phantom
-  // runs that the user has since deselected. Remove them here to avoid ghost
-  // rows appearing in the table during pagination.
+  // update within the session, so prefetchedSelectedRuns can contain runs
+  // that aren't on the current runs.list page AND aren't selected anymore
+  // (e.g. cached from a prior session). Those are phantoms and would render
+  // as ghost rows. But a run that's also on the current page must NOT be
+  // filtered: when the user deselects a URL-linked run, it stays in
+  // prefetchedSelectedRuns (the getByIds cache doesn't refetch instantly)
+  // but it's still a legitimate row on page 1 of runs.list — dropping it
+  // makes the row vanish from the table the moment you uncheck it.
   const tableRuns = useMemo(() => {
     if (!prefetchedSelectedRuns?.runs?.length) return runs;
     const prefetchedIds = new Set(prefetchedSelectedRuns.runs.map((r: Run) => r.id));
     const actualSelectedIds = new Set(Object.keys(selectedRunsWithColors));
-    // Keep all runs that are not from the (potentially stale) prefetched set,
-    // and for those that are, keep them only if they are still actually selected.
-    return runs.filter((r) => !prefetchedIds.has(r.id) || actualSelectedIds.has(r.id));
-  }, [runs, prefetchedSelectedRuns, selectedRunsWithColors]);
+    const pageIds = new Set(allLoadedRuns.map((r) => r.id));
+    return runs.filter((r) => {
+      // Not from the prefetched-selected set → always a real row.
+      if (!prefetchedIds.has(r.id)) return true;
+      // Currently selected → keep (user wants it visible).
+      if (actualSelectedIds.has(r.id)) return true;
+      // On the current runs.list page → keep (it's a real table row, the
+      // prefetch just happened to overlap).
+      if (pageIds.has(r.id)) return true;
+      // Otherwise: phantom from a stale IndexedDB cache; drop it.
+      return false;
+    });
+  }, [runs, prefetchedSelectedRuns, selectedRunsWithColors, allLoadedRuns]);
 
   // Fetch logs only for selected runs (lazy loading)
   const selectedRunIds = useMemo(
@@ -1311,29 +1316,41 @@ function RouteComponent() {
                 <Skeleton className="h-full w-full" />
               ) : (
                 <>
-                  {viewMode === "side-by-side" && (
+                  {viewMode === "side-by-side" ? (
                     <SideBySideView
                       selectedRunsWithColors={visibleRunsWithColors}
                       onRemoveRun={(runId) => handleRunSelection(runId, false)}
                       organizationId={organizationId}
                       projectName={projectName}
                     />
+                  ) : (
+                    // MetricsDisplay is only mounted while the user is on
+                    // Charts view. Keeping it mounted-but-hidden via CSS in
+                    // side-by-side mode left every dashboard useQuery an
+                    // active observer and every chart's DOM listeners live,
+                    // which produced visible UI lag (re-renders on cache
+                    // changes, RefreshButton timer firing, dynamic-section
+                    // regex queries refetching) even with auto-refresh off.
+                    // Switching back to Charts re-mounts the tree; query
+                    // data is served from the TanStack Query cache so the
+                    // refetch cost is minimal. Only in-component state like
+                    // per-chart uPlot zoom is lost on the switch.
+                    <div className="relative h-full">
+                      <MetricsDisplay
+                        groupedMetrics={groupedMetrics}
+                        onRefresh={refresh}
+                        organizationId={organizationId}
+                        projectName={projectName}
+                        lastRefreshed={lastRefreshed}
+                        selectedRuns={effectiveRunsWithColors}
+                        selectedViewId={chart ?? null}
+                        onViewChange={handleViewChange}
+                        showInheritedMetrics={urlInherited === "false" ? false : true}
+                        onInheritedChange={handleInheritedChange}
+                        experimentRunIdsMap={experimentRunIdsMap}
+                      />
+                    </div>
                   )}
-                  <div className={`relative h-full ${viewMode === "side-by-side" ? "hidden" : ""}`}>
-                    <MetricsDisplay
-                      groupedMetrics={groupedMetrics}
-                      onRefresh={refresh}
-                      organizationId={organizationId}
-                      projectName={projectName}
-                      lastRefreshed={lastRefreshed}
-                      selectedRuns={effectiveRunsWithColors}
-                      selectedViewId={chart ?? null}
-                      onViewChange={handleViewChange}
-                      showInheritedMetrics={urlInherited === "false" ? false : true}
-                      onInheritedChange={handleInheritedChange}
-                      experimentRunIdsMap={experimentRunIdsMap}
-                    />
-                  </div>
                 </>
               )}
             </div>

@@ -3,24 +3,13 @@ import { getRowRange, getCustomColumnValue, formatCellValue } from "../columns-u
 import type { Row } from "@tanstack/react-table";
 import type { Run } from "../../../~queries/list-runs";
 import type { ColumnConfig } from "../../../~hooks/use-column-config";
+import { makeRun } from "./_fixtures";
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 /** Minimal TanStack Row stub — only `id` and `original` are used by getRowRange */
 function makeRow(id: string): Row<Run> {
   return { id, original: makeRun(id) } as unknown as Row<Run>;
-}
-
-function makeRun(id: string, overrides: Partial<Run> & Record<string, any> = {}): Run {
-  return {
-    id,
-    name: `run-${id}`,
-    status: "COMPLETED",
-    tags: [],
-    createdAt: "2025-03-01T12:00:00.000Z",
-    updatedAt: "2025-03-02T14:30:00.000Z",
-    ...overrides,
-  } as Run;
 }
 
 // ── getRowRange ──────────────────────────────────────────────────────────

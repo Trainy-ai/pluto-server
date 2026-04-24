@@ -228,10 +228,13 @@ function isValidRegex(pattern: string): boolean {
   }
 }
 
-// Check if a key or any of its values match the search
+// Check if a key or any of its values match the search. `getValues` is invoked
+// lazily — when the key itself matches, we short-circuit without ever paying
+// the formatValue / JSON.stringify cost for the row's values, which matters a
+// lot for Config sections with thousands of keyed object blobs.
 function rowMatchesSearch(
   key: string,
-  values: unknown[],
+  getValues: () => unknown[],
   searchTerm: string,
   isRegex: boolean,
 ): boolean {
@@ -240,14 +243,14 @@ function rowMatchesSearch(
     try {
       const re = new RegExp(searchTerm, "i");
       if (re.test(key)) return true;
-      return values.some((v) => v != null && re.test(formatValue(v)));
+      return getValues().some((v) => v != null && re.test(formatValue(v)));
     } catch {
       return true; // invalid regex shows everything
     }
   }
   const lower = searchTerm.toLowerCase();
   if (key.toLowerCase().includes(lower)) return true;
-  return values.some((v) => v != null && formatValue(v).toLowerCase().includes(lower));
+  return getValues().some((v) => v != null && formatValue(v).toLowerCase().includes(lower));
 }
 
 const METRIC_AGGS = ["MIN", "MAX", "AVG", "LAST", "VARIANCE"] as const;
@@ -373,7 +376,15 @@ function MetricSubGroup({
 }
 
 export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizationId, projectName }: SideBySideViewProps) {
-  const selectedRuns = Object.values(selectedRunsWithColors);
+  // Memoize so the array reference is stable across renders. Without this,
+  // every downstream useMemo that depends on `selectedRuns` recomputes each
+  // render — including `configMatchedKeys`, which then trips the "reset
+  // paginated window" effect and snaps the visible count back to 100 before
+  // the IntersectionObserver's bump can take effect.
+  const selectedRuns = useMemo(
+    () => Object.values(selectedRunsWithColors),
+    [selectedRunsWithColors],
+  );
 
   // Search state
   const [searchValue, setSearchValue] = useState("");
@@ -561,6 +572,13 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
 
   const { getWidth, handleMouseDown, totalWidth } = useResizableColumns(selectedRuns.length);
 
+  // Config pagination: scroll container is the IntersectionObserver root, a
+  // sentinel row at the end of the visible slice triggers the next page.
+  // The observer effect itself is declared below, after configHasMore /
+  // configMatchedKeys are computed.
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const configSentinelRef = useRef<HTMLTableRowElement | null>(null);
+
   // Helper to get owner name from Pluto creator relation
   function getPlutoOwner(run: Run): string {
     if (run.creator?.name) return run.creator.name;
@@ -628,39 +646,71 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
   // Active search term (only apply if valid)
   const activeSearch = isInvalidRegex ? "" : searchValue;
 
-  // Filter helper for key-value rows
+  // Filter helper for key-value rows. The values getter is lazy so the search
+  // short-circuits on a key match without ever formatting the row's values.
   const keyMatchesSearch = useCallback(
     (key: string, getValues: () => unknown[]) => {
       if (!activeSearch) return true;
-      return rowMatchesSearch(key, getValues(), activeSearch, isRegexMode);
+      return rowMatchesSearch(key, getValues, activeSearch, isRegexMode);
     },
     [activeSearch, isRegexMode],
   );
 
-  // Shared filter+precompute helper: filters keys by search & diff, pre-computes values, highlights, and inline diffs.
+  // Phase 1: cheap filter. Only evaluates values when the key doesn't match
+  // the search and when diff-only mode is on (needs formatted values to
+  // compare equality). No highlights, no inline diffs.
+  const filterSectionKeys = useCallback(
+    <T,>(
+      keys: T[],
+      getKey: (item: T) => string,
+      getValues: (item: T) => string[],
+      getRawValues?: (item: T) => unknown[],
+    ): T[] => {
+      const diffEnabled = showOnlyDiffs && selectedRuns.length >= 2;
+      return keys.filter((item) => {
+        const key = getKey(item);
+        if (!keyMatchesSearch(key, () => (getRawValues ? getRawValues(item) : getValues(item)))) {
+          return false;
+        }
+        if (diffEnabled && !hasRowDiff(getValues(item))) return false;
+        return true;
+      });
+    },
+    [keyMatchesSearch, showOnlyDiffs, selectedRuns.length],
+  );
+
+  // Phase 2: expensive per-row compute. Runs formatValue × runs, diff
+  // highlights, and word-level inline diffs — only on items we actually plan
+  // to render. Split from phase 1 so paginated sections (Config) can skip
+  // this work for rows beyond the visible slice.
+  const computeSectionRows = useCallback(
+    <T,>(
+      items: T[],
+      getValues: (item: T) => string[],
+    ): KeyedRowData<T>[] => {
+      const diffEnabled = showOnlyDiffs && selectedRuns.length >= 2;
+      return items.map((item) => {
+        const values = getValues(item);
+        const highlights = diffEnabled ? getDiffHighlights(values, clampedRefIndex) : values.map(() => undefined);
+        const inlineDiffs = diffEnabled && highlights.some((h) => h !== undefined)
+          ? computeRowInlineDiffs(values, clampedRefIndex, prettyJson)
+          : values.map(() => undefined);
+        return { item, values, highlights, inlineDiffs };
+      });
+    },
+    [showOnlyDiffs, selectedRuns.length, clampedRefIndex, prettyJson],
+  );
+
+  // Convenience wrapper for sections that don't paginate: filter then compute.
   const filterKeyedSection = useCallback(
     <T,>(
       keys: T[],
       getKey: (item: T) => string,
       getValues: (item: T) => string[],
       getRawValues?: (item: T) => unknown[],
-    ): KeyedRowData<T>[] => {
-      const diffEnabled = showOnlyDiffs && selectedRuns.length >= 2;
-      return keys.reduce<KeyedRowData<T>[]>((acc, item) => {
-        const key = getKey(item);
-        const values = getValues(item);
-        const rawValues = getRawValues ? getRawValues(item) : values;
-        if (!keyMatchesSearch(key, () => rawValues)) return acc;
-        if (diffEnabled && !hasRowDiff(values)) return acc;
-        const highlights = diffEnabled ? getDiffHighlights(values, clampedRefIndex) : values.map(() => undefined);
-        const inlineDiffs = diffEnabled && highlights.some((h) => h !== undefined)
-          ? computeRowInlineDiffs(values, clampedRefIndex, prettyJson)
-          : values.map(() => undefined);
-        acc.push({ item, values, highlights, inlineDiffs });
-        return acc;
-      }, []);
-    },
-    [keyMatchesSearch, showOnlyDiffs, selectedRuns.length, clampedRefIndex, prettyJson],
+    ): KeyedRowData<T>[] =>
+      computeSectionRows(filterSectionKeys(keys, getKey, getValues, getRawValues), getValues),
+    [filterSectionKeys, computeSectionRows],
   );
 
   // Filter pluto metadata rows (pre-compute values + highlights)
@@ -678,7 +728,7 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
   const tagsRow = useMemo(() => {
     if (!rowMatchesSearch(
       "Tags",
-      selectedRuns.flatMap(({ run }) => run.tags || []),
+      () => selectedRuns.flatMap(({ run }) => run.tags || []),
       activeSearch || "",
       isRegexMode,
     )) return null;
@@ -712,16 +762,65 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
     [allSysMetaKeys, filterKeyedSection, selectedRuns, runSysMeta],
   );
 
-  const filteredConfigRows = useMemo(
-    () =>
-      filterKeyedSection(
-        nonImportConfigKeys,
-        (key) => key,
-        (key) => selectedRuns.map(({ run }) => formatValue(runConfigs[run.id]?.[key])),
-        (key) => selectedRuns.map(({ run }) => runConfigs[run.id]?.[key]),
-      ),
-    [nonImportConfigKeys, filterKeyedSection, selectedRuns, runConfigs],
+  // Config can be huge (thousands of keys × nested JSON values). Split into
+  // filter (cheap, runs over all keys) and compute (expensive — formatValue
+  // × runs + inline diffs — runs only on the visible slice). The user scrolls
+  // to load more via the sentinel row at the end of the section.
+  const configGetValues = useCallback(
+    (key: string) => selectedRuns.map(({ run }) => formatValue(runConfigs[run.id]?.[key])),
+    [selectedRuns, runConfigs],
   );
+  const configGetRawValues = useCallback(
+    (key: string) => selectedRuns.map(({ run }) => runConfigs[run.id]?.[key]),
+    [selectedRuns, runConfigs],
+  );
+
+  const configMatchedKeys = useMemo(
+    () => filterSectionKeys(nonImportConfigKeys, (k) => k, configGetValues, configGetRawValues),
+    [nonImportConfigKeys, filterSectionKeys, configGetValues, configGetRawValues],
+  );
+
+  const CONFIG_PAGE_SIZE = 100;
+  const [configVisibleCount, setConfigVisibleCount] = useState(CONFIG_PAGE_SIZE);
+
+  // Reset the visible window whenever the inputs that affect matched keys
+  // change. selectedRuns and nonImportConfigKeys are both stable refs (the
+  // former via the useMemo at the top of this component, the latter via the
+  // useMemo that derives it from selectedRuns), so depending on the array
+  // refs here is safe and catches the corner case where a run swap leaves
+  // the key count the same but the key set different — which `.length`
+  // would miss. If the upstream memo chain ever breaks the worst case is
+  // an extra reset to 100, not the original render-loop bug (which is
+  // separately guarded by memoizing selectedRuns inside this component).
+  useEffect(() => {
+    setConfigVisibleCount(CONFIG_PAGE_SIZE);
+  }, [activeSearch, isRegexMode, showOnlyDiffs, selectedRuns, nonImportConfigKeys]);
+
+  const filteredConfigRows = useMemo(
+    () => computeSectionRows(configMatchedKeys.slice(0, configVisibleCount), configGetValues),
+    [configMatchedKeys, configVisibleCount, computeSectionRows, configGetValues],
+  );
+
+  const configHasMore = configMatchedKeys.length > filteredConfigRows.length;
+
+  useEffect(() => {
+    if (!configHasMore) return;
+    const sentinel = configSentinelRef.current;
+    const root = scrollRef.current;
+    if (!sentinel || !root) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setConfigVisibleCount((prev) => prev + CONFIG_PAGE_SIZE);
+        }
+      },
+      // Start loading before the user reaches the bottom so scrolling feels
+      // continuous rather than paused while the next page computes.
+      { root, rootMargin: "400px 0px" },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [configHasMore, configMatchedKeys.length]);
 
   // Filter metric names for search - match on metric name or aggregation labels
   const filteredMetricNames = useMemo(() => {
@@ -873,7 +972,7 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
           )}
         </div>
       </div>
-      <div className="flex-1 overflow-auto">
+      <div ref={scrollRef} className="flex-1 overflow-auto">
         <table className="text-sm" style={{ width: `max(100%, ${totalWidth}px)`, borderCollapse: "separate", borderSpacing: 0, tableLayout: "fixed" }}>
           <colgroup>
             <col style={{ width: getWidth(0), minWidth: MIN_COL_WIDTH }} />
@@ -1141,7 +1240,7 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
             )}
 
             {/* ===== CONFIG section (non-import keys only) ===== */}
-            {filteredConfigRows.length > 0 && (
+            {configMatchedKeys.length > 0 && (
               <>
                 <SectionHeader
                   numRunCols={numRunCols}
@@ -1149,41 +1248,54 @@ export function SideBySideView({ selectedRunsWithColors, onRemoveRun, organizati
                   isCollapsed={!!collapsedSections["config"]}
                   onToggle={() => toggleSection("config")}
                 />
-                {!collapsedSections["config"] &&
-                  filteredConfigRows.map(({ item: key, values, highlights, inlineDiffs }, idx) => (
-                    <tr
-                      key={`cfg-${key}`}
-                      className={`border-b border-border/50 ${
-                        idx % 2 === 0 ? "bg-background" : "bg-muted"
-                      } hover:bg-accent/30 transition-colors`}
-                    >
-                      <td
-                        style={{ borderRight: KEY_COL_BORDER }}
-                      className={`sticky left-0 z-10 px-3 py-1.5 align-top ${
+                {!collapsedSections["config"] && (
+                  <>
+                    {filteredConfigRows.map(({ item: key, values, highlights, inlineDiffs }, idx) => (
+                      <tr
+                        key={`cfg-${key}`}
+                        className={`border-b border-border/50 ${
                           idx % 2 === 0 ? "bg-background" : "bg-muted"
-                        }`}
+                        } hover:bg-accent/30 transition-colors`}
                       >
-                        <span className="break-all font-mono text-xs text-muted-foreground">
-                          {key}
-                        </span>
-                      </td>
-                      {selectedRuns.map(({ run }, colIdx) => {
-                        const displayValue = values[colIdx];
-                        const isEmpty = displayValue === "-";
-                        return (
-                          <td
-                            key={run.id}
-                            className={`border-r border-border/50 px-3 py-1.5 align-top last:border-r-0 ${
-                              isEmpty ? "text-muted-foreground/50" : "text-foreground"
-                            }`}
-                            style={highlights[colIdx] ? { background: highlights[colIdx] } : undefined}
-                          >
-                            <CollapsibleCell value={displayValue} isEmpty={isEmpty} diffSpans={inlineDiffs[colIdx]} prettyJson={prettyJson} />
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  ))}
+                        <td
+                          style={{ borderRight: KEY_COL_BORDER }}
+                          className={`sticky left-0 z-10 px-3 py-1.5 align-top ${
+                            idx % 2 === 0 ? "bg-background" : "bg-muted"
+                          }`}
+                        >
+                          <span className="break-all font-mono text-xs text-muted-foreground">
+                            {key}
+                          </span>
+                        </td>
+                        {selectedRuns.map(({ run }, colIdx) => {
+                          const displayValue = values[colIdx];
+                          const isEmpty = displayValue === "-";
+                          return (
+                            <td
+                              key={run.id}
+                              className={`border-r border-border/50 px-3 py-1.5 align-top last:border-r-0 ${
+                                isEmpty ? "text-muted-foreground/50" : "text-foreground"
+                              }`}
+                              style={highlights[colIdx] ? { background: highlights[colIdx] } : undefined}
+                            >
+                              <CollapsibleCell value={displayValue} isEmpty={isEmpty} diffSpans={inlineDiffs[colIdx]} prettyJson={prettyJson} />
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                    {configHasMore && (
+                      <tr ref={configSentinelRef} className="border-b border-border/50">
+                        <td
+                          colSpan={numRunCols + 1}
+                          className="px-3 py-3 text-center text-xs text-muted-foreground"
+                        >
+                          Loading more config… (showing {filteredConfigRows.length} of {configMatchedKeys.length})
+                        </td>
+                      </tr>
+                    )}
+                  </>
+                )}
               </>
             )}
 

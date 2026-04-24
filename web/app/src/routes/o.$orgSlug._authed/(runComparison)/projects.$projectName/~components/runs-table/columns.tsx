@@ -1,6 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import type { ColumnDef, Row, SortingState } from "@tanstack/react-table";
 import { Eye, EyeOff, X } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
 import { ColorPicker } from "@/components/ui/color-picker";
 import { SELECTED_RUNS_LIMIT } from "./config";
 import { StatusIndicator } from "@/components/layout/dashboard/sidebar";
@@ -486,6 +487,16 @@ export const columns = ({
       enableSorting: canSort,
       cell: ({ row }: { row: Row<Run> }) => {
         const value = getCustomColumnValue(row.original, col);
+        // Metric columns: distinguish "still fetching" from "value is
+        // genuinely null/NaN". Both used to render as "-", which made
+        // it impossible to tell whether to wait or accept the empty.
+        if (
+          col.source === "metric" &&
+          value == null &&
+          (row.original as { _metricsLoading?: boolean })._metricsLoading
+        ) {
+          return <Skeleton className="h-3 w-12" />;
+        }
         const display = formatCellValue(value, col);
         return (
           <Tooltip>

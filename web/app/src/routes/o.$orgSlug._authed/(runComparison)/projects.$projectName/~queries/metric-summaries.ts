@@ -85,6 +85,13 @@ export function useRegexSearchMetricNames(orgId: string, projectName: string, re
   );
 }
 
+// Re-export the pure wipe predicate so existing imports of
+// useMetricSummaries can pull it from the same module path. The actual
+// implementation lives in metric-summaries-cache.ts so it can be unit
+// tested without dragging in @/utils/trpc (which initializes env).
+export { metricSpecRequiresWipe } from "./metric-summaries-cache";
+import { metricSpecRequiresWipe } from "./metric-summaries-cache";
+
 /**
  * Batch fetch metric summaries for visible runs.
  * Used by the run table for metric columns (small, known set of specs).
@@ -92,6 +99,15 @@ export function useRegexSearchMetricNames(orgId: string, projectName: string, re
  * runIds are sorted for a stable query key — when runs reorder (e.g., sort
  * change), the set of IDs stays the same so TanStack Query returns the
  * cached result instead of triggering an unnecessary refetch.
+ *
+ * Returns:
+ *   data.summaries     — accumulated Record<runId, Record<"logName|AGG", number>>
+ *   loadedRunIds       — Set of run IDs the accumulator currently has data
+ *                        for. Cells use this to distinguish "value missing
+ *                        because we haven't fetched yet" (show skeleton)
+ *                        from "value missing because the run truly has none"
+ *                        (show "-").
+ *   isLoading/isFetching from the underlying query.
  */
 export function useMetricSummaries(
   orgId: string,
@@ -103,63 +119,101 @@ export function useMetricSummaries(
   // never loses metric values for already-loaded runs.
   const accRef = useRef<Record<string, Record<string, number>>>({});
 
-  // Track which metric specs the accumulator was built for.  When the user
-  // adds/removes a metric column the accumulated data is stale and must be
-  // discarded so we re-fetch everything with the new spec set.
-  const metricsKeyRef = useRef<string>("");
-  const metricsKey = useMemo(
-    () => metrics.map((m) => `${m.logName}|${m.aggregation}`).sort().join(","),
+  // Separate tracker for which runIds have completed a fetch under the
+  // current metric set. Decoupled from `accRef` because the accumulator
+  // only sees runs the server returned data for — runs with no values
+  // for any of the requested metrics aren't in `accRef` at all, but they
+  // ARE "loaded" (we asked, the server said nothing). Cells use this set
+  // to decide whether to render the loading skeleton or "-".
+  const fetchedRunIdsRef = useRef<Set<string>>(new Set());
+
+  // Track which metric specs the accumulator was built for. We only wipe
+  // when a NEW metric is added — pure removals keep the cached values, so
+  // re-adding a removed column is instant and removing alone never
+  // triggers a refetch.
+  const prevMetricsSetRef = useRef<ReadonlySet<string>>(new Set());
+  const currentMetricsSet = useMemo(
+    () => new Set(metrics.map((m) => `${m.logName}|${m.aggregation}`)),
     [metrics],
   );
-  if (metricsKey !== metricsKeyRef.current) {
+  if (metricSpecRequiresWipe(prevMetricsSetRef.current, currentMetricsSet)) {
     accRef.current = {};
-    metricsKeyRef.current = metricsKey;
+    fetchedRunIdsRef.current = new Set();
   }
+  prevMetricsSetRef.current = currentMetricsSet;
 
-  // Only fetch IDs we haven't seen yet (incremental pagination).
-  const newIds = useMemo(() => {
-    const acc = accRef.current;
-    return runIds.filter((id) => !acc[id]);
-  }, [runIds]);
-
-  // Sort for a stable query key.
-  const sortedNewIds = useMemo(() => [...newIds].sort(), [newIds]);
+  // Compute missing runIds inline (not via useMemo). Recomputed every
+  // render so it reflects the current ref state, not a stale memoized
+  // snapshot. A run is "missing" iff we haven't completed a fetch for it
+  // under the current metric set. Without this the query would stay
+  // enabled after a metric change and TanStack Query would fire a fetch
+  // on every queryKey change (any add OR remove changes the key, since
+  // `metrics` is part of the input).
+  const fetched = fetchedRunIdsRef.current;
+  const missingRunIds: string[] = [];
+  for (const id of runIds) {
+    if (!fetched.has(id)) missingRunIds.push(id);
+  }
+  missingRunIds.sort();
 
   const query = useQuery(
     trpc.runs.metricSummaries.queryOptions(
       {
         organizationId: orgId,
         projectName,
-        runIds: sortedNewIds,
+        runIds: missingRunIds,
         metrics,
       },
       {
-        enabled: sortedNewIds.length > 0 && metrics.length > 0,
+        enabled: missingRunIds.length > 0 && metrics.length > 0,
         staleTime: 30 * 1000,
       },
     )
   );
 
-  // Merge new results into the accumulator.
+  // Merge fetch results. Two pieces of state to update:
+  //   - `accRef`: actual values (only for runs the server returned).
+  //   - `fetchedRunIdsRef`: every runId we ASKED about, regardless of
+  //     whether the server returned anything. This is what keeps cells
+  //     for runs-with-no-values from being stuck in the loading skeleton
+  //     state forever and what prevents an endless fetch loop on those
+  //     runs.
   if (query.data?.summaries) {
     const fresh = query.data.summaries;
     const acc = accRef.current;
     for (const [id, vals] of Object.entries(fresh)) {
-      acc[id] = vals;
+      acc[id] = { ...acc[id], ...vals };
+    }
+    for (const id of missingRunIds) {
+      fetchedRunIdsRef.current.add(id);
     }
   }
 
   // Return the accumulated map in the same shape callers expect.
   // Wrap in a stable reference that only changes when the accumulator content
-  // changes (new data arrived or metrics key changed).
+  // changes (new data arrived or metrics-set changed).
   const summaries = accRef.current;
   const summariesSnapshot = useMemo(
     () => ({ summaries: { ...summaries } }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [query.data, metricsKey],
+    [query.data, currentMetricsSet],
   );
 
-  return { data: summariesSnapshot, isLoading: query.isLoading, isFetching: query.isFetching };
+  // loadedRunIds reflects "we've asked about this run" not "we have data
+  // for this run". Cells need the former to know when to stop showing the
+  // loading skeleton.
+  const loadedRunIds = useMemo(
+    () => new Set(fetchedRunIdsRef.current),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [query.data, currentMetricsSet],
+  );
+
+  return {
+    data: summariesSnapshot,
+    loadedRunIds,
+    isLoading: query.isLoading,
+    isFetching: query.isFetching,
+  };
 }
 
 /**

@@ -2,20 +2,9 @@ import { describe, it, expect } from "vitest";
 import { sortPinnedRuns } from "../hooks/use-data-table-state";
 import type { Run } from "../../../~queries/list-runs";
 import type { ColumnConfig } from "../../../~hooks/use-column-config";
+import { makeRun } from "./_fixtures";
 
 // ── Helpers ──────────────────────────────────────────────────────────────
-
-function makeRun(id: string, overrides: Partial<Run> & Record<string, any> = {}): Run {
-  return {
-    id,
-    name: `run-${id}`,
-    status: "COMPLETED",
-    tags: [],
-    createdAt: "2025-03-01T12:00:00.000Z",
-    updatedAt: "2025-03-02T14:30:00.000Z",
-    ...overrides,
-  } as Run;
-}
 
 function makeSelected(runs: Run[]): Record<string, { run: Run; color: string }> {
   const result: Record<string, { run: Run; color: string }> = {};
@@ -235,7 +224,7 @@ describe("sortPinnedRuns", () => {
       expect(names(result)).toEqual(["also-has-loss", "has-loss", "no-loss"]);
     });
 
-    it("runs with missing values sort consistently (descending)", () => {
+    it("runs with missing values sort to the end (descending — NULLS LAST)", () => {
       const runs = [
         makeRun("a-no", { name: "no-loss" }),
         makeRun("b-has", { name: "has-loss", metricSummaries: { "train/loss|LAST": 0.5 } }),
@@ -244,8 +233,9 @@ describe("sortPinnedRuns", () => {
         true, makeSelected(runs),
         [{ id: "custom-metric-train/loss-LAST", desc: true }], cols,
       );
-      // Nulls sort before non-null in descending (dir=-1)
-      expect(names(result)).toEqual(["no-loss", "has-loss"]);
+      // NULLS LAST regardless of direction — matches backend sort order
+      // and what the user expects ("-" always at the bottom).
+      expect(names(result)).toEqual(["has-loss", "no-loss"]);
     });
 
     it("all null values preserves original order", () => {

@@ -33,18 +33,20 @@ interface UseDataTableStateParams {
 }
 
 /**
- * Sort pinned runs client-side to match the active column sort.
- * Exported for unit testing.
+ * Client-side sort of a Run list by the active column sort. Used wherever
+ * we've client-merged runs in a way the server-side sort no longer covers
+ * (pinned runs, "Display only selected" out-of-page tail, etc.).
+ *
+ * Returns a new array; original is not mutated. When sorting is empty, the
+ * input is returned as-is so callers can rely on reference stability when
+ * the user hasn't picked a sort.
  */
-export function sortPinnedRuns(
-  isPinningActive: boolean,
-  selectedRunsWithColors: Record<string, { run: Run; color: string }>,
+export function sortRunsByColumn(
+  runs: Run[],
   sorting: SortingState,
   customColumns: ColumnConfig[],
 ): Run[] {
-  if (!isPinningActive) return [];
-  const result = Object.values(selectedRunsWithColors).map((v) => v.run);
-  if (sorting.length === 0) return result;
+  if (runs.length === 0 || sorting.length === 0) return runs;
 
   const { id: colId, desc } = sorting[0];
   const dir = desc ? -1 : 1;
@@ -60,8 +62,13 @@ export function sortPinnedRuns(
           : `custom-${c.source}-${c.id}`;
       return tableId === colId;
     }) ?? null;
+    // Unknown column id — e.g. a server-side sort key the client doesn't
+    // know how to evaluate. Leave the list in whatever order the server /
+    // caller produced instead of collapsing it to "all equal".
+    if (!sortCol) return runs;
   }
 
+  const result = [...runs];
   result.sort((a, b) => {
     const va = colId === "name"
       ? a.name
@@ -69,9 +76,15 @@ export function sortPinnedRuns(
     const vb = colId === "name"
       ? b.name
       : sortCol ? getCustomColumnValue(b, sortCol) : undefined;
+    // NULLS LAST regardless of direction — matches the backend's sort
+    // (and how users expect tables to behave). Keeping the client's null
+    // placement aligned with the server's is also what lets us apply
+    // this helper to a server-sorted array safely: it's a no-op when
+    // the server already ordered the list, so it doesn't corrupt the
+    // offset-paginated pages when the user scrolls forward and back.
     if (va == null && vb == null) return 0;
-    if (va == null) return dir;
-    if (vb == null) return -dir;
+    if (va == null) return 1;
+    if (vb == null) return -1;
     if (typeof va === "number" && typeof vb === "number") {
       return (va - vb) * dir;
     }
@@ -80,6 +93,21 @@ export function sortPinnedRuns(
     return sa < sb ? -dir : sa > sb ? dir : 0;
   });
   return result;
+}
+
+/**
+ * Sort pinned runs client-side to match the active column sort.
+ * Exported for unit testing.
+ */
+export function sortPinnedRuns(
+  isPinningActive: boolean,
+  selectedRunsWithColors: Record<string, { run: Run; color: string }>,
+  sorting: SortingState,
+  customColumns: ColumnConfig[],
+): Run[] {
+  if (!isPinningActive) return [];
+  const runs = Object.values(selectedRunsWithColors).map((v) => v.run);
+  return sortRunsByColumn(runs, sorting, customColumns);
 }
 
 /**
@@ -168,19 +196,32 @@ export function useDataTableState({
   // When "Display only selected" is active, use mergeSelectedRuns to include
   // selected runs that may not be in the current paginated page (e.g., from
   // IndexedDB cache or previous browsing sessions).
+  //
+  // Both merge helpers can produce rows the server's sort didn't order:
+  //   - mergeSelectedRuns appends out-of-page selected runs in insertion
+  //     order (Object.entries(selectedRunsWithColors)). Visible as a
+  //     scrambled tail under "Display only selected".
+  //   - ensureSelectedRunsIncluded appends missing selected runs at the
+  //     end of the page regardless of the sort.
+  // In either case, re-sort client-side so the user sees a coherent order.
+  // When the merge didn't touch the list (reference-equal to runs), the
+  // client sort is redundant but cheap — sortRunsByColumn short-circuits
+  // on empty sorting and returns a shallow copy otherwise.
   const displayedRuns = useMemo(() => {
+    let base: Run[];
     if (isPinningActive) {
       const pinnedIds = new Set(Object.keys(selectedRunsWithColors));
-      const base = showOnlySelected
+      const merged = showOnlySelected
         ? mergeSelectedRuns(runs, selectedRunsWithColors)
         : ensureSelectedRunsIncluded(runs, selectedRunsWithColors);
-      return base.filter((r) => !pinnedIds.has(r.id));
+      base = merged.filter((r) => !pinnedIds.has(r.id));
+    } else if (showOnlySelected) {
+      base = mergeSelectedRuns(runs, selectedRunsWithColors);
+    } else {
+      base = ensureSelectedRunsIncluded(runs, selectedRunsWithColors);
     }
-    if (showOnlySelected) {
-      return mergeSelectedRuns(runs, selectedRunsWithColors);
-    }
-    return ensureSelectedRunsIncluded(runs, selectedRunsWithColors);
-  }, [runs, showOnlySelected, isPinningActive, selectedRunsWithColors]);
+    return sortRunsByColumn(base, sorting, customColumns);
+  }, [runs, showOnlySelected, isPinningActive, selectedRunsWithColors, sorting, customColumns]);
 
   // In "experiments" mode, collapse same-name runs into one row per experiment.
   // Keeps the first occurrence (most recent) as the representative.
