@@ -1,4 +1,5 @@
 import { LRUCache } from "lru-cache";
+import superjson from "superjson";
 import { getRedisClient, isRedisAvailable } from "./redis";
 import type { PrismaClient } from "@prisma/client";
 
@@ -54,7 +55,11 @@ const l1Cache = new LRUCache<string, CacheEntry<unknown>>({
       return value.data.length * 2 + 128;
     }
     try {
-      return JSON.stringify(value).length * 2;
+      // superjson handles BigInt / Date / Map / Set without throwing — plain
+      // JSON.stringify would have fallen through to the 1024-byte fallback
+      // for any entry containing a BigInt (per Gemini review on PR #430),
+      // silently weakening the L1 byte-cap memory safeguard.
+      return superjson.stringify(value).length * 2;
     } catch {
       // Non-serializable fallback: small enough not to dominate, big enough
       // that many of them will still trigger eviction.
@@ -98,13 +103,32 @@ export async function getCached<T>(key: string): Promise<T | null> {
     return l1Entry.data;
   }
 
-  // Try L2 (Redis)
+  // Try L2 (Redis). superjson preserves Date / BigInt / Map / Set across the
+  // string round-trip — plain JSON.parse silently coerced them (e.g. Date →
+  // ISO string), which crashed downstream callers like the logs page.
   const redis = await getRedisClient();
   if (redis) {
     try {
       const redisValue = await redis.get(key);
       if (redisValue) {
-        const entry = JSON.parse(redisValue) as CacheEntry<T>;
+        // Legacy entries (written by the previous JSON.stringify implementation)
+        // and corruption are treated as a miss — the caller refetches and the
+        // next setCached overwrites with a properly-typed superjson entry.
+        // superjson.parse returns undefined for inputs that don't match its
+        // {json, meta} envelope, and throws on garbage; handle both as a miss.
+        let entry: CacheEntry<T> | undefined;
+        try {
+          entry = superjson.parse<CacheEntry<T>>(redisValue);
+        } catch {
+          return null;
+        }
+        if (
+          !entry ||
+          typeof entry !== "object" ||
+          typeof entry.expiresAt !== "number"
+        ) {
+          return null;
+        }
         if (entry.expiresAt > Date.now()) {
           // Backfill L1 cache for next request
           l1Cache.set(key, entry);
@@ -135,11 +159,12 @@ export async function setCached<T>(
   // Set L1 (synchronous)
   l1Cache.set(key, entry, { ttl: ttlMs });
 
-  // Set L2 (Redis) - fire and forget, don't block
+  // Set L2 (Redis) - fire and forget, don't block. Use superjson so Date /
+  // BigInt survive the round-trip; the matching getCached uses superjson.parse.
   const redis = await getRedisClient();
   if (redis) {
     redis
-      .setEx(key, Math.ceil(ttlMs / 1000), JSON.stringify(entry))
+      .setEx(key, Math.ceil(ttlMs / 1000), superjson.stringify(entry))
       .catch((err: unknown) => {
         console.warn("[Cache] Redis set failed:", err);
       });

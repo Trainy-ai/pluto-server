@@ -29,8 +29,8 @@ export interface TimeDetails {
 interface TerminalLogsProps {
   logs: LogEntry[];
   noScroll?: boolean; // Optional prop to render without scroll, defaults to false
-  logType: "INFO" | "ERROR";
-  onLogTypeChange: (type: "INFO" | "ERROR") => void;
+  stream: "stdout" | "stderr";
+  onStreamChange: (stream: "stdout" | "stderr") => void;
 }
 
 const ansiUp = new AnsiUp();
@@ -275,8 +275,8 @@ LogEntryComponent.displayName = "LogEntryComponent";
 export default function TerminalLogs({
   logs,
   noScroll = false,
-  logType,
-  onLogTypeChange,
+  stream,
+  onStreamChange,
 }: TerminalLogsProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const { formatters } = useTimeFormatting();
@@ -333,11 +333,11 @@ export default function TerminalLogs({
         <div className="flex items-center gap-2">
           <div className="flex bg-muted/30 p-1">
             <Button
-              variant={logType === "INFO" ? "secondary" : "ghost"}
+              variant={stream === "stdout" ? "secondary" : "ghost"}
               size="sm"
-              onClick={() => onLogTypeChange("INFO")}
+              onClick={() => onStreamChange("stdout")}
               className={`px-4 font-mono font-medium transition-all ${
-                logType === "INFO"
+                stream === "stdout"
                   ? "bg-blue-500/20 text-blue-600 hover:bg-blue-500/30 dark:text-blue-400"
                   : "hover:bg-muted"
               }`}
@@ -345,11 +345,11 @@ export default function TerminalLogs({
               stdout
             </Button>
             <Button
-              variant={logType === "ERROR" ? "secondary" : "ghost"}
+              variant={stream === "stderr" ? "secondary" : "ghost"}
               size="sm"
-              onClick={() => onLogTypeChange("ERROR")}
+              onClick={() => onStreamChange("stderr")}
               className={`px-4 font-mono font-medium transition-all ${
-                logType === "ERROR"
+                stream === "stderr"
                   ? "bg-red-500/20 text-red-600 hover:bg-red-500/30 dark:text-red-400"
                   : "hover:bg-muted"
               }`}
@@ -426,7 +426,7 @@ export default function TerminalLogs({
       <div
         ref={containerRef}
         className={`font-mono text-sm leading-4 ${
-          noScroll ? "" : "max-h-[calc(100vh-10rem)] overflow-auto"
+          noScroll ? "" : "max-h-[calc(100vh-10rem)] overflow-auto overscroll-y-contain"
         } [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-border hover:[&::-webkit-scrollbar-thumb]:bg-muted-foreground/50 [&::-webkit-scrollbar-track]:bg-transparent`}
       >
         {filteredLogs.length === 0 ? (

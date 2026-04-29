@@ -22,6 +22,33 @@ vi.mock('../lib/redis', () => ({
   isRedisAvailable: vi.fn().mockReturnValue(false),
 }));
 
+// Fake Redis backed by an in-memory Map. Mirrors the subset of the redis client
+// API that cache.ts uses (get / setEx). Lets us exercise the L2 round-trip path.
+function createFakeRedis() {
+  const store = new Map<string, string>();
+  return {
+    store,
+    client: {
+      get: async (key: string) => store.get(key) ?? null,
+      setEx: async (key: string, _ttlSeconds: number, value: string) => {
+        store.set(key, value);
+        return 'OK';
+      },
+    },
+  };
+}
+
+async function withFakeRedis<T>(fn: (store: Map<string, string>) => Promise<T>): Promise<T> {
+  const { getRedisClient } = await import('../lib/redis');
+  const fake = createFakeRedis();
+  vi.mocked(getRedisClient).mockResolvedValue(fake.client as never);
+  try {
+    return await fn(fake.store);
+  } finally {
+    vi.mocked(getRedisClient).mockResolvedValue(null);
+  }
+}
+
 describe('Cache Unit Tests', () => {
   beforeEach(() => {
     // Clear L1 cache before each test
@@ -304,6 +331,76 @@ describe('Cache Unit Tests', () => {
       // Both query functions should be called (different cache keys)
       expect(queryFn1).toHaveBeenCalledTimes(1);
       expect(queryFn2).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('L2 (Redis) type preservation', () => {
+    // Regression coverage for the Pylon #708 root cause: when the L1 entry was
+    // evicted (pod restart, LRU pressure, multi-pod hop) the L2 read used
+    // JSON.parse, which silently coerced Date fields to ISO strings. The
+    // frontend then crashed with "r.getTime is not a function" inside
+    // useTimeDetails, which TanStack Router caught via errorComponent and
+    // rendered as a misleading "Run not found" page.
+
+    it('round-trips Date through L2 as a Date instance', async () => {
+      await withFakeRedis(async () => {
+        const original = new Date('2026-04-28T16:33:52.000Z');
+        await setCached('l2-date', { time: original }, 60_000);
+
+        // Force the L2 path: clear L1 so the next read has to deserialize from Redis.
+        clearL1Cache();
+
+        const result = await getCached<{ time: Date }>('l2-date');
+        expect(result).not.toBeNull();
+        expect(result!.time).toBeInstanceOf(Date);
+        expect(result!.time.getTime()).toBe(original.getTime());
+      });
+    });
+
+    it('round-trips BigInt through L2 as a bigint', async () => {
+      await withFakeRedis(async () => {
+        await setCached('l2-bigint', { runId: 9007199254740993n }, 60_000);
+        clearL1Cache();
+
+        const result = await getCached<{ runId: bigint }>('l2-bigint');
+        expect(result).not.toBeNull();
+        expect(typeof result!.runId).toBe('bigint');
+        expect(result!.runId).toBe(9007199254740993n);
+      });
+    });
+
+    it('preserves Date fields inside nested arrays (matches runs.data.logs shape)', async () => {
+      await withFakeRedis(async () => {
+        const logs = [
+          { time: new Date('2026-04-28T16:33:52.000Z'), message: 'a', logType: 'INFO', lineNumber: 1 },
+          { time: new Date('2026-04-28T16:33:53.500Z'), message: 'b', logType: 'INFO', lineNumber: 2 },
+        ];
+        await setCached('l2-logs', logs, 60_000);
+        clearL1Cache();
+
+        const result = await getCached<typeof logs>('l2-logs');
+        expect(result).not.toBeNull();
+        expect(result).toHaveLength(2);
+        for (const entry of result!) {
+          expect(entry.time).toBeInstanceOf(Date);
+        }
+        expect(result![0].time.getTime()).toBe(logs[0].time.getTime());
+      });
+    });
+
+    it('treats malformed L2 entries (legacy raw JSON or corruption) as a miss', async () => {
+      await withFakeRedis(async (store) => {
+        // Simulate a legacy entry written by the previous JSON.stringify implementation.
+        // The new superjson reader should not throw; it should return null so the
+        // caller refetches and overwrites with a properly-typed entry.
+        store.set(
+          'mlop:legacy:k=1',
+          JSON.stringify({ data: { time: new Date().toISOString() }, expiresAt: Date.now() + 60_000 })
+        );
+
+        const result = await getCached('mlop:legacy:k=1');
+        expect(result).toBeNull();
+      });
     });
   });
 

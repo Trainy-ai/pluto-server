@@ -33,14 +33,42 @@ export function useStepNavigation<T extends StepData>(
 
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
 
-  // Default to the last (max) step when steps first become available
+  // Default to the last (max) step when steps first become available, AND
+  // keep tracking the new max if the array grows while the user was already
+  // on the previous max. The grow case happens when data arrives in stages
+  // (Dexie placeholderData with a partial step list, then the fresh fetch
+  // extending it) — without the second branch the slider stayed pinned at
+  // the old length-1 while the visible max moved past it (Pylon #708 follow-
+  // up; reproduced in CI on the IR-DD/IR-DS histogram step navigator tests).
   const hasInitializedRef = useRef(false);
+  const prevLengthRef = useRef(0);
+  const wasAtLastStepRef = useRef(false);
   useEffect(() => {
-    if (!hasInitializedRef.current && availableSteps.length > 0) {
+    const newLength = availableSteps.length;
+    const oldLength = prevLengthRef.current;
+
+    if (!hasInitializedRef.current && newLength > 0) {
       hasInitializedRef.current = true;
-      setCurrentStepIndex(availableSteps.length - 1);
+      setCurrentStepIndex(newLength - 1);
+    } else if (
+      hasInitializedRef.current &&
+      newLength > oldLength &&
+      wasAtLastStepRef.current
+    ) {
+      setCurrentStepIndex(newLength - 1);
     }
+
+    prevLengthRef.current = newLength;
   }, [availableSteps]);
+
+  // Track whether the user is currently on the last step. Used to decide
+  // whether a future grow should auto-advance — if the user has navigated
+  // away from the max, the array growing must not yank them back.
+  useEffect(() => {
+    wasAtLastStepRef.current =
+      availableSteps.length > 0 &&
+      currentStepIndex === availableSteps.length - 1;
+  });
 
   // Get current step value from index
   const currentStepValue = availableSteps[currentStepIndex] ?? 0;
