@@ -6,6 +6,14 @@
         "playwright",
         "run-test-mcp-server"
       ]
+    },
+    "pylon": {
+      "type": "http",
+      "url": "https://mcp.usepylon.com/"
+    },
+    "buildkite": {
+      "type": "http",
+      "url": "https://mcp.buildkite.com/mcp"
     }
   }
 }
