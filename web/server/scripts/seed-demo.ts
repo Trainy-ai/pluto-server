@@ -38,7 +38,7 @@ const DEV_PROJECT = 'my-ml-project';
 // Demo Configuration
 // ============================================================================
 
-const TOTAL_RUNS = 5000;
+const TOTAL_RUNS = 2000;
 const METRICS_PER_RUN = 20; // Reduced for demo to speed up seeding
 
 // High-fidelity runs: first 10 runs get 100k datapoints (realistic training runs)
@@ -257,6 +257,34 @@ function getMetricValue(metricIndex: number, step: number, totalSteps: number, r
   }
 
   return baseValue;
+}
+
+/**
+ * Truncates demo ClickHouse tables so re-seeds don't accumulate data across deploys.
+ * The Postgres seed reads as the source of truth for which runs exist; ClickHouse must match.
+ */
+async function truncateClickHouseTables() {
+  const clickhouseUrl = process.env.CLICKHOUSE_URL;
+  const clickhouseUser = process.env.CLICKHOUSE_USER || 'default';
+  const clickhousePassword = process.env.CLICKHOUSE_PASSWORD || '';
+
+  if (!clickhouseUrl) {
+    console.log('   CLICKHOUSE_URL not set, skipping ClickHouse truncate');
+    return;
+  }
+
+  const clickhouse = createClient({
+    url: clickhouseUrl,
+    username: clickhouseUser,
+    password: clickhousePassword,
+  });
+
+  const tables = ['mlop_metrics', 'mlop_metric_summaries', 'mlop_logs', 'mlop_data', 'mlop_files'];
+  for (const table of tables) {
+    await clickhouse.command({ query: `TRUNCATE TABLE IF EXISTS ${table}` });
+    console.log(`   Truncated ${table}`);
+  }
+  await clickhouse.close();
 }
 
 /**
@@ -725,6 +753,22 @@ async function main() {
   } else {
     console.log(`   Project exists: ${DEV_PROJECT}`);
   }
+
+  // 4a. Wipe previous demo data so re-seeds are deterministic and don't pile data
+  // onto an already-overloaded ClickHouse.
+  console.log('\n4a. Clearing previous demo data...');
+  // ProjectColumnKey cascades from Project, not Run — runs.deleteMany won't
+  // clear it. Wipe explicitly so a renamed/removed config field doesn't leave
+  // stale entries in the column picker.
+  const deletedKeys = await prisma.projectColumnKey.deleteMany({
+    where: { projectId: project.id, organizationId: org.id },
+  });
+  const deleted = await prisma.runs.deleteMany({
+    where: { projectId: project.id, organizationId: org.id },
+  });
+  console.log(`   Deleted ${deleted.count} Postgres runs (cascades to RunLogs/RunFieldValue)`);
+  console.log(`   Deleted ${deletedKeys.count} ProjectColumnKey rows`);
+  await truncateClickHouseTables();
 
   // 5. Create runs
   console.log(`\n5. Creating ${TOTAL_RUNS} runs...`);
