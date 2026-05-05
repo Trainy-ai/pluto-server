@@ -277,6 +277,10 @@ async function truncateClickHouseTables() {
     url: clickhouseUrl,
     username: clickhouseUser,
     password: clickhousePassword,
+    // Default is 30s. A 50k-row insert with the materialized view aggregating
+    // can take longer on a constrained CH (4Gi). Without this bump the seed
+    // dies with "Error: Timeout error" before even the first progress line.
+    request_timeout: 120_000,
   });
 
   const tables = ['mlop_metrics', 'mlop_metric_summaries', 'mlop_logs', 'mlop_data', 'mlop_files'];
@@ -308,6 +312,10 @@ async function seedClickHouseMetrics(
     url: clickhouseUrl,
     username: clickhouseUser,
     password: clickhousePassword,
+    // Default is 30s. A 50k-row insert with the materialized view aggregating
+    // can take longer on a constrained CH (4Gi). Without this bump the seed
+    // dies with "Error: Timeout error" before even the first progress line.
+    request_timeout: 120_000,
   });
 
   // Calculate total rows
@@ -514,6 +522,10 @@ async function seedClickHouseLogs(
     url: clickhouseUrl,
     username: clickhouseUser,
     password: clickhousePassword,
+    // Default is 30s. A 50k-row insert with the materialized view aggregating
+    // can take longer on a constrained CH (4Gi). Without this bump the seed
+    // dies with "Error: Timeout error" before even the first progress line.
+    request_timeout: 120_000,
   });
 
   // Calculate total logs
@@ -809,7 +821,7 @@ async function main() {
           projectId: project.id,
           createdById: user.id,
           creatorApiKeyId: apiKey.id,
-          status: i % 10 === 0 ? ('RUNNING' as const) : ('COMPLETED' as const),
+          status: 'COMPLETED' as const,
           tags,
           config: storyConfig
             ? {
