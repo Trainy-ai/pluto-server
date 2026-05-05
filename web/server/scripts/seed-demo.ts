@@ -1,12 +1,12 @@
 /**
  * Seed demo data for the Pluto demo instance.
- * Creates a demo user with 5000 pre-populated runs and metrics.
+ * Creates a demo user with 2000 pre-populated runs and metrics.
  *
  * Features:
- * - 5000 total runs across the project
+ * - 2000 total runs across the project (all COMPLETED)
  * - 10 high-fidelity runs with 100k datapoints each (for performance showcase)
  * - 50 story runs with anomaly patterns (loss spikes, OOM, gradient explosion)
- * - 4940 standard runs with 500-1000 datapoints each
+ * - 1950 standard runs with 500-1000 datapoints each
  * - Realistic console logs with training output patterns
  *
  * Usage:
