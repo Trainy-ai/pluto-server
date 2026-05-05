@@ -18,6 +18,25 @@ import { scryptAsync } from '@noble/hashes/scrypt.js';
 import { createClient } from '@clickhouse/client-web';
 import crypto from 'crypto';
 import { nanoid } from 'nanoid';
+// Inlined from web/server/lib/run-prefix.ts so the seed pod doesn't need
+// to mount that lib file via its ConfigMap. Keep in sync with the original.
+function generateRunPrefix(projectName: string): string {
+  const words = projectName.split(/[-_\s.]+/).filter((w) => w.length > 0);
+  if (words.length === 0) return 'RUN';
+  let prefix: string;
+  if (words.length === 1) {
+    prefix = words[0].slice(0, 3);
+  } else {
+    prefix = words.map((w) => w[0]).join('');
+    if (prefix.length < 3) {
+      const lastWord = words[words.length - 1];
+      const needed = 3 - prefix.length;
+      prefix = prefix.slice(0, -1) + lastWord.slice(0, needed + 1);
+    }
+    prefix = prefix.slice(0, 4);
+  }
+  return prefix.toUpperCase();
+}
 
 const prisma = new PrismaClient();
 
@@ -754,16 +773,30 @@ async function main() {
     },
   });
 
+  // Match what routes/runs-openapi.ts does on first-run creation:
+  // generate a Neptune-style runPrefix (e.g. "my-ml-project" → "MMP") so
+  // each run gets a display ID like MMP-1, MMP-2, ... in the UI.
+  const projectRunPrefix = generateRunPrefix(DEV_PROJECT);
   if (!project) {
     project = await prisma.projects.create({
       data: {
         name: DEV_PROJECT,
         organizationId: org.id,
+        runPrefix: projectRunPrefix,
       },
     });
-    console.log(`   Created project: ${DEV_PROJECT}`);
+    console.log(`   Created project: ${DEV_PROJECT} (runPrefix=${projectRunPrefix})`);
   } else {
-    console.log(`   Project exists: ${DEV_PROJECT}`);
+    // Backfill runPrefix on existing projects (mirrors routes/runs-openapi.ts behavior)
+    if (!project.runPrefix) {
+      project = await prisma.projects.update({
+        where: { id: project.id },
+        data: { runPrefix: projectRunPrefix },
+      });
+      console.log(`   Project exists: ${DEV_PROJECT} (added runPrefix=${projectRunPrefix})`);
+    } else {
+      console.log(`   Project exists: ${DEV_PROJECT}`);
+    }
   }
 
   // 4a. Wipe previous demo data so re-seeds are deterministic and don't pile data
@@ -816,7 +849,18 @@ async function main() {
         if (storyConfig?.gradientExplosion) tags.push('gradient-explosion');
 
         runData.push({
+          // Explicit BigInt id makes seeding deterministic: every redeploy
+          // produces the same id → same SQID → same URL-encoded run id, so
+          // browser localStorage's "selected runs" / "hidden runs" entries
+          // remain valid across seeds. Without this, autoincrement marches
+          // forward with each seed (1..2000, then 2001..4000, etc.) and the
+          // frontend silently 404s on stale localStorage references.
+          id: BigInt(i + 1),
           name: runName,
+          // Sequential per-project run number — combined with project.runPrefix
+          // gives display IDs like "MMP-1", "MMP-2", ... matching what the
+          // HTTP API path (routes/runs-openapi.ts) assigns from nextRunNumber.
+          number: i + 1,
           organizationId: org.id,
           projectId: project.id,
           createdById: user.id,
@@ -877,6 +921,21 @@ async function main() {
   } else {
     console.log(`   ${existingRunCount} runs already exist`);
   }
+
+  // Bump nextRunNumber so future API-created runs continue past the seeded set.
+  await prisma.projects.update({
+    where: { id: project.id },
+    data: { nextRunNumber: TOTAL_RUNS + 1 },
+  });
+
+  // Sync the Postgres autoincrement sequence past our explicit IDs.
+  // We inserted runs with id=1..TOTAL_RUNS via createMany, but explicit
+  // INSERTs don't move the sequence. Without this, the next API-created run
+  // would call nextval() and get an id that's already in use → unique
+  // constraint violation. setval to max(id) makes nextval() return max+1.
+  await prisma.$executeRawUnsafe(
+    "SELECT setval(pg_get_serial_sequence('runs', 'id'), coalesce(max(id), 1), max(id) IS NOT NULL) FROM runs"
+  );
 
   // Fetch ALL runs for ClickHouse seeding
   const allRuns = await prisma.runs.findMany({
