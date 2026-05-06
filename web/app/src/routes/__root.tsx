@@ -16,6 +16,7 @@ import type { inferOutput } from "@trpc/tanstack-react-query";
 import { env } from "@/lib/env";
 import { PostHogProvider } from "posthog-js/react";
 import { PostHogAnalytics } from "@/components/posthog-analytics";
+import { FpsMonitor } from "@/components/fps-monitor";
 
 type Auth = inferOutput<typeof trpc.auth>;
 export interface RouterAppContext {
@@ -85,6 +86,7 @@ function RootComponent() {
           <HeadContent />
           <Outlet />
           <Toaster richColors />
+          <FpsMonitor />
         </PostHogProviderWrapper>
       </ThemeProvider>
       {env.VITE_ENV === "development" && (

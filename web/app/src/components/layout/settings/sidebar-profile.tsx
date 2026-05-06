@@ -21,11 +21,11 @@ const mainNavItems = [
     href: "/settings/account",
     icon: RiUser3Fill,
   },
-  // {
-  //   title: "Preferences",
-  //   href: "/settings/account/preferences",
-  //   icon: RiSettingsFill,
-  // },
+  {
+    title: "Preferences",
+    href: "/settings/account/preferences",
+    icon: RiSettingsFill,
+  },
 ];
 
 interface SidebarProfileProps extends SidebarGroupProps {
