@@ -185,6 +185,11 @@ interface ChartSyncProviderProps {
   tableHighlightedSeries?: string | null;
   /** Experiment run ID lookup for group highlighting. Maps runId → all runIds in same experiment. */
   experimentRunIdsMap?: Map<string, string[]> | null;
+  /** Run IDs to hide from charts. Synced into hiddenRunIdsRef during render so
+   *  charts mounting in this provider see the up-to-date value on init. The
+   *  CustomEvent path is still used to update already-mounted charts; this
+   *  prop closes the gap for charts that mount after the event fires. */
+  hiddenRunIds?: Set<string>;
 }
 
 /**
@@ -202,6 +207,7 @@ export function ChartSyncProvider({
   initialGlobalXRange = null,
   tableHighlightedSeries: tableHighlightedSeriesProp = null,
   experimentRunIdsMap: experimentRunIdsMapProp = null,
+  hiddenRunIds: hiddenRunIdsProp,
 }: ChartSyncProviderProps) {
   // Use refs for registries to avoid re-renders when charts register/unregister
   const uplotInstancesRef = useRef(new Map<string, uPlot>());
@@ -299,8 +305,14 @@ export function ChartSyncProvider({
     tableHighlightedSeriesRef.current = tableHighlightedSeriesProp;
   }, [tableHighlightedSeriesProp]);
 
-  // Hidden run IDs — stored imperatively, read by charts on creation to apply show/hide
-  const hiddenRunIdsRef = useRef<Set<string>>(new Set());
+  // Hidden run IDs — stored imperatively, read by charts on creation to apply show/hide.
+  // Synced from the hiddenRunIdsProp during render so newly-mounted charts see the
+  // up-to-date value via chartSyncContextRef. The CustomEvent listener below
+  // handles the imperative path for charts that are already registered.
+  const hiddenRunIdsRef = useRef<Set<string>>(hiddenRunIdsProp ?? new Set());
+  if (hiddenRunIdsProp && hiddenRunIdsProp !== hiddenRunIdsRef.current) {
+    hiddenRunIdsRef.current = hiddenRunIdsProp;
+  }
 
   // Listen for run visibility changes (dispatched from index.tsx when hiddenRunIds changes).
   // Imperatively toggles uPlot series visibility via setSeries() — no chart recreation.
@@ -695,12 +707,15 @@ export function ChartSyncProvider({
   const sharedTooltipContentRef = useRef<HTMLDivElement | null>(null);
   const activeTooltipChartRef = useRef<string | null>(null);
 
-  const getOrCreateTooltipEl = useCallback((theme: string) => {
+  const getOrCreateTooltipEl = useCallback((_theme: string) => {
     if (sharedTooltipElRef.current) return sharedTooltipElRef.current;
     const el = document.createElement("div");
     el.className = "uplot-tooltip";
     el.dataset.testid = "uplot-tooltip";
     el.setAttribute("data-tooltip", "true");
+    // Background/border use CSS variables so they auto-update when the
+    // user toggles light/dark mode (the .dark class on <html> rewrites
+    // --popover and --border via cascade).
     el.style.cssText = `
       position: fixed;
       display: none;
@@ -710,8 +725,8 @@ export function ChartSyncProvider({
       top: -9999px;
       font-family: ui-monospace, monospace;
       font-size: 11px;
-      background: ${theme === "dark" ? "#161619" : "#fff"};
-      border: 1px solid ${theme === "dark" ? "#333" : "#e0e0e0"};
+      background: hsl(var(--popover));
+      border: 1px solid hsl(var(--border));
       border-radius: 4px;
       padding: 4px;
       width: fit-content;

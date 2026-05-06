@@ -413,28 +413,64 @@ async function defaultCursorQueryWithFieldFilters(
   const dir = input.direction === "forward" ? "DESC" : "ASC";
   const creatorJoin = needsCreatorJoin ? `LEFT JOIN "user" u ON r."createdById" = u.id` : "";
 
+  // Cursor / offset pagination uses a COMPOUND (createdAt, id) keyset
+  // rather than `r.id < cursor` alone.
+  //
+  // Background: ORDER BY createdAt DESC paginated by `r.id < cursor`
+  // assumes id and createdAt are monotonically aligned (newer createdAt =>
+  // larger id). That holds for normal sequential inserts, but breaks for
+  // any data set where timestamps are backfilled out-of-order — e.g.
+  // seed-demo.ts:852-857 deliberately reverses them, and any imported /
+  // migrated runs can do the same. With non-aligned data, `r.id < cursor`
+  // selects rows that come BEFORE the cursor in createdAt-DESC order, so
+  // page 2 returns the same rows as page 1 minus one, producing visible
+  // duplicates and pinning the user to the first batch.
+  //
+  // Fix: compound keyset on (createdAt, id) which exactly matches the
+  // ORDER BY tuple. id is the tiebreaker for runs sharing a createdAt,
+  // so pagination is also stable across duplicate timestamps.
   if (useOffset) {
-    // Step 1: Lightweight cursor lookup — find the id at the target offset
+    // Step 1: lookup the row at OFFSET — also fetch its createdAt so we
+    // can build a compound keyset for step 2.
     const cursorQuery = `
-      SELECT r.id
+      SELECT r.id, r."createdAt"
       FROM "runs" r
       JOIN "projects" p ON r."projectId" = p.id
       ${creatorJoin}
       WHERE ${conditions.join(" AND ")}
-      ORDER BY r."createdAt" ${dir}
+      ORDER BY r."createdAt" ${dir}, r.id ${dir}
       OFFSET ${input.offset} LIMIT 1
     `;
-    const cursorRows: { id: bigint }[] = await ctx.prisma.$queryRawUnsafe(cursorQuery, ...queryParams);
+    const cursorRows: { id: bigint; createdAt: Date }[] = await ctx.prisma.$queryRawUnsafe(cursorQuery, ...queryParams);
     if (cursorRows.length === 0) return { runs: [], nextCursor: null, nextOffset: null };
 
-    // Step 2: Fetch from cursor position using id >= / <= for efficient seek
-    const cursorId = cursorRows[0].id;
-    queryParams.push(cursorId as any);
-    conditions.push(`r.id ${input.direction === "forward" ? "<=" : ">="} $${queryParams.length}::bigint`);
+    // Step 2: inclusive seek (cursor row is the first row of the new page).
+    const cursorRow = cursorRows[0];
+    queryParams.push(cursorRow.createdAt.toISOString());
+    const createdAtIdx = queryParams.length;
+    queryParams.push(cursorRow.id as any);
+    const idIdx = queryParams.length;
+    const cmp = input.direction === "forward" ? "<=" : ">=";
+    conditions.push(
+      `(r."createdAt", r.id) ${cmp} ($${createdAtIdx}::timestamptz, $${idIdx}::bigint)`,
+    );
   } else if (input.cursor) {
-    // Normal cursor pagination
+    // Normal cursor pagination — exclusive seek (cursor was the last row
+    // of the previous page; fetch rows after it). Look up the cursor
+    // row's createdAt so we can build the compound keyset.
+    const cursorRow = await ctx.prisma.runs.findUnique({
+      where: { id: BigInt(input.cursor) },
+      select: { createdAt: true },
+    });
+    if (!cursorRow) return { runs: [], nextCursor: null, nextOffset: null };
+    queryParams.push(cursorRow.createdAt.toISOString());
+    const createdAtIdx = queryParams.length;
     queryParams.push(BigInt(input.cursor) as any);
-    conditions.push(`r.id ${input.direction === "forward" ? "<" : ">"} $${queryParams.length}::bigint`);
+    const idIdx = queryParams.length;
+    const cmp = input.direction === "forward" ? "<" : ">";
+    conditions.push(
+      `(r."createdAt", r.id) ${cmp} ($${createdAtIdx}::timestamptz, $${idIdx}::bigint)`,
+    );
   }
 
   const query = `
@@ -443,7 +479,7 @@ async function defaultCursorQueryWithFieldFilters(
     JOIN "projects" p ON r."projectId" = p.id
     ${creatorJoin}
     WHERE ${conditions.join(" AND ")}
-    ORDER BY r."createdAt" ${dir}
+    ORDER BY r."createdAt" ${dir}, r.id ${dir}
     LIMIT ${input.limit}
   `;
 

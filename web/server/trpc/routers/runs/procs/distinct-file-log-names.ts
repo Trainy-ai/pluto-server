@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { protectedOrgProcedure } from "../../../../lib/trpc";
 import { sqidDecode } from "../../../../lib/sqid";
+import { getCached, setCached, buildBatchCacheKey } from "../../../../lib/cache";
+
+/** Fixed 30s TTL — mirrors distinctMetricNamesProcedure. Dedupes the burst of
+ *  identical calls each dynamic section / chart widget makes per render. */
+const DISTINCT_FILE_LOGS_TTL = 30 * 1000;
 
 /** Default limit for project-wide discovery */
 const DEFAULT_LIMIT = 500;
@@ -25,6 +30,19 @@ export const distinctFileLogNamesProcedure = protectedOrgProcedure
     })
   )
   .query(async ({ ctx, input }) => {
+    const numericRunIds = input.runIds?.map((sqid) => sqidDecode(sqid));
+
+    const cacheKey = buildBatchCacheKey("distinctFileLogNames", {
+      orgId: input.organizationId,
+      projectName: input.projectName,
+      search: input.search,
+      regex: input.regex,
+      runIds: numericRunIds ?? [],
+    });
+
+    const cached = await getCached<{ files: { logName: string; logType: string }[] }>(cacheKey);
+    if (cached) return cached;
+
     const project = await ctx.prisma.projects.findFirst({
       where: {
         name: input.projectName,
@@ -37,7 +55,6 @@ export const distinctFileLogNamesProcedure = protectedOrgProcedure
       return { files: [] as { logName: string; logType: string }[] };
     }
 
-    const numericRunIds = input.runIds?.map((sqid) => sqidDecode(sqid));
     const hasRunIds = numericRunIds && numericRunIds.length > 0;
     const limit = hasRunIds ? SCOPED_LIMIT : DEFAULT_LIMIT;
 
@@ -113,5 +130,7 @@ export const distinctFileLogNamesProcedure = protectedOrgProcedure
       { logName: string; logType: string }[]
     >(query, ...params);
 
-    return { files: rows };
+    const result = { files: rows };
+    await setCached(cacheKey, result, DISTINCT_FILE_LOGS_TTL);
+    return result;
   });

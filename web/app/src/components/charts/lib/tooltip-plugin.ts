@@ -341,7 +341,10 @@ function createTooltipRow(
     switch (col.id) {
       case "name": {
         const nameSpan = document.createElement("span");
-        nameSpan.style.cssText = `color: ${data.isHighlighted ? "#fff" : textColor}; min-width: 0; overflow: hidden; text-overflow: ellipsis${data.isHighlighted ? "; font-weight: 600" : ""}${divider}`;
+        // Use textColor (theme-aware) for both states. The translucent blue
+        // background already signals highlight; hardcoding #fff was illegible
+        // on the light-mode tooltip background. Bold conveys the highlight.
+        nameSpan.style.cssText = `color: ${textColor}; min-width: 0; overflow: hidden; text-overflow: ellipsis${data.isHighlighted ? "; font-weight: 600" : ""}${divider}`;
         nameSpan.textContent = data.name;
         row.appendChild(nameSpan);
         break;
@@ -626,8 +629,8 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
         top: -9999px;
         font-family: ui-monospace, monospace;
         font-size: 11px;
-        background: ${theme === "dark" ? "#161619" : "#fff"};
-        border: 1px solid ${theme === "dark" ? "#333" : "#e0e0e0"};
+        background: hsl(var(--popover));
+        border: 1px solid hsl(var(--border));
         border-radius: 4px;
         padding: 4px;
         width: fit-content;
@@ -652,8 +655,40 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       if (isSharedMode && tooltipEl) {
         const sharedTimer = (tooltipEl as any)._hideTimer as ReturnType<typeof setTimeout> | null;
         if (sharedTimer) {
+          // Cross-chart cancellation: the shared timer was set by a
+          // DIFFERENT plugin instance's mouseleave (sharedTimer !==
+          // this plugin's local hideTimeoutId). The other chart's
+          // hideCallback was the only thing that would have fired its
+          // onHoverChange(false) — and we're about to cancel it. Fire
+          // the pending callback synchronously so the other chart's
+          // chart-state cleanup (lastFocusedSeriesRef.current = null,
+          // _lastFocusedSeriesIdx delete, etc. inside line-uplot's
+          // handleHoverChange(false)) actually runs.
+          //
+          // Without this, rapid mouse motion through several charts in
+          // a sync group leaves every chart visited mid-chain with a
+          // stuck local-focus state — its lastFocusedSeriesRef.current
+          // still points at the last series the cursor was near, so
+          // the stroke fn's local-tier priority "wins" forever and
+          // table-row hovers can no longer override it. Re-entering
+          // and leaving the chart "fixes" it because that mouseleave
+          // schedules a fresh timer that isn't canceled.
+          //
+          // Same-chart re-entry (cursor wiggling in/out within 50 ms)
+          // is the case sharedTimer === hideTimeoutId — for that we
+          // skip the pending fire and preserve the existing wiggle
+          // grace where the chart-state stays "still hovered" across
+          // brief boundary-crossings.
+          const isCrossChart = sharedTimer !== hideTimeoutId;
           clearTimeout(sharedTimer);
           (tooltipEl as any)._hideTimer = null;
+          if (isCrossChart) {
+            const pendingCb = (tooltipEl as any)._pendingOnHoverChange as
+              | ((isHovering: boolean) => void)
+              | undefined;
+            pendingCb?.(false);
+          }
+          (tooltipEl as any)._pendingOnHoverChange = null;
         }
       }
       if (hideTimeoutId !== null) {
@@ -704,12 +739,21 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
           tooltipEl.style.display = "none";
         }
         hideTimeoutId = null;
-        if (isSharedMode && tooltipEl) (tooltipEl as any)._hideTimer = null;
+        if (isSharedMode && tooltipEl) {
+          (tooltipEl as any)._hideTimer = null;
+          // Pending callback was just fired by hideCallback's
+          // onHoverChange?.(false) above — clear the ref so a later
+          // cross-chart cancel doesn't try to fire a stale callback.
+          (tooltipEl as any)._pendingOnHoverChange = null;
+        }
       };
       hideTimeoutId = setTimeout(hideCallback, 50);
-      // In shared mode, also store on the element so other instances can cancel it
+      // In shared mode, also store on the element so other instances can cancel it.
+      // Store the pending onHoverChange too so a cross-chart mouseenter that
+      // cancels the timer can fire the chart-state cleanup explicitly.
       if (isSharedMode && tooltipEl) {
         (tooltipEl as any)._hideTimer = hideTimeoutId;
+        (tooltipEl as any)._pendingOnHoverChange = onHoverChange ?? null;
       }
     };
 
@@ -747,7 +791,11 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     } // end else (non-shared mode)
 
     // --- Pin / Unpin logic ---
-    const borderDefault = `1px solid ${theme === "dark" ? "#333" : "#e0e0e0"}`;
+    // borderDefault uses a CSS variable so re-applying it after unpin or on
+    // destroy doesn't lock in the old theme's color. borderPinned stays as a
+    // literal blue (works on both themes); pin state is cleared on chart
+    // recreation anyway, so a theme switch while pinned is unreachable.
+    const borderDefault = `1px solid hsl(var(--border))`;
     const borderPinned = `1px solid ${theme === "dark" ? "#5b9bf0" : "#3b82f6"}`;
 
     /** Apply pinned visual state to tooltip */
@@ -1728,6 +1776,19 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     // Apply latest saved size from shared cache (picks up resizes from other pinned tooltips)
     applySavedSize(tooltipEl);
 
+    // Ensure the element is laid out before measuring. offsetWidth/Height
+    // return 0 for display:none elements, which silently fed the 200/100
+    // fallbacks below and made repositionTooltip's viewport-overflow check
+    // undershoot — tooltip ended up off-screen on the first hover after a
+    // chart switch (mouseenter defers display:block until content exists).
+    // The element stays positioned at left:-9999px until repositionTooltip
+    // runs, so flipping display early is invisible to the user.
+    const willShow = isSharedMode && isHovering && !_pinState.isPinned;
+    const wasHidden = tooltipEl.style.display === "none";
+    if (willShow && wasHidden) {
+      tooltipEl.style.display = "block";
+    }
+
     // Re-measure dimensions after full rebuild (the only time we read layout)
     cachedTipW = tooltipEl.offsetWidth || 200;
     cachedTipH = tooltipEl.offsetHeight || 100;
@@ -1736,11 +1797,6 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     // Reposition tooltip (skip when pinned — caller handles position restoration)
     if (!_pinState.isPinned) {
       repositionTooltip(u);
-    }
-    // In shared mode, ensure tooltip is visible after successful content build.
-    // mouseenter may have deferred display when content was empty.
-    if (isSharedMode && isHovering && !_pinState.isPinned && tooltipEl.style.display === "none") {
-      tooltipEl.style.display = "block";
     }
   }
 
@@ -1956,10 +2012,12 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
             dash: lineData?.dash, runName: lineData?.runName, runId: lineData?.runId, metricName: lineData?.metricName,
           }, textColor);
           cached.row.style.background = isHighlighted ? "rgba(59, 130, 246, 0.15)" : "";
+          if (cached.nameSpan) cached.nameSpan.style.fontWeight = isHighlighted ? "600" : "";
           cached.lastValueKey = vk;
           cached.lastHighlight = isHighlighted;
         } else if (cached.lastHighlight !== isHighlighted) {
           cached.row.style.background = isHighlighted ? "rgba(59, 130, 246, 0.15)" : "";
+          if (cached.nameSpan) cached.nameSpan.style.fontWeight = isHighlighted ? "600" : "";
           cached.lastHighlight = isHighlighted;
         }
         cached.row.style.display = "grid";
@@ -1985,10 +2043,12 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
               dash: lineData.dash, runName: lineData.runName, runId: lineData.runId, metricName: lineData.metricName,
             }, textColor);
             cached.row.style.background = isHighlighted ? "rgba(59, 130, 246, 0.15)" : "";
+            if (cached.nameSpan) cached.nameSpan.style.fontWeight = isHighlighted ? "600" : "";
             cached.lastValueKey = vk;
             cached.lastHighlight = isHighlighted;
           } else if (cached.lastHighlight !== isHighlighted) {
             cached.row.style.background = isHighlighted ? "rgba(59, 130, 246, 0.15)" : "";
+            if (cached.nameSpan) cached.nameSpan.style.fontWeight = isHighlighted ? "600" : "";
             cached.lastHighlight = isHighlighted;
           }
           cached.row.style.display = "grid";
@@ -2041,10 +2101,12 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
             nonFiniteFlags: bucketFlags,
           }, textColor);
           cached.row.style.background = isHighlighted ? "rgba(59, 130, 246, 0.15)" : "";
+          if (cached.nameSpan) cached.nameSpan.style.fontWeight = isHighlighted ? "600" : "";
           cached.lastValueKey = vk;
           cached.lastHighlight = isHighlighted;
         } else if (cached.lastHighlight !== isHighlighted) {
           cached.row.style.background = isHighlighted ? "rgba(59, 130, 246, 0.15)" : "";
+          if (cached.nameSpan) cached.nameSpan.style.fontWeight = isHighlighted ? "600" : "";
           cached.lastHighlight = isHighlighted;
         }
         cached.row.style.display = "grid";
@@ -2102,6 +2164,18 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
 
     lastRenderedIdx = idx;
     lastContentHighlight = highlightedSId;
+
+    // Re-measure tooltip dimensions when any row was updated. Fast-path
+    // value writes can change width (longer numbers, flag text, raw+smoothed
+    // dual values, header "X/Y series" label, etc.) and a stale cachedTipW
+    // makes repositionTooltip's right-edge overflow check undershoot —
+    // tooltip lands past the viewport. Bounded by x-bucket transitions
+    // (setCursor early-returns when idx is unchanged), not mouse pixels, so
+    // this preserves the perf wins from the original cache.
+    if (updatedKeys.size > 0 && tooltipEl) {
+      cachedTipW = tooltipEl.offsetWidth || cachedTipW;
+      cachedTipH = tooltipEl.offsetHeight || cachedTipH;
+    }
 
     // Reposition tooltip (skip when pinned — position is locked)
     if (!_pinState.isPinned) {
@@ -2311,7 +2385,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
             tooltipEl.removeAttribute("data-pinned");
             tooltipEl.style.display = "none";
             tooltipEl.style.pointerEvents = "none";
-            tooltipEl.style.border = `1px solid ${theme === "dark" ? "#333" : "#e0e0e0"}`;
+            tooltipEl.style.border = `1px solid hsl(var(--border))`;
             tooltipEl.style.resize = "none";
             const closeBtn = tooltipEl.querySelector("[data-tooltip-close]");
             if (closeBtn) closeBtn.remove();

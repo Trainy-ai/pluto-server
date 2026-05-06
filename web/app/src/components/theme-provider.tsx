@@ -32,20 +32,27 @@ export function ThemeProvider({
 
   useEffect(() => {
     const root = window.document.documentElement;
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
 
-    root.classList.remove("light", "dark");
+    const apply = () => {
+      root.classList.remove("light", "dark");
+      if (theme === "system") {
+        root.classList.add(mediaQuery.matches ? "dark" : "light");
+      } else {
+        root.classList.add(theme);
+      }
+    };
 
-    if (theme === "system") {
-      const systemTheme = window.matchMedia("(prefers-color-scheme: dark)")
-        .matches
-        ? "dark"
-        : "light";
+    apply();
 
-      root.classList.add(systemTheme);
-      return;
-    }
-
-    root.classList.add(theme);
+    // When theme === "system", re-apply on OS-level theme changes (e.g.
+    // automatic time-of-day light/dark switch). Without this, <html> keeps
+    // its old class while other components that read prefers-color-scheme
+    // (e.g. chart code via lib/hooks/use-theme) flip — leaving the page in
+    // a half-light/half-dark "intermediate state" until a hard refresh.
+    if (theme !== "system") return;
+    mediaQuery.addEventListener("change", apply);
+    return () => mediaQuery.removeEventListener("change", apply);
   }, [theme]);
 
   const value = {

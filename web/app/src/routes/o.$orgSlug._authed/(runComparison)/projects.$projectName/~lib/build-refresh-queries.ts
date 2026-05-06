@@ -1,7 +1,5 @@
 import type { InvalidateQueryFilters, Query } from "@tanstack/react-query";
 
-export type RunComparisonViewMode = "charts" | "side-by-side";
-
 // tRPC v11 query keys look like: [path[], { input, type }]
 // e.g. [["runs", "distinctMetricNames"], { input: {...}, type: "query" }]
 function getPath(query: Query): readonly string[] | undefined {
@@ -9,82 +7,34 @@ function getPath(query: Query): readonly string[] | undefined {
   return Array.isArray(first) ? (first as string[]) : undefined;
 }
 
-function getInput(query: Query): Record<string, unknown> | undefined {
-  const second = query.queryKey?.[1] as { input?: Record<string, unknown> } | undefined;
-  return second?.input;
-}
-
-// Side-by-side view observes: runs.list (table, still visible), runs.count,
-// runs.getByIds, runs.metricSummaries, runs.distinctTags, and the
-// runIds-scoped variant of runs.distinctMetricNames (no regex/search).
-// Dashboard-only queries (distinctFileLogNames, distinctMetricNames with
-// regex/search, distinctColumnKeys) belong to the unmounted chart tree and
-// must not be refetched on the auto-refresh tick.
-export function isSideBySideQuery(query: Query): boolean {
-  const path = getPath(query);
-  if (path?.[0] !== "runs") return false;
-  const sub = path[1];
-  if (
-    sub === "list" ||
-    sub === "count" ||
-    sub === "getByIds" ||
-    sub === "metricSummaries" ||
-    sub === "distinctTags"
-  ) {
-    return true;
-  }
-  if (sub === "distinctMetricNames") {
-    const input = getInput(query);
-    return !input?.regex && !input?.search;
-  }
-  return false;
-}
-
 // Build the queries list passed to useRefresh.
 //
-// runs.list uses refetchType "active" in both modes to avoid the pageSize
-// zombie (stale cache entries with different limits all refetching on every
-// tick, stacking concurrent backend requests).
+// Single filter: every runs.* query, refetchType "active". Active means
+// "only refetch queries that still have a mounted observer". Queries whose
+// key has changed because of input changes (e.g. selectedRunIds toggled,
+// search term edited, page size flipped) become orphans with zero
+// observers and sit in the cache until gc. Refetching those orphans on
+// every tick produced a request-amplification fan-out: each runIds toggle
+// minted ~20 new dynamic-section queries, and the previous ~20 (now
+// orphaned) kept refetching for the full gcTime window — 30s of toggling
+// could pin 100+ orphan queries to the auto-refresh cycle.
 //
-// Charts mode: every other runs.* query refetches with "all" so hidden chart
-// groups, dashboard widgets, diff view, etc. stay warm.
+// Active observers cover everything currently rendered, including hidden
+// tabs whose components are still mounted. The only case "active" misses
+// is fully unmounted subtrees, which will refetch when their components
+// remount and their stale data is observed again — that's the right
+// behavior.
 //
-// Side-by-side mode: narrow to the queries side-by-side actually observes.
-// The dashboard tree is unmounted, so its cached queries would otherwise be
-// refetched anyway (refetchType "all" ignores whether there's an observer).
-export function buildRefreshQueryFilters(
-  viewMode: RunComparisonViewMode,
-): InvalidateQueryFilters[] {
-  const runsListFilter: InvalidateQueryFilters = {
-    predicate: (query) => {
-      const path = getPath(query);
-      return path?.[0] === "runs" && path?.[1] === "list";
-    },
-    refetchType: "active",
-  };
-
-  if (viewMode === "side-by-side") {
-    return [
-      runsListFilter,
-      {
-        predicate: (query) => {
-          const path = getPath(query);
-          if (path?.[0] !== "runs" || path?.[1] === "list") return false;
-          return isSideBySideQuery(query);
-        },
-        refetchType: "all",
-      },
-    ];
-  }
-
+// Charts and side-by-side modes used to need different predicates: charts
+// refetched everything with "all", side-by-side narrowed to specific
+// procs because dashboard queries were orphans in that mode. Once both
+// modes use "active", orphans are skipped automatically and the narrowing
+// is moot. One filter, one predicate.
+export function buildRefreshQueryFilters(): InvalidateQueryFilters[] {
   return [
-    runsListFilter,
     {
-      predicate: (query) => {
-        const path = getPath(query);
-        return path?.[0] === "runs" && path?.[1] !== "list";
-      },
-      refetchType: "all",
+      predicate: (query) => getPath(query)?.[0] === "runs",
+      refetchType: "active",
     },
   ];
 }

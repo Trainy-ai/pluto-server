@@ -245,6 +245,12 @@ export function useSelectedRuns(
 
   // --- State machine for initialization ---
   const initPhaseRef = useRef<InitPhase>("uninit");
+  // Mirror of "phase reached ready" as React state so downstream useEffects
+  // (URL sync, cache save) re-fire when init completes. Refs alone don't
+  // trigger re-renders, so cache-hydration → ready transitions used to leave
+  // the URL out of sync with restored state (notably hiddenRunIds, which has
+  // no upstream-runs-refresh side-effect to nudge it).
+  const [isInited, setIsInited] = useState(false);
   // Track the previous URL run IDs to detect navigation changes
   const prevUrlRunIdsRef = useRef<string[] | undefined>(undefined);
   // Track whether a URL change was triggered by our own selection update
@@ -345,6 +351,7 @@ export function useSelectedRuns(
     setRunColors({});
     setSelectedRunsWithColors({});
     setHiddenRunIds(new Set());
+    setIsInited(false);
     prevUrlRunIdsRef.current = undefined;
 
     if (urlRunIds?.length) {
@@ -371,7 +378,16 @@ export function useSelectedRuns(
               if (cachedData.data.hiddenRunIds?.length) {
                 setHiddenRunIds(new Set(cachedData.data.hiddenRunIds));
               }
-              initPhaseRef.current = "cache-applied";
+              // Transition straight to "ready" instead of an intermediate
+              // "cache-applied" that depends on the line 396 effect re-firing.
+              // That effect's deps (runs, urlRunIds, ...) often haven't changed
+              // by the time we get here — particularly when `runs` was already
+              // hydrated from React Query cache (e.g. user navigated back via
+              // the breadcrumb from an individual run page) — so the effect
+              // wouldn't re-fire and isInited would stay false, leaving URL
+              // sync silently disabled.
+              initPhaseRef.current = "ready";
+              setIsInited(true);
               return;
             }
           }
@@ -407,6 +423,7 @@ export function useSelectedRuns(
       if (selection) {
         applySelection(selection, urlHiddenIds);
         initPhaseRef.current = "ready";
+        setIsInited(true);
         prevUrlRunIdsRef.current = urlRunIds;
       }
       // If selection is null, the target runs haven't loaded yet (e.g.,
@@ -418,6 +435,7 @@ export function useSelectedRuns(
     if (phase === "cache-applied") {
       // Cache was restored — we're done initializing
       initPhaseRef.current = "ready";
+      setIsInited(true);
       return;
     }
 
@@ -432,6 +450,7 @@ export function useSelectedRuns(
     setRunColors(colors);
     setSelectedRunsWithColors(selected);
     initPhaseRef.current = "ready";
+    setIsInited(true);
   }, [runs, urlRunIds, urlHiddenIds, buildSelectionFromUrl, buildDefaultSelection, applySelection]);
 
   // --- Handle URL param changes AFTER initialization (navigation) ---
@@ -464,7 +483,14 @@ export function useSelectedRuns(
   }, [urlRunIds, urlHiddenIds, runs, buildSelectionFromUrl, applySelection]);
 
   // --- Debounced save to cache ---
-  const debouncedSaveToCache = useDebouncedCallback(
+  // The callback must be stable (useCallback). useDebouncedCallback's
+  // useMemo keys on the callback reference; an inline function is a new
+  // reference every render, which makes the debounced fn itself a new
+  // reference, which makes the cache-save useEffect's deps churn every
+  // render, which calls debouncedSaveToCache(...) every render, which
+  // clears + reschedules the 500ms setTimeout every render. On a busy
+  // dashboard the timer never fires and the cache is never written.
+  const saveToCacheImpl = useCallback(
     async (colors: Record<RunId, Color>, selected: Record<RunId, { run: Run; color: Color }>, hidden: Set<RunId>, key: string) => {
       try {
         await runCacheDb.setData(key, {
@@ -476,15 +502,17 @@ export function useSelectedRuns(
         console.error("Error saving run selections to cache:", error);
       }
     },
-    500,
+    [],
   );
+  const debouncedSaveToCache = useDebouncedCallback(saveToCacheImpl, 500);
 
-  // Save to cache whenever state changes (debounced).
-  // Guard on ready phase to avoid overwriting cache before it's restored.
+  // Save to cache whenever state changes (debounced). Gate on isInited so
+  // the effect re-fires when init transitions ready (refs alone don't
+  // trigger re-renders, so a ref gate would miss the post-hydration save).
   useEffect(() => {
-    if (initPhaseRef.current !== "ready") return;
+    if (!isInited) return;
     debouncedSaveToCache(runColors, selectedRunsWithColors, hiddenRunIds, storageKey);
-  }, [runColors, selectedRunsWithColors, hiddenRunIds, debouncedSaveToCache, storageKey]);
+  }, [runColors, selectedRunsWithColors, hiddenRunIds, debouncedSaveToCache, storageKey, isInited]);
 
   // --- Keep stored run objects fresh when upstream `runs` is enriched ---
   useEffect(() => {
@@ -512,16 +540,17 @@ export function useSelectedRuns(
   }, [runs]);
 
   // --- Notify parent when selection changes (for URL sync) ---
+  // Gate on isInited (state) instead of initPhaseRef.current so this effect
+  // re-fires when init completes, ensuring restored selection state lands
+  // in the URL even when the underlying state was set during cache hydration
+  // (when phase was "cache-applied", not yet "ready").
   useEffect(() => {
-    if (onSelectionChange) {
-      // Don't sync to URL before initialization is complete
-      if (initPhaseRef.current !== "ready") return;
-      // Mark that the upcoming URL change was triggered locally
-      isLocalSelectionUpdateRef.current = true;
-      const selectedIds = Object.keys(selectedRunsWithColors);
-      onSelectionChange(selectedIds);
-    }
-  }, [selectedRunsWithColors, onSelectionChange]);
+    if (!onSelectionChange) return;
+    if (!isInited) return;
+    isLocalSelectionUpdateRef.current = true;
+    const selectedIds = Object.keys(selectedRunsWithColors);
+    onSelectionChange(selectedIds);
+  }, [selectedRunsWithColors, onSelectionChange, isInited]);
 
   // --- User action handlers ---
 
@@ -723,14 +752,18 @@ export function useSelectedRuns(
     setHiddenRunIds(new Set(Object.keys(selectedRunsWithColors)));
   }, [selectedRunsWithColors]);
 
-  // Notify parent when hidden runs change (for URL sync)
+  // Notify parent when hidden runs change (for URL sync). Gate on isInited
+  // (state) so this effect re-fires when init transitions to ready —
+  // critical for the cache-hydration path, where hiddenRunIds is set during
+  // "cache-applied" phase but no further state change pokes this effect
+  // afterward (unlike selectedRunsWithColors, which gets nudged again by
+  // the upstream-runs-refresh effect).
   useEffect(() => {
-    if (onHiddenChange) {
-      if (initPhaseRef.current !== "ready") return;
-      isLocalSelectionUpdateRef.current = true;
-      onHiddenChange(Array.from(hiddenRunIds));
-    }
-  }, [hiddenRunIds, onHiddenChange]);
+    if (!onHiddenChange) return;
+    if (!isInited) return;
+    isLocalSelectionUpdateRef.current = true;
+    onHiddenChange(Array.from(hiddenRunIds));
+  }, [hiddenRunIds, onHiddenChange, isInited]);
 
   return {
     runColors,

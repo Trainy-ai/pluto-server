@@ -146,17 +146,27 @@ export function ChartCardWrapper({
         </div>
       </div>
 
-      {/* Fullscreen dialog */}
-      <ChartFullscreenDialog
-        open={isFullscreen}
-        onOpenChange={(open) => { setIsFullscreen(open); setFullscreen(open); }}
-        title={metricName}
-        logXAxis={effectiveLogXAxis}
-        logYAxis={effectiveLogYAxis}
-        onLogScaleChange={handleLogScaleChange}
-      >
-        {renderChart(undefined, effectiveLogXAxis, effectiveLogYAxis, true, yZoomRange, handleYZoomRangeChange)}
-      </ChartFullscreenDialog>
+      {/* Fullscreen dialog — conditionally mounted to match the
+          AR-DS / AR-DD render pattern (dashboard-builder.tsx:873,
+          dynamic-section-grid.tsx:225). Previously this was always
+          mounted with `open={isFullscreen}`, which meant every visible
+          ChartCardWrapper had a dialog wrapper in the tree even when
+          closed. Radix only renders dialog content when open, so the
+          extra wrappers were not creating chart instances, but the
+          renderChart() child was still being invoked on every render
+          for every card and the tree shape diverged from dashboards. */}
+      {isFullscreen && (
+        <ChartFullscreenDialog
+          open={true}
+          onOpenChange={(open) => { setIsFullscreen(open); setFullscreen(open); }}
+          title={metricName}
+          logXAxis={effectiveLogXAxis}
+          logYAxis={effectiveLogYAxis}
+          onLogScaleChange={handleLogScaleChange}
+        >
+          {renderChart(undefined, effectiveLogXAxis, effectiveLogYAxis, true, yZoomRange, handleYZoomRangeChange)}
+        </ChartFullscreenDialog>
+      )}
     </>
   );
 }

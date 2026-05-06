@@ -34,6 +34,9 @@ interface MetricsDisplayProps {
   onInheritedChange?: (value: boolean) => void;
   /** Experiment run ID lookup for group highlighting in experiments mode */
   experimentRunIdsMap?: Map<string, string[]> | null;
+  /** Run IDs marked hidden — passed into ChartSyncProvider so charts mounting
+   *  after a state change see the right value via the synchronous ref-sync path. */
+  hiddenRunIds?: Set<string>;
 }
 
 /**
@@ -53,6 +56,7 @@ export const MetricsDisplay = memo(function MetricsDisplay({
   showInheritedMetrics: externalShowInherited,
   onInheritedChange,
   experimentRunIdsMap,
+  hiddenRunIds,
 }: MetricsDisplayProps) {
   const [searchState, setSearchState] = useState<SearchState>({
     query: "",
@@ -166,7 +170,7 @@ export const MetricsDisplay = memo(function MetricsDisplay({
   // If a custom view is selected, render the DashboardBuilder
   if (selectedViewId && selectedView) {
     return (
-      <ChartSyncProvider syncKey={`dashboard-${selectedViewId}`} experimentRunIdsMap={experimentRunIdsMap}>
+      <ChartSyncProvider syncKey={`dashboard-${selectedViewId}`} experimentRunIdsMap={experimentRunIdsMap} hiddenRunIds={hiddenRunIds}>
         <FullscreenProvider>
         <div className="flex-1 space-y-4">
           <div className="sticky top-0 z-20 flex items-center gap-4 bg-background pb-2">
@@ -219,7 +223,7 @@ export const MetricsDisplay = memo(function MetricsDisplay({
 
   // Default "All Metrics" view
   return (
-    <ChartSyncProvider syncKey={`all-metrics-${projectName}`} experimentRunIdsMap={experimentRunIdsMap}>
+    <ChartSyncProvider syncKey={`all-metrics-${projectName}`} experimentRunIdsMap={experimentRunIdsMap} hiddenRunIds={hiddenRunIds}>
       <FullscreenProvider>
       <div className="flex-1 space-y-4">
         <div className="sticky top-0 z-20 flex items-center gap-4 bg-background pb-2">

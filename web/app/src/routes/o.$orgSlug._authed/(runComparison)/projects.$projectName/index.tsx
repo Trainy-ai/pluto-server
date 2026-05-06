@@ -529,13 +529,12 @@ function RouteComponent() {
     [updateDebouncedSearch, searchStorageKey],
   );
 
-  // Side-by-side narrows the "everything else runs.*" refresh to only the
-  // queries that view observes (runs.getByIds, metricSummaries, distinctTags,
-  // and runIds-scoped distinctMetricNames). MetricsDisplay is fully unmounted
-  // in that mode so its dashboard queries would otherwise refetch needlessly
-  // — refetchType "all" ignores whether a query still has an observer.
+  // Auto-refresh predicate: every runs.* query, refetchType "active".
+  // Same predicate for both charts and side-by-side modes — "active" skips
+  // unmounted/orphaned queries automatically, so the per-mode narrowing
+  // that used to live here is no longer needed.
   const { refresh, lastRefreshed } = useRefresh({
-    queries: useMemo(() => buildRefreshQueryFilters(viewMode), [viewMode]),
+    queries: useMemo(() => buildRefreshQueryFilters(), []),
   });
 
   const { data: runCount, isLoading: runCountLoading } = useRunCount(
@@ -1152,7 +1151,9 @@ function RouteComponent() {
   }, [selectedRunsWithColors, listMode]);
 
   // Dispatch DOM event when hidden runs change — chart-sync-context listens
-  // and imperatively toggles uPlot series visibility (no React re-render)
+  // and imperatively toggles uPlot series visibility on already-mounted
+  // charts (no React re-render). Charts that mount after this event fires
+  // pick up the value via the synchronous prop-sync inside ChartSyncProvider.
   useEffect(() => {
     const event = new CustomEvent('run-visibility-change', {
       detail: hiddenRunIds,
@@ -1348,6 +1349,7 @@ function RouteComponent() {
                         showInheritedMetrics={urlInherited === "false" ? false : true}
                         onInheritedChange={handleInheritedChange}
                         experimentRunIdsMap={experimentRunIdsMap}
+                        hiddenRunIds={hiddenRunIds}
                       />
                     </div>
                   )}

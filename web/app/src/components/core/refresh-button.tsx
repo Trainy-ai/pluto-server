@@ -69,6 +69,10 @@ export function RefreshButton({
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastKeyPressRef = useRef<number>(0);
+  // True when one or more auto-refresh ticks were skipped because a popup
+  // (menu / dialog / listbox / chart tooltip) was open. Cleared when the
+  // deferred refresh fires.
+  const pendingRefreshRef = useRef(false);
   const onRefreshRef = useRef(onRefresh);
   onRefreshRef.current = onRefresh;
 
@@ -153,9 +157,54 @@ export function RefreshButton({
       return;
     }
 
+    // True if the user currently has any popup open that would be
+    // disrupted by a refresh-induced re-render (menu/dialog/listbox) or
+    // is mid-read of a chart tooltip. Generic Radix tooltips
+    // (role=tooltip) are intentionally NOT included — they're
+    // hover-driven and would otherwise gate refresh forever while the
+    // cursor sits on any tooltipped element.
+    const popupOpen = () => {
+      if (
+        document.querySelector(
+          '[role="menu"], [role="dialog"], [role="listbox"]',
+        )
+      ) {
+        return true;
+      }
+      // Chart tooltips: keep the element mounted; toggle style.display
+      // between "block" and "none". Treat as open only when displayed.
+      const chartTooltips = document.querySelectorAll<HTMLElement>(
+        '[data-tooltip="true"]',
+      );
+      for (const el of chartTooltips) {
+        if (el.style.display !== "none") return true;
+      }
+      return false;
+    };
+
+    const fireDeferredIfReady = () => {
+      if (
+        pendingRefreshRef.current &&
+        !popupOpen() &&
+        document.visibilityState === "visible"
+      ) {
+        pendingRefreshRef.current = false;
+        void handleRefreshRef.current();
+      }
+    };
+
     const startTimer = () => {
       if (timerRef.current) return;
       timerRef.current = setInterval(() => {
+        if (popupOpen()) {
+          // Skip the tick but remember we owe the user a refresh — the
+          // observer below will fire it the moment they close the popup,
+          // so a 5-minute interval doesn't double to 10 minutes just
+          // because the tick happened to land while a popup was open.
+          pendingRefreshRef.current = true;
+          return;
+        }
+        pendingRefreshRef.current = false;
         void handleRefreshRef.current();
       }, activeInterval);
     };
@@ -170,10 +219,30 @@ export function RefreshButton({
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") {
         startTimer();
+        // Tab regained focus — if we owe a deferred refresh and the
+        // user closed the popup while the tab was hidden, fire it now.
+        fireDeferredIfReady();
       } else {
         stopTimer();
       }
     };
+
+    // Watch the document for popups appearing/disappearing. When a
+    // pending refresh is owed and the last popup just closed, fire it.
+    // Watches style attribute changes too so the chart tooltip's
+    // display:none → display:block toggle counts. Fast-paths when no
+    // refresh is pending (the common case) so cursor-move style churn
+    // doesn't repeatedly run popupOpen().
+    const observer = new MutationObserver(() => {
+      if (!pendingRefreshRef.current) return;
+      fireDeferredIfReady();
+    });
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["style"],
+    });
 
     if (document.visibilityState === "visible") {
       startTimer();
@@ -182,6 +251,7 @@ export function RefreshButton({
 
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
+      observer.disconnect();
       stopTimer();
     };
   }, [activeInterval]);

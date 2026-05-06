@@ -476,6 +476,43 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           }],
           draw: [drawHook],
           setScale: [setScaleHook],
+          // Hover-end cleanup for chart-destroyed-mid-hover. uPlot fires this
+          // synchronously inside chart.destroy(); we use it to scrub any
+          // hover-related state that survives chart recreation. Without this,
+          // when the chart is torn down while the user was hovering it (drag-
+          // zoom past chart bounds → auto-zoom on mouseleave → refetch →
+          // recreate; or FS dialog closed via ESC with the cursor still
+          // inside the FS chart overlay), the tooltip plugin's destroy hook
+          // cancels its 50ms mouseleave-hide timer without ever firing
+          // onHoverChange(false), so handleHoverChange's hover-end path
+          // doesn't run. Two things leak as a result:
+          //   1. component-level lastFocusedSeriesRef survives recreation
+          //      and the next chart's stroke function picks it up as
+          //      stuck local focus (series-config.ts ~L82 fallback) →
+          //      "1 chart stuck on a specific run color, ignores row hover".
+          //   2. chart-sync-context.hoveredChartIdRef keeps pointing at
+          //      this (now-dead) chart's id → handleRunTableHover early-
+          //      returns at `if (hoveredChartIdRef.current !== null) return`
+          //      → row hover does nothing on any chart.
+          // Reading hoveredChartIdRef directly is the reliable signal here;
+          // the tooltip plugin's local isHovering state may have already
+          // been flipped by an earlier-firing destroy hook.
+          destroy: [(_u) => {
+            const ctx = chartSyncContextRef.current;
+            if (ctx?.hoveredChartIdRef?.current !== chartId) return;
+            lastFocusedSeriesRef.current = null;
+            // setHoveredChart(null) clears hoveredChartIdRef + companion
+            // refs (highlightedSeriesNameRef, highlightedRunIdRef) and
+            // dispatches the runs-table "chart-hover-run" cleanup event.
+            ctx.setHoveredChart(null);
+            // Broadcast a hover-end so any other chart that received
+            // this chart's _crossHighlightRunId during the drag has it
+            // cleared. Iterates uplotInstancesRef which no longer
+            // contains this chart (unregisterUPlot already removed it
+            // earlier in the effect cleanup), so the source-skip check
+            // inside is moot — every remaining chart gets the clear.
+            ctx.highlightUPlotSeries(chartId, null);
+          }],
           ...(yZoom ? { setSelect: [buildSetSelectHook(userHasZoomedYRef, userYZoomRangeRef, onYZoomRangeChangeRef)] } : {}),
         },
       };
