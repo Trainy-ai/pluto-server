@@ -14,7 +14,7 @@ import { PrismaClient } from '@prisma/client';
 import crypto from 'crypto';
 import { nanoid } from 'nanoid';
 import zlib from 'zlib';
-import { createClient } from '@clickhouse/client-web';
+import { createClient, type ClickHouseClient } from '@clickhouse/client-web';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { extractAndUpsertColumnKeys } from '../lib/extract-column-keys';
 
@@ -83,6 +83,37 @@ function createSimplePNG(
   const idatChunk = createPNGChunk('IDAT', zlib.deflateSync(Buffer.from(rawData)));
   const iendChunk = createPNGChunk('IEND', Buffer.alloc(0));
   return Buffer.concat([signature, ihdrChunk, idatChunk, iendChunk]);
+}
+
+/**
+ * Trigger an unscheduled refresh of mlop_metric_summaries_v2_refresh_mv and
+ * wait for it to complete.
+ *
+ * The refreshable MV recomputes summaries every 5 min in production. Tests
+ * can't wait that long — manually triggering forces it to run now so the
+ * just-seeded fixture data shows up in mlop_metric_summaries_v2 before tests
+ * read it.
+ *
+ * The mirror MV (mlop_metrics_v2_mv) propagates mlop_metrics → mlop_metrics_v2
+ * synchronously on each insert, so by the time we trigger the refresh, v2 has
+ * everything the seeders wrote. The refreshable MV reads from v2 FINAL.
+ */
+async function refreshMetricSummariesAndWait(ch: ClickHouseClient): Promise<void> {
+  await ch.command({
+    query: 'SYSTEM REFRESH VIEW mlop_metric_summaries_v2_refresh_mv',
+  });
+  // Poll until status leaves "Running". Refresh on test-scale data is ~1s.
+  // Cap at 15s; if it hits the timeout something is genuinely wrong.
+  for (let attempt = 0; attempt < 60; attempt++) {
+    const r = await ch.query({
+      query: `SELECT status FROM system.view_refreshes WHERE view = 'mlop_metric_summaries_v2_refresh_mv'`,
+      format: 'JSONEachRow',
+    });
+    const rows = (await r.json()) as Array<{ status: string }>;
+    if (rows[0]?.status && rows[0].status !== 'Running') return;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error('mlop_metric_summaries_v2_refresh_mv refresh timed out after 15s');
 }
 
 /**
@@ -163,41 +194,8 @@ async function seedClickHouseMetrics(
 
   console.log(`\r   ✓ Seeded ClickHouse with ${insertedCount.toLocaleString()} metric datapoints`);
 
-  // Populate mlop_metric_summaries directly (the MV may not exist if SQL
-  // files were executed in alphabetical order where metric_summaries_mv.sql
-  // runs before metrics.sql, causing the MV creation to fail).
-  //
-  // Use .command() (not .query()) for INSERT FROM SELECT — per @clickhouse/client
-  // docs, .query() is reserved for SELECTs and silently fails for INSERT SELECT
-  // in some configurations. This was the root cause of the empty
-  // mlop_metric_summaries table in CI that broke image-pinning tests 7+8.
-  // No try/catch — if seeding fails it should crash the setup, not silently
-  // leave the table empty.
-  await clickhouse.command({
-    query: `
-      INSERT INTO mlop_metric_summaries
-      SELECT
-        tenantId,
-        projectName,
-        runId,
-        logName,
-        min(value)               AS min_value,
-        max(value)               AS max_value,
-        sum(value)               AS sum_value,
-        toUInt64(count())        AS count_value,
-        argMaxState(value, step) AS last_value,
-        sum(value * value)       AS sum_sq_value,
-        min(step)                AS min_step,
-        max(step)                AS max_step
-      FROM mlop_metrics
-      WHERE tenantId = {tenantId: String}
-        AND projectName = {projectName: String}
-        AND isFinite(value)
-      GROUP BY tenantId, projectName, runId, logName
-    `,
-    query_params: { tenantId, projectName },
-  });
-  console.log('   ✓ Populated mlop_metric_summaries from mlop_metrics');
+  // mlop_metric_summaries population is handled by a single SYSTEM REFRESH
+  // VIEW call near the end of setupTestData (after all fixtures are seeded).
 
   await clickhouse.close();
 }
@@ -597,7 +595,12 @@ async function setupTestData(): Promise<TestData> {
 
   // 4. Create or get test projects (multiple for pagination tests)
   console.log('\n4️⃣  Creating test projects...');
-  const projectNames = ['smoke-test-project', 'test-project-2', 'test-project-3'];
+  // `dedup-e2e-project` exists so dedup-* E2E specs don't pollute
+  // smoke-test-project (which sort-pagination tests run against). The runs
+  // those specs create stay status=RUNNING for a brief moment and would
+  // otherwise show up at the top of smoke-test-project's runs table,
+  // tripping pagination assertions.
+  const projectNames = ['smoke-test-project', 'test-project-2', 'test-project-3', 'dedup-e2e-project'];
   const projects = [];
 
   for (const projectName of projectNames) {
@@ -1034,40 +1037,7 @@ async function setupTestData(): Promise<TestData> {
         format: 'JSONEachRow',
       });
       console.log(`   ✓ Seeded ${STAIRCASE_STEPS * 2} staircase metric datapoints (regular + irregular)`);
-
-      // Populate metric summaries for the staircase run.
-      // Use .command() not .query() for INSERT FROM SELECT (see comment on
-      // line ~165 — .query() silently fails in some CI configurations).
-      await clickhouse.command({
-        query: `
-          INSERT INTO mlop_metric_summaries
-          SELECT
-            tenantId,
-            projectName,
-            runId,
-            logName,
-            min(value)               AS min_value,
-            max(value)               AS max_value,
-            sum(value)               AS sum_value,
-            toUInt64(count())        AS count_value,
-            argMaxState(value, step) AS last_value,
-            sum(value * value)       AS sum_sq_value,
-            min(step)                AS min_step,
-            max(step)                AS max_step
-          FROM mlop_metrics
-          WHERE tenantId = {tenantId: String}
-            AND projectName = {projectName: String}
-            AND runId = {runId: UInt64}
-            AND isFinite(value)
-          GROUP BY tenantId, projectName, runId, logName
-        `,
-        query_params: {
-          tenantId: org.id,
-          projectName: project.name,
-          runId: Number(staircaseRun.id),
-        },
-      });
-      console.log('   ✓ Populated metric summaries for staircase run');
+      // Summaries populated by the end-of-setup SYSTEM REFRESH.
 
       await clickhouse.close();
     } else {
@@ -1091,96 +1061,6 @@ async function setupTestData(): Promise<TestData> {
       data: { number: 999 },
     });
     console.log(`   ✓ Ensured display ID: ${project.runPrefix}-999`);
-  }
-
-  // 5d-dedup. Create dedup-test run for step deduplication tests
-  console.log('\n5️⃣d-dedup Creating dedup-test run...');
-
-  let dedupRun = await prisma.runs.findFirst({
-    where: { organizationId: org.id, projectId: project.id, name: 'dedup-test' },
-  });
-
-  if (!dedupRun) {
-    const dedupCreatedAt = new Date(Date.now() - 364 * 24 * 60 * 60 * 1000);
-    dedupRun = await prisma.runs.create({
-      data: {
-        name: 'dedup-test',
-        organizationId: org.id,
-        projectId: project.id,
-        createdById: user.id,
-        creatorApiKeyId: apiKey.id,
-        status: 'COMPLETED',
-        createdAt: dedupCreatedAt,
-        updatedAt: dedupCreatedAt,
-      },
-    });
-    console.log(`   ✓ Created dedup-test run (ID: ${dedupRun.id})`);
-
-    // Register metric in run_logs
-    await prisma.runLogs.createMany({
-      data: [
-        { runId: dedupRun.id, logName: 'test/dedup_metric', logGroup: 'test', logType: 'METRIC' },
-      ],
-      skipDuplicates: true,
-    });
-
-    const clickhouseUrl = process.env.CLICKHOUSE_URL;
-    const clickhouseUser = process.env.CLICKHOUSE_USER || 'default';
-    const clickhousePassword = process.env.CLICKHOUSE_PASSWORD || '';
-
-    if (clickhouseUrl) {
-      const clickhouse = createClient({
-        url: clickhouseUrl,
-        username: clickhouseUser,
-        password: clickhousePassword,
-      });
-
-      // Seed 200 steps with 2 values each:
-      //   Value 1 (wrong, logged first):  step * 10  (huge)
-      //   Value 2 (correct, logged second): step      (true curve)
-      // Timestamps differ by 1 second so argMax(value, time) picks the correct one.
-      const DEDUP_STEPS = 200;
-      const baseTime = dedupRun.createdAt.getTime();
-      const dedupRows: Record<string, unknown>[] = [];
-
-      for (let step = 0; step < DEDUP_STEPS; step++) {
-        // Wrong value — earlier timestamp
-        dedupRows.push({
-          tenantId: org.id,
-          projectName: project.name,
-          runId: Number(dedupRun.id),
-          logGroup: 'test',
-          logName: 'test/dedup_metric',
-          time: new Date(baseTime + step * 2000).toISOString().replace('T', ' ').replace('Z', ''),
-          step,
-          value: step * 10, // 10x the correct value
-        });
-        // Correct value — later timestamp (1 second later)
-        dedupRows.push({
-          tenantId: org.id,
-          projectName: project.name,
-          runId: Number(dedupRun.id),
-          logGroup: 'test',
-          logName: 'test/dedup_metric',
-          time: new Date(baseTime + step * 2000 + 1000).toISOString().replace('T', ' ').replace('Z', ''),
-          step,
-          value: step, // true value
-        });
-      }
-
-      await clickhouse.insert({
-        table: 'mlop_metrics',
-        values: dedupRows,
-        format: 'JSONEachRow',
-      });
-      console.log(`   ✓ Seeded ${DEDUP_STEPS * 2} dedup metric datapoints (${DEDUP_STEPS} steps × 2 duplicates)`);
-
-      await clickhouse.close();
-    } else {
-      console.log('   ⚠ CLICKHOUSE_URL not set, skipping dedup ClickHouse seeding');
-    }
-  } else {
-    console.log(`   ✓ dedup-test run already exists (ID: ${dedupRun.id})`);
   }
 
   // 5d. Create multi-metric-test run for single-run multi-metric tooltip E2E tests
@@ -1265,39 +1145,7 @@ async function setupTestData(): Promise<TestData> {
         format: 'JSONEachRow',
       });
       console.log(`   ✓ Seeded ${multiMetricRows.length} multi-metric datapoints (${MULTI_METRIC_COUNT} metrics × ${MULTI_METRIC_STEPS} steps)`);
-
-      // Populate metric summaries for the multi-metric run.
-      // Use .command() not .query() for INSERT FROM SELECT.
-      await clickhouse.command({
-        query: `
-          INSERT INTO mlop_metric_summaries
-          SELECT
-            tenantId,
-            projectName,
-            runId,
-            logName,
-            min(value)               AS min_value,
-            max(value)               AS max_value,
-            sum(value)               AS sum_value,
-            toUInt64(count())        AS count_value,
-            argMaxState(value, step) AS last_value,
-            sum(value * value)       AS sum_sq_value,
-            min(step)                AS min_step,
-            max(step)                AS max_step
-          FROM mlop_metrics
-          WHERE tenantId = {tenantId: String}
-            AND projectName = {projectName: String}
-            AND runId = {runId: UInt64}
-            AND isFinite(value)
-          GROUP BY tenantId, projectName, runId, logName
-        `,
-        query_params: {
-          tenantId: org.id,
-          projectName: project.name,
-          runId: Number(multiMetricRun.id),
-        },
-      });
-      console.log('   ✓ Populated metric summaries for multi-metric run');
+      // Summaries populated by the end-of-setup SYSTEM REFRESH.
 
       await clickhouse.close();
     } else {
@@ -1409,32 +1257,7 @@ async function setupTestData(): Promise<TestData> {
         format: 'JSONEachRow',
       });
       console.log(`   ✓ Seeded ${rows.length} zoom-visibility metric datapoints (200 + 1000)`);
-
-      // Populate metric summaries.
-      // Use .command() not .query() for INSERT FROM SELECT.
-      for (const run of [shortRun, longRun]) {
-        await clickhouse.command({
-          query: `
-            INSERT INTO mlop_metric_summaries
-            SELECT
-              tenantId, projectName, runId, logName,
-              min(value), max(value), sum(value),
-              toUInt64(count()), argMaxState(value, step), sum(value * value),
-              min(step), max(step)
-            FROM mlop_metrics
-            WHERE tenantId = {tenantId: String}
-              AND projectName = {projectName: String}
-              AND runId = {runId: UInt64}
-              AND isFinite(value)
-            GROUP BY tenantId, projectName, runId, logName
-          `,
-          query_params: {
-            tenantId: org.id,
-            projectName: project.name,
-            runId: Number(run.id),
-          },
-        });
-      }
+      // Summaries populated by the end-of-setup SYSTEM REFRESH.
 
       await clickhouse.close();
     }
@@ -1569,12 +1392,9 @@ async function setupTestData(): Promise<TestData> {
       }
     }
     if (metricRows.length > 0) {
-      // CRITICAL: disable async insert and force commit-before-return so the
-      // subsequent INSERT INTO mlop_metric_summaries SELECT FROM mlop_metrics
-      // can see these rows. Without this, CI's ClickHouse may have async
-      // inserts enabled (or eventually-consistent buffer flush) and the
-      // SELECT reads empty, yielding zero summary rows. Locally async insert
-      // is off by default so this is invisible — only manifests in CI.
+      // Disable async insert + wait for commit so the mirror MV
+      // (mlop_metrics_v2_mv) propagates these rows to mlop_metrics_v2 before
+      // setupTestData's end-of-setup SYSTEM REFRESH reads from v2 FINAL.
       await pinTestCh.insert({
         table: 'mlop_metrics',
         values: metricRows,
@@ -1586,83 +1406,10 @@ async function setupTestData(): Promise<TestData> {
       });
       console.log(`   ✓ Inserted ${metricRows.length} pin-test train/loss rows`);
 
-      // Belt-and-suspenders: force any in-flight async inserts to flush
-      // before we read back. This is a no-op if async_insert is already off,
-      // but it makes the seed robust to CI ClickHouse configurations that
-      // have async_insert enabled by default.
+      // Belt-and-suspenders: force any in-flight async inserts to flush so
+      // they're committed before the end-of-setup SYSTEM REFRESH runs.
       await pinTestCh.command({ query: 'SYSTEM FLUSH ASYNC INSERT QUEUE' });
-
-      // Populate mlop_metric_summaries for the pin-test runs — the runs
-      // table reads aggregated column values from this table, not from
-      // mlop_metrics directly. Without this, train/loss (Max) shows dashes.
-      //
-      // Use .command() (not .query()) for INSERT SELECT per @clickhouse/client
-      // docs: "in case of a custom insert operation (e.g., INSERT FROM SELECT),
-      // consider using ClickHouseClient.command, passing the entire raw query".
-      // No try/catch — any failure here should crash the setup loudly rather
-      // than silently leaving the column empty in CI.
-      const pinTestRunIdsNum = createdPinTestRuns.map((r) => Number(r.id));
-      await pinTestCh.command({
-        query: `
-          INSERT INTO mlop_metric_summaries
-          SELECT
-            tenantId, projectName, runId, logName,
-            min(value)               AS min_value,
-            max(value)               AS max_value,
-            sum(value)               AS sum_value,
-            toUInt64(count())        AS count_value,
-            argMaxState(value, step) AS last_value,
-            sum(value * value)       AS sum_sq_value,
-            min(step)                AS min_step,
-            max(step)                AS max_step
-          FROM mlop_metrics
-          WHERE tenantId = {tenantId: String}
-            AND projectName = {projectName: String}
-            AND runId IN ({runIds: Array(UInt64)})
-            AND isFinite(value)
-          GROUP BY tenantId, projectName, runId, logName
-        `,
-        query_params: {
-          tenantId: org.id,
-          projectName: project.name,
-          runIds: pinTestRunIdsNum,
-        },
-        clickhouse_settings: {
-          async_insert: 0,
-          wait_for_async_insert: 1,
-        },
-      });
-
-      // Verify the summaries actually landed — if not, the UI column will
-      // be empty and every pin-test test fails with "Received: null".
-      const verifyResult = await pinTestCh.query({
-        query: `
-          SELECT runId, sum(count_value) AS cnt
-          FROM mlop_metric_summaries
-          WHERE tenantId = {tenantId: String}
-            AND projectName = {projectName: String}
-            AND logName = 'train/loss'
-            AND runId IN ({runIds: Array(UInt64)})
-          GROUP BY runId
-        `,
-        query_params: {
-          tenantId: org.id,
-          projectName: project.name,
-          runIds: pinTestRunIdsNum,
-        },
-        format: 'JSONEachRow',
-      });
-      const verifyRows = (await verifyResult.json()) as { runId: number; cnt: number }[];
-      const runsMissingSummary = pinTestRunIdsNum.filter(
-        (id) => !verifyRows.some((r) => Number(r.runId) === id && Number(r.cnt) > 0),
-      );
-      if (runsMissingSummary.length > 0) {
-        throw new Error(
-          `pin-test metric_summaries missing for runs: ${runsMissingSummary.join(', ')}. ` +
-          `Found rows: ${JSON.stringify(verifyRows)}`,
-        );
-      }
-      console.log(`   ✓ Populated + verified pin-test metric summaries (${verifyRows.length} runs)`);
+      // Summaries populated by the end-of-setup SYSTEM REFRESH.
     }
 
     // --- image files at deterministic steps ---
@@ -1718,62 +1465,10 @@ async function setupTestData(): Promise<TestData> {
       console.log(`   ✓ Uploaded ${pinTestS3Uploads.length} pin-test PNGs to S3`);
     }
 
-    // ── Diagnostic: simulate the EXACT query the runs-table column uses ──
-    // The runs-table calls trpc.runs.metricSummaries which runs
-    // queryMetricSummariesBatch — a `GROUP BY (runId, logName)` over
-    // mlop_metric_summaries with `max(max_value)` for the MAX aggregation.
-    // If this returns an empty/incomplete result, the column shows dashes.
-    // We replicate that query here so CI logs show what the runs table will
-    // actually see for the pin-test runs.
-    const diagPinTestRunIds = createdPinTestRuns.map((r) => Number(r.id));
-    const diagResult = await pinTestCh.query({
-      query: `
-        SELECT
-          runId,
-          logName,
-          min(min_value) AS min_val,
-          max(max_value) AS max_val,
-          sum(sum_value) / sum(count_value) AS avg_val,
-          sum(count_value) AS cnt
-        FROM mlop_metric_summaries
-        WHERE tenantId = {tenantId: String}
-          AND projectName = {projectName: String}
-          AND logName IN ({logNames: Array(String)})
-          AND runId IN ({runIds: Array(UInt64)})
-        GROUP BY runId, logName
-        ORDER BY runId
-      `,
-      query_params: {
-        tenantId: org.id,
-        projectName: project.name,
-        logNames: ['train/loss'],
-        runIds: diagPinTestRunIds,
-      },
-      format: 'JSONEachRow',
-    });
-    const diagRows = (await diagResult.json()) as Array<{
-      runId: number;
-      logName: string;
-      min_val: number;
-      max_val: number;
-      avg_val: number;
-      cnt: number;
-    }>;
-    console.log(
-      `   🔬 Runs-table column simulation for pin-test runs (logName=train/loss MAX):`,
-    );
-    for (const r of diagRows) {
-      console.log(
-        `        runId=${r.runId} logName=${r.logName} min=${r.min_val} max=${r.max_val} avg=${r.avg_val.toFixed(2)} cnt=${r.cnt}`,
-      );
-    }
-    if (diagRows.length !== diagPinTestRunIds.length) {
-      throw new Error(
-        `🔥 Runs-table query returned ${diagRows.length} rows but expected ${diagPinTestRunIds.length}. ` +
-        `Pin-test column will show dashes for missing runs in the UI. ` +
-        `Got: ${JSON.stringify(diagRows)}, expected runIds: ${diagPinTestRunIds.join(', ')}`,
-      );
-    }
+    // mlop_metric_summaries population is handled by the end-of-setup
+    // SYSTEM REFRESH (refreshMetricSummariesAndWait). The previous diagnostic
+    // verification that lived here ran BEFORE the refresh, so it would have
+    // erroneously failed under the new flow.
 
     await pinTestCh.close();
   } else {
@@ -1781,6 +1476,219 @@ async function setupTestData(): Promise<TestData> {
   }
 
   console.log(`   ✓ Ensured ${createdPinTestRuns.length} pin-test runs are seeded`);
+
+  // 5f.2. Best-step tolerance fixtures. Two runs exercise the nearest-snap
+  // + K cap algorithm used by "pin to best step (with image)":
+  //
+  //   tol-test-run-offset — offset-cadence pattern: metric at steps
+  //   {0,10,...,100} and image at steps {5,15,...,95}. They never overlap
+  //   but are always exactly 5 steps apart. Parabolic loss centered at
+  //   step 50 (min value 0.1). Nearest-snap with default K=20 should pick
+  //   metricStep=50 and imageStep=55 (tie between 45 and 55, tie-break
+  //   prefers later step).
+  //
+  //   tol-test-run-hard — global argmin far from any image. Metric absolute
+  //   min at step 500 with no nearby image; second-smallest metric at step
+  //   1002 right next to an image. Images at {0, 1000, 1001, 1003}. With
+  //   K=20 the argmin (step 500, dist 500) is filtered out, step 1002
+  //   qualifies (nearest images at 1001 and 1003, tie-break → 1003).
+  console.log('\n5️⃣f² Creating best-step-tolerance fixture runs...');
+
+  const tolRunConfigs = [
+    { name: 'tol-test-run-offset', kind: 'offset' as const },
+    { name: 'tol-test-run-hard', kind: 'hard' as const },
+  ];
+  const tolCreatedAt = new Date(Date.now() - 361 * 24 * 60 * 60 * 1000);
+  const existingTolRuns = await prisma.runs.findMany({
+    where: {
+      projectId: project.id,
+      organizationId: org.id,
+      name: { in: tolRunConfigs.map((c) => c.name) },
+    },
+    select: { id: true, name: true, createdAt: true },
+  });
+  const existingTolByName = new Map(existingTolRuns.map((r) => [r.name, r]));
+  const tolRuns: { id: bigint; name: string; kind: 'offset' | 'hard' }[] = [];
+  for (let i = 0; i < tolRunConfigs.length; i++) {
+    const cfg = tolRunConfigs[i];
+    let run = existingTolByName.get(cfg.name);
+    if (!run) {
+      run = await prisma.runs.create({
+        data: {
+          name: cfg.name,
+          organizationId: org.id,
+          projectId: project.id,
+          createdById: user.id,
+          creatorApiKeyId: apiKey.id,
+          status: 'COMPLETED',
+          createdAt: new Date(tolCreatedAt.getTime() + i * 1000),
+          updatedAt: new Date(tolCreatedAt.getTime() + i * 1000),
+        },
+      });
+    }
+    tolRuns.push({ id: run.id, name: cfg.name, kind: cfg.kind });
+  }
+
+  await prisma.runLogs.createMany({
+    data: tolRuns.flatMap((run) => [
+      { runId: run.id, logName: 'train/loss', logGroup: 'train', logType: 'METRIC' as const },
+      { runId: run.id, logName: 'images/samples', logGroup: 'images', logType: 'IMAGE' as const },
+    ]),
+    skipDuplicates: true,
+  });
+
+  if (
+    pinTestClickhouseUrl &&
+    pinTestStorageEndpoint &&
+    pinTestStorageAccessKey &&
+    pinTestStorageSecretKey &&
+    pinTestStorageBucket
+  ) {
+    const tolCh = createClient({
+      url: pinTestClickhouseUrl,
+      username: process.env.CLICKHOUSE_USER || 'default',
+      password: process.env.CLICKHOUSE_PASSWORD || '',
+    });
+    const tolS3 = new S3Client({
+      endpoint: pinTestStorageEndpoint,
+      region: process.env.STORAGE_REGION || 'us-east-1',
+      credentials: {
+        accessKeyId: pinTestStorageAccessKey,
+        secretAccessKey: pinTestStorageSecretKey,
+      },
+      forcePathStyle: true,
+    });
+
+    // Reset old rows synchronously so re-seeding during development
+    // produces a deterministic fixture. mutations_sync=2 blocks until the
+    // ALTER TABLE DELETE mutation has been applied on all replicas.
+    const tolRunIds = tolRuns.map((r) => Number(r.id));
+    if (tolRunIds.length > 0) {
+      const runIdList = tolRunIds.join(",");
+      await tolCh.command({
+        query: `ALTER TABLE mlop_metrics DELETE WHERE tenantId = '${org.id}' AND projectName = '${project.name}' AND runId IN (${runIdList}) AND logName = 'train/loss' SETTINGS mutations_sync = 2`,
+      });
+      await tolCh.command({
+        query: `ALTER TABLE mlop_files DELETE WHERE tenantId = '${org.id}' AND projectName = '${project.name}' AND runId IN (${runIdList}) AND logName = 'images/samples' SETTINGS mutations_sync = 2`,
+      });
+    }
+
+    const tolMetricRows: Record<string, unknown>[] = [];
+    const tolFileRows: Record<string, unknown>[] = [];
+    const tolS3Uploads: Promise<unknown>[] = [];
+    const baseTime = new Date('2025-01-01T00:00:00Z').getTime();
+    const toIsoCh = (ms: number) =>
+      new Date(ms).toISOString().replace('T', ' ').replace('Z', '');
+
+    for (const run of tolRuns) {
+      if (run.kind === 'offset') {
+        // Metric at steps 0,10,20,...,100 — parabolic loss min at step 50.
+        for (let s = 0; s <= 100; s += 10) {
+          tolMetricRows.push({
+            tenantId: org.id,
+            projectName: project.name,
+            runId: Number(run.id),
+            logGroup: 'train',
+            logName: 'train/loss',
+            time: toIsoCh(baseTime + s * 1000),
+            step: s,
+            value: 0.1 + Math.pow(s - 50, 2) / 1000,
+          });
+        }
+        // Image at steps 5,15,...,95 — offset by 5 from metric cadence.
+        for (let s = 5; s < 100; s += 10) {
+          const fileName = `offset_step_${String(s).padStart(4, '0')}.png`;
+          const png = createSimplePNG(16, 16, (s * 2) % 256, 80, 120);
+          const s3Key = `${org.id}/${project.name}/${run.id}/images/samples/${fileName}`;
+          tolFileRows.push({
+            tenantId: org.id,
+            projectName: project.name,
+            runId: Number(run.id),
+            logGroup: 'images',
+            logName: 'images/samples',
+            time: toIsoCh(baseTime + s * 1000),
+            step: s,
+            fileName,
+            fileType: 'image/png',
+            fileSize: png.length,
+          });
+          tolS3Uploads.push(
+            tolS3.send(new PutObjectCommand({
+              Bucket: pinTestStorageBucket,
+              Key: s3Key,
+              Body: png,
+              ContentType: 'image/png',
+            })),
+          );
+        }
+      } else {
+        // hard case: metric argmin far from any image, 2nd-best near an image.
+        const hardMetricSteps: [number, number][] = [
+          // [step, value]
+          [500, 0.01],   // true argmin — dist 500 from nearest image, filtered out
+          [1002, 0.02],  // 2nd-smallest — dist 1 from image 1001/1003, qualifies
+          [200, 0.5],    // filler so run has more than 2 rows
+          [800, 0.4],    // filler
+        ];
+        for (const [s, v] of hardMetricSteps) {
+          tolMetricRows.push({
+            tenantId: org.id,
+            projectName: project.name,
+            runId: Number(run.id),
+            logGroup: 'train',
+            logName: 'train/loss',
+            time: toIsoCh(baseTime + s * 1000),
+            step: s,
+            value: v,
+          });
+        }
+        const hardImageSteps = [0, 1000, 1001, 1003];
+        for (const s of hardImageSteps) {
+          const fileName = `hard_step_${String(s).padStart(4, '0')}.png`;
+          const png = createSimplePNG(16, 16, (s * 7) % 256, 120, 80);
+          const s3Key = `${org.id}/${project.name}/${run.id}/images/samples/${fileName}`;
+          tolFileRows.push({
+            tenantId: org.id,
+            projectName: project.name,
+            runId: Number(run.id),
+            logGroup: 'images',
+            logName: 'images/samples',
+            time: toIsoCh(baseTime + s * 1000),
+            step: s,
+            fileName,
+            fileType: 'image/png',
+            fileSize: png.length,
+          });
+          tolS3Uploads.push(
+            tolS3.send(new PutObjectCommand({
+              Bucket: pinTestStorageBucket,
+              Key: s3Key,
+              Body: png,
+              ContentType: 'image/png',
+            })),
+          );
+        }
+      }
+    }
+
+    await tolCh.insert({
+      table: 'mlop_metrics',
+      values: tolMetricRows,
+      format: 'JSONEachRow',
+      clickhouse_settings: { async_insert: 0, wait_for_async_insert: 1 },
+    });
+    await tolCh.insert({
+      table: 'mlop_files',
+      values: tolFileRows,
+      format: 'JSONEachRow',
+      clickhouse_settings: { async_insert: 0, wait_for_async_insert: 1 },
+    });
+    await Promise.all(tolS3Uploads);
+    // Summaries populated by the end-of-setup SYSTEM REFRESH.
+
+    await tolCh.close();
+    console.log(`   ✓ Seeded ${tolMetricRows.length} metrics + ${tolFileRows.length} images across ${tolRuns.length} tolerance-test runs`);
+  }
 
   // 5g. Create multi-index-media runs with wandb-style list-of-media logging.
   // Each run logs multiple sample files at the same (logName, step) so the
@@ -3284,65 +3192,6 @@ async function setupTestData(): Promise<TestData> {
   });
   console.log('   ✓ Created Line Chart Variants Test dashboard view');
 
-  // 11d. Create "Dedup Test" dashboard view for step deduplication E2E tests
-  console.log('\n1️⃣1️⃣d Creating Dedup Test dashboard view...');
-
-  const dedupDashboardConfig = {
-    version: 1,
-    sections: [
-      {
-        id: 'dedup-static-section',
-        name: 'Dedup Metrics (Static)',
-        collapsed: false,
-        widgets: [
-          {
-            id: 'dedup-static-widget',
-            type: 'chart',
-            config: {
-              title: 'Dedup metric',
-              metrics: ['test/dedup_metric'],
-              xAxis: 'step',
-              yAxisScale: 'linear',
-              xAxisScale: 'linear',
-              aggregation: 'LAST',
-              showOriginal: false,
-            },
-            layout: { x: 0, y: 0, w: 12, h: 4 },
-          },
-        ],
-      },
-      {
-        id: 'dedup-dynamic-section',
-        name: 'Dedup Metrics (Dynamic)',
-        collapsed: false,
-        widgets: [],
-        dynamicPattern: 'test/dedup*',
-        dynamicPatternMode: 'search',
-      },
-    ],
-    settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
-  };
-
-  await prisma.dashboardView.upsert({
-    where: {
-      organizationId_projectId_name: {
-        organizationId: org.id,
-        projectId: project.id,
-        name: 'Dedup Test',
-      },
-    },
-    update: { config: dedupDashboardConfig },
-    create: {
-      name: 'Dedup Test',
-      organizationId: org.id,
-      projectId: project.id,
-      createdById: user.id,
-      isDefault: false,
-      config: dedupDashboardConfig,
-    },
-  });
-  console.log('   ✓ Created Dedup Test dashboard view');
-
   // --- Zoom Visibility Test dashboard ---
   const zoomVisibilityDashboardConfig = {
     version: 1,
@@ -4003,6 +3852,23 @@ async function setupTestData(): Promise<TestData> {
     }
   } else {
     console.log('   ⚠ Missing CLICKHOUSE_URL or STORAGE_* env vars, skipping media-rich seeding');
+  }
+
+  // All raw mlop_metrics inserts above propagate synchronously to
+  // mlop_metrics_v2 via the mirror MV. Trigger the refreshable summaries MV
+  // once now so mlop_metric_summaries_v2 is populated for any test that
+  // reads it. Replaces 6 piecemeal INSERT INTO mlop_metric_summaries blocks
+  // scattered through the seeders.
+  if (process.env.CLICKHOUSE_URL) {
+    console.log('\n📊 Refreshing mlop_metric_summaries_v2...');
+    const refreshCh = createClient({
+      url: process.env.CLICKHOUSE_URL,
+      username: process.env.CLICKHOUSE_USER || 'default',
+      password: process.env.CLICKHOUSE_PASSWORD || '',
+    });
+    await refreshMetricSummariesAndWait(refreshCh);
+    await refreshCh.close();
+    console.log('   ✓ mlop_metric_summaries_v2 refreshed');
   }
 
   const testData: TestData = {

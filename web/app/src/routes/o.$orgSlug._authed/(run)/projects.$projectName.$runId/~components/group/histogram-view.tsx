@@ -337,7 +337,7 @@ export const HistogramView = ({
 
   return (
     <MediaCardWrapper title={logName} className="h-full w-full">
-    <div className="flex h-full w-full flex-col space-y-4 p-2">
+    <div data-testid="histogram-widget" className="flex h-full w-full flex-col space-y-4 p-2">
       <h3 className="text-center font-mono text-sm font-medium text-muted-foreground">{logName}</h3>
       <div className="min-h-0 flex-1">
         <div className="relative">

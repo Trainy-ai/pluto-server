@@ -78,35 +78,43 @@ done
 
 echo "Finished processing SQL files."
 
-# ── Backfill metric summaries if the MV missed historical inserts ──
-echo "Checking if metric summaries need backfill..."
+# ── Backfill mlop_metrics_v2 + force first v2 summaries refresh ──
+#
+# On a fresh container with pre-existing mlop_metrics data (e.g. a dev
+# stack with a persisted ClickHouse volume), the mirror MV
+# (mlop_metrics_v2_mv) only sees future inserts — historical rows never
+# land in mlop_metrics_v2, and the refresh MV reading from v2 produces
+# empty summaries. New chart code reads mlop_metric_summaries_v2, so the
+# UI would show empty charts.
+#
+# Fix: backfill v2 from mlop_metrics, then trigger an immediate refresh
+# of mlop_metric_summaries_v2_refresh_mv. Both are idempotent — re-runs
+# on already-mirrored data are no-ops because ReplacingMergeTree
+# collapses identical (run, metric, step, time) duplicates.
+#
+# The v1 mlop_metric_summaries table is left alone. Its incremental MV
+# (sql/03_*) catches future inserts; historical-row backfill isn't done
+# here because no production read path queries v1 anymore.
+echo "Checking if mlop_metrics_v2 needs backfill..."
 
-summaries_count=$(curl -sS -u "${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}" \
+v2_metrics_count=$(curl -sS -u "${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}" \
     --connect-timeout "$REQUEST_TIMEOUT" --max-time 30 \
-    -d "SELECT count() FROM mlop_metric_summaries" "$CLICKHOUSE_URL" 2>/dev/null | tr -d '[:space:]')
+    -d "SELECT count() FROM mlop_metrics_v2" "$CLICKHOUSE_URL" 2>/dev/null | tr -d '[:space:]')
 
 metrics_count=$(curl -sS -u "${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}" \
     --connect-timeout "$REQUEST_TIMEOUT" --max-time 30 \
     -d "SELECT count() FROM mlop_metrics" "$CLICKHOUSE_URL" 2>/dev/null | tr -d '[:space:]')
 
-if [ "${summaries_count:-0}" = "0" ] && [ "${metrics_count:-0}" != "0" ] && [ "${metrics_count:-0}" -gt 0 ] 2>/dev/null; then
-    echo "Backfilling metric summaries (mlop_metrics has ${metrics_count} rows, summaries has 0)..."
+if [ "${v2_metrics_count:-0}" = "0" ] && [ "${metrics_count:-0}" != "0" ] && [ "${metrics_count:-0}" -gt 0 ] 2>/dev/null; then
+    echo "Backfilling mlop_metrics_v2 from mlop_metrics (${metrics_count} rows)..."
     backfill_start=$(date +%s)
 
     backfill_response=$(curl -sS -u "${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}" \
         --connect-timeout "$REQUEST_TIMEOUT" --max-time 600 \
         -w "\n%{http_code}" \
-        -d "INSERT INTO mlop_metric_summaries
-            SELECT tenantId, projectName, runId, logName,
-                min(value), max(value), sum(value),
-                toUInt64(count()),
-                argMaxState(value, step),
-                sum(value * value),
-                min(step),
-                max(step)
-            FROM mlop_metrics
-            WHERE isFinite(value)
-            GROUP BY tenantId, projectName, runId, logName" \
+        -d "INSERT INTO mlop_metrics_v2
+            SELECT tenantId, projectName, runId, logGroup, logName, time, step, value
+            FROM mlop_metrics" \
         "$CLICKHOUSE_URL")
 
     backfill_status=$(echo "$backfill_response" | tail -n1)
@@ -114,14 +122,29 @@ if [ "${summaries_count:-0}" = "0" ] && [ "${metrics_count:-0}" != "0" ] && [ "$
     backfill_elapsed=$((backfill_end - backfill_start))
 
     if [ "$backfill_status" -eq 200 ]; then
-        new_summaries=$(curl -sS -u "${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}" \
+        new_v2_count=$(curl -sS -u "${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}" \
             --connect-timeout "$REQUEST_TIMEOUT" --max-time 30 \
-            -d "SELECT count() FROM mlop_metric_summaries" "$CLICKHOUSE_URL" 2>/dev/null | tr -d '[:space:]')
-        echo "Metric summaries backfill complete: ${new_summaries} rows in ${backfill_elapsed}s"
+            -d "SELECT count() FROM mlop_metrics_v2" "$CLICKHOUSE_URL" 2>/dev/null | tr -d '[:space:]')
+        echo "mlop_metrics_v2 backfill complete: ${new_v2_count} rows in ${backfill_elapsed}s"
     else
-        echo "Error backfilling metric summaries (HTTP ${backfill_status}):"
+        echo "Error backfilling mlop_metrics_v2 (HTTP ${backfill_status}):"
         echo "$backfill_response" | head -n -1
     fi
 else
-    echo "Metric summaries OK (${summaries_count:-0} rows, metrics: ${metrics_count:-0} rows)"
-fi 
+    echo "mlop_metrics_v2 OK (${v2_metrics_count:-0} rows, mlop_metrics: ${metrics_count:-0} rows)"
+fi
+
+# Trigger one immediate refresh of the v2 summaries MV so the leaderboard
+# is populated before the first scheduled tick (up to 5 min away).
+v2_summaries_count=$(curl -sS -u "${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}" \
+    --connect-timeout "$REQUEST_TIMEOUT" --max-time 30 \
+    -d "SELECT count() FROM mlop_metric_summaries_v2" "$CLICKHOUSE_URL" 2>/dev/null | tr -d '[:space:]')
+
+if [ "${v2_summaries_count:-0}" = "0" ] && [ "${metrics_count:-0}" != "0" ]; then
+    echo "Triggering initial refresh of mlop_metric_summaries_v2_refresh_mv..."
+    curl -sS -u "${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}" \
+        --connect-timeout "$REQUEST_TIMEOUT" --max-time 30 \
+        -d "SYSTEM REFRESH VIEW mlop_metric_summaries_v2_refresh_mv" \
+        "$CLICKHOUSE_URL" > /dev/null
+    echo "   (refresh runs async; summaries will populate within seconds)"
+fi

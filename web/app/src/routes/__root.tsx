@@ -85,6 +85,7 @@ function RootComponent() {
           <PostHogAnalytics auth={auth ?? null} />
           <HeadContent />
           <Outlet />
+          <Toaster richColors expand />
           <Toaster richColors />
           <FpsMonitor />
         </PostHogProviderWrapper>

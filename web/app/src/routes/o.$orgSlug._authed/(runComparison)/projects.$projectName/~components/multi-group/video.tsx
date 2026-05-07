@@ -144,6 +144,7 @@ export const MultiGroupVideo = ({
   return (
     <MediaCardWrapper title={logName} className="h-full w-full">
     <div
+      data-testid="video-widget"
       className={cn(
         "flex h-full w-full flex-col space-y-4 p-4",
         className,

@@ -140,7 +140,10 @@ export const AudioView = ({
 
   return (
     <MediaCardWrapper title={log.logName} className="h-full w-full">
-    <div className="flex h-full w-full flex-col space-y-4 p-4">
+    <div
+      data-testid="audio-widget"
+      className="flex h-full w-full flex-col space-y-4 p-4"
+    >
       <h3 className="text-center font-mono text-sm font-medium text-muted-foreground">
         {log.logName}
       </h3>

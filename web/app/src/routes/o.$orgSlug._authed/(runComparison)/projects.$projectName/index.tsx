@@ -5,6 +5,7 @@ import PageLayout from "@/components/layout/page-layout";
 import { OrganizationPageTitle } from "@/components/layout/page-title";
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useDocumentTitle } from "@/hooks/use-document-title";
+import { useBestStepTolerance } from "@/hooks/use-best-step-tolerance";
 import type { SortingState } from "@tanstack/react-table";
 import { useQuery } from "@tanstack/react-query";
 import { useSelectedRuns } from "./~hooks/use-selected-runs";
@@ -1048,11 +1049,28 @@ function RouteComponent() {
     organizationId
   );
 
-  // Pin images to best step handler
+  // Per-user / per-browser "best step (with image)" tolerance, scoped to
+  // this project. Stored in localStorage — no backend persistence so one
+  // user's tweak doesn't reshape pins for the rest of the team.
+  const [bestStepToleranceSteps, handleChangeBestStepTolerance] =
+    useBestStepTolerance(projectName);
+
+  // Pin images to best step handler. The backend returns
+  // { argmin, argmax } where each entry is { metricStep, imageStep, distance }.
+  // When `with image` is requested, nearest-snap coupling produces a non-null
+  // imageStep (= the actual file to render) and distance (= metric↔image
+  // step delta for provenance). Without image coupling, imageStep/distance
+  // are null and we pin the metric step directly.
+  //
+  // The optional `toleranceOverride` lets the column-header dropdown pass
+  // the user's freshly-typed value for THIS click even if they haven't
+  // saved it back to localStorage yet — falls back to the persisted
+  // value otherwise.
   const handlePinImagesToBestStep = useCallback(
     async (
       logName: string,
       mode: "argmin" | "argmax" | "argmin-with-image" | "argmax-with-image",
+      toleranceOverride?: number,
     ) => {
       if (selectedRunIds.length === 0) return;
 
@@ -1067,42 +1085,94 @@ function RouteComponent() {
             projectName,
             logName,
             runIds: selectedRunIds,
-            // "with image" → per-widget: each image widget gets its own best step
             perWidget: withImage,
-            // Non-per-widget fallback retains the old single-step-per-run behavior
-            requireImage: withImage,
+            toleranceSteps: toleranceOverride ?? bestStepToleranceSteps,
           }),
         );
 
+        const toleranceUsed = result.toleranceUsed ?? 0;
+
         if (withImage && result.perWidgetBestSteps && result.perWidgetBestSteps.length > 0) {
-          // Per-widget pins: key is "runId:imageLogName"
+          // Per-widget pins: key is "runId:imageLogName", value is the
+          // imageStep (what the widget renders) for the chosen argmin/argmax.
           const pinsByWidget: Record<string, number> = {};
-          for (const entry of result.perWidgetBestSteps) {
-            if (entry) {
-              const key = `${entry.runId}:${entry.imageLogName}`;
-              pinsByWidget[key] = useMin ? entry.argminStep : entry.argmaxStep;
+          // Parallel map carrying provenance (metric step + distance) and
+          // tied-alternative step so the image card can show a "tied
+          // with step X" hint on hover.
+          const pinMetadataByWidget: Record<
+            string,
+            {
+              metricStep: number;
+              metricValue: number | null;
+              distance: number;
+              tiedAlternativeImageStep: number | null;
             }
+          > = {};
+          for (const entry of result.perWidgetBestSteps) {
+            if (!entry) continue;
+            const bestEntry = useMin ? entry.argmin : entry.argmax;
+            const stepToPin = bestEntry.imageStep ?? bestEntry.metricStep;
+            const key = `${entry.runId}:${entry.imageLogName}`;
+            pinsByWidget[key] = stepToPin;
+            pinMetadataByWidget[key] = {
+              metricStep: bestEntry.metricStep,
+              metricValue: bestEntry.metricValue,
+              distance: bestEntry.distance ?? 0,
+              tiedAlternativeImageStep: bestEntry.tiedAlternativeImageStep,
+            };
           }
           document.dispatchEvent(
-            new CustomEvent("pin-runs-to-best-step", { detail: { pinsByWidget } }),
+            new CustomEvent("pin-runs-to-best-step", {
+              detail: {
+                pinsByWidget,
+                pinMetadataByWidget,
+                toleranceUsed,
+                mode,
+                logName,
+              },
+            }),
           );
         } else if (result.bestSteps && result.bestSteps.length > 0) {
-          // Single step per run (applies to all image widgets)
+          // Single step per run (applies to all image widgets).
           const pins: Record<string, number> = {};
-          for (const entry of result.bestSteps) {
-            if (entry) {
-              pins[entry.runId] = useMin ? entry.argminStep : entry.argmaxStep;
+          const pinMetadata: Record<
+            string,
+            {
+              metricStep: number;
+              metricValue: number | null;
+              distance: number;
+              tiedAlternativeImageStep: number | null;
             }
+          > = {};
+          for (const entry of result.bestSteps) {
+            if (!entry) continue;
+            const bestEntry = useMin ? entry.argmin : entry.argmax;
+            const stepToPin = bestEntry.imageStep ?? bestEntry.metricStep;
+            pins[entry.runId] = stepToPin;
+            pinMetadata[entry.runId] = {
+              metricStep: bestEntry.metricStep,
+              metricValue: bestEntry.metricValue,
+              distance: bestEntry.distance ?? 0,
+              tiedAlternativeImageStep: bestEntry.tiedAlternativeImageStep,
+            };
           }
           document.dispatchEvent(
-            new CustomEvent("pin-runs-to-best-step", { detail: { pins } }),
+            new CustomEvent("pin-runs-to-best-step", {
+              detail: {
+                pins,
+                pinMetadata,
+                toleranceUsed,
+                mode,
+                logName,
+              },
+            }),
           );
         }
       } catch (error) {
         console.error("Failed to fetch best steps:", error);
       }
     },
-    [selectedRunIds, organizationId, projectName],
+    [selectedRunIds, organizationId, projectName, bestStepToleranceSteps],
   );
 
   // In experiments mode, unify colors so all runs in the same experiment
@@ -1268,6 +1338,8 @@ function RouteComponent() {
                 onReorderColumns={reorderColumns}
                 onToggleColumnPin={toggleColumnPin}
                 onPinImagesToBestStep={handlePinImagesToBestStep}
+                bestStepToleranceSteps={bestStepToleranceSteps}
+                onChangeBestStepTolerance={handleChangeBestStepTolerance}
                 sorting={sorting}
                 onSortingChange={setSorting}
                 pageSize={pageSize}

@@ -1,6 +1,11 @@
 /**
- * Query functions for the mlop_metric_summaries AggregatingMergeTree table.
+ * Query functions for the mlop_metric_summaries_v2 ReplacingMergeTree table.
  * Provides pre-computed MIN/MAX/AVG/LAST/VARIANCE per (run, metric).
+ * All reads use FINAL to dedup the version-collapsed rows produced by the
+ * refreshable MV (mlop_metric_summaries_v2_refresh_mv). The legacy
+ * AggregatingMergeTree mlop_metric_summaries (fed by the broken incremental
+ * MV) still exists alongside but is no longer read from — see
+ * ingest/docker-setup/sql/02b_metric_summaries_v2.sql for context.
  */
 
 import type { clickhouse } from "../clickhouse";
@@ -85,7 +90,7 @@ export async function queryMetricSummariesBatch(
       ${aggExpression("AVG")} AS avg_val,
       ${aggExpression("LAST")} AS last_val,
       ${aggExpression("VARIANCE")} AS var_val
-    FROM mlop_metric_summaries
+    FROM mlop_metric_summaries_v2 FINAL
     WHERE tenantId = {tenantId: String}
       AND projectName = {projectName: String}
       AND logName IN ({logNames: Array(String)})
@@ -139,102 +144,49 @@ export async function queryMetricSummariesBatch(
 // Argmin/argmax step — find the step where a metric's value is min/max
 // ---------------------------------------------------------------------------
 
+const IMAGE_FILE_FILTER = `(
+  startsWith(fileType, 'image/')
+  OR fileType IN ('png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp')
+)`;
+
 /**
- * For each run, find the step where a metric reaches its min and max value.
- * Uses ClickHouse's built-in argMin/argMax aggregate functions on mlop_metrics.
+ * A "best step" result — the metric step where value is min/max, along with
+ * the image step the widget should render and the step distance between them.
  *
- * If `requireImage` is true, the search is restricted to steps where an image
- * file also exists for that run — useful when pinning images to the "best step"
- * (otherwise the argmin/argmax step may not have any image to show).
+ * On the metric-only path (`queryArgminArgmaxSteps`), `imageStep`,
+ * `distance`, and `tiedAlternativeImageStep` are always null — there's no
+ * image coupling to report.
  *
- * Returns Map<runId, { argminStep, argmaxStep }>.
+ * On the per-widget path (`queryArgminArgmaxStepsPerImageLog`), results are
+ * filtered so `distance` is always ≤ the caller-supplied tolerance
+ * (nearest-snap). If no metric step within tolerance of any image exists,
+ * the entry is omitted.
+ *
+ * `tiedAlternativeImageStep` is non-null when the nearest-snap tie-break
+ * had to choose between two image steps at the same minimum distance. It
+ * exposes the step that WASN'T picked, so the frontend can show a "tied
+ * with step X" hint in the pin tooltip.
  */
-export async function queryArgminArgmaxSteps(
-  ch: typeof clickhouse,
-  params: {
-    organizationId: string;
-    projectName: string;
-    logName: string;
-    runIds: number[];
-    requireImage?: boolean;
-  },
-): Promise<Map<number, { argminStep: number; argmaxStep: number }>> {
-  const { organizationId, projectName, logName, runIds, requireImage } = params;
-
-  if (runIds.length === 0) return new Map();
-
-  // When requireImage is true, restrict to (runId, step) pairs where an
-  // actual image file exists for the same run+step. mlop_files contains
-  // all file types (png, wav, mp4, md, etc.) — filter to image types only
-  // so we don't match steps that only have e.g. audio or checkpoint files.
-  const imageFilter = requireImage
-    ? `
-        AND (runId, step) IN (
-          SELECT DISTINCT runId, step
-          FROM mlop_files
-          WHERE tenantId = {tenantId: String}
-            AND projectName = {projectName: String}
-            AND runId IN ({runIds: Array(UInt64)})
-            AND (
-              startsWith(fileType, 'image/')
-              OR fileType IN ('png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp')
-            )
-        )
-      `
-    : "";
-
-  const query = `
-    SELECT
-      runId,
-      argMin(step, value) AS argmin_step,
-      argMax(step, value) AS argmax_step
-    FROM mlop_metrics
-    WHERE tenantId = {tenantId: String}
-      AND projectName = {projectName: String}
-      AND logName = {logName: String}
-      AND runId IN ({runIds: Array(UInt64)})
-      ${imageFilter}
-    GROUP BY runId
-  `;
-
-  const result = await ch.query(query, {
-    tenantId: organizationId,
-    projectName,
-    logName,
-    runIds,
-  });
-
-  // ClickHouse serializes UInt64 as JSON string — coerce to number below.
-  const rows = (await result.json()) as {
-    runId: string;
-    argmin_step: string;
-    argmax_step: string;
-  }[];
-
-  const resultMap = new Map<number, { argminStep: number; argmaxStep: number }>();
-  for (const row of rows) {
-    resultMap.set(Number(row.runId), {
-      argminStep: Number(row.argmin_step),
-      argmaxStep: Number(row.argmax_step),
-    });
-  }
-  return resultMap;
+export interface BestStepEntry {
+  metricStep: number;
+  metricValue: number | null;
+  imageStep: number | null;
+  distance: number | null;
+  tiedAlternativeImageStep: number | null;
 }
 
-// ---------------------------------------------------------------------------
-// Per-widget argmin/argmax step — for each (run, imageLogName), find the step
-// where a metric reaches its min/max value AND that specific image log has data.
-// ---------------------------------------------------------------------------
-
 /**
- * For each (run, image logName) pair, find the step where a given metric
- * reaches its min/max value constrained to steps where that specific image
- * log has a file. This enables per-widget pinning: different image widgets
- * can pin the same run at different steps.
+ * Look up the global argmin / argmax step per run from
+ * `mlop_metric_summaries_v2`. One row per
+ * (tenantId, projectName, logName, runId), so this scan is bounded by
+ * the number of selected runs — no raw mlop_metrics_v2 access.
  *
- * Returns an array of { runId, imageLogName, argminStep, argmaxStep }.
+ * Returns null entry shape for runs that have no summary row yet (e.g.
+ * fresh ingest before the MV materialised, or the migration to add the
+ * argmin_step / argmax_step columns hasn't been backfilled). Callers
+ * should fall back to the raw scan for those runs.
  */
-export async function queryArgminArgmaxStepsPerImageLog(
+async function queryGlobalArgminArgmaxFromSummaries(
   ch: typeof clickhouse,
   params: {
     organizationId: string;
@@ -243,67 +195,509 @@ export async function queryArgminArgmaxStepsPerImageLog(
     runIds: number[];
   },
 ): Promise<
-  Array<{
-    runId: number;
-    imageLogName: string;
-    argminStep: number;
-    argmaxStep: number;
-  }>
+  Map<
+    number,
+    { argminStep: number; argmaxStep: number; minValue: number; maxValue: number }
+  >
 > {
   const { organizationId, projectName, logName, runIds } = params;
+  if (runIds.length === 0) return new Map();
 
-  if (runIds.length === 0) return [];
-
-  // Join mlop_metrics with mlop_files on (runId, step) to find metric values
-  // that have an accompanying image file. Group by (runId, image logName) so
-  // each widget gets its own per-run best step.
   const query = `
     SELECT
-      m.runId AS runId,
-      f.logName AS imageLogName,
-      argMin(m.step, m.value) AS argmin_step,
-      argMax(m.step, m.value) AS argmax_step
-    FROM mlop_metrics m
-    INNER JOIN (
-      SELECT DISTINCT runId, step, logName
-      FROM mlop_files
-      WHERE tenantId = {tenantId: String}
-        AND projectName = {projectName: String}
-        AND runId IN ({runIds: Array(UInt64)})
-        AND (
-          startsWith(fileType, 'image/')
-          OR fileType IN ('png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp')
-        )
-    ) f
-      ON f.runId = m.runId AND f.step = m.step
-    WHERE m.tenantId = {tenantId: String}
-      AND m.projectName = {projectName: String}
-      AND m.logName = {logName: String}
-      AND m.runId IN ({runIds: Array(UInt64)})
-    GROUP BY m.runId, f.logName
+      runId,
+      argMinMerge(argmin_step) AS argmin_step,
+      argMaxMerge(argmax_step) AS argmax_step,
+      min(min_value) AS min_value,
+      max(max_value) AS max_value,
+      sum(count_value) AS count_value
+    FROM mlop_metric_summaries_v2 FINAL
+    WHERE tenantId = {tenantId: String}
+      AND projectName = {projectName: String}
+      AND logName = {logName: String}
+      AND runId IN ({runIds: Array(UInt64)})
+    GROUP BY runId
   `;
-
   const result = await ch.query(query, {
     tenantId: organizationId,
     projectName,
     logName,
     runIds,
   });
+  const rows = (await result.json()) as {
+    runId: string;
+    argmin_step: string;
+    argmax_step: string;
+    min_value: number;
+    max_value: number;
+    count_value: string;
+  }[];
+  const out = new Map<
+    number,
+    { argminStep: number; argmaxStep: number; minValue: number; maxValue: number }
+  >();
+  for (const row of rows) {
+    // `count_value === 0` means the row exists but no isFinite values
+    // were seen — skip; raw scan would also return nothing useful.
+    if (Number(row.count_value) === 0) continue;
+    out.set(Number(row.runId), {
+      argminStep: Number(row.argmin_step),
+      argmaxStep: Number(row.argmax_step),
+      minValue: Number(row.min_value),
+      maxValue: Number(row.max_value),
+    });
+  }
+  return out;
+}
 
-  // ClickHouse serializes UInt64 as JSON string — coerce below.
+/**
+ * For each run, find the step where a metric reaches its min/max value
+ * (no image coupling). Pure summaries lookup — one row scan per (run,
+ * metric) regardless of how many data points the run logged.
+ *
+ * imageStep/distance/tied fields are always null on this path; callers
+ * that need image coupling should use `queryArgminArgmaxStepsPerImageLog`
+ * instead.
+ *
+ * Returns Map<runId, { argmin, argmax }>. A run is omitted entirely
+ * when its summary row has no finite values (count_value === 0).
+ */
+export async function queryArgminArgmaxSteps(
+  ch: typeof clickhouse,
+  params: {
+    organizationId: string;
+    projectName: string;
+    logName: string;
+    runIds: number[];
+  },
+): Promise<Map<number, { argmin: BestStepEntry; argmax: BestStepEntry }>> {
+  const { organizationId, projectName, logName, runIds } = params;
+  if (runIds.length === 0) return new Map();
+
+  const globals = await queryGlobalArgminArgmaxFromSummaries(ch, {
+    organizationId,
+    projectName,
+    logName,
+    runIds,
+  });
+  const resultMap = new Map<number, { argmin: BestStepEntry; argmax: BestStepEntry }>();
+  for (const [runId, g] of globals) {
+    resultMap.set(runId, {
+      argmin: {
+        metricStep: g.argminStep,
+        metricValue: g.minValue,
+        imageStep: null,
+        distance: null,
+        tiedAlternativeImageStep: null,
+      },
+      argmax: {
+        metricStep: g.argmaxStep,
+        metricValue: g.maxValue,
+        imageStep: null,
+        distance: null,
+        tiedAlternativeImageStep: null,
+      },
+    });
+  }
+  return resultMap;
+}
+
+// ---------------------------------------------------------------------------
+// Per-widget argmin/argmax step — for each (run, imageLogName), find the step
+// where a metric reaches its min/max value with nearest-snap to that specific
+// image log.
+// ---------------------------------------------------------------------------
+
+export interface PerWidgetBestStepRow {
+  runId: number;
+  imageLogName: string;
+  argmin: BestStepEntry;
+  argmax: BestStepEntry;
+}
+
+/**
+ * List the (runId, imageLogName) pairs that actually have at least one
+ * image file. Used by the per-widget hybrid to know which pairs to
+ * expect — fast path can only tell us "I found N pairs", not "N exist
+ * but I missed M of them" without this.
+ */
+async function queryImageLogsPerRun(
+  ch: typeof clickhouse,
+  params: {
+    organizationId: string;
+    projectName: string;
+    runIds: number[];
+  },
+): Promise<Map<number, Set<string>>> {
+  const { organizationId, projectName, runIds } = params;
+  if (runIds.length === 0) return new Map();
+
+  const query = `
+    SELECT DISTINCT runId, logName
+    FROM mlop_files
+    WHERE tenantId = {tenantId: String}
+      AND projectName = {projectName: String}
+      AND runId IN ({runIds: Array(UInt64)})
+      AND ${IMAGE_FILE_FILTER}
+  `;
+  const result = await ch.query(query, {
+    tenantId: organizationId,
+    projectName,
+    runIds,
+  });
+  const rows = (await result.json()) as { runId: string; logName: string }[];
+  const out = new Map<number, Set<string>>();
+  for (const row of rows) {
+    const runId = Number(row.runId);
+    if (!out.has(runId)) out.set(runId, new Set());
+    out.get(runId)!.add(row.logName);
+  }
+  return out;
+}
+
+/**
+ * Per-image-log version of the fast-path nearest-image lookup. For each
+ * (run, kind, imageLogName) triple, finds the image in `imageLogName`
+ * nearest to the target step (argmin or argmax from summaries), within
+ * tolerance K. Returns nested map keyed by runId then imageLogName so
+ * the caller can identify which pairs were covered vs missed.
+ */
+async function queryNearestImagePerLogForGlobalSteps(
+  ch: typeof clickhouse,
+  params: {
+    organizationId: string;
+    projectName: string;
+    runIds: number[];
+    targets: Map<number, { argminStep: number; argmaxStep: number }>;
+    toleranceSteps: number;
+  },
+): Promise<
+  Map<
+    number, // runId
+    Map<
+      string, // imageLogName
+      {
+        argmin?: { imageStep: number; dist: number; altImageStep: number };
+        argmax?: { imageStep: number; dist: number; altImageStep: number };
+      }
+    >
+  >
+> {
+  const { organizationId, projectName, runIds, targets, toleranceSteps } = params;
+  if (runIds.length === 0 || targets.size === 0) return new Map();
+
+  const tRunIds: number[] = [];
+  const tSteps: number[] = [];
+  const tKinds: number[] = [];
+  for (const runId of runIds) {
+    const t = targets.get(runId);
+    if (!t) continue;
+    tRunIds.push(runId);
+    tSteps.push(t.argminStep);
+    tKinds.push(0);
+    tRunIds.push(runId);
+    tSteps.push(t.argmaxStep);
+    tKinds.push(1);
+  }
+  if (tRunIds.length === 0) return new Map();
+
+  const query = `
+    WITH targets AS (
+      SELECT
+        arrayJoin(arrayZip(
+          {tRunIds: Array(UInt64)},
+          {tSteps:  Array(UInt64)},
+          {tKinds:  Array(UInt8)}
+        )) AS row,
+        row.1 AS runId,
+        row.2 AS target_step,
+        row.3 AS kind
+    ),
+    ranked AS (
+      SELECT
+        t.runId,
+        t.kind,
+        t.target_step,
+        f.logName AS image_log,
+        f.step AS image_step,
+        greatest(t.target_step, f.step) - least(t.target_step, f.step) AS dist,
+        row_number() OVER (
+          PARTITION BY t.runId, t.kind, f.logName
+          ORDER BY greatest(t.target_step, f.step) - least(t.target_step, f.step) ASC, f.step DESC
+        ) AS rn,
+        first_value(f.step) OVER (
+          PARTITION BY t.runId, t.kind, f.logName
+          ORDER BY greatest(t.target_step, f.step) - least(t.target_step, f.step) ASC, f.step ASC
+        ) AS alt_image_step
+      FROM targets t
+      INNER JOIN mlop_files f
+        ON f.tenantId = {tenantId: String}
+       AND f.projectName = {projectName: String}
+       AND f.runId = t.runId
+      WHERE ${IMAGE_FILE_FILTER.replace(/fileType/g, "f.fileType")}
+    )
+    SELECT runId, kind, image_log, image_step, dist, alt_image_step
+    FROM ranked
+    WHERE rn = 1 AND dist <= {toleranceSteps: UInt64}
+  `;
+
+  const result = await ch.query(query, {
+    tenantId: organizationId,
+    projectName,
+    tRunIds,
+    tSteps,
+    tKinds,
+    toleranceSteps,
+  });
+  const rows = (await result.json()) as {
+    runId: string;
+    kind: number;
+    image_log: string;
+    image_step: string;
+    dist: string;
+    alt_image_step: string;
+  }[];
+
+  const out = new Map<
+    number,
+    Map<
+      string,
+      {
+        argmin?: { imageStep: number; dist: number; altImageStep: number };
+        argmax?: { imageStep: number; dist: number; altImageStep: number };
+      }
+    >
+  >();
+  for (const row of rows) {
+    const runId = Number(row.runId);
+    if (!out.has(runId)) out.set(runId, new Map());
+    const logMap = out.get(runId)!;
+    if (!logMap.has(row.image_log)) logMap.set(row.image_log, {});
+    const sides = logMap.get(row.image_log)!;
+    const entry = {
+      imageStep: Number(row.image_step),
+      dist: Number(row.dist),
+      altImageStep: Number(row.alt_image_step),
+    };
+    if (Number(row.kind) === 0) sides.argmin = entry;
+    else sides.argmax = entry;
+  }
+  return out;
+}
+
+/**
+ * Slow-path fallback for the per-widget query. Same SQL as the original
+ * raw nearest-snap, but filtered to a specific list of (runId,
+ * imageLogName) pairs so we don't redo work the fast path already did.
+ * When called with all pairs for some runs (i.e. the fast path covered
+ * none), behaves identically to the pre-hybrid version.
+ */
+async function queryArgminArgmaxStepsPerImageLogRawFallback(
+  ch: typeof clickhouse,
+  params: {
+    organizationId: string;
+    projectName: string;
+    logName: string;
+    pairs: Array<{ runId: number; imageLogName: string }>;
+    toleranceSteps: number;
+  },
+): Promise<PerWidgetBestStepRow[]> {
+  const { organizationId, projectName, logName, pairs, toleranceSteps } = params;
+  if (pairs.length === 0) return [];
+
+  const pRunIds = pairs.map((p) => p.runId);
+  const pLogNames = pairs.map((p) => p.imageLogName);
+
+  // Filter the join down to exactly the requested (runId, imageLogName)
+  // pairs by joining mlop_metrics × mlop_files against an inline pair
+  // table built from parallel arrays. Doing it as a JOIN (rather than
+  // a tuple IN) lets CH plan it as a hash join, which beats the
+  // subquery approach on large pair sets.
+  const query = `
+    WITH pair_filter AS (
+      SELECT
+        arrayJoin(arrayZip(
+          {pRunIds:   Array(UInt64)},
+          {pLogNames: Array(String)}
+        )) AS row,
+        row.1 AS pair_runId,
+        row.2 AS pair_imageLogName
+    )
+    SELECT
+      runId,
+      image_log AS imageLogName,
+      argMin((metric_step, image_step, dist, alt_image_step, metric_value), metric_value) AS argmin_tuple,
+      argMax((metric_step, image_step, dist, alt_image_step, metric_value), metric_value) AS argmax_tuple
+    FROM (
+      SELECT
+        m.runId AS runId,
+        m.step AS metric_step,
+        m.value AS metric_value,
+        f.step AS image_step,
+        f.logName AS image_log,
+        greatest(m.step, f.step) - least(m.step, f.step) AS dist,
+        row_number() OVER (
+          PARTITION BY m.runId, m.step, f.logName
+          ORDER BY greatest(m.step, f.step) - least(m.step, f.step) ASC, f.step DESC
+        ) AS rn,
+        first_value(f.step) OVER (
+          PARTITION BY m.runId, m.step, f.logName
+          ORDER BY greatest(m.step, f.step) - least(m.step, f.step) ASC, f.step ASC
+        ) AS alt_image_step
+      FROM mlop_metrics_v2 m FINAL
+      INNER JOIN mlop_files f
+        ON m.tenantId = f.tenantId
+       AND m.projectName = f.projectName
+       AND m.runId = f.runId
+      INNER JOIN pair_filter p
+        ON p.pair_runId = m.runId
+       AND p.pair_imageLogName = f.logName
+      WHERE m.tenantId = {tenantId: String}
+        AND m.projectName = {projectName: String}
+        AND m.logName = {logName: String}
+        AND isFinite(m.value)
+        AND ${IMAGE_FILE_FILTER.replace(/fileType/g, "f.fileType")}
+    ) t
+    WHERE rn = 1 AND dist <= {toleranceSteps: UInt64}
+    GROUP BY runId, image_log
+  `;
+
+  const result = await ch.query(query, {
+    tenantId: organizationId,
+    projectName,
+    logName,
+    pRunIds,
+    pLogNames,
+    toleranceSteps,
+  });
+
   const rows = (await result.json()) as {
     runId: string;
     imageLogName: string;
-    argmin_step: string;
-    argmax_step: string;
+    // (metric_step, image_step, dist, alt_image_step, metric_value)
+    argmin_tuple: [string, string, string, string, number];
+    argmax_tuple: [string, string, string, string, number];
   }[];
+
+  const toEntry = (t: [string, string, string, string, number]): BestStepEntry => {
+    const imageStep = Number(t[1]);
+    const altImageStep = Number(t[3]);
+    return {
+      metricStep: Number(t[0]),
+      metricValue: Number(t[4]),
+      imageStep,
+      distance: Number(t[2]),
+      tiedAlternativeImageStep: altImageStep === imageStep ? null : altImageStep,
+    };
+  };
 
   return rows.map((r) => ({
     runId: Number(r.runId),
     imageLogName: r.imageLogName,
-    argminStep: Number(r.argmin_step),
-    argmaxStep: Number(r.argmax_step),
+    argmin: toEntry(r.argmin_tuple),
+    argmax: toEntry(r.argmax_tuple),
   }));
+}
+
+/**
+ * For each (run, image logName) pair, find the metric step where a given
+ * metric reaches its min/max value, snapping each metric row to the nearest
+ * image step within the tolerance. Enables per-widget pinning: different
+ * image widgets can pin the same run at different steps, even when their
+ * image cadences differ.
+ *
+ * Hybrid:
+ *   1. Look up global argmin/argmax steps from the summaries table.
+ *   2. Look up nearest image per (run, kind, imageLogName) within K.
+ *   3. For (run, imageLogName) pairs where both argmin AND argmax got an
+ *      image hit → use the fast-path result.
+ *   4. For pairs where the fast path missed (the global argmin/argmax is
+ *      too far from any image in that log) → fall back to the raw scan,
+ *      filtered to just those pairs. The raw scan considers every metric
+ *      step, so it can find a non-global-min/max metric step that
+ *      happens to have an image within K for that specific image log.
+ *
+ * The fast path tends to hit when a run has a single image log (or
+ * multiple logs co-logged on the same cadence as the metric); the
+ * fallback dominates when image logs have mixed cadences. Worst case
+ * adds a few cheap lookups before paying the same raw-scan cost as
+ * before; best case skips the raw scan entirely.
+ */
+export async function queryArgminArgmaxStepsPerImageLog(
+  ch: typeof clickhouse,
+  params: {
+    organizationId: string;
+    projectName: string;
+    logName: string;
+    runIds: number[];
+    toleranceSteps: number;
+  },
+): Promise<PerWidgetBestStepRow[]> {
+  const { organizationId, projectName, logName, runIds, toleranceSteps } = params;
+
+  if (runIds.length === 0) return [];
+
+  // Fire the two independent lookups in parallel; the fast-path image
+  // lookup depends on `globals` so it follows.
+  const [expectedPairs, globals] = await Promise.all([
+    queryImageLogsPerRun(ch, { organizationId, projectName, runIds }),
+    queryGlobalArgminArgmaxFromSummaries(ch, { organizationId, projectName, logName, runIds }),
+  ]);
+  const fastPath = await queryNearestImagePerLogForGlobalSteps(ch, {
+    organizationId,
+    projectName,
+    runIds: Array.from(globals.keys()),
+    targets: globals,
+    toleranceSteps,
+  });
+
+  // Walk every expected (run, imageLogName) pair. Pairs where the fast
+  // path covered both argmin AND argmax become fast-path rows; the rest
+  // are queued for the raw fallback.
+  const fastRows: PerWidgetBestStepRow[] = [];
+  const fallbackPairs: Array<{ runId: number; imageLogName: string }> = [];
+  for (const [runId, logSet] of expectedPairs) {
+    const g = globals.get(runId);
+    const fpRun = fastPath.get(runId);
+    for (const imageLogName of logSet) {
+      const fp = fpRun?.get(imageLogName);
+      if (g && fp?.argmin && fp?.argmax) {
+        const argminAlt = fp.argmin.altImageStep;
+        const argmaxAlt = fp.argmax.altImageStep;
+        fastRows.push({
+          runId,
+          imageLogName,
+          argmin: {
+            metricStep: g.argminStep,
+            metricValue: g.minValue,
+            imageStep: fp.argmin.imageStep,
+            distance: fp.argmin.dist,
+            tiedAlternativeImageStep: argminAlt === fp.argmin.imageStep ? null : argminAlt,
+          },
+          argmax: {
+            metricStep: g.argmaxStep,
+            metricValue: g.maxValue,
+            imageStep: fp.argmax.imageStep,
+            distance: fp.argmax.dist,
+            tiedAlternativeImageStep: argmaxAlt === fp.argmax.imageStep ? null : argmaxAlt,
+          },
+        });
+      } else {
+        fallbackPairs.push({ runId, imageLogName });
+      }
+    }
+  }
+
+  // Fallback for pairs where the fast path didn't have both sides.
+  const slowRows = await queryArgminArgmaxStepsPerImageLogRawFallback(ch, {
+    organizationId,
+    projectName,
+    logName,
+    pairs: fallbackPairs,
+    toleranceSteps,
+  });
+
+  return [...fastRows, ...slowRows];
 }
 
 // ---------------------------------------------------------------------------
@@ -378,7 +772,7 @@ export async function queryDistinctMetrics(
   const query = useRawTable
     ? `
       SELECT logName, countIf(isFinite(value)) > 0 AS hasFinite
-      FROM mlop_metrics
+      FROM mlop_metrics_v2 FINAL
       WHERE tenantId = {tenantId: String}
         AND projectName = {projectName: String}
         ${searchFilter}
@@ -389,7 +783,7 @@ export async function queryDistinctMetrics(
     `
     : `
       SELECT logName, 1 AS hasFinite
-      FROM mlop_metric_summaries
+      FROM mlop_metric_summaries_v2 FINAL
       WHERE tenantId = {tenantId: String}
         AND projectName = {projectName: String}
         ${searchFilter}
@@ -518,7 +912,7 @@ export async function queryMetricSortedRunIds(
 
       filterSubqueries.push(`
         SELECT runId
-        FROM mlop_metric_summaries
+        FROM mlop_metric_summaries_v2 FINAL
         WHERE tenantId = {tenantId: String}
           AND projectName = {projectName: String}
           AND logName = {${logNameParam}: String}
@@ -546,7 +940,7 @@ export async function queryMetricSortedRunIds(
       SELECT
         runId,
         ${sortAggExpr} AS sort_value
-      FROM mlop_metric_summaries
+      FROM mlop_metric_summaries_v2 FINAL
       WHERE tenantId = {tenantId: String}
         AND projectName = {projectName: String}
         AND logName = {sortLogName: String}
@@ -609,7 +1003,7 @@ export async function queryMetricFilteredRunIds(
 
     subqueries.push(`
       SELECT runId
-      FROM mlop_metric_summaries
+      FROM mlop_metric_summaries_v2 FINAL
       WHERE tenantId = {tenantId: String}
         AND projectName = {projectName: String}
         AND logName = {${logNameParam}: String}
@@ -734,7 +1128,7 @@ export async function queryRunMetricValues(
       ${aggExpression("MAX")} AS maxValue,
       ${aggExpression("AVG")} AS avgValue,
       sum(count_value) AS count
-    FROM mlop_metric_summaries
+    FROM mlop_metric_summaries_v2 FINAL
     WHERE tenantId = {tenantId: String}
       AND projectName = {projectName: String}
       AND runId = {runId: UInt64}

@@ -55,10 +55,6 @@ export interface LineChartSettings {
    *  query against the raw metrics table instead of the pre-aggregated summaries.
    *  Default false. */
   includeNonFiniteMetrics: boolean;
-  /** When true, deduplicate metric values at the same step before bucketing.
-   *  Takes the last-logged value (by timestamp) per step per run.
-   *  Useful for distributed training where multiple ranks log the same step. */
-  deduplicateSteps: boolean;
 }
 
 export const DEFAULT_SETTINGS: LineChartSettings = {
@@ -79,7 +75,6 @@ export const DEFAULT_SETTINGS: LineChartSettings = {
   showInheritedMetrics: true,
   downsamplingAlgorithm: "avg",
   includeNonFiniteMetrics: false,
-  deduplicateSteps: false,
 };
 
 const lineSettingsDb = new LocalCache<LineChartSettings>(

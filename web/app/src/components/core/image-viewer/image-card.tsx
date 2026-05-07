@@ -8,10 +8,17 @@ import {
   ZoomOut,
   RotateCcw,
   Pin,
+  Info,
 } from "lucide-react";
 import { StepNavigator } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/shared/step-navigator";
+import { formatAxisLabel } from "@/components/charts/lib/format";
 import { PinButton } from "./pin-button";
 import { MultiIndexNav } from "@/components/core/multi-index-nav";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import type { PinSource } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~context/image-step-sync-context";
 
 interface ImageCardStepNavigation {
@@ -27,7 +34,10 @@ interface ImageCardStepNavigation {
 interface ImageCardProps {
   url?: string;
   fileName?: string;
-  /** Optional run label with color dot shown above the image */
+  /** Optional run label with color dot. Shown above the image on the
+   * card and again in the fullscreen footer (where there's otherwise no
+   * indication of which run a maximised image came from). The name
+   * usually carries the display ID inline (e.g. "run-0246 (TES-450)"). */
   runLabel?: {
     name: string;
     color: string;
@@ -42,6 +52,20 @@ interface ImageCardProps {
   isPinned?: boolean;
   /** The step this run is pinned at */
   pinnedStep?: number | null;
+  /**
+   * For `pinSource === "best-step"` pins: provenance shown in the badge
+   * tooltip. `tiedAlternativeImageStep` is non-null when the nearest-snap
+   * tie-break had to choose between two image steps at the same distance.
+   * `metricLogName` and `operation` recall *what* was pinned ("max train/loss").
+   */
+  pinBestStepMeta?: {
+    metricStep: number;
+    metricValue: number | null;
+    metricLogName: string;
+    operation: "argmin" | "argmax";
+    distance: number;
+    tiedAlternativeImageStep: number | null;
+  } | null;
   /** Callback to pin this run at current step */
   onPin?: (scope: "local" | "all-panels") => void;
   /** Callback to unpin this run — scope controls whether to unpin this widget only or all widgets */
@@ -88,6 +112,7 @@ export function ImageCard({
   onScaleChange,
   isPinned,
   pinnedStep,
+  pinBestStepMeta,
   onPin,
   onUnpin,
   hasSyncContext,
@@ -97,6 +122,43 @@ export function ImageCard({
   currentImageIndex,
   onIndexChange,
 }: ImageCardProps) {
+  // Build provenance lines for the pin badge tooltip. Only populated when
+  // the pin came from "find best step" — other pin sources get no extra
+  // tooltip and fall back to the raw "Step N ★" visual.
+  const pinBadgeLines =
+    pinSource === "best-step" && pinBestStepMeta
+      ? (() => {
+          const {
+            metricStep,
+            metricValue,
+            metricLogName,
+            operation,
+            distance,
+            tiedAlternativeImageStep,
+          } = pinBestStepMeta;
+          const opLabel = operation === "argmin" ? "min" : "max";
+          // Headline reminds the user *what* they pinned (metric + op +
+          // value) so they don't have to remember which button they hit.
+          const headline = metricLogName
+            ? metricValue != null
+              ? `Pinned at ${opLabel} ${metricLogName} = ${formatAxisLabel(metricValue)}`
+              : `Pinned at ${opLabel} ${metricLogName}`
+            : `Pinned at ${opLabel} value`;
+          const lines = [
+            headline,
+            `Metric step: ${metricStep}`,
+            distance === 0
+              ? "Image step matches metric step exactly"
+              : `Image step ${pinnedStep} is ${distance} step${distance === 1 ? "" : "s"} away`,
+          ];
+          if (tiedAlternativeImageStep != null) {
+            lines.push(
+              `Tied with step ${tiedAlternativeImageStep} at the same distance — later step preferred`,
+            );
+          }
+          return lines;
+        })()
+      : null;
   const pinRingClass = isPinned
     ? pinSource === "best-step"
       ? "ring-2 ring-amber-500/40"
@@ -160,10 +222,43 @@ export function ImageCard({
           {isPinned && pinnedStep != null && (
             <span
               data-testid="pin-step-badge"
-              className={cn("shrink-0 whitespace-nowrap rounded px-1 py-0.5 font-mono text-[10px]", pinBadgeClass || "bg-muted text-muted-foreground")}
+              className={cn(
+                "shrink-0 whitespace-nowrap rounded px-1 py-0.5 font-mono text-[10px]",
+                pinBadgeClass || "bg-muted text-muted-foreground",
+              )}
             >
               Step {pinnedStep} {pinSource === "local" ? "◇" : pinSource === "cross-panel" ? "◈" : pinSource === "best-step" ? "★" : ""}
             </span>
+          )}
+          {isPinned && pinnedStep != null && pinBadgeLines && (
+            // Separate icon so the hover target (and tooltip) is scoped to
+            // the provenance hint instead of the step badge itself.
+            // Uses Radix Tooltip with delayDuration=0 (the project default)
+            // for instant hover feedback — the native title= attribute has
+            // a 1–2s OS-driven delay that feels broken.
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span
+                  data-testid="pin-info-icon"
+                  className="shrink-0 text-muted-foreground/70 hover:text-muted-foreground"
+                  aria-label="Pin provenance"
+                >
+                  <Info className="h-3 w-3" />
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                <div className="space-y-0.5 text-xs">
+                  {pinBadgeLines.map((line, i) => (
+                    // whitespace-nowrap on each line lets the tooltip's
+                    // w-fit container size exactly to the longest line
+                    // instead of wrapping mid-line at an awkward width.
+                    <div key={i} className="whitespace-nowrap">
+                      {line}
+                    </div>
+                  ))}
+                </div>
+              </TooltipContent>
+            </Tooltip>
           )}
           {onPin && onUnpin && currentStepValue != null && (
             <PinButton
@@ -245,20 +340,89 @@ export function ImageCard({
               )}
             </div>
             <div className="flex flex-col gap-2 border-t bg-background px-6 py-3">
-              {isPinned && pinnedStep != null ? (
-                <div className="flex items-center gap-2 pb-1">
-                  <Pin className="h-3.5 w-3.5 text-primary" />
-                  <span className="text-sm text-muted-foreground">
-                    Pinned at step{" "}
-                    <span className="font-mono font-medium text-foreground">
-                      {pinnedStep}
-                    </span>
+              {runLabel && (
+                <div className="flex min-w-0 items-center gap-2 pb-1">
+                  <div
+                    className="h-2.5 w-2.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: runLabel.color }}
+                  />
+                  <span
+                    className="truncate text-sm font-medium"
+                    style={{ color: runLabel.color }}
+                    title={runLabel.name}
+                  >
+                    {runLabel.name}
                   </span>
-                  {stepNavigation && (
+                </div>
+              )}
+              {isPinned && pinnedStep != null ? (
+                <div className="flex flex-col gap-0.5 pb-1">
+                  <div className="flex items-center gap-2">
+                    <Pin className="h-3.5 w-3.5 text-primary" />
                     <span className="text-sm text-muted-foreground">
-                      (widget at step{" "}
-                      <span className="font-mono">{stepNavigation.currentStepValue}</span>)
+                      Pinned at step{" "}
+                      <span className="font-mono font-medium text-foreground">
+                        {pinnedStep}
+                      </span>
                     </span>
+                    {stepNavigation && (
+                      <span className="text-sm text-muted-foreground">
+                        (widget at step{" "}
+                        <span className="font-mono">{stepNavigation.currentStepValue}</span>)
+                      </span>
+                    )}
+                  </div>
+                  {pinSource === "best-step" && pinBestStepMeta && (
+                    <div className="ml-[1.375rem] text-xs text-muted-foreground">
+                      {(() => {
+                        const {
+                          metricStep,
+                          metricValue,
+                          metricLogName,
+                          operation,
+                          distance,
+                          tiedAlternativeImageStep,
+                        } = pinBestStepMeta;
+                        const opLabel = operation === "argmin" ? "min" : "max";
+                        const valueStr =
+                          metricValue != null ? formatAxisLabel(metricValue) : null;
+                        const headline = metricLogName
+                          ? valueStr != null
+                            ? `${opLabel} ${metricLogName} = `
+                            : `${opLabel} ${metricLogName}`
+                          : `${opLabel} value`;
+                        const distSuffix =
+                          distance === 0
+                            ? "exact match"
+                            : `${distance} step${distance === 1 ? "" : "s"} away`;
+                        return (
+                          <>
+                            <div>
+                              {headline}
+                              {valueStr != null && (
+                                <span className="font-mono font-medium text-foreground">
+                                  {valueStr}
+                                </span>
+                              )}{" "}
+                              <span className="text-muted-foreground/80">
+                                (metric step{" "}
+                                <span className="font-mono">{metricStep}</span>,{" "}
+                                {distSuffix})
+                              </span>
+                            </div>
+                            {tiedAlternativeImageStep != null && (
+                              <div className="text-muted-foreground/80">
+                                Tied with step{" "}
+                                <span className="font-mono">
+                                  {tiedAlternativeImageStep}
+                                </span>{" "}
+                                — later step preferred
+                              </div>
+                            )}
+                          </>
+                        );
+                      })()}
+                    </div>
                   )}
                 </div>
               ) : (

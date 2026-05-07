@@ -222,6 +222,7 @@ export const MultiGroupImage = ({
           isPinned: pinInfo !== null,
           pinnedStep: pinInfo?.step ?? null,
           pinSource: pinInfo?.source ?? null,
+          pinBestStepMeta: pinInfo?.bestStepMeta ?? null,
           pinnedIndexForThisWidget,
           effectiveStep,
         };
@@ -306,7 +307,7 @@ export const MultiGroupImage = ({
         />
       }
     >
-      <div className={cn("flex h-full w-full flex-col space-y-4 p-4", className)}>
+      <div data-testid="image-widget" className={cn("flex h-full w-full flex-col space-y-4 p-4", className)}>
         <h3 className="text-center font-mono text-sm font-medium text-muted-foreground">
           {logName}
         </h3>
@@ -323,6 +324,7 @@ export const MultiGroupImage = ({
               isPinned,
               pinnedStep,
               pinSource,
+              pinBestStepMeta,
               pinnedIndexForThisWidget,
               effectiveStep,
             } = entry;
@@ -344,6 +346,7 @@ export const MultiGroupImage = ({
                 isPinned={isPinned}
                 pinnedStep={pinnedStep}
                 pinSource={pinSource}
+                pinBestStepMeta={pinBestStepMeta}
                 currentStepValue={effectiveStep}
                 totalIndices={images.length}
                 currentImageIndex={safeIndex}

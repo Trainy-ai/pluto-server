@@ -954,7 +954,7 @@ async function backfillMetricSummaries(
 
   try {
     const countResult = await clickhouse.query({
-      query: `SELECT count() as cnt FROM mlop_metric_summaries WHERE tenantId = {tenantId:String} AND projectName = {projectName:String}`,
+      query: `SELECT count() as cnt FROM mlop_metric_summaries FINAL WHERE tenantId = {tenantId:String} AND projectName = {projectName:String}`,
       query_params: { tenantId, projectName },
       format: 'JSONEachRow',
     });
@@ -984,7 +984,7 @@ async function backfillMetricSummaries(
     });
 
     const newCountResult = await clickhouse.query({
-      query: `SELECT count() as cnt FROM mlop_metric_summaries WHERE tenantId = {tenantId:String} AND projectName = {projectName:String}`,
+      query: `SELECT count() as cnt FROM mlop_metric_summaries FINAL WHERE tenantId = {tenantId:String} AND projectName = {projectName:String}`,
       query_params: { tenantId, projectName },
       format: 'JSONEachRow',
     });

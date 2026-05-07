@@ -105,5 +105,4 @@ export const useGetGraphProgressive = (
   logName: string,
   buckets: number,
   algorithm?: "avg" | "lttb",
-  dedup?: boolean,
-) => useProgressiveGraph(orgId, projectName, runId, logName, buckets, algorithm, dedup);
+) => useProgressiveGraph(orgId, projectName, runId, logName, buckets, algorithm);

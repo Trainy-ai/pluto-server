@@ -124,10 +124,9 @@ export async function queryLineageMetricsBucketedByLogName(
     buckets?: number;
     preview?: boolean;
     algorithm?: DownsamplingAlgorithm;
-    dedup?: boolean;
   }
 ): Promise<BucketedMetricDataPoint[]> {
-  const { organizationId, projectName, runId, logName, buckets, preview, algorithm, dedup } =
+  const { organizationId, projectName, runId, logName, buckets, preview, algorithm } =
     params;
 
   const segments = await resolveLineageChain(prisma, runId, organizationId);
@@ -142,11 +141,12 @@ export async function queryLineageMetricsBucketedByLogName(
       buckets,
       preview,
       algorithm,
-      dedup,
     });
   }
 
-  // Build a single UNION ALL query across all lineage segments
+  // Build a single UNION ALL query across all lineage segments. Each part
+  // reads from mlop_metrics_v2 FINAL so dedup happens at the engine level
+  // (no per-step argMax wrapper needed).
   const logGroup = getLogGroupName(logName);
   const numBuckets = buckets ?? (preview ? 200 : 1000);
 
@@ -174,33 +174,17 @@ export async function queryLineageMetricsBucketedByLogName(
       stepFilter += ` AND step <= {stepMax_${i}: UInt64}`;
     }
 
-    if (dedup) {
-      unionParts.push(`
-        SELECT step, argMax(value, time) AS value, max(time) AS ts
-        FROM mlop_metrics
-        WHERE tenantId = {tenantId: String}
-          AND projectName = {projectName: String}
-          AND runId = {runId_${i}: UInt64}
-          AND logName = {logName: String}
-          AND logGroup = {logGroup: String}
-          ${stepFilter}
-        GROUP BY step
-      `);
-    } else {
-      unionParts.push(`
-        SELECT step, time, value
-        FROM mlop_metrics
-        WHERE tenantId = {tenantId: String}
-          AND projectName = {projectName: String}
-          AND runId = {runId_${i}: UInt64}
-          AND logName = {logName: String}
-          AND logGroup = {logGroup: String}
-          ${stepFilter}
-      `);
-    }
+    unionParts.push(`
+      SELECT step, time, value
+      FROM mlop_metrics_v2 FINAL
+      WHERE tenantId = {tenantId: String}
+        AND projectName = {projectName: String}
+        AND runId = {runId_${i}: UInt64}
+        AND logName = {logName: String}
+        AND logGroup = {logGroup: String}
+        ${stepFilter}
+    `);
   }
-
-  const timeAgg = dedup ? "min(c.ts)" : "argMin(c.time, c.step)";
 
   const query = `
     WITH
@@ -212,7 +196,7 @@ export async function queryLineageMetricsBucketedByLogName(
     SELECT
       intDiv(c.step - b.minStep, greatest(toUInt64(1), intDiv(b.maxStep - b.minStep + 1, toUInt64({numBuckets: UInt32})))) AS bucket,
       min(c.step) AS step,
-      ${timeAgg} AS time,
+      argMin(c.time, c.step) AS time,
       avg(c.value) AS value,
       min(c.value) AS minY,
       max(c.value) AS maxY,

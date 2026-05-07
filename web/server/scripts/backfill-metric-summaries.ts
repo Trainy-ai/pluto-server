@@ -45,7 +45,7 @@ async function backfill() {
 
   // Print row count
   const countResult = await ch.query({
-    query: "SELECT count() AS cnt FROM mlop_metric_summaries",
+    query: "SELECT count() AS cnt FROM mlop_metric_summaries FINAL",
     format: "JSONEachRow",
   });
   const rows = await countResult.json<{ cnt: string }>();

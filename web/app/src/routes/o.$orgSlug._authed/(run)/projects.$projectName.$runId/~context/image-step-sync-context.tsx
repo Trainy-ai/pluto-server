@@ -38,6 +38,25 @@ export interface PinInfo {
    * attached to.
    */
   index?: number;
+  /**
+   * Provenance for `source === "best-step"` pins: which metric row drove
+   * the pick, the step distance between that metric row and the rendered
+   * image, and the other candidate image step at the same distance (if
+   * the nearest-snap tie-break had to choose). Surfaced as a hover hint
+   * on the pin badge.
+   *
+   * `metricLogName` and `operation` ("argmin" / "argmax") are also
+   * captured so the badge can remind the user *what* they pinned (e.g.
+   * "Pinned at max train/loss = 0.90").
+   */
+  bestStepMeta?: {
+    metricStep: number;
+    metricValue: number | null;
+    metricLogName: string;
+    operation: "argmin" | "argmax";
+    distance: number;
+    tiedAlternativeImageStep: number | null;
+  };
 }
 
 interface ImageStepSyncContextValue {
@@ -221,17 +240,45 @@ export function ImageStepSyncProvider({ children }: ImageStepSyncProviderProps) 
 
   // Listen for DOM events to pin runs from outside the provider tree (e.g., runs table)
   useEffect(() => {
+    // Per-pin slice carried by the event — the metric name + operation
+    // are event-level (same for every pin in the batch) and merged in
+    // below.
+    type BestStepMetaSlice = {
+      metricStep: number;
+      metricValue: number | null;
+      distance: number;
+      tiedAlternativeImageStep: number | null;
+    };
+    type BestStepMode =
+      | "argmin"
+      | "argmax"
+      | "argmin-with-image"
+      | "argmax-with-image";
     const handler = (e: Event) => {
       const detail = (e as CustomEvent<{
         pins?: Record<string, number>;
         pinsByWidget?: Record<string, number>;
+        pinMetadata?: Record<string, BestStepMetaSlice>;
+        pinMetadataByWidget?: Record<string, BestStepMetaSlice>;
+        mode?: BestStepMode;
+        logName?: string;
       }>).detail;
+
+      const operation: "argmin" | "argmax" =
+        detail.mode === "argmin" || detail.mode === "argmin-with-image"
+          ? "argmin"
+          : "argmax";
+      const metricLogName = detail.logName ?? "";
+
+      const buildMeta = (slice: BestStepMetaSlice | undefined) =>
+        slice && { ...slice, metricLogName, operation };
 
       if (detail.pinsByWidget) {
         // Per-widget pins: keys are "runId:imageLogName"
         const widgetMap = new Map<string, PinInfo>();
         for (const [key, step] of Object.entries(detail.pinsByWidget)) {
-          widgetMap.set(key, { step, source: "best-step" });
+          const meta = buildMeta(detail.pinMetadataByWidget?.[key]);
+          widgetMap.set(key, { step, source: "best-step", bestStepMeta: meta });
         }
         setPinnedRunsByWidget(widgetMap);
         // Clear per-run pins so the new per-widget ones fully replace
@@ -240,7 +287,8 @@ export function ImageStepSyncProvider({ children }: ImageStepSyncProviderProps) 
         // Per-run pins: keys are runId
         const pinMap = new Map<string, PinInfo>();
         for (const [runId, step] of Object.entries(detail.pins)) {
-          pinMap.set(runId, { step, source: "best-step" });
+          const meta = buildMeta(detail.pinMetadata?.[runId]);
+          pinMap.set(runId, { step, source: "best-step", bestStepMeta: meta });
         }
         setPinnedRuns(pinMap);
         // Clear per-widget pins so the new per-run ones fully replace

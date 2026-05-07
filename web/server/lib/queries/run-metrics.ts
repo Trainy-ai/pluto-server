@@ -120,7 +120,7 @@ export async function queryRunMetrics(
         logName, logGroup, value, time, step,
         count() OVER (PARTITION BY logName) as total_rows,
         row_number() OVER (PARTITION BY logName ORDER BY step ASC) as rn
-      FROM mlop_metrics
+      FROM mlop_metrics_v2 FINAL
       WHERE ${whereClause}
     )
     SELECT logName, logGroup, value, ${VALUE_FLAG_SELECT}, time, step
@@ -178,7 +178,7 @@ export async function queryRunMetricsByLogName(
     if (effectiveLimit === 0) {
       const query = `
         SELECT value, ${VALUE_FLAG_SELECT}, time, step
-        FROM mlop_metrics
+        FROM mlop_metrics_v2 FINAL
         WHERE tenantId = {tenantId: String}
           AND projectName = {projectName: String}
           AND runId = {runId: UInt64}
@@ -198,7 +198,7 @@ export async function queryRunMetricsByLogName(
     if (preview && effectiveLimit > 0) {
       const query = `
         SELECT value, ${VALUE_FLAG_SELECT}, time, step
-        FROM mlop_metrics
+        FROM mlop_metrics_v2 FINAL
         WHERE tenantId = {tenantId: String}
           AND projectName = {projectName: String}
           AND runId = {runId: UInt64}
@@ -221,7 +221,7 @@ export async function queryRunMetricsByLogName(
           value, time, step,
           count() OVER () as total_rows,
           row_number() OVER (ORDER BY step ASC) as rn
-        FROM mlop_metrics
+        FROM mlop_metrics_v2 FINAL
         WHERE tenantId = {tenantId: String}
           AND projectName = {projectName: String}
           AND runId = {runId: UInt64}
@@ -246,7 +246,7 @@ export async function queryRunMetricsByLogName(
   if (effectiveLimit === 0) {
     const query = `
       SELECT value, ${VALUE_FLAG_SELECT}, time, step
-      FROM mlop_metrics
+      FROM mlop_metrics_v2 FINAL
       WHERE tenantId = {tenantId: String}
         AND projectName = {projectName: String}
         AND runId = {runId: UInt64}
@@ -264,7 +264,7 @@ export async function queryRunMetricsByLogName(
   if (preview && effectiveLimit > 0) {
     const query = `
       SELECT value, ${VALUE_FLAG_SELECT}, time, step
-      FROM mlop_metrics
+      FROM mlop_metrics_v2 FINAL
       WHERE tenantId = {tenantId: String}
         AND projectName = {projectName: String}
         AND runId = {runId: UInt64}
@@ -284,7 +284,7 @@ export async function queryRunMetricsByLogName(
         value, time, step,
         count() OVER () as total_rows,
         row_number() OVER (ORDER BY step ASC) as rn
-      FROM mlop_metrics
+      FROM mlop_metrics_v2 FINAL
       WHERE tenantId = {tenantId: String}
         AND projectName = {projectName: String}
         AND runId = {runId: UInt64}
@@ -323,6 +323,57 @@ export interface BucketedMetricDataPoint {
 
 const DEFAULT_BUCKETS = 1000;
 const PREVIEW_BUCKETS = 200;
+
+/**
+ * Bounds CTE body for batch queries with a single logName (no GROUP BY).
+ * Always reads from mlop_metric_summaries_v2 — accepts up to ~5 min staleness
+ * on the right edge for RUNNING runs (refresh interval).
+ *
+ * NULL handling: aggregate over an empty set returns one row of NULLs, so
+ * `ifNull`/`coalesce` make the bounds degrade to (0, 1000) when no summary
+ * row exists yet for the (run, metric) — happens during the brief window
+ * after first ingest and before the first refresh tick lands.
+ */
+function buildSummaryBoundsBodySingleMetric(logNameFilter: string): string {
+  return `
+    SELECT
+      ifNull(min(min_step), toUInt64(0)) AS minStep,
+      coalesce(nullIf(max(max_step), 0), toUInt64(1000)) AS maxStep
+    FROM mlop_metric_summaries_v2
+    WHERE tenantId = {tenantId: String}
+      AND projectName = {projectName: String}
+      AND runId IN ({runIds: Array(UInt64)})
+      ${logNameFilter}
+  `;
+}
+
+/**
+ * Bounds CTE body for multi-metric batch queries (one row per logName).
+ *
+ * Uses `arrayJoin({logNames})` LEFT JOINed against summaries so that every
+ * requested logName always produces a bounds row — even if no summary row
+ * exists yet. Without this, GROUP BY would silently drop missing metrics
+ * and the downstream `INNER JOIN params p ON m.logName = p.logName` would
+ * return zero rows for those metrics until the next refresh tick.
+ */
+function buildSummaryBoundsBodyMultiMetric(): string {
+  return `
+    SELECT
+      lns.ln AS logName,
+      ifNull(sb.rawMinStep, toUInt64(0)) AS minStep,
+      coalesce(nullIf(sb.rawMaxStep, 0), toUInt64(1000)) AS maxStep
+    FROM (SELECT arrayJoin({logNames: Array(String)}) AS ln) lns
+    LEFT JOIN (
+      SELECT logName, min(min_step) AS rawMinStep, max(max_step) AS rawMaxStep
+      FROM mlop_metric_summaries_v2
+      WHERE tenantId = {tenantId: String}
+        AND projectName = {projectName: String}
+        AND runId IN ({runIds: Array(UInt64)})
+        AND logName IN ({logNames: Array(String)})
+      GROUP BY logName
+    ) sb ON lns.ln = sb.logName
+  `;
+}
 
 /**
  * Sanitize bucketed metric rows: null values (from ClickHouse JSON serialization
@@ -365,10 +416,9 @@ export async function queryRunMetricsBucketedByLogName(
     stepMax?: number;
     preview?: boolean;
     algorithm?: DownsamplingAlgorithm;
-    dedup?: boolean;
   }
 ): Promise<BucketedMetricDataPoint[]> {
-  const { organizationId, projectName, runId, logName, stepMin, stepMax, preview, algorithm, dedup } = params;
+  const { organizationId, projectName, runId, logName, stepMin, stepMax, preview, algorithm } = params;
 
   if (algorithm === "lttb") {
     return queryRunMetricsBucketedByLogNameLttb(ch, params);
@@ -405,36 +455,19 @@ export async function queryRunMetricsBucketedByLogName(
     queryParams.stepMax = stepMax;
   }
 
-  // When dedup is enabled, use a subquery that takes the last-logged value per step.
-  // The subquery reads from mlop_metrics directly (no alias), so use boundsStepRange
-  // (bare `step`) not mainStepRange (`m.step`).
-  const metricsSource = dedup
-    ? `(SELECT step, argMax(value, time) AS value, max(time) AS ts
-        FROM mlop_metrics
-        WHERE ${whereClause}${boundsStepRange}
-        GROUP BY step) m`
-    : `mlop_metrics m`;
-  const dedupWhere = dedup ? "1 = 1" : `${whereClause}${mainStepRange}`;
-  const timeAgg = dedup ? "min(m.ts)" : "argMin(m.time, m.step)";
-
-  // Non-zoom path: read pre-aggregated min/max step from mlop_metric_summaries
-  // instead of scanning every row in mlop_metrics. Zoom path keeps the raw scan
-  // because the bucket width must reflect the zoomed range.
-  //
-  // SAFETY (see incident 2026-04-15): `max_step` defaults to 0 for rows in
-  // mlop_metric_summaries that pre-date the migration added in PR #408. When a
-  // row returns max_step=0, the naive bucketWidth = intDiv(0-0+1, N) = 0 →
-  // greatest(1, 0) = 1 → every step becomes its own bucket → a 50k-step run
-  // returns 50k rows instead of ~200. That response size blows the backend
-  // heap during JSON serialization, crashing the pod. We substitute a
-  // synthetic large maxStep (1_000_000) when max_step=0 so bucketWidth stays
-  // bounded. Affected metrics display with coarser-than-expected bucketing
-  // rather than crashing the server. Once the migration has been applied and
-  // verified everywhere, this fallback becomes a no-op.
+  // Non-zoom path: read min/max step from mlop_metric_summaries
+  // (refreshable MV, eventually consistent within ~5 min). RUNNING runs
+  // can have bounds that lag the latest logged step by up to 5 min.
+  // ifNull/nullIf handle the brief post-ingest / pre-refresh window where
+  // no summary row exists yet (degrade to 0..1000 → bucketWidth=1).
+  // Zoom path always uses raw v2 because the bucket width must reflect
+  // the zoomed range.
   const boundsCte = stepMin === undefined || stepMax === undefined
     ? `bounds AS (
-        SELECT min(min_step) AS minStep, if(max(max_step) = 0, toUInt64(1000000), max(max_step)) AS maxStep
-        FROM mlop_metric_summaries
+        SELECT
+          ifNull(min(min_step), toUInt64(0)) AS minStep,
+          coalesce(nullIf(max(max_step), 0), toUInt64(1000)) AS maxStep
+        FROM mlop_metric_summaries_v2
         WHERE tenantId = {tenantId: String}
           AND projectName = {projectName: String}
           AND runId = {runId: UInt64}
@@ -442,7 +475,7 @@ export async function queryRunMetricsBucketedByLogName(
       )`
     : `bounds AS (
         SELECT min(step) AS minStep, max(step) AS maxStep
-        FROM mlop_metrics
+        FROM mlop_metrics_v2
         WHERE ${whereClause}${boundsStepRange}
       )`;
 
@@ -452,15 +485,15 @@ export async function queryRunMetricsBucketedByLogName(
     SELECT
       intDiv(m.step - b.minStep, greatest(toUInt64(1), intDiv(b.maxStep - b.minStep + 1, toUInt64({numBuckets: UInt32})))) AS bucket,
       min(m.step) AS step,
-      ${timeAgg} AS time,
+      argMin(m.time, m.step) AS time,
       avgIf(m.value, isFinite(m.value)) AS value,
       minIf(m.value, isFinite(m.value)) AS minY,
       maxIf(m.value, isFinite(m.value)) AS maxY,
       toUInt64(count()) AS count,
       toUInt8((countIf(isNaN(m.value)) > 0) + (countIf(isInfinite(m.value) AND m.value > 0) > 0) * 2 + (countIf(isInfinite(m.value) AND m.value < 0) > 0) * 4) AS nonFiniteFlags
-    FROM ${metricsSource}
+    FROM mlop_metrics_v2 m FINAL
     CROSS JOIN bounds b
-    WHERE ${dedupWhere}
+    WHERE ${whereClause}${mainStepRange}
     GROUP BY bucket
     ORDER BY bucket ASC
   `;
@@ -485,10 +518,9 @@ export async function queryRunMetricsBatchBucketedByLogName(
     stepMax?: number;
     preview?: boolean;
     algorithm?: DownsamplingAlgorithm;
-    dedup?: boolean;
   }
 ): Promise<Record<number, BucketedMetricDataPoint[]>> {
-  const { organizationId, projectName, runIds, logName, stepMin, stepMax, preview, algorithm, dedup } = params;
+  const { organizationId, projectName, runIds, logName, stepMin, stepMax, preview, algorithm } = params;
 
   if (runIds.length === 0) return {};
 
@@ -527,33 +559,14 @@ export async function queryRunMetricsBatchBucketedByLogName(
     queryParams.stepMax = stepMax;
   }
 
-  // When dedup is enabled, use a subquery that takes the last-logged value per step.
-  // Use boundsStepRange (bare `step`) inside the subquery, not mainStepRange (`m.step`).
-  const metricsSource = dedup
-    ? `(SELECT runId, step, argMax(value, time) AS value, max(time) AS ts
-        FROM mlop_metrics
-        WHERE ${whereClause}${boundsStepRange}
-        GROUP BY runId, step) m`
-    : `mlop_metrics m`;
-  const dedupWhere = dedup ? "1 = 1" : `${whereClause}${mainStepRange}`;
-  const timeAgg = dedup ? "min(m.ts)" : "argMin(m.time, m.step)";
-
-  // When no zoom range is provided, the bounds CTE reads pre-aggregated min/max
-  // step from mlop_metric_summaries (one row per (run, metric)) instead of
-  // scanning all step rows in mlop_metrics. When zoomed, we must still scan
-  // the raw table so the bucket width reflects the zoomed range.
+  // When no zoom range is provided, read bounds from mlop_metric_summaries
+  // (refreshable MV, ≤5 min stale on the right edge for RUNNING runs).
+  // When zoomed, scan raw v2 within the explicit step range.
   const boundsCte = stepMin === undefined || stepMax === undefined
-    ? `bounds AS (
-        SELECT min(min_step) AS minStep, if(max(max_step) = 0, toUInt64(1000000), max(max_step)) AS maxStep
-        FROM mlop_metric_summaries
-        WHERE tenantId = {tenantId: String}
-          AND projectName = {projectName: String}
-          AND runId IN ({runIds: Array(UInt64)})
-          AND logName = {logName: String}
-      )`
+    ? `bounds AS (${buildSummaryBoundsBodySingleMetric(" AND logName = {logName: String}")})`
     : `bounds AS (
         SELECT min(step) AS minStep, max(step) AS maxStep
-        FROM mlop_metrics
+        FROM mlop_metrics_v2
         WHERE ${whereClause}${boundsStepRange}
       )`;
 
@@ -569,15 +582,15 @@ export async function queryRunMetricsBatchBucketedByLogName(
       m.runId AS runId,
       intDiv(m.step - p.minStep, p.bucketWidth) AS bucket,
       any(toUInt64(p.minStep + intDiv(m.step - p.minStep, p.bucketWidth) * p.bucketWidth)) AS step,
-      ${timeAgg} AS time,
+      argMin(m.time, m.step) AS time,
       avgIf(m.value, isFinite(m.value)) AS value,
       minIf(m.value, isFinite(m.value)) AS minY,
       maxIf(m.value, isFinite(m.value)) AS maxY,
       toUInt64(count()) AS count,
       toUInt8((countIf(isNaN(m.value)) > 0) + (countIf(isInfinite(m.value) AND m.value > 0) > 0) * 2 + (countIf(isInfinite(m.value) AND m.value < 0) > 0) * 4) AS nonFiniteFlags
-    FROM ${metricsSource}
+    FROM mlop_metrics_v2 m FINAL
     CROSS JOIN params p
-    WHERE ${dedupWhere}
+    WHERE ${whereClause}${mainStepRange}
     GROUP BY m.runId, bucket
     ORDER BY m.runId, bucket ASC
   `;
@@ -616,10 +629,9 @@ export async function queryRunMetricsMultiMetricBatchBucketed(
     stepMax?: number;
     preview?: boolean;
     algorithm?: DownsamplingAlgorithm;
-    dedup?: boolean;
   }
 ): Promise<Record<string, Record<number, BucketedMetricDataPoint[]>>> {
-  const { organizationId, projectName, runIds, logNames, stepMin, stepMax, preview, algorithm, dedup } = params;
+  const { organizationId, projectName, runIds, logNames, stepMin, stepMax, preview, algorithm } = params;
 
   if (runIds.length === 0 || logNames.length === 0) return {};
 
@@ -645,29 +657,12 @@ export async function queryRunMetricsMultiMetricBatchBucketed(
   `;
 
   let mainStepRange = "";
-  let bareStepRange = "";  // same filter but without m. prefix, for use inside dedup subqueries
   const hasStepRange = stepMin !== undefined && stepMax !== undefined;
   if (hasStepRange) {
     mainStepRange = ` AND m.step >= {stepMin: UInt64} AND m.step <= {stepMax: UInt64}`;
-    bareStepRange = ` AND step >= {stepMin: UInt64} AND step <= {stepMax: UInt64}`;
     queryParams.stepMin = stepMin;
     queryParams.stepMax = stepMax;
   }
-
-  // When dedup is enabled, use a subquery that takes the last-logged value per step
-  // (by timestamp) before bucketing — eliminates duplicate values from distributed training.
-  const metricsSource = dedup
-    ? `(SELECT logName, runId, step, argMax(value, time) AS value, max(time) AS ts
-        FROM mlop_metrics
-        WHERE ${whereClause}${bareStepRange}
-        GROUP BY logName, runId, step) m`
-    : `mlop_metrics m`;
-  const dedupWhereClause = dedup ? "1 = 1" : `${whereClause}`;
-  const dedupMainStepRange = dedup ? "" : mainStepRange;
-  // When dedup subquery is used, m.time is already an aggregate result (max(time)),
-  // so we can't wrap it in argMin(). Use min(m.time) instead — it's equivalent since
-  // each step has exactly one row after dedup.
-  const timeAgg = dedup ? "min(m.ts)" : "argMin(m.time, m.step)";
 
   // When stepMin/stepMax are provided (zoom queries), skip the bounds CTE entirely —
   // compute bucketWidth directly from the provided range, avoiding a full table scan.
@@ -679,33 +674,24 @@ export async function queryRunMetricsMultiMetricBatchBucketed(
         m.runId AS runId,
         intDiv(m.step - {stepMin: UInt64}, greatest(toUInt64(1), intDiv({stepMax: UInt64} - {stepMin: UInt64} + 1, toUInt64({numBuckets: UInt32})))) AS bucket,
         any(toUInt64({stepMin: UInt64} + intDiv(m.step - {stepMin: UInt64}, greatest(toUInt64(1), intDiv({stepMax: UInt64} - {stepMin: UInt64} + 1, toUInt64({numBuckets: UInt32})))) * greatest(toUInt64(1), intDiv({stepMax: UInt64} - {stepMin: UInt64} + 1, toUInt64({numBuckets: UInt32}))))) AS step,
-        ${timeAgg} AS time,
+        argMin(m.time, m.step) AS time,
         avgIf(m.value, isFinite(m.value)) AS value,
         minIf(m.value, isFinite(m.value)) AS minY,
         maxIf(m.value, isFinite(m.value)) AS maxY,
         toUInt64(count()) AS count,
         toUInt8((countIf(isNaN(m.value)) > 0) + (countIf(isInfinite(m.value) AND m.value > 0) > 0) * 2 + (countIf(isInfinite(m.value) AND m.value < 0) > 0) * 4) AS nonFiniteFlags
-      FROM ${metricsSource}
-      WHERE ${dedupWhereClause}${dedupMainStepRange}
+      FROM mlop_metrics_v2 m FINAL
+      WHERE ${whereClause}${mainStepRange}
       GROUP BY m.logName, m.runId, bucket
       ORDER BY m.logName, m.runId, bucket ASC
     `;
   } else {
-    // Bounds CTE reads from mlop_metric_summaries (one pre-aggregated row per
-    // run/metric pair) instead of scanning every step row in mlop_metrics.
-    // dedup doesn't change the step range, only which value is kept per step,
-    // so it's safe regardless of dedup mode.
+    // Bounds CTE: per-metric min/max from mlop_metric_summaries. arrayJoin
+    // ensures every requested logName produces a bounds row even if the
+    // refresh hasn't populated a summary for it yet.
     query = `
       WITH
-        bounds AS (
-          SELECT logName, min(min_step) AS minStep, if(max(max_step) = 0, toUInt64(1000000), max(max_step)) AS maxStep
-          FROM mlop_metric_summaries
-          WHERE tenantId = {tenantId: String}
-            AND projectName = {projectName: String}
-            AND runId IN ({runIds: Array(UInt64)})
-            AND logName IN ({logNames: Array(String)})
-          GROUP BY logName
-        ),
+        bounds AS (${buildSummaryBoundsBodyMultiMetric()}),
         params AS (
           SELECT logName, minStep,
             greatest(toUInt64(1), intDiv(maxStep - minStep + 1, toUInt64({numBuckets: UInt32}))) AS bucketWidth
@@ -716,15 +702,15 @@ export async function queryRunMetricsMultiMetricBatchBucketed(
         m.runId AS runId,
         intDiv(m.step - p.minStep, p.bucketWidth) AS bucket,
         any(toUInt64(p.minStep + intDiv(m.step - p.minStep, p.bucketWidth) * p.bucketWidth)) AS step,
-        ${timeAgg} AS time,
+        argMin(m.time, m.step) AS time,
         avgIf(m.value, isFinite(m.value)) AS value,
         minIf(m.value, isFinite(m.value)) AS minY,
         maxIf(m.value, isFinite(m.value)) AS maxY,
         toUInt64(count()) AS count,
         toUInt8((countIf(isNaN(m.value)) > 0) + (countIf(isInfinite(m.value) AND m.value > 0) > 0) * 2 + (countIf(isInfinite(m.value) AND m.value < 0) > 0) * 4) AS nonFiniteFlags
-      FROM ${metricsSource}
+      FROM mlop_metrics_v2 m FINAL
       INNER JOIN params p ON m.logName = p.logName
-      WHERE ${dedupWhereClause}
+      WHERE ${whereClause}
       GROUP BY m.logName, m.runId, bucket
       ORDER BY m.logName, m.runId, bucket ASC
     `;
@@ -818,7 +804,7 @@ export async function queryRunMetricsBatchByLogName(
       // No sampling — return all rows in range
       query = `
         SELECT runId, value, ${VALUE_FLAG_SELECT}, time, step
-        FROM mlop_metrics
+        FROM mlop_metrics_v2 FINAL
         WHERE tenantId = {tenantId: String}
           AND projectName = {projectName: String}
           AND runId IN ({runIds: Array(UInt64)})
@@ -834,7 +820,7 @@ export async function queryRunMetricsBatchByLogName(
       // entire visible area at once rather than filling in left-to-right.
       query = `
         SELECT runId, value, ${VALUE_FLAG_SELECT}, time, step
-        FROM mlop_metrics
+        FROM mlop_metrics_v2 FINAL
         WHERE tenantId = {tenantId: String}
           AND projectName = {projectName: String}
           AND runId IN ({runIds: Array(UInt64)})
@@ -852,7 +838,7 @@ export async function queryRunMetricsBatchByLogName(
           SELECT runId, value, time, step,
             count() OVER (PARTITION BY runId) as total_rows,
             row_number() OVER (PARTITION BY runId ORDER BY step ASC) as rn
-          FROM mlop_metrics
+          FROM mlop_metrics_v2 FINAL
           WHERE tenantId = {tenantId: String}
             AND projectName = {projectName: String}
             AND runId IN ({runIds: Array(UInt64)})
@@ -872,7 +858,7 @@ export async function queryRunMetricsBatchByLogName(
     // No sampling — return all data
     query = `
       SELECT runId, value, ${VALUE_FLAG_SELECT}, time, step
-      FROM mlop_metrics
+      FROM mlop_metrics_v2 FINAL
       WHERE tenantId = {tenantId: String}
         AND projectName = {projectName: String}
         AND runId IN ({runIds: Array(UInt64)})
@@ -886,7 +872,7 @@ export async function queryRunMetricsBatchByLogName(
       WITH numbered AS (
         SELECT runId, value, time, step,
           row_number() OVER (PARTITION BY runId ORDER BY step ASC) as rn
-        FROM mlop_metrics
+        FROM mlop_metrics_v2 FINAL
         WHERE tenantId = {tenantId: String}
           AND projectName = {projectName: String}
           AND runId IN ({runIds: Array(UInt64)})
@@ -904,7 +890,7 @@ export async function queryRunMetricsBatchByLogName(
         SELECT runId, value, time, step,
           count() OVER (PARTITION BY runId) as total_rows,
           row_number() OVER (PARTITION BY runId ORDER BY step ASC) as rn
-        FROM mlop_metrics
+        FROM mlop_metrics_v2 FINAL
         WHERE tenantId = {tenantId: String}
           AND projectName = {projectName: String}
           AND runId IN ({runIds: Array(UInt64)})
@@ -965,10 +951,9 @@ async function queryRunMetricsBucketedByLogNameLttb(
     stepMin?: number;
     stepMax?: number;
     preview?: boolean;
-    dedup?: boolean;
   },
 ): Promise<BucketedMetricDataPoint[]> {
-  const { organizationId, projectName, runId, logName, stepMin, stepMax, preview, dedup } = params;
+  const { organizationId, projectName, runId, logName, stepMin, stepMax, preview } = params;
   const logGroup = getLogGroupName(logName);
   const numBuckets = params.buckets ?? (preview ? PREVIEW_BUCKETS : DEFAULT_BUCKETS);
 
@@ -998,25 +983,15 @@ async function queryRunMetricsBucketedByLogNameLttb(
     queryParams.stepMax = stepMax;
   }
 
-  // When dedup is enabled, add a CTE that deduplicates before bucketing/LTTB.
-  // Use boundsStepRange (bare `step`) inside the CTE, not mainStepRange (`m.step`).
-  const dedupCte = dedup
-    ? `deduped AS (
-        SELECT step, argMax(value, time) AS value, max(time) AS ts
-        FROM mlop_metrics
-        WHERE ${whereClause}${boundsStepRange}
-        GROUP BY step
-      ),`
-    : "";
-  const dataSrc = dedup ? "deduped" : "mlop_metrics";
-  const dataWhere = dedup ? "1 = 1" : `${whereClause}${mainStepRange}`;
-  const timeAgg = dedup ? "min(m.ts)" : "argMin(m.time, m.step)";
-
-  // Non-zoom: use mlop_metric_summaries for bounds. Zoom: raw mlop_metrics.
+  // Non-zoom: bounds from mlop_metric_summaries (≤5 min stale on the right
+  // edge for RUNNING runs). Zoom: bucket width must reflect the zoomed range,
+  // so scan raw v2 directly.
   const boundsCte = stepMin === undefined || stepMax === undefined
     ? `bounds AS (
-        SELECT min(min_step) AS minStep, if(max(max_step) = 0, toUInt64(1000000), max(max_step)) AS maxStep
-        FROM mlop_metric_summaries
+        SELECT
+          ifNull(min(min_step), toUInt64(0)) AS minStep,
+          coalesce(nullIf(max(max_step), 0), toUInt64(1000)) AS maxStep
+        FROM mlop_metric_summaries_v2
         WHERE tenantId = {tenantId: String}
           AND projectName = {projectName: String}
           AND runId = {runId: UInt64}
@@ -1024,13 +999,12 @@ async function queryRunMetricsBucketedByLogNameLttb(
       )`
     : `bounds AS (
         SELECT min(step) AS minStep, max(step) AS maxStep
-        FROM mlop_metrics
+        FROM mlop_metrics_v2
         WHERE ${whereClause}${boundsStepRange}
       )`;
 
   const query = `
     WITH
-      ${dedupCte}
       ${boundsCte},
       params AS (
         SELECT minStep,
@@ -1041,21 +1015,21 @@ async function queryRunMetricsBucketedByLogNameLttb(
         SELECT
           intDiv(m.step - p.minStep, p.bucketWidth) AS bucket,
           min(m.step) AS step,
-          ${timeAgg} AS time,
+          argMin(m.time, m.step) AS time,
           avgIf(m.value, isFinite(m.value)) AS avg_value,
           minIf(m.value, isFinite(m.value)) AS minY,
           maxIf(m.value, isFinite(m.value)) AS maxY,
           toUInt64(count()) AS count,
           ${NF_FLAGS_SQL} AS nonFiniteFlags
-        FROM ${dataSrc} m
+        FROM mlop_metrics_v2 m FINAL
         CROSS JOIN params p
-        WHERE ${dataWhere}
+        WHERE ${whereClause}${mainStepRange}
         GROUP BY bucket
       ),
       lttb_selected AS (
         SELECT lttb({numBuckets: UInt32})(toFloat64(m.step), m.value) AS sampled_points
-        FROM ${dataSrc} m
-        WHERE ${dataWhere} AND isFinite(m.value)
+        FROM mlop_metrics_v2 m FINAL
+        WHERE ${whereClause}${mainStepRange} AND isFinite(m.value)
       ),
       lttb_bucketed AS (
         SELECT
@@ -1101,10 +1075,9 @@ async function queryRunMetricsBatchBucketedByLogNameLttb(
     stepMin?: number;
     stepMax?: number;
     preview?: boolean;
-    dedup?: boolean;
   },
 ): Promise<Record<number, BucketedMetricDataPoint[]>> {
-  const { organizationId, projectName, runIds, logName, stepMin, stepMax, preview, dedup } = params;
+  const { organizationId, projectName, runIds, logName, stepMin, stepMax, preview } = params;
   const logGroup = getLogGroupName(logName);
   const numBuckets = params.buckets ?? (preview ? PREVIEW_BUCKETS : DEFAULT_BUCKETS);
 
@@ -1134,40 +1107,18 @@ async function queryRunMetricsBatchBucketedByLogNameLttb(
     queryParams.stepMax = stepMax;
   }
 
-  // When dedup is enabled, add a CTE that deduplicates before bucketing/LTTB.
-  // Use boundsStepRange (bare `step`) inside the CTE, not mainStepRange (`m.step`).
-  const dedupCte = dedup
-    ? `deduped AS (
-        SELECT runId, step, argMax(value, time) AS value, max(time) AS ts
-        FROM mlop_metrics
-        WHERE ${whereClause}${boundsStepRange}
-        GROUP BY runId, step
-      ),`
-    : "";
-  const dataSrc = dedup ? "deduped" : "mlop_metrics";
-  const dataWhere = dedup ? "1 = 1" : `${whereClause}${mainStepRange}`;
-  const lttbWhere = dedup ? "isFinite(value)" : `${whereClause}${boundsStepRange} AND isFinite(value)`;
-  const timeAgg = dedup ? "min(m.ts)" : "argMin(m.time, m.step)";
-
-  // Non-zoom: use mlop_metric_summaries for bounds. Zoom: raw mlop_metrics.
+  // Non-zoom: bounds from mlop_metric_summaries.
+  // Zoom: raw mlop_metrics_v2 (range comes from caller).
   const boundsCte = stepMin === undefined || stepMax === undefined
-    ? `bounds AS (
-        SELECT min(min_step) AS minStep, if(max(max_step) = 0, toUInt64(1000000), max(max_step)) AS maxStep
-        FROM mlop_metric_summaries
-        WHERE tenantId = {tenantId: String}
-          AND projectName = {projectName: String}
-          AND runId IN ({runIds: Array(UInt64)})
-          AND logName = {logName: String}
-      )`
+    ? `bounds AS (${buildSummaryBoundsBodySingleMetric(" AND logName = {logName: String}")})`
     : `bounds AS (
         SELECT min(step) AS minStep, max(step) AS maxStep
-        FROM mlop_metrics
+        FROM mlop_metrics_v2
         WHERE ${whereClause}${boundsStepRange}
       )`;
 
   const query = `
     WITH
-      ${dedupCte}
       ${boundsCte},
       params AS (
         SELECT minStep,
@@ -1179,23 +1130,23 @@ async function queryRunMetricsBatchBucketedByLogNameLttb(
           m.runId AS runId,
           intDiv(m.step - p.minStep, p.bucketWidth) AS bucket,
           min(m.step) AS step,
-          ${timeAgg} AS time,
+          argMin(m.time, m.step) AS time,
           avgIf(m.value, isFinite(m.value)) AS avg_value,
           minIf(m.value, isFinite(m.value)) AS minY,
           maxIf(m.value, isFinite(m.value)) AS maxY,
           toUInt64(count()) AS count,
           ${NF_FLAGS_SQL} AS nonFiniteFlags
-        FROM ${dataSrc} m
+        FROM mlop_metrics_v2 m FINAL
         CROSS JOIN params p
-        WHERE ${dataWhere}
+        WHERE ${whereClause}${mainStepRange}
         GROUP BY m.runId, bucket
       ),
       lttb_selected AS (
         SELECT
           runId,
           lttb({numBuckets: UInt32})(toFloat64(step), value) AS sampled_points
-        FROM ${dataSrc}
-        WHERE ${lttbWhere}
+        FROM mlop_metrics_v2 FINAL
+        WHERE ${whereClause}${boundsStepRange} AND isFinite(value)
         GROUP BY runId
       ),
       lttb_bucketed AS (
@@ -1258,10 +1209,9 @@ async function queryRunMetricsMultiMetricBatchBucketedLttb(
     stepMin?: number;
     stepMax?: number;
     preview?: boolean;
-    dedup?: boolean;
   },
 ): Promise<Record<string, Record<number, BucketedMetricDataPoint[]>>> {
-  const { organizationId, projectName, runIds, logNames, stepMin, stepMax, preview, dedup } = params;
+  const { organizationId, projectName, runIds, logNames, stepMin, stepMax, preview } = params;
 
   if (runIds.length === 0 || logNames.length === 0) return {};
 
@@ -1283,7 +1233,7 @@ async function queryRunMetricsMultiMetricBatchBucketedLttb(
   `;
 
   let mainStepRange = "";
-  let bareStepRange = "";  // same filter without m. prefix, for use inside dedup CTEs and unaliased queries
+  let bareStepRange = "";  // same filter without m. prefix, for unaliased queries
   const hasStepRange = stepMin !== undefined && stepMax !== undefined;
   if (hasStepRange) {
     mainStepRange = ` AND m.step >= {stepMin: UInt64} AND m.step <= {stepMax: UInt64}`;
@@ -1292,50 +1242,34 @@ async function queryRunMetricsMultiMetricBatchBucketedLttb(
     queryParams.stepMax = stepMax;
   }
 
-  // When dedup is enabled, add a CTE that deduplicates before bucketing/LTTB
-  const dedupCte = dedup
-    ? `deduped AS (
-        SELECT logName, runId, step, argMax(value, time) AS value, max(time) AS ts
-        FROM mlop_metrics
-        WHERE ${whereClause}${bareStepRange}
-        GROUP BY logName, runId, step
-      ),`
-    : "";
-  const dataSrc = dedup ? "deduped" : "mlop_metrics";
-  const dataWhere = dedup ? "1 = 1" : `${whereClause}${mainStepRange}`;
-  const dataWhereNoAlias = dedup ? "1 = 1" : `${whereClause}${bareStepRange}`;
-  const nonZoomDataWhere = dedup ? "1 = 1" : whereClause;
-  const timeAgg = dedup ? "min(m.ts)" : "argMin(m.time, m.step)";
-
   // Build LTTB query with per-metric bucket boundaries
   let query: string;
   if (hasStepRange) {
     // Zoom: compute bucket width from the provided step range
     query = `
       WITH
-        ${dedupCte}
         bucket_agg AS (
           SELECT
             m.logName AS logName,
             m.runId AS runId,
             intDiv(m.step - {stepMin: UInt64}, greatest(toUInt64(1), intDiv({stepMax: UInt64} - {stepMin: UInt64} + 1, toUInt64({numBuckets: UInt32})))) AS bucket,
             any(toUInt64({stepMin: UInt64} + intDiv(m.step - {stepMin: UInt64}, greatest(toUInt64(1), intDiv({stepMax: UInt64} - {stepMin: UInt64} + 1, toUInt64({numBuckets: UInt32})))) * greatest(toUInt64(1), intDiv({stepMax: UInt64} - {stepMin: UInt64} + 1, toUInt64({numBuckets: UInt32}))))) AS step,
-            ${timeAgg} AS time,
+            argMin(m.time, m.step) AS time,
             avgIf(m.value, isFinite(m.value)) AS avg_value,
             minIf(m.value, isFinite(m.value)) AS minY,
             maxIf(m.value, isFinite(m.value)) AS maxY,
             toUInt64(count()) AS count,
             ${NF_FLAGS_SQL} AS nonFiniteFlags
-          FROM ${dataSrc} m
-          WHERE ${dataWhere}
+          FROM mlop_metrics_v2 m FINAL
+          WHERE ${whereClause}${mainStepRange}
           GROUP BY m.logName, m.runId, bucket
         ),
         lttb_selected AS (
           SELECT
             logName, runId,
             lttb({numBuckets: UInt32})(toFloat64(step), value) AS sampled_points
-          FROM ${dataSrc}
-          WHERE ${dataWhereNoAlias} AND isFinite(value)
+          FROM mlop_metrics_v2 FINAL
+          WHERE ${whereClause}${bareStepRange} AND isFinite(value)
           GROUP BY logName, runId
         ),
         lttb_bucketed AS (
@@ -1367,28 +1301,11 @@ async function queryRunMetricsMultiMetricBatchBucketedLttb(
       ORDER BY ba.logName, ba.runId, ba.bucket ASC
     `;
   } else {
-    // Non-zoom: per-metric bounds CTE
-    const nonZoomDedupCte = dedup
-      ? `deduped AS (
-          SELECT logName, runId, step, argMax(value, time) AS value, max(time) AS ts
-          FROM mlop_metrics
-          WHERE ${whereClause}
-          GROUP BY logName, runId, step
-        ),`
-      : "";
-
+    // Non-zoom: per-metric bounds CTE from mlop_metric_summaries (arrayJoin
+    // guarantees a row per requested logName even before first refresh).
     query = `
       WITH
-        ${nonZoomDedupCte}
-        bounds AS (
-          SELECT logName, min(min_step) AS minStep, if(max(max_step) = 0, toUInt64(1000000), max(max_step)) AS maxStep
-          FROM mlop_metric_summaries
-          WHERE tenantId = {tenantId: String}
-            AND projectName = {projectName: String}
-            AND runId IN ({runIds: Array(UInt64)})
-            AND logName IN ({logNames: Array(String)})
-          GROUP BY logName
-        ),
+        bounds AS (${buildSummaryBoundsBodyMultiMetric()}),
         params AS (
           SELECT logName, minStep,
             greatest(toUInt64(1), intDiv(maxStep - minStep + 1, toUInt64({numBuckets: UInt32}))) AS bucketWidth
@@ -1400,23 +1317,23 @@ async function queryRunMetricsMultiMetricBatchBucketedLttb(
             m.runId AS runId,
             intDiv(m.step - p.minStep, p.bucketWidth) AS bucket,
             any(toUInt64(p.minStep + intDiv(m.step - p.minStep, p.bucketWidth) * p.bucketWidth)) AS step,
-            ${timeAgg} AS time,
+            argMin(m.time, m.step) AS time,
             avgIf(m.value, isFinite(m.value)) AS avg_value,
             minIf(m.value, isFinite(m.value)) AS minY,
             maxIf(m.value, isFinite(m.value)) AS maxY,
             toUInt64(count()) AS count,
             ${NF_FLAGS_SQL} AS nonFiniteFlags
-          FROM ${dataSrc} m
+          FROM mlop_metrics_v2 m FINAL
           INNER JOIN params p ON m.logName = p.logName
-          WHERE ${nonZoomDataWhere}
+          WHERE ${whereClause}
           GROUP BY m.logName, m.runId, bucket
         ),
         lttb_selected AS (
           SELECT
             logName, runId,
             lttb({numBuckets: UInt32})(toFloat64(step), value) AS sampled_points
-          FROM ${dataSrc}
-          WHERE ${nonZoomDataWhere} AND isFinite(value)
+          FROM mlop_metrics_v2 FINAL
+          WHERE ${whereClause} AND isFinite(value)
           GROUP BY logName, runId
         ),
         lttb_bucketed AS (

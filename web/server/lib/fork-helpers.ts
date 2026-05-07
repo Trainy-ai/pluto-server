@@ -78,7 +78,7 @@ export async function validateForkStep(
   forkStep: number
 ): Promise<string | null> {
   const result = await ch.query(
-    `SELECT max(step) AS maxStep FROM mlop_metrics
+    `SELECT max(step) AS maxStep FROM mlop_metrics_v2 FINAL
      WHERE tenantId = {tenantId: String}
        AND projectName = {projectName: String}
        AND runId = {runId: UInt64}`,

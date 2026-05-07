@@ -100,7 +100,10 @@ interface DataTableProps {
   onPinImagesToBestStep?: (
     logName: string,
     mode: "argmin" | "argmax" | "argmin-with-image" | "argmax-with-image",
+    toleranceOverride?: number,
   ) => void;
+  bestStepToleranceSteps?: number;
+  onChangeBestStepTolerance?: (next: number) => void;
   listMode: ListMode;
   onListModeChange: (mode: ListMode) => void;
   showInherited: boolean;
@@ -175,6 +178,8 @@ export function DataTable({
   activeChartViewId,
   onToggleColumnPin,
   onPinImagesToBestStep,
+  bestStepToleranceSteps,
+  onChangeBestStepTolerance,
   listMode,
   onListModeChange,
   showInherited,
@@ -291,6 +296,8 @@ export function DataTable({
         pinnedColumnIds,
         onToggleColumnPin,
         onPinImagesToBestStep,
+        bestStepToleranceSteps,
+        onChangeBestStepTolerance,
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
@@ -301,6 +308,7 @@ export function DataTable({
       nameOverrides, onNameRename, onNameSetColor,
       sorting, onSortingChange, activeChartViewId,
       pinnedColumnIds, onToggleColumnPin, onPinImagesToBestStep,
+      bestStepToleranceSteps, onChangeBestStepTolerance,
       colorVersion, // trigger cell re-render when colors first populate
     ],
   );

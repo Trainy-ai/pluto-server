@@ -2364,7 +2364,7 @@ router.openapi(leaderboardRoute, async (c) => {
   // Get total count of runs with this metric (for pagination), scoped to valid PG runs
   const countQuery = `
     SELECT count(DISTINCT runId) as total
-    FROM mlop_metric_summaries
+    FROM mlop_metric_summaries_v2 FINAL
     WHERE tenantId = {tenantId: String}
       AND projectName = {projectName: String}
       AND logName = {logName: String}

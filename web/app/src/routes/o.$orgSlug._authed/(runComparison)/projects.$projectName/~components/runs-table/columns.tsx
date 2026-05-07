@@ -210,7 +210,12 @@ interface ColumnsProps {
   onPinImagesToBestStep?: (
     logName: string,
     mode: "argmin" | "argmax" | "argmin-with-image" | "argmax-with-image",
+    toleranceOverride?: number,
   ) => void;
+  /** Project-wide nearest-snap tolerance for "with image" pin variants */
+  bestStepToleranceSteps?: number;
+  /** Persist a new tolerance value on the project */
+  onChangeBestStepTolerance?: (next: number) => void;
 }
 
 // Shared ref for tracking last selected row ID (for shift-click range selection)
@@ -241,6 +246,8 @@ export const columns = ({
   pinnedColumnIds,
   onToggleColumnPin,
   onPinImagesToBestStep,
+  bestStepToleranceSteps,
+  onChangeBestStepTolerance,
 }: ColumnsProps): ColumnDef<Run>[] => {
   // Helper to get sort direction for a column
   const getSortDirection = (colId: string): "asc" | "desc" | false => {
@@ -476,8 +483,13 @@ export const columns = ({
           isMetric={col.source === "metric"}
           onPinImagesToBestStep={
             col.source === "metric" && onPinImagesToBestStep
-              ? (mode) => onPinImagesToBestStep(col.id, mode)
+              ? (mode, toleranceOverride) =>
+                  onPinImagesToBestStep(col.id, mode, toleranceOverride)
               : undefined
+          }
+          bestStepToleranceSteps={bestStepToleranceSteps}
+          onChangeBestStepTolerance={
+            col.source === "metric" ? onChangeBestStepTolerance : undefined
           }
         />
       ),
