@@ -23,50 +23,69 @@ interface PageLayoutProps {
   disableScroll?: boolean;
 }
 
+const PromoMessage = () => (
+  <span className="text-[11px] opacity-95">
+    Academic users and early-stage startups: email{" "}
+    <a
+      href="mailto:founders@trainy.ai?subject=PRO%20promo%20code"
+      className="underline underline-offset-2 hover:opacity-80"
+    >
+      founders@trainy.ai
+    </a>{" "}
+    for PRO promo codes.
+  </span>
+);
+
 const WarningBar = () => {
   return (
-    <div className="flex h-8 w-full items-center justify-center gap-2 bg-amber-500 font-mono text-sm text-gray-50 dark:bg-amber-900">
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        width="16"
-        height="16"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        className="shrink-0"
-      >
-        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-        <line x1="12" y1="9" x2="12" y2="13" />
-        <line x1="12" y1="17" x2="12.01" y2="17" />
-      </svg>
-      Warning: You are approaching your organization's usage limit
+    <div className="flex w-full flex-col items-center justify-center gap-0.5 bg-amber-500 px-8 py-1.5 font-mono text-sm text-gray-50 dark:bg-amber-900">
+      <div className="flex items-center gap-2">
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="shrink-0"
+        >
+          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+          <line x1="12" y1="9" x2="12" y2="13" />
+          <line x1="12" y1="17" x2="12.01" y2="17" />
+        </svg>
+        Warning: You are approaching your organization's usage limit
+      </div>
+      <PromoMessage />
     </div>
   );
 };
 
 const AtLimitBar = () => {
   return (
-    <div className="flex h-8 w-full items-center justify-center gap-2 bg-red-400 font-mono text-sm text-gray-50 dark:bg-red-900">
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        width="16"
-        height="16"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        className="shrink-0"
-      >
-        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-        <line x1="12" y1="9" x2="12" y2="13" />
-        <line x1="12" y1="17" x2="12.01" y2="17" />
-      </svg>
-      Warning: You have reached your organization's usage limit
+    <div className="flex w-full flex-col items-center justify-center gap-0.5 bg-red-400 px-8 py-1.5 font-mono text-sm text-gray-50 dark:bg-red-900">
+      <div className="flex items-center gap-2">
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="shrink-0"
+        >
+          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+          <line x1="12" y1="9" x2="12" y2="13" />
+          <line x1="12" y1="17" x2="12.01" y2="17" />
+        </svg>
+        Warning: You have reached your organization's usage limit
+      </div>
+      <PromoMessage />
     </div>
   );
 };
