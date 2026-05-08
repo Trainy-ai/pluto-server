@@ -52,3 +52,42 @@ describe('getLogGroupName', () => {
     expect(getLogGroupName('')).toBeUndefined();
   });
 });
+
+/**
+ * Statistics endpoint pushes the logGroup filter into ClickHouse via:
+ *   arrayStringConcat(arraySlice(splitByChar('/', logName), 1, -1), '/')
+ *
+ * This must stay equivalent to getLogGroupName for non-empty logNames,
+ * otherwise `?logGroup=...` returns the wrong rows. This reimplements
+ * the CH expression in TS and checks parity against a representative
+ * set of metric names — including the empty-string group (top-level
+ * metrics like "loss") that motivated the fix.
+ */
+describe('logGroup CH expression parity with getLogGroupName', () => {
+  // arraySlice(arr, 1, -1) in CH returns arr with the last element dropped
+  // (offset 1 = start, length -1 = drop one from the end).
+  function chLogGroupExpr(logName: string): string {
+    const parts = logName.split('/');
+    return parts.slice(0, parts.length - 1).join('/');
+  }
+
+  const cases = [
+    'loss',
+    'train/loss',
+    'val/metric',
+    'val/metric/metric2',
+    'val/metric/metric2/metric3',
+    'optimizer/param_groups/0/lr',
+  ];
+
+  it.each(cases)('matches getLogGroupName for %s', (logName) => {
+    expect(chLogGroupExpr(logName)).toBe(getLogGroupName(logName));
+  });
+
+  it('top-level metrics produce empty-string group (matches ?logGroup=)', () => {
+    // Truthiness-based guards (`if (logGroup)`) skip "" and break this case;
+    // the route must use `logGroup !== undefined` to honor it.
+    expect(chLogGroupExpr('loss')).toBe('');
+    expect(getLogGroupName('loss')).toBe('');
+  });
+});

@@ -1723,6 +1723,118 @@ router.openapi(queryMetricsRoute, async (c) => {
   return c.json({ metrics }, 200);
 });
 
+// ============= Query Raw Metrics =============
+// Reads directly from `mlop_metrics` (no FINAL, no dedup MV). Surfaces
+// every write — including duplicates at the same (run, metric, step)
+// from resumed runs / re-logs / manual corrections — with the row's
+// original `time`. Intended for SDK/CLI audit + cleanup workflows;
+// MCP/Claude analysis paths read the deduped tables instead.
+const RAW_METRICS_MAX_LIMIT = 50_000;
+const queryRawMetricsRoute = createRoute({
+  method: "get",
+  path: "/metrics/raw",
+  tags: ["Runs"],
+  summary: "Query raw (un-deduped) metric writes from a run",
+  description: "Returns every row written to ClickHouse for the given (run, metric), including duplicates from resumes/re-logs, with the original write `time`. Reads from the un-deduped `mlop_metrics` table — no FINAL, no reservoir sampling. Each row carries a `nonFiniteFlags` bitmask (bit0=NaN, bit1=+Inf, bit2=-Inf); when a flag is set, `value` is `0` and the flag is the source of truth. Use `/metrics` for analysis or chart rendering — this endpoint is for audit and cleanup.",
+  security: [{ bearerAuth: [] }],
+  request: {
+    query: z.object({
+      runId: z.coerce.number().openapi({ description: "Numeric run ID" }),
+      projectName: z.string().openapi({ description: "Project name" }),
+      logName: z.string().openapi({ description: "Metric name (e.g., train/loss). Required — scoping every raw scan to a single metric keeps payloads bounded." }),
+      stepMin: z.coerce.number().int().min(0).optional().openapi({ description: "Minimum step number (inclusive)." }),
+      stepMax: z.coerce.number().int().min(0).optional().openapi({ description: "Maximum step number (inclusive)." }),
+      limit: z.coerce.number().int().min(1).max(RAW_METRICS_MAX_LIMIT).default(RAW_METRICS_MAX_LIMIT).openapi({ description: `Maximum rows to return (default and max: ${RAW_METRICS_MAX_LIMIT}). Page by narrowing stepMin/stepMax when more is needed.` }),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Raw metric rows",
+      content: {
+        "application/json": {
+          schema: z.object({
+            rows: z.array(z.object({
+              logGroup: z.string(),
+              step: z.number(),
+              time: z.string().openapi({ description: "Server-side write timestamp (ClickHouse DateTime64(3))." }),
+              value: z.number(),
+              nonFiniteFlags: z.number().openapi({ description: "Bitmask: bit0=NaN, bit1=+Inf, bit2=-Inf. When non-zero, `value` is 0 and the flag is the source of truth." }),
+            })),
+            truncated: z.boolean().openapi({ description: "True when the row count hit `limit` and more rows likely exist — narrow stepMin/stepMax to page." }),
+          }).openapi("QueryRawMetricsResponse"),
+        },
+      },
+    },
+  },
+});
+
+router.use(queryRawMetricsRoute.path, withApiKey);
+router.openapi(queryRawMetricsRoute, async (c) => {
+  const apiKey = c.get("apiKey");
+  const { runId, projectName, logName, stepMin, stepMax, limit } = c.req.valid("query");
+
+  const queryParams: Record<string, unknown> = {
+    tenantId: apiKey.organization.id,
+    projectName,
+    runId,
+    logName,
+    limit,
+  };
+
+  let whereClause = `
+    tenantId = {tenantId: String}
+    AND projectName = {projectName: String}
+    AND runId = {runId: UInt64}
+    AND logName = {logName: String}
+  `;
+  if (stepMin !== undefined) {
+    whereClause += ` AND step >= {stepMin: UInt64}`;
+    queryParams.stepMin = stepMin;
+  }
+  if (stepMax !== undefined) {
+    whereClause += ` AND step <= {stepMax: UInt64}`;
+    queryParams.stepMax = stepMax;
+  }
+
+  // Per-row nonFiniteFlags bitmask. ClickHouse JSON serializes NaN/Inf
+  // as null, so the flag is the only reliable signal of non-finiteness.
+  const query = `
+    SELECT
+      logGroup,
+      step,
+      time,
+      value,
+      toUInt8(
+        if(isNaN(value), 1, 0)
+        + if(isInfinite(value) AND value > 0, 2, 0)
+        + if(isInfinite(value) AND value < 0, 4, 0)
+      ) AS nonFiniteFlags
+    FROM mlop_metrics
+    WHERE ${whereClause}
+    ORDER BY step ASC, time ASC
+    LIMIT {limit: UInt32}
+  `;
+
+  const result = await clickhouse.query(query, queryParams);
+  const rawRows = (await result.json()) as Array<{
+    logGroup: string;
+    step: string;
+    time: string;
+    value: number | null;
+    nonFiniteFlags: number;
+  }>;
+
+  const rows = rawRows.map((r) => ({
+    logGroup: r.logGroup,
+    step: Number(r.step),
+    time: r.time,
+    value: r.value ?? 0,
+    nonFiniteFlags: Number(r.nonFiniteFlags) || 0,
+  }));
+
+  return c.json({ rows, truncated: rows.length === limit }, 200);
+});
+
 // ============= Get Files =============
 const getFilesRoute = createRoute({
   method: "get",
@@ -1830,7 +1942,7 @@ const getStatisticsRoute = createRoute({
   path: "/statistics",
   tags: ["Runs"],
   summary: "Get statistics for a run's metrics",
-  description: "Computes statistics (min, max, mean, stddev) and detects anomalies for metrics in a run. Useful for quick analysis without downloading all data points.",
+  description: "Returns per-metric aggregates (count, min, max, mean, stddev, last) read from the pre-computed summaries table. Raw, no editorializing — interpretation is the caller's job.",
   security: [{ bearerAuth: [] }],
   request: {
     query: z.object({
@@ -1858,14 +1970,7 @@ const getStatisticsRoute = createRoute({
               max: z.number(),
               mean: z.number(),
               stddev: z.number(),
-              first: z.object({ step: z.number(), value: z.number() }),
               last: z.object({ step: z.number(), value: z.number() }),
-              anomalies: z.array(z.object({
-                step: z.number(),
-                value: z.number(),
-                type: z.enum(["spike", "drop", "plateau"]),
-                description: z.string(),
-              })),
             })),
           }).openapi("GetStatisticsResponse"),
         },
@@ -1898,122 +2003,76 @@ router.openapi(getStatisticsRoute, async (c) => {
     return c.json({ error: "Run not found" }, 404);
   }
 
-  // Query for statistics using ClickHouse aggregation with parameterized queries
-  const queryParams: Record<string, unknown> = {
+  // Aggregate stats come from the pre-computed summaries (dedup-correct,
+  // far cheaper than scanning raw points). Variance is derived from
+  // sum_sq/count/sum the same way mlop_metric_summaries_v2 callers do.
+  // Summaries don't store logGroup, so the filter is pushed into the
+  // query as a string expression on logName — equivalent to
+  // getLogGroupName — to keep filtering in front of LIMIT 100.
+  const summariesParams: Record<string, unknown> = {
     tenantId: apiKey.organization.id,
     projectName,
     runId,
   };
-
-  let whereClause = `
+  let summariesFilter = `
     tenantId = {tenantId: String}
     AND projectName = {projectName: String}
     AND runId = {runId: UInt64}
   `;
-
   if (logName) {
-    whereClause += ` AND logName = {logName: String}`;
-    queryParams.logName = logName;
+    summariesFilter += ` AND logName = {logName: String}`;
+    summariesParams.logName = logName;
   }
-  if (logGroup) {
-    whereClause += ` AND logGroup = {logGroup: String}`;
-    queryParams.logGroup = logGroup;
+  // `!== undefined` (not truthiness) so `?logGroup=` filters top-level
+  // metrics (those with no `/`, whose group is the empty string).
+  if (logGroup !== undefined) {
+    summariesFilter += ` AND arrayStringConcat(arraySlice(splitByChar('/', logName), 1, -1), '/') = {logGroup: String}`;
+    summariesParams.logGroup = logGroup;
   }
 
-  const statsQuery = `
+  const summariesQuery = `
     SELECT
       logName,
-      logGroup,
-      count() as count,
-      min(value) as min_val,
-      max(value) as max_val,
-      avg(value) as mean_val,
-      stddevPop(value) as stddev_val,
-      argMin(value, step) as first_value,
-      argMin(step, step) as first_step,
-      argMax(value, step) as last_value,
-      argMax(step, step) as last_step
-    FROM mlop_metrics
-    WHERE ${whereClause}
-    GROUP BY logName, logGroup
+      sum(count_value) AS count,
+      min(min_value) AS min_val,
+      max(max_value) AS max_val,
+      sum(sum_value) / sum(count_value) AS mean_val,
+      sqrt(greatest(
+        (sum(sum_sq_value) / sum(count_value))
+          - pow(sum(sum_value) / sum(count_value), 2),
+        0
+      )) AS stddev_val,
+      argMaxMerge(last_value) AS last_value,
+      max(max_step) AS last_step
+    FROM mlop_metric_summaries_v2 FINAL
+    WHERE ${summariesFilter}
+    GROUP BY logName
     ORDER BY logName
     LIMIT 100
   `;
 
-  const statsResult = await clickhouse.query(statsQuery, queryParams);
-  const statsData = (await statsResult.json()) as Array<{
+  const summariesResult = await clickhouse.query(summariesQuery, summariesParams);
+  const summariesData = (await summariesResult.json()) as Array<{
     logName: string;
-    logGroup: string;
     count: string;
     min_val: number;
     max_val: number;
     mean_val: number;
     stddev_val: number;
-    first_value: number;
-    first_step: string;
     last_value: number;
     last_step: string;
   }>;
 
-  // Detect anomalies for each metric
-  const metricsWithAnomalies = await Promise.all(
-    statsData.map(async (stat) => {
-      const anomalies: Array<{ step: number; value: number; type: "spike" | "drop" | "plateau"; description: string }> = [];
-
-      // Query for potential anomalies (values > 2 stddev from mean)
-      if (Number(stat.count) > 10 && stat.stddev_val > 0) {
-        const threshold = stat.mean_val + 2 * stat.stddev_val;
-        const lowerThreshold = stat.mean_val - 2 * stat.stddev_val;
-
-        const anomalyQuery = `
-          SELECT step, value
-          FROM mlop_metrics
-          WHERE tenantId = {tenantId: String}
-            AND projectName = {projectName: String}
-            AND runId = {runId: UInt64}
-            AND logName = {logName: String}
-            AND (value > {threshold: Float64} OR value < {lowerThreshold: Float64})
-          ORDER BY step
-          LIMIT 10
-        `;
-
-        const anomalyResult = await clickhouse.query(anomalyQuery, {
-          tenantId: apiKey.organization.id,
-          projectName,
-          runId,
-          logName: stat.logName,
-          threshold,
-          lowerThreshold,
-        });
-        const anomalyData = (await anomalyResult.json()) as Array<{ step: string; value: number }>;
-
-        for (const a of anomalyData) {
-          const isSpike = a.value > threshold;
-          anomalies.push({
-            step: Number(a.step),
-            value: a.value,
-            type: isSpike ? "spike" : "drop",
-            description: isSpike
-              ? `Value ${a.value.toFixed(4)} is ${((a.value - stat.mean_val) / stat.stddev_val).toFixed(1)} stddev above mean`
-              : `Value ${a.value.toFixed(4)} is ${((stat.mean_val - a.value) / stat.stddev_val).toFixed(1)} stddev below mean`,
-          });
-        }
-      }
-
-      return {
-        logName: stat.logName,
-        logGroup: stat.logGroup,
-        count: Number(stat.count),
-        min: stat.min_val,
-        max: stat.max_val,
-        mean: stat.mean_val,
-        stddev: stat.stddev_val,
-        first: { step: Number(stat.first_step), value: stat.first_value },
-        last: { step: Number(stat.last_step), value: stat.last_value },
-        anomalies,
-      };
-    })
-  );
+  const metrics = summariesData.map((stat) => ({
+    logName: stat.logName,
+    logGroup: getLogGroupName(stat.logName) ?? "",
+    count: Number(stat.count),
+    min: stat.min_val,
+    max: stat.max_val,
+    mean: stat.mean_val,
+    stddev: stat.stddev_val,
+    last: { step: Number(stat.last_step), value: stat.last_value },
+  }));
 
   const runUrl = `${env.BETTER_AUTH_URL}/o/${apiKey.organization.slug}/projects/${encodeURIComponent(projectName)}/${sqidEncode(runId)}`;
 
@@ -2022,7 +2081,7 @@ router.openapi(getStatisticsRoute, async (c) => {
     runName: run.name,
     projectName,
     url: runUrl,
-    metrics: metricsWithAnomalies,
+    metrics,
   }, 200);
 });
 
@@ -2032,7 +2091,7 @@ const compareRunsRoute = createRoute({
   path: "/compare",
   tags: ["Runs"],
   summary: "Compare metrics across multiple runs",
-  description: "Compares statistics for a specific metric across multiple runs. Returns min/max/mean/final values and identifies the best performing run.",
+  description: "Returns per-run aggregates (count, min, max, mean, final) for a single metric across multiple runs, read from the pre-computed summaries table. Raw, no editorializing — interpretation is the caller's job.",
   security: [{ bearerAuth: [] }],
   request: {
     query: z.object({
@@ -2062,17 +2121,8 @@ const compareRunsRoute = createRoute({
                 max: z.number(),
                 mean: z.number(),
                 final: z.number().openapi({ description: "Final value (at last step)" }),
-                improvement: z.number().openapi({ description: "Percent change from first to last value" }),
               }).nullable(),
             })),
-            summary: z.object({
-              bestRun: z.object({
-                runId: z.number(),
-                runName: z.string(),
-                reason: z.string(),
-              }).nullable(),
-              recommendation: z.string(),
-            }),
           }).openapi("CompareRunsResponse"),
         },
       },
@@ -2111,103 +2161,84 @@ router.openapi(compareRunsRoute, async (c) => {
     select: { id: true, name: true, status: true, config: true },
   });
 
-  // Query stats for each run using parameterized queries
-  const runStats = await Promise.all(
-    runs.map(async (run) => {
-      const statsQuery = `
-        SELECT
-          count() as count,
-          min(value) as min_val,
-          max(value) as max_val,
-          avg(value) as mean_val,
-          argMin(value, step) as first_value,
-          argMax(value, step) as last_value
-        FROM mlop_metrics
-        WHERE tenantId = {tenantId: String}
-          AND projectName = {projectName: String}
-          AND runId = {runId: UInt64}
-          AND logName = {logName: String}
-      `;
+  // Aggregate stats come from the pre-computed summaries (one row per
+  // run/metric, dedup-correct). Batched into a single query for all
+  // runs instead of N round-trips.
+  const runIdNumbers = runs.map((r) => Number(r.id));
 
-      const result = await clickhouse.query(statsQuery, {
-        tenantId: apiKey.organization.id,
-        projectName,
-        runId: run.id,
-        logName,
+  const summariesByRunId = new Map<
+    number,
+    {
+      count: number;
+      min: number;
+      max: number;
+      mean: number;
+      last: number;
+    }
+  >();
+
+  if (runIdNumbers.length > 0) {
+    const summariesQuery = `
+      SELECT
+        runId,
+        sum(count_value) AS count,
+        min(min_value) AS min_val,
+        max(max_value) AS max_val,
+        sum(sum_value) / sum(count_value) AS mean_val,
+        argMaxMerge(last_value) AS last_value
+      FROM mlop_metric_summaries_v2 FINAL
+      WHERE tenantId = {tenantId: String}
+        AND projectName = {projectName: String}
+        AND logName = {logName: String}
+        AND runId IN ({runIds: Array(UInt64)})
+      GROUP BY runId
+    `;
+    const summariesResult = await clickhouse.query(summariesQuery, {
+      tenantId: apiKey.organization.id,
+      projectName,
+      logName,
+      runIds: runIdNumbers,
+    });
+    const summariesRows = (await summariesResult.json()) as Array<{
+      runId: string;
+      count: string;
+      min_val: number;
+      max_val: number;
+      mean_val: number;
+      last_value: number;
+    }>;
+    for (const row of summariesRows) {
+      summariesByRunId.set(Number(row.runId), {
+        count: Number(row.count),
+        min: row.min_val,
+        max: row.max_val,
+        mean: row.mean_val,
+        last: row.last_value,
       });
-      const data = (await result.json()) as Array<{
-        count: string;
-        min_val: number;
-        max_val: number;
-        mean_val: number;
-        first_value: number;
-        last_value: number;
-      }>;
-
-      const stat = data[0];
-      const count = Number(stat?.count || 0);
-
-      return {
-        runId: Number(run.id),
-        runName: run.name,
-        url: `${env.BETTER_AUTH_URL}/o/${apiKey.organization.slug}/projects/${encodeURIComponent(projectName)}/${sqidEncode(Number(run.id))}`,
-        status: run.status,
-        config: run.config,
-        stats: count > 0
-          ? {
-              count,
-              min: stat.min_val,
-              max: stat.max_val,
-              mean: stat.mean_val,
-              final: stat.last_value,
-              improvement: stat.first_value !== 0
-                ? ((stat.first_value - stat.last_value) / stat.first_value) * 100
-                : 0,
-            }
-          : null,
-      };
-    })
-  );
-
-  // Determine best run (for loss-like metrics, lower is better)
-  const isLossMetric = logName.toLowerCase().includes("loss") || logName.toLowerCase().includes("error");
-  const validRuns = runStats.filter((r) => r.stats !== null);
-
-  let bestRun: { runId: number; runName: string; reason: string } | null = null;
-  if (validRuns.length > 0) {
-    if (isLossMetric) {
-      const best = validRuns.reduce((a, b) =>
-        (a.stats?.final ?? Infinity) < (b.stats?.final ?? Infinity) ? a : b
-      );
-      bestRun = {
-        runId: best.runId,
-        runName: best.runName,
-        reason: `Lowest final ${logName}: ${best.stats?.final.toFixed(4)}`,
-      };
-    } else {
-      const best = validRuns.reduce((a, b) =>
-        (a.stats?.final ?? -Infinity) > (b.stats?.final ?? -Infinity) ? a : b
-      );
-      bestRun = {
-        runId: best.runId,
-        runName: best.runName,
-        reason: `Highest final ${logName}: ${best.stats?.final.toFixed(4)}`,
-      };
     }
   }
 
-  // Generate recommendation
-  let recommendation = "";
-  if (bestRun && validRuns.length > 1) {
-    const bestRunData = validRuns.find((r) => r.runId === bestRun!.runId);
-    if (bestRunData?.stats?.improvement) {
-      recommendation = `${bestRun.runName} achieved ${Math.abs(bestRunData.stats.improvement).toFixed(1)}% ${
-        bestRunData.stats.improvement > 0 ? "improvement" : "degradation"
-      } in ${logName} during training.`;
-    }
-  } else if (validRuns.length === 0) {
-    recommendation = `No data found for metric '${logName}' in the specified runs.`;
-  }
+  const runStats = runs.map((run) => {
+    const numericId = Number(run.id);
+    const stat = summariesByRunId.get(numericId);
+
+    return {
+      runId: numericId,
+      runName: run.name,
+      url: `${env.BETTER_AUTH_URL}/o/${apiKey.organization.slug}/projects/${encodeURIComponent(projectName)}/${sqidEncode(numericId)}`,
+      status: run.status,
+      config: run.config,
+      stats: stat && stat.count > 0
+        ? {
+            count: stat.count,
+            min: stat.min,
+            max: stat.max,
+            mean: stat.mean,
+            final: stat.last,
+          }
+        : null,
+    };
+  });
 
   const runIdsParam = runIds.join(",");
   const comparisonUrl = `${env.BETTER_AUTH_URL}/o/${apiKey.organization.slug}/projects/${encodeURIComponent(projectName)}?runs=${runIdsParam}`;
@@ -2217,10 +2248,6 @@ router.openapi(compareRunsRoute, async (c) => {
     logName,
     comparisonUrl,
     runs: runStats,
-    summary: {
-      bestRun,
-      recommendation,
-    },
   }, 200);
 });
 
