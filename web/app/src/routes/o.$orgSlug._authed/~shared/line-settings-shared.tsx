@@ -79,14 +79,18 @@ export const SettingsSection = ({
   title,
   children,
   description,
+  titleAccessory,
 }: {
   title: string;
   children: React.ReactNode;
   description?: React.ReactNode;
+  /** Optional element rendered next to the title — typically an `<InfoTooltip />`. */
+  titleAccessory?: React.ReactNode;
 }) => (
   <div className="space-y-4 rounded-lg bg-background transition-all">
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-1">
       <h3 className="text-sm font-medium text-primary">{title}</h3>
+      {titleAccessory}
     </div>
     {description && (
       <p className="-mt-2 text-xs text-muted-foreground">{description}</p>

@@ -345,8 +345,17 @@ export function DashboardBuilder({
     setHasChanges(true);
   }, []);
 
-  const addSection = useCallback((name: string, dynamicPattern?: string, dynamicPatternMode?: "search" | "regex") => {
-    setConfig((prev) => configOps.addSection(prev, name, dynamicPattern, dynamicPatternMode));
+  const addSection = useCallback((
+    name: string,
+    dynamicPattern?: string,
+    dynamicPatternMode?: "search" | "regex",
+    dynamicGroupBy?: string[],
+    dynamicGroupPrefixes?: string[],
+    dynamicGroupPrefixRegex?: string,
+  ) => {
+    setConfig((prev) =>
+      configOps.addSection(prev, name, dynamicPattern, dynamicPatternMode, dynamicGroupBy, dynamicGroupPrefixes, dynamicGroupPrefixRegex),
+    );
     setHasChanges(true);
   }, []);
 
@@ -357,8 +366,18 @@ export function DashboardBuilder({
     setHasChanges(true);
   }, []);
 
-  const addChildSection = useCallback((parentId: string, name: string, dynamicPattern?: string, dynamicPatternMode?: "search" | "regex") => {
-    setConfig((prev) => configOps.addChildSection(prev, parentId, name, dynamicPattern, dynamicPatternMode));
+  const addChildSection = useCallback((
+    parentId: string,
+    name: string,
+    dynamicPattern?: string,
+    dynamicPatternMode?: "search" | "regex",
+    dynamicGroupBy?: string[],
+    dynamicGroupPrefixes?: string[],
+    dynamicGroupPrefixRegex?: string,
+  ) => {
+    setConfig((prev) =>
+      configOps.addChildSection(prev, parentId, name, dynamicPattern, dynamicPatternMode, dynamicGroupBy, dynamicGroupPrefixes, dynamicGroupPrefixRegex),
+    );
     setHasChanges(true);
   }, []);
 
@@ -576,6 +595,9 @@ export function DashboardBuilder({
           sectionId={section.id}
           pattern={section.dynamicPattern}
           patternMode={section.dynamicPatternMode}
+          groupBy={section.dynamicGroupBy}
+          groupPrefixes={section.dynamicGroupPrefixes}
+          groupPrefixRegex={section.dynamicGroupPrefixRegex}
           organizationId={organizationId}
           projectName={projectName}
           selectedRunIds={selectedRunIds}
@@ -724,7 +746,7 @@ export function DashboardBuilder({
         onUpdate={(s) => updateSection(section.id, s)}
         onToggleCollapse={() => toggleSectionCollapse(section.id)}
         onDelete={() => deleteSection(section.id)}
-        onAddChildSection={(name, dp, dpm) => addChildSection(section.id, name, dp, dpm)}
+        onAddChildSection={(name, dp, dpm, dgb, dgp, dgpr) => addChildSection(section.id, name, dp, dpm, dgb, dgp, dgpr)}
         organizationId={organizationId}
         projectName={projectName}
         selectedRunIds={selectedRunIds}
@@ -757,7 +779,7 @@ export function DashboardBuilder({
         {isEditing && (
           <div className="flex items-center justify-center gap-2 py-2">
             <AddSectionButton
-              onAddSection={(name, dp, dpm) => addChildSection(section.id, name, dp, dpm)}
+              onAddSection={(name, dp, dpm, dgb, dgp, dgpr) => addChildSection(section.id, name, dp, dpm, dgb, dgp, dgpr)}
               organizationId={organizationId}
               projectName={projectName}
               selectedRunIds={selectedRunIds}

@@ -74,7 +74,10 @@ export function addSection(
   config: DashboardViewConfig,
   name: string,
   dynamicPattern?: string,
-  dynamicPatternMode?: "search" | "regex"
+  dynamicPatternMode?: "search" | "regex",
+  dynamicGroupBy?: string[],
+  dynamicGroupPrefixes?: string[],
+  dynamicGroupPrefixRegex?: string,
 ): DashboardViewConfig {
   const newSection: Section = {
     id: `section-${generateId()}`,
@@ -83,6 +86,13 @@ export function addSection(
     widgets: [],
     dynamicPattern,
     dynamicPatternMode,
+    dynamicGroupBy: dynamicGroupBy && dynamicGroupBy.length > 0 ? dynamicGroupBy : undefined,
+    dynamicGroupPrefixes:
+      dynamicGroupPrefixes && dynamicGroupPrefixes.length > 0 ? dynamicGroupPrefixes : undefined,
+    dynamicGroupPrefixRegex:
+      dynamicGroupPrefixRegex && dynamicGroupPrefixRegex.trim().length > 0
+        ? dynamicGroupPrefixRegex.trim()
+        : undefined,
   };
   return { ...config, sections: [...config.sections, newSection] };
 }
@@ -165,6 +175,9 @@ export function addChildSection(
   name: string,
   dynamicPattern?: string,
   dynamicPatternMode?: "search" | "regex",
+  dynamicGroupBy?: string[],
+  dynamicGroupPrefixes?: string[],
+  dynamicGroupPrefixRegex?: string,
 ): DashboardViewConfig {
   const newChild: Section = {
     id: `section-${generateId()}`,
@@ -173,6 +186,13 @@ export function addChildSection(
     widgets: [],
     dynamicPattern,
     dynamicPatternMode,
+    dynamicGroupBy: dynamicGroupBy && dynamicGroupBy.length > 0 ? dynamicGroupBy : undefined,
+    dynamicGroupPrefixes:
+      dynamicGroupPrefixes && dynamicGroupPrefixes.length > 0 ? dynamicGroupPrefixes : undefined,
+    dynamicGroupPrefixRegex:
+      dynamicGroupPrefixRegex && dynamicGroupPrefixRegex.trim().length > 0
+        ? dynamicGroupPrefixRegex.trim()
+        : undefined,
   };
   return {
     ...config,

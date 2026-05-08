@@ -329,6 +329,233 @@ async function seedNanInfMetrics(
   console.log(`   ✓ Inserted ${rows.length} NaN/Inf metric rows`);
 }
 
+/**
+ * Seeds deeply-nested gradient-norm metrics for testing the dynamic-section
+ * grouping feature. Mirrors what real per-layer training runs produce:
+ *
+ *   gradients/norms/<layer-path>/{min, max, mean, std}
+ *
+ * 5 layer prefixes × 4 stat suffixes = 20 metrics per run. Cheap to seed
+ * (200 datapoints/metric → 4k rows per run), reuses the same backfill
+ * pattern as seedClickHouseMetrics.
+ */
+const NESTED_GRAD_NORM_LAYERS = [
+  'model.encoder.layer_0',
+  'model.encoder.layer_1',
+  'model.encoder.layer_2',
+  'model.decoder.attention',
+  'model.decoder.mlp',
+];
+const NESTED_GRAD_NORM_STATS = ['min', 'max', 'mean', 'std'];
+
+async function seedNestedGradNormMetrics(
+  runs: Array<{ id: bigint; name: string; createdAt: Date }>,
+  tenantId: string,
+  projectName: string,
+): Promise<void> {
+  const clickhouseUrl = process.env.CLICKHOUSE_URL;
+  const clickhouseUser = process.env.CLICKHOUSE_USER || 'default';
+  const clickhousePassword = process.env.CLICKHOUSE_PASSWORD || '';
+  if (!clickhouseUrl) {
+    console.log('   ⚠ CLICKHOUSE_URL not set, skipping nested grad-norm seeding');
+    return;
+  }
+
+  const clickhouse = createClient({
+    url: clickhouseUrl,
+    username: clickhouseUser,
+    password: clickhousePassword,
+  });
+
+  const STEPS = 200;
+  const rows: Record<string, unknown>[] = [];
+
+  for (const run of runs) {
+    const baseTime = run.createdAt.getTime();
+    for (let li = 0; li < NESTED_GRAD_NORM_LAYERS.length; li++) {
+      const layer = NESTED_GRAD_NORM_LAYERS[li];
+      // Per-layer scale so different layers have visibly different magnitudes
+      const layerScale = 0.5 + 0.5 * Math.abs(Math.cos(li * 0.7));
+      for (const stat of NESTED_GRAD_NORM_STATS) {
+        const logName = `gradients/norms/${layer}/${stat}`;
+        for (let step = 0; step < STEPS; step++) {
+          const decay = Math.exp(-2 * (step / STEPS));
+          const noise = (Math.random() - 0.5) * 0.02;
+          const base = 0.05 * layerScale * decay + 0.005;
+          let value: number;
+          switch (stat) {
+            case 'min':  value = Math.max(0, base * 0.05 + noise * 0.2); break;
+            case 'max':  value = base * 4.0 + Math.abs(noise) * 2.0; break;
+            case 'mean': value = base + noise; break;
+            case 'std':  value = base * 0.6 + Math.abs(noise); break;
+            default:     value = base;
+          }
+          rows.push({
+            tenantId,
+            projectName,
+            runId: Number(run.id),
+            logGroup: 'gradients/norms',
+            logName,
+            time: new Date(baseTime + step * 1000).toISOString().replace('T', ' ').replace('Z', ''),
+            step,
+            value,
+          });
+        }
+      }
+    }
+  }
+
+  // Batch insert
+  const BATCH = 50000;
+  for (let i = 0; i < rows.length; i += BATCH) {
+    await clickhouse.insert({
+      table: 'mlop_metrics',
+      values: rows.slice(i, i + BATCH),
+      format: 'JSONEachRow',
+    });
+  }
+
+  // Backfill mlop_metric_summaries for the new metrics so charts have stats.
+  // Scoped to (tenantId, projectName, gradients/norms/% logName)
+  // so we don't redo work for the train/metric_NN summaries.
+  await clickhouse.command({
+    query: `
+      INSERT INTO mlop_metric_summaries
+      SELECT
+        tenantId, projectName, runId, logName,
+        min(value)               AS min_value,
+        max(value)               AS max_value,
+        sum(value)               AS sum_value,
+        toUInt64(count())        AS count_value,
+        argMaxState(value, step) AS last_value,
+        sum(value * value)       AS sum_sq_value,
+        min(step)                AS min_step,
+        max(step)                AS max_step
+      FROM mlop_metrics
+      WHERE tenantId = {tenantId: String}
+        AND projectName = {projectName: String}
+        AND logName LIKE 'gradients/norms/%'
+        AND isFinite(value)
+      GROUP BY tenantId, projectName, runId, logName
+    `,
+    query_params: { tenantId, projectName },
+  });
+
+  await clickhouse.close();
+  console.log(`   ✓ Seeded ${rows.length} nested grad-norm rows across ${runs.length} runs`);
+}
+
+/**
+ * Seeds blah-eval metrics with TWO independently-varying path segments
+ * for testing regex-with-multiple-capture-groups prefix grouping:
+ *
+ *   validation/blah/<horizon>/<variant>/<metric>
+ *
+ * 3 horizons × 2 variants × 3 metrics = 18 metrics per run. Designed so:
+ *   - Regex `validation/blah/(.*?)/(original|smoothed)/` produces 6
+ *     buckets keyed on (horizon, variant), each combining the 3 metrics.
+ *   - Regex `validation/blah/(.*?)/original/` produces 3 buckets
+ *     keyed on horizon, each combining the 3 original-variant metrics
+ *     (smoothed metrics fall through as standalone widgets).
+ *
+ * Prefix `validation/blah/` deliberately avoids the substring "train" so
+ * existing IR-C tests' default "train" metric filter doesn't pick it up.
+ * (Note: "trainy" — our earlier name — contained "train" and broke that.)
+ */
+const BLAH_HORIZONS = ['5T', 'H', 'D'];
+const BLAH_VARIANTS = ['original', 'smoothed'];
+const BLAH_METRICS = ['CRPS', 'MASE', 'MAPE'];
+
+async function seedBlahMetrics(
+  runs: Array<{ id: bigint; name: string; createdAt: Date }>,
+  tenantId: string,
+  projectName: string,
+): Promise<void> {
+  const clickhouseUrl = process.env.CLICKHOUSE_URL;
+  const clickhouseUser = process.env.CLICKHOUSE_USER || 'default';
+  const clickhousePassword = process.env.CLICKHOUSE_PASSWORD || '';
+  if (!clickhouseUrl) {
+    console.log('   ⚠ CLICKHOUSE_URL not set, skipping blah seeding');
+    return;
+  }
+
+  const clickhouse = createClient({
+    url: clickhouseUrl,
+    username: clickhouseUser,
+    password: clickhousePassword,
+  });
+
+  const STEPS = 200;
+  const rows: Record<string, unknown>[] = [];
+
+  for (const run of runs) {
+    const baseTime = run.createdAt.getTime();
+    let curveIdx = 0;
+    for (const horizon of BLAH_HORIZONS) {
+      for (const variant of BLAH_VARIANTS) {
+        for (const metric of BLAH_METRICS) {
+          const logName = `validation/blah/${horizon}/${variant}/${metric}`;
+          // Each (horizon, variant, metric) gets a slightly different curve so
+          // visual debugging in the browser distinguishes series within a bucket.
+          const curveSeed = curveIdx++;
+          for (let step = 0; step < STEPS; step++) {
+            const p = step / STEPS;
+            const startMag = 1.0 + (curveSeed % 5) * 0.3;
+            const baseFloor = 0.05 + (curveSeed % 4) * 0.02;
+            const noise = (Math.random() - 0.5) * 0.04;
+            const value = startMag * Math.exp(-2.5 * p) + baseFloor + noise;
+            rows.push({
+              tenantId,
+              projectName,
+              runId: Number(run.id),
+              logGroup: 'validation/blah',
+              logName,
+              time: new Date(baseTime + step * 1000).toISOString().replace('T', ' ').replace('Z', ''),
+              step,
+              value,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  const BATCH = 50000;
+  for (let i = 0; i < rows.length; i += BATCH) {
+    await clickhouse.insert({
+      table: 'mlop_metrics',
+      values: rows.slice(i, i + BATCH),
+      format: 'JSONEachRow',
+    });
+  }
+
+  await clickhouse.command({
+    query: `
+      INSERT INTO mlop_metric_summaries
+      SELECT
+        tenantId, projectName, runId, logName,
+        min(value)               AS min_value,
+        max(value)               AS max_value,
+        sum(value)               AS sum_value,
+        toUInt64(count())        AS count_value,
+        argMaxState(value, step) AS last_value,
+        sum(value * value)       AS sum_sq_value,
+        min(step)                AS min_step,
+        max(step)                AS max_step
+      FROM mlop_metrics
+      WHERE tenantId = {tenantId: String}
+        AND projectName = {projectName: String}
+        AND logName LIKE 'validation/blah/%'
+        AND isFinite(value)
+      GROUP BY tenantId, projectName, runId, logName
+    `,
+    query_params: { tenantId, projectName },
+  });
+
+  await clickhouse.close();
+  console.log(`   ✓ Seeded ${rows.length} blah eval rows across ${runs.length} runs`);
+}
+
 interface OrgSetupResult {
   org: { id: string; name: string; slug: string; createdAt: Date };
 }
@@ -923,6 +1150,45 @@ async function setupTestData(): Promise<TestData> {
 
       // Insert NaN/Inf metric values via raw SQL
       await seedNanInfMetrics(nanInfRun.id, nanInfRun.createdAt, org.id, project.name);
+    }
+
+    // Seed nested gradient-norm metrics for the a-bulk-run-011..013 runs so
+    // dynamic-section grouping E2E tests can target a realistic per-layer
+    // metric tree (gradients/norms/<layer>/{min,max,mean,std}).
+    const gradNormRuns = createdBulkRuns.filter((r) => r.name.startsWith('a-bulk-run-'));
+    if (gradNormRuns.length > 0) {
+      console.log(`   📝 Registering ${NESTED_GRAD_NORM_LAYERS.length * NESTED_GRAD_NORM_STATS.length} nested grad-norm metrics in run_logs...`);
+      const gradNormLogData = gradNormRuns.flatMap((run) =>
+        NESTED_GRAD_NORM_LAYERS.flatMap((layer) =>
+          NESTED_GRAD_NORM_STATS.map((stat) => ({
+            runId: run.id,
+            logName: `gradients/norms/${layer}/${stat}`,
+            logGroup: 'gradients/norms',
+            logType: 'METRIC' as const,
+          })),
+        ),
+      );
+      await prisma.runLogs.createMany({ data: gradNormLogData, skipDuplicates: true });
+      await seedNestedGradNormMetrics(gradNormRuns, org.id, project.name);
+
+      // Blah eval metrics with TWO independently-varying segments —
+      // exercises regex prefix grouping with multiple capture groups.
+      const blahMetricCount = BLAH_HORIZONS.length * BLAH_VARIANTS.length * BLAH_METRICS.length;
+      console.log(`   📝 Registering ${blahMetricCount} blah eval metrics in run_logs...`);
+      const blahLogData = gradNormRuns.flatMap((run) =>
+        BLAH_HORIZONS.flatMap((horizon) =>
+          BLAH_VARIANTS.flatMap((variant) =>
+            BLAH_METRICS.map((metric) => ({
+              runId: run.id,
+              logName: `validation/blah/${horizon}/${variant}/${metric}`,
+              logGroup: 'validation/blah',
+              logType: 'METRIC' as const,
+            })),
+          ),
+        ),
+      );
+      await prisma.runLogs.createMany({ data: blahLogData, skipDuplicates: true });
+      await seedBlahMetrics(gradNormRuns, org.id, project.name);
     }
   } else {
     console.log(`   ✓ Bulk runs already exist (found needle run)`);
@@ -2498,6 +2764,123 @@ async function setupTestData(): Promise<TestData> {
     },
   });
   console.log('   ✓ Created Dynamic Section Test dashboard view');
+
+  // Two extra dashboard views for grouping E2E (PR #434):
+  // - "Dynamic Section Grouping Test": suffix grouping only, all prefixes eligible
+  // - "Dynamic Section Prefix Allowlist Test": suffix grouping + prefix allowlist
+  const groupingDashboardConfig = {
+    version: 1,
+    sections: [
+      {
+        id: 'section-dynamic-grouping',
+        name: 'Grad Norms (Grouped)',
+        collapsed: false,
+        widgets: [],
+        dynamicPattern: 'gradients/norms/*',
+        dynamicPatternMode: 'search',
+        dynamicGroupBy: ['min', 'max', 'mean'],
+      },
+    ],
+    settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
+  };
+  await prisma.dashboardView.upsert({
+    where: {
+      organizationId_projectId_name: {
+        organizationId: org.id,
+        projectId: project.id,
+        name: 'Dynamic Section Grouping Test',
+      },
+    },
+    update: { config: groupingDashboardConfig },
+    create: {
+      name: 'Dynamic Section Grouping Test',
+      organizationId: org.id,
+      projectId: project.id,
+      createdById: user.id,
+      isDefault: false,
+      config: groupingDashboardConfig,
+    },
+  });
+  console.log('   ✓ Created Dynamic Section Grouping Test dashboard view');
+
+  const allowlistDashboardConfig = {
+    version: 1,
+    sections: [
+      {
+        id: 'section-dynamic-allowlist',
+        name: 'Grad Norms (Allowlist)',
+        collapsed: false,
+        widgets: [],
+        dynamicPattern: 'gradients/norms/*',
+        dynamicPatternMode: 'search',
+        dynamicGroupBy: ['min', 'max', 'mean'],
+        dynamicGroupPrefixes: [
+          'gradients/norms/model.encoder.layer_0',
+          'gradients/norms/model.encoder.layer_1',
+        ],
+      },
+    ],
+    settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
+  };
+  await prisma.dashboardView.upsert({
+    where: {
+      organizationId_projectId_name: {
+        organizationId: org.id,
+        projectId: project.id,
+        name: 'Dynamic Section Prefix Allowlist Test',
+      },
+    },
+    update: { config: allowlistDashboardConfig },
+    create: {
+      name: 'Dynamic Section Prefix Allowlist Test',
+      organizationId: org.id,
+      projectId: project.id,
+      createdById: user.id,
+      isDefault: false,
+      config: allowlistDashboardConfig,
+    },
+  });
+  console.log('   ✓ Created Dynamic Section Prefix Allowlist Test dashboard view');
+
+  // Regex-with-capture-groups grouping. Pattern matches the bitbrains-style
+  // blah eval metrics seeded above; the regex captures (horizon, variant)
+  // so each unique tuple becomes one combined widget bundling the 3 stat metrics.
+  // Expected: 3 horizons × 2 variants = 6 combined widgets, no passthrough.
+  const regexDashboardConfig = {
+    version: 1,
+    sections: [
+      {
+        id: 'section-dynamic-regex',
+        name: 'Blah Eval (Regex)',
+        collapsed: false,
+        widgets: [],
+        dynamicPattern: 'validation/blah/*',
+        dynamicPatternMode: 'search',
+        dynamicGroupBy: ['CRPS', 'MASE', 'MAPE'],
+        dynamicGroupPrefixRegex: 'validation/blah/(.*?)/(original|smoothed)/',
+      },
+    ],
+    settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
+  };
+  await prisma.dashboardView.upsert({
+    where: {
+      organizationId_projectId_name: {
+        organizationId: org.id,
+        projectId: project.id,
+        name: 'Dynamic Section Regex Test',
+      },
+    },
+    update: { config: regexDashboardConfig },
+    create: {
+      name: 'Dynamic Section Regex Test',
+      organizationId: org.id,
+      projectId: project.id,
+      createdById: user.id,
+      isDefault: false,
+      config: regexDashboardConfig,
+    },
+  });
+  console.log('   ✓ Created Dynamic Section Regex Test dashboard view');
 
   // 11. Create "Y-Zoom Widget Test" dashboard view for Y-axis zoom E2E tests
   console.log('\n1️⃣1️⃣  Creating Y-Zoom Widget Test dashboard view...');

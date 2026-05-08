@@ -35,6 +35,8 @@ import { Card } from "@/components/ui/card";
 import {
   useLineSettings,
   DEFAULT_SETTINGS,
+  type ChartResolution,
+  type DownsamplingAlgorithm,
 } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/use-line-settings";
 import { useChartLineWidth } from "@/lib/hooks/use-chart-line-width";
 import type { TooltipInterpolation } from "@/lib/math/interpolation";
@@ -54,6 +56,18 @@ interface LineSettingsProps {
   /** Show "Max Series per Chart" control (only relevant for multi-run comparison) */
   showMaxSeriesCount?: boolean;
 }
+
+const RESOLUTION_LABELS: Record<ChartResolution, string> = {
+  auto: "Auto (screen-fit)",
+  high: "High (500 points)",
+  max: "Max (1,000 points)",
+  ultra: "Ultra (3,000 points)",
+};
+
+const SAMPLING_LABELS: Record<DownsamplingAlgorithm, string> = {
+  avg: "Average (with min/max envelope)",
+  lttb: "LTTB (preserve spikes)",
+};
 
 const LineSettings = ({
   organizationId,
@@ -368,6 +382,44 @@ const LineSettings = ({
               title="Performance"
               description="Settings to improve chart rendering performance"
             >
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <Label
+                    htmlFor="chart-resolution"
+                    className="flex items-center gap-1.5 text-sm"
+                  >
+                    Resolution
+                    <InfoTooltip
+                      title="Chart Resolution"
+                      description="How many points (buckets) the server returns per series. Auto fits ~4 pixels per bucket based on chart size — increase for sharper detail when zoomed in or fullscreened. Higher resolutions transfer more data and take longer to render."
+                    />
+                  </Label>
+                  <span className="rounded bg-muted px-2 py-0.5 text-sm font-medium">
+                    {RESOLUTION_LABELS[settings.chartResolution]}
+                  </span>
+                </div>
+                <Select
+                  value={settings.chartResolution}
+                  onValueChange={(value) =>
+                    updateSettings("chartResolution", value as ChartResolution)
+                  }
+                >
+                  <SelectTrigger
+                    id="chart-resolution"
+                    className="h-9 rounded-md border border-input text-sm"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="rounded-md border border-input">
+                    {Object.entries(RESOLUTION_LABELS).map(([value, label]) => (
+                      <SelectItem key={value} value={value}>
+                        {label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
               {showMaxSeriesCount && (
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
@@ -456,49 +508,71 @@ const LineSettings = ({
             </SettingsSection>
 
             <SettingsSection
+              title="Sampling"
+              description="How each bucket's representative point is chosen when the server downsamples raw metrics for display"
+              titleAccessory={
+                <InfoTooltip
+                  title="Downsampling Algorithm"
+                  description="Average computes mean(value) per bucket plus a min/max envelope — best for smooth trends. LTTB (Largest Triangle Three Buckets) selects real data points that preserve curve shape — best when sharp spikes matter (gradient norms, learning rate steps)."
+                />
+              }
+            >
+              <Select
+                value={settings.downsamplingAlgorithm ?? "avg"}
+                onValueChange={(value) =>
+                  updateSettings("downsamplingAlgorithm", value as DownsamplingAlgorithm)
+                }
+              >
+                <SelectTrigger
+                  id="downsampling-algorithm"
+                  className="h-9 rounded-md border border-input text-sm"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="rounded-md border border-input">
+                  {Object.entries(SAMPLING_LABELS).map(([value, label]) => (
+                    <SelectItem key={value} value={value}>
+                      {label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </SettingsSection>
+
+            <SettingsSection
               title="Tooltip Interpolation"
               description="Fill in missing tooltip values when comparing runs with different logging frequencies"
+              titleAccessory={
+                <InfoTooltip
+                  title="Tooltip Interpolation"
+                  description="When comparing experiments that log at different step frequencies, the tooltip normally only shows values where steps match exactly. Interpolation fills in the gaps: Linear interpolates between neighboring points, Last Value uses the most recent known value."
+                />
+              }
             >
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Label
-                      htmlFor="tooltip-interpolation"
-                      className="flex items-center gap-1.5 text-sm"
-                    >
-                      Mode
-                      <InfoTooltip
-                        title="Tooltip Interpolation"
-                        description="When comparing experiments that log at different step frequencies, the tooltip normally only shows values where steps match exactly. Interpolation fills in the gaps: Linear interpolates between neighboring points, Last Value uses the most recent known value."
-                      />
-                    </Label>
-                  </div>
-                </div>
-                <Select
-                  value={settings.tooltipInterpolation}
-                  onValueChange={(value) =>
-                    updateSettings("tooltipInterpolation", value as TooltipInterpolation)
-                  }
+              <Select
+                value={settings.tooltipInterpolation}
+                onValueChange={(value) =>
+                  updateSettings("tooltipInterpolation", value as TooltipInterpolation)
+                }
+              >
+                <SelectTrigger
+                  id="tooltip-interpolation"
+                  className="h-9 rounded-md border border-input text-sm"
                 >
-                  <SelectTrigger
-                    id="tooltip-interpolation"
-                    className="h-9 rounded-md border border-input text-sm"
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="rounded-md border border-input">
-                    <SelectItem value="none" className="text-sm">
-                      None (exact matches only)
-                    </SelectItem>
-                    <SelectItem value="linear" className="text-sm">
-                      Linear interpolation
-                    </SelectItem>
-                    <SelectItem value="last" className="text-sm">
-                      Last known value
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="rounded-md border border-input">
+                  <SelectItem value="none" className="text-sm">
+                    None (exact matches only)
+                  </SelectItem>
+                  <SelectItem value="linear" className="text-sm">
+                    Linear interpolation
+                  </SelectItem>
+                  <SelectItem value="last" className="text-sm">
+                    Last known value
+                  </SelectItem>
+                </SelectContent>
+              </Select>
             </SettingsSection>
 
             <SettingsSection

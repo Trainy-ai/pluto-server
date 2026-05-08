@@ -119,6 +119,18 @@ export interface Section {
   widgets: Widget[];
   dynamicPattern?: string;
   dynamicPatternMode?: "search" | "regex";
+  // Suffixes that combine into one widget per shared prefix. Loose: metrics
+  // whose final segment isn't in this list still appear as standalone widgets.
+  dynamicGroupBy?: string[];
+  // Optional prefix allowlist. If set, only metrics whose prefix is in the
+  // list participate in combined-widget generation; metrics with other
+  // prefixes still render as standalone widgets. Empty/unset = all participate.
+  dynamicGroupPrefixes?: string[];
+  // Optional regex applied to each metric path. When set, REPLACES the
+  // literal prefix-allowlist mode (regex wins). Capture-group tuples define
+  // buckets; metrics with the same captured tuple combine into one widget.
+  // Zero captures = match-anything filter → one big combined widget.
+  dynamicGroupPrefixRegex?: string;
   children?: Section[];
 }
 

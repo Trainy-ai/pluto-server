@@ -1750,6 +1750,219 @@ describe('SDK API Endpoints (with API Key)', () => {
       // Cleanup
       await makeTrpcRequest('dashboardViews.delete', { viewId }, { 'Cookie': sessionCookie }, 'POST');
     });
+
+    it('Test 15.8: Dynamic grouping fields roundtrip (dynamicGroupBy + dynamicGroupPrefixes)', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+      const config = {
+        version: 1,
+        sections: [{
+          id: 'section-grouping',
+          name: 'Grouping Test',
+          collapsed: false,
+          widgets: [],
+          dynamicPattern: 'training/gradient/norms/*',
+          dynamicPatternMode: 'search',
+          dynamicGroupBy: ['min', 'max', 'mean'],
+          dynamicGroupPrefixes: [
+            'training/gradient/norms/encoder.layer_0',
+            'training/gradient/norms/encoder.layer_1',
+          ],
+        }],
+        settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
+      };
+      const createRes = await makeTrpcRequest('dashboardViews.create', {
+        projectName: TEST_PROJECT_NAME,
+        name: `Grouping Roundtrip ${Date.now()}`,
+        config,
+      }, { 'Cookie': sessionCookie }, 'POST');
+      expect(createRes.status).toBe(200);
+      const viewId = (await createRes.json()).result?.data?.id;
+      expect(viewId).toBeDefined();
+
+      // Read back and assert grouping fields survived
+      const getRes = await makeTrpcRequest('dashboardViews.get', { viewId }, { 'Cookie': sessionCookie }, 'GET');
+      expect(getRes.status).toBe(200);
+      const section = (await getRes.json()).result?.data?.config?.sections?.[0];
+      expect(section?.dynamicPattern).toBe('training/gradient/norms/*');
+      expect(section?.dynamicGroupBy).toEqual(['min', 'max', 'mean']);
+      expect(section?.dynamicGroupPrefixes).toEqual([
+        'training/gradient/norms/encoder.layer_0',
+        'training/gradient/norms/encoder.layer_1',
+      ]);
+
+      await makeTrpcRequest('dashboardViews.delete', { viewId }, { 'Cookie': sessionCookie }, 'POST');
+    });
+
+    it('Test 15.9: Backward compat — section without grouping fields loads cleanly', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+      // Old-shape dynamic section (no grouping fields at all). This is what
+      // every existing saved dashboard looks like.
+      const config = {
+        version: 1,
+        sections: [{
+          id: 'section-legacy',
+          name: 'Legacy Dynamic',
+          collapsed: false,
+          widgets: [],
+          dynamicPattern: 'train/*',
+          dynamicPatternMode: 'search',
+        }],
+        settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
+      };
+      const createRes = await makeTrpcRequest('dashboardViews.create', {
+        projectName: TEST_PROJECT_NAME,
+        name: `Legacy Compat ${Date.now()}`,
+        config,
+      }, { 'Cookie': sessionCookie }, 'POST');
+      expect(createRes.status).toBe(200);
+      const viewId = (await createRes.json()).result?.data?.id;
+
+      const getRes = await makeTrpcRequest('dashboardViews.get', { viewId }, { 'Cookie': sessionCookie }, 'GET');
+      expect(getRes.status).toBe(200);
+      const section = (await getRes.json()).result?.data?.config?.sections?.[0];
+      expect(section?.dynamicPattern).toBe('train/*');
+      // Grouping fields absent or undefined — both are valid for backward compat
+      expect(section?.dynamicGroupBy ?? undefined).toBeUndefined();
+      expect(section?.dynamicGroupPrefixes ?? undefined).toBeUndefined();
+
+      await makeTrpcRequest('dashboardViews.delete', { viewId }, { 'Cookie': sessionCookie }, 'POST');
+    });
+
+    it('Test 15.10: Unknown section keys are stripped (Zod strip behavior)', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+      // Send a dashboard with a bogus extra section field. Zod's default
+      // .strip() mode should drop it — important for forward compat where a
+      // newer frontend writes a field the current backend doesn't know about.
+      const config = {
+        version: 1,
+        sections: [{
+          id: 'section-strip',
+          name: 'Strip Test',
+          collapsed: false,
+          widgets: [],
+          dynamicPattern: 'train/*',
+          dynamicPatternMode: 'search',
+          dynamicGroupBy: ['min'],
+          // Unknown key — should be dropped on read
+          dynamicGroupSomeFutureField: { foo: 'bar' },
+          someBogusExtra: 42,
+        }],
+        settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
+      };
+      const createRes = await makeTrpcRequest('dashboardViews.create', {
+        projectName: TEST_PROJECT_NAME,
+        name: `Strip Test ${Date.now()}`,
+        config,
+      }, { 'Cookie': sessionCookie }, 'POST');
+      expect(createRes.status).toBe(200);
+      const viewId = (await createRes.json()).result?.data?.id;
+
+      const getRes = await makeTrpcRequest('dashboardViews.get', { viewId }, { 'Cookie': sessionCookie }, 'GET');
+      expect(getRes.status).toBe(200);
+      const section = (await getRes.json()).result?.data?.config?.sections?.[0];
+      // Known fields preserved
+      expect(section?.dynamicPattern).toBe('train/*');
+      expect(section?.dynamicGroupBy).toEqual(['min']);
+      // Unknown fields stripped
+      expect(section?.dynamicGroupSomeFutureField).toBeUndefined();
+      expect(section?.someBogusExtra).toBeUndefined();
+
+      await makeTrpcRequest('dashboardViews.delete', { viewId }, { 'Cookie': sessionCookie }, 'POST');
+    });
+
+    it('Test 15.11: dynamicGroupPrefixRegex roundtrips through tRPC', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+      const config = {
+        version: 1,
+        sections: [{
+          id: 'section-regex-grouping',
+          name: 'Regex Grouping',
+          collapsed: false,
+          widgets: [],
+          dynamicPattern: 'validation/*',
+          dynamicPatternMode: 'search',
+          dynamicGroupBy: ['CRPS', 'MASE'],
+          // Capture-group regex — REPLACES the literal allowlist when set.
+          dynamicGroupPrefixRegex: 'validation/bitbrains_fast_storage/(.*?)/original/(.*?)$',
+        }],
+        settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
+      };
+      const createRes = await makeTrpcRequest('dashboardViews.create', {
+        projectName: TEST_PROJECT_NAME,
+        name: `Regex Grouping ${Date.now()}`,
+        config,
+      }, { 'Cookie': sessionCookie }, 'POST');
+      expect(createRes.status).toBe(200);
+      const viewId = (await createRes.json()).result?.data?.id;
+      expect(viewId).toBeDefined();
+
+      const getRes = await makeTrpcRequest('dashboardViews.get', { viewId }, { 'Cookie': sessionCookie }, 'GET');
+      expect(getRes.status).toBe(200);
+      const section = (await getRes.json()).result?.data?.config?.sections?.[0];
+      expect(section?.dynamicPattern).toBe('validation/*');
+      expect(section?.dynamicGroupBy).toEqual(['CRPS', 'MASE']);
+      expect(section?.dynamicGroupPrefixRegex).toBe(
+        'validation/bitbrains_fast_storage/(.*?)/original/(.*?)$',
+      );
+
+      await makeTrpcRequest('dashboardViews.delete', { viewId }, { 'Cookie': sessionCookie }, 'POST');
+    });
+
+    it('Test 15.12: dynamicGroupPrefixes and dynamicGroupPrefixRegex coexist on read (regex wins at runtime)', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+      // The dialog UI saves only one of them (mode-exclusive), but the schema
+      // doesn't enforce mutual exclusion at the storage layer. If a section
+      // ever ends up with BOTH set (e.g. older client, manual edit, or future
+      // schema migration), reads must round-trip both fields cleanly. The
+      // bucketing layer's documented precedence ("regex wins") is covered by
+      // the bucket-metrics unit tests; this just locks the storage shape.
+      const config = {
+        version: 1,
+        sections: [{
+          id: 'section-both',
+          name: 'Both Set',
+          collapsed: false,
+          widgets: [],
+          dynamicPattern: 'training/gradient/norms/*',
+          dynamicPatternMode: 'search',
+          dynamicGroupBy: ['min', 'max', 'mean'],
+          dynamicGroupPrefixes: ['training/gradient/norms/encoder.layer_0'],
+          dynamicGroupPrefixRegex: 'training/gradient/norms/(.*?)/.+$',
+        }],
+        settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
+      };
+      const createRes = await makeTrpcRequest('dashboardViews.create', {
+        projectName: TEST_PROJECT_NAME,
+        name: `Both Set ${Date.now()}`,
+        config,
+      }, { 'Cookie': sessionCookie }, 'POST');
+      expect(createRes.status).toBe(200);
+      const viewId = (await createRes.json()).result?.data?.id;
+
+      const getRes = await makeTrpcRequest('dashboardViews.get', { viewId }, { 'Cookie': sessionCookie }, 'GET');
+      expect(getRes.status).toBe(200);
+      const section = (await getRes.json()).result?.data?.config?.sections?.[0];
+      // Both fields preserved as-stored
+      expect(section?.dynamicGroupPrefixes).toEqual(['training/gradient/norms/encoder.layer_0']);
+      expect(section?.dynamicGroupPrefixRegex).toBe('training/gradient/norms/(.*?)/.+$');
+
+      await makeTrpcRequest('dashboardViews.delete', { viewId }, { 'Cookie': sessionCookie }, 'POST');
+    });
   });
 
   // NOTE: Test Suites 16 and 17 are temporarily disabled until we can properly

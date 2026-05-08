@@ -18,7 +18,10 @@ ENV VITE_ENV=${VITE_ENV}
 ENV NODE_ENV=${NODE_ENV}
 
 COPY . .
-RUN npm install -g pnpm && pnpm i && pnpm build
+# Pin pnpm to the project's packageManager version — pnpm 11+ exits non-zero
+# on ignored build scripts (warning becomes a hard error) which breaks the
+# image build even though the warning is benign for our deps.
+RUN npm install -g pnpm@10.9.0 && pnpm i && pnpm build
 
 FROM nginx:stable-alpine
 

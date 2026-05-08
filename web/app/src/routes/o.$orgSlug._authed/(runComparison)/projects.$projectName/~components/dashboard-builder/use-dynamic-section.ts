@@ -11,8 +11,13 @@ import type {
 } from "../../~types/dashboard-types";
 import { SYNTHETIC_CONSOLE_ENTRIES } from "./console-log-constants";
 import { useLineSettings } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/use-line-settings";
+import { bucketMetricsByPrefix, splitMetricPath } from "./bucket-metrics";
 
 const MAX_DYNAMIC_WIDGETS = 100;
+
+// Re-export pure grouping helpers so the existing import surface stays stable.
+// Unit tests should import from `./bucket-metrics` directly to avoid tRPC.
+export { splitMetricPath, bucketMetricsByPrefix };
 
 /**
  * Hook that resolves a dynamic section pattern into virtual Widget[].
@@ -45,6 +50,9 @@ export function useDynamicSectionWidgets(
   organizationId: string,
   projectName: string,
   selectedRunIds: string[],
+  groupBy: string[] | undefined,
+  groupPrefixes: string[] | undefined,
+  groupPrefixRegex: string | undefined,
 ): { dynamicWidgets: Widget[]; isLoading: boolean } {
   const hasPattern = !!dynamicPattern?.trim();
   const trimmed = dynamicPattern?.trim() ?? "";
@@ -221,7 +229,41 @@ export function useDynamicSectionWidgets(
     // Generate widgets
     const widgets: Widget[] = [];
 
-    for (const logName of filteredMetrics) {
+    // Apply grouping rules: prefix allowlist OR regex + suffix combining.
+    // - groups: combined widgets (one per shared prefix or capture-tuple)
+    // - passthrough: metrics that survive the filter but don't combine (own widget)
+    const { groups, passthrough } = bucketMetricsByPrefix(
+      filteredMetrics,
+      groupBy ?? [],
+      groupPrefixes ?? [],
+      groupPrefixRegex,
+    );
+
+    for (const [, group] of groups) {
+      const sortedMembers = [...group.members].sort((a, b) => a.localeCompare(b));
+      // Title shows the bucket key (prefix or capture-tuple) + the suffixes
+      // bundled inside, e.g. "layers/layer_0 (grad_mean, weight_mean)" or
+      // "5T · CRPS (max, mean, min)" for regex-grouped buckets.
+      const suffixes = sortedMembers.map((m) => splitMetricPath(m).suffix);
+      const title = `${group.title} (${suffixes.join(", ")})`;
+      const config: ChartWidgetConfig = {
+        title,
+        metrics: sortedMembers,
+        xAxis: "step",
+        yAxisScale: "linear",
+        xAxisScale: "linear",
+        aggregation: "LAST",
+        showOriginal: false,
+      };
+      widgets.push({
+        id: `dyn-${sectionId}-group-${group.key}`,
+        type: "chart",
+        config,
+        layout: { x: 0, y: 0, w: 6, h: 4 },
+      });
+    }
+
+    for (const logName of passthrough) {
       const config: ChartWidgetConfig = {
         metrics: [logName],
         xAxis: "step",
@@ -253,7 +295,7 @@ export function useDynamicSectionWidgets(
     widgets.sort((a, b) => a.id.localeCompare(b.id));
     return widgets.slice(0, MAX_DYNAMIC_WIDGETS);
   }, [
-    hasPattern, hasRuns, trimmed, isGlob, patternMode, sectionId,
+    hasPattern, hasRuns, trimmed, isGlob, patternMode, sectionId, groupBy, groupPrefixes, groupPrefixRegex,
     initialMetrics.data, initialFiles.data,
     searchMetrics.data, searchFiles.data,
     regexMetrics.data, regexFiles.data,
@@ -287,6 +329,9 @@ export function useDynamicWidgetCount(
   organizationId: string,
   projectName: string,
   selectedRunIds: string[],
+  groupBy: string[] | undefined,
+  groupPrefixes: string[] | undefined,
+  groupPrefixRegex: string | undefined,
 ): { count: number; isLoading: boolean } {
   const hasPattern = !!dynamicPattern?.trim();
   const trimmed = dynamicPattern?.trim() ?? "";
@@ -351,11 +396,11 @@ export function useDynamicWidgetCount(
     if (!hasPattern) return 0;
     if (!hasRuns) return 0;
 
-    let metricCount: number;
+    let metricNames: string[];
     let fileCount: number;
 
     if (patternMode === "regex") {
-      metricCount = regexMetrics.data?.metricNames?.length ?? 0;
+      metricNames = regexMetrics.data?.metricNames ?? [];
       const backendFileCount = regexFiles.data?.files?.length ?? 0;
       let syntheticCount = 0;
       if (trimmed) {
@@ -378,29 +423,138 @@ export function useDynamicWidgetCount(
       for (const f of searchF) fileNames.add(f.logName);
 
       if (!trimmed) {
-        metricCount = mergedMetrics.size;
+        metricNames = [...mergedMetrics];
         fileCount = fileNames.size;
       } else if (isGlob) {
         try {
           const regex = globToRegex(trimmed);
-          metricCount = [...mergedMetrics].filter((m) => regex.test(m)).length;
+          metricNames = [...mergedMetrics].filter((m) => regex.test(m));
           fileCount = [...fileNames].filter((n) => regex.test(n)).length;
         } catch {
           return 0;
         }
       } else {
-        metricCount = fuzzyFilter([...mergedMetrics], trimmed).length;
+        metricNames = fuzzyFilter([...mergedMetrics], trimmed);
         fileCount = fuzzyFilter([...fileNames], trimmed).length;
       }
     }
 
-    return Math.min(metricCount + fileCount, MAX_DYNAMIC_WIDGETS);
+    // Apply grouping: each combined group counts as one widget; passthrough
+    // metrics each count as one widget (own widget).
+    const hasGrouping =
+      (groupBy?.length ?? 0) > 0 ||
+      (groupPrefixes?.length ?? 0) > 0 ||
+      (groupPrefixRegex?.trim().length ?? 0) > 0;
+    let metricWidgetCount: number;
+    if (hasGrouping) {
+      const { groups, passthrough } = bucketMetricsByPrefix(
+        metricNames,
+        groupBy ?? [],
+        groupPrefixes ?? [],
+        groupPrefixRegex,
+      );
+      metricWidgetCount = groups.size + passthrough.length;
+    } else {
+      metricWidgetCount = metricNames.length;
+    }
+
+    return Math.min(metricWidgetCount + fileCount, MAX_DYNAMIC_WIDGETS);
   }, [
-    hasPattern, hasRuns, trimmed, isGlob, patternMode,
+    hasPattern, hasRuns, trimmed, isGlob, patternMode, groupBy, groupPrefixes, groupPrefixRegex,
     initialMetrics.data, initialFiles.data,
     searchMetrics.data, searchFiles.data,
     regexMetrics.data, regexFiles.data,
   ]);
 
   return { count, isLoading };
+}
+
+/**
+ * Resolve a dynamic pattern to its matched metric names. Cache-shared with
+ * useDynamicSectionWidgets so calling this from a dialog while the section
+ * is rendered is essentially free.
+ *
+ * Returned `metricNames` are sorted alphabetically. Files are not included —
+ * they don't participate in prefix/suffix grouping.
+ */
+export function useDynamicMatchedMetrics(
+  dynamicPattern: string | undefined,
+  patternMode: "search" | "regex",
+  organizationId: string,
+  projectName: string,
+  selectedRunIds: string[],
+): { metricNames: string[]; isLoading: boolean } {
+  const hasPattern = !!dynamicPattern?.trim();
+  const trimmed = dynamicPattern?.trim() ?? "";
+  const hasRuns = selectedRunIds.length > 0;
+
+  const isGlob =
+    patternMode === "search" && (trimmed.includes("*") || trimmed.includes("?"));
+  const isRe2Valid = patternMode === "regex" && trimmed ? isValidRe2Regex(trimmed) : true;
+  const backendSearch = isGlob ? trimmed.replace(/[*?]/g, "") : trimmed;
+
+  const initialMetrics = useQuery(
+    trpc.runs.distinctMetricNames.queryOptions(
+      { organizationId, projectName, runIds: selectedRunIds },
+      { enabled: hasPattern && hasRuns && patternMode === "search", staleTime: 60_000 },
+    ),
+  );
+  const searchMetrics = useQuery(
+    trpc.runs.distinctMetricNames.queryOptions(
+      { organizationId, projectName, runIds: selectedRunIds, search: backendSearch },
+      {
+        enabled: hasPattern && hasRuns && patternMode === "search" && backendSearch.length > 0,
+        staleTime: 60_000,
+        placeholderData: (prev) => prev,
+      },
+    ),
+  );
+  const regexMetrics = useQuery(
+    trpc.runs.distinctMetricNames.queryOptions(
+      { organizationId, projectName, runIds: selectedRunIds, regex: trimmed },
+      {
+        enabled: hasPattern && hasRuns && patternMode === "regex" && isRe2Valid,
+        staleTime: 60_000,
+        placeholderData: (prev) => prev,
+      },
+    ),
+  );
+
+  const isLoading =
+    hasPattern &&
+    hasRuns &&
+    ((patternMode === "search" && (initialMetrics.isLoading || searchMetrics.isLoading)) ||
+      (patternMode === "regex" && regexMetrics.isLoading));
+
+  const metricNames = useMemo(() => {
+    if (!hasPattern || !hasRuns) return [];
+
+    let names: string[];
+    if (patternMode === "regex") {
+      names = regexMetrics.data?.metricNames ?? [];
+    } else {
+      const initM = initialMetrics.data?.metricNames ?? [];
+      const searchM = searchMetrics.data?.metricNames ?? [];
+      const merged = Array.from(new Set([...searchM, ...initM]));
+
+      if (!trimmed) {
+        names = merged;
+      } else if (isGlob) {
+        try {
+          const regex = globToRegex(trimmed);
+          names = merged.filter((m) => regex.test(m));
+        } catch {
+          return [];
+        }
+      } else {
+        names = fuzzyFilter(merged, trimmed);
+      }
+    }
+    return names.sort((a, b) => a.localeCompare(b));
+  }, [
+    hasPattern, hasRuns, trimmed, isGlob, patternMode,
+    initialMetrics.data, searchMetrics.data, regexMetrics.data,
+  ]);
+
+  return { metricNames, isLoading };
 }

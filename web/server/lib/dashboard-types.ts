@@ -216,6 +216,25 @@ export const SectionSchema: z.ZodType<Section, z.ZodTypeDef, any> = z.lazy(() =>
     widgets: z.array(WidgetSchema).default([]),
     dynamicPattern: z.string().optional(),
     dynamicPatternMode: z.enum(["search", "regex"]).optional(),
+    // Suffixes (final path segment after last `/`) whose metrics combine into
+    // one widget per shared prefix. e.g. ["min", "max", "mean"] groups
+    // `foo/bar/{min,max,mean}` into a single widget keyed on `foo/bar`.
+    // Metrics whose final segment isn't in this list still appear as their
+    // own standalone widgets (loose semantics — nothing is hidden).
+    dynamicGroupBy: z.array(z.string()).optional(),
+    // Optional prefix allowlist (each entry is a full path before the last `/`).
+    // If set, only metrics whose prefix is in the list participate in
+    // combined-widget generation; metrics with other prefixes still render as
+    // standalone widgets. If empty/unset, all matched prefixes participate.
+    dynamicGroupPrefixes: z.array(z.string()).optional(),
+    // Optional regex applied to each metric path. When set, REPLACES the
+    // literal prefix-allowlist mode (regex wins). Each unique tuple of
+    // capture-group values defines a bucket. A pattern with zero capture
+    // groups treats the regex as a "match anything" filter and bucks all
+    // matching metrics into a single combined widget. Useful when more than
+    // one path segment varies independently (e.g. dataset and stat name in
+    // `validation/<dataset>/original/<stat>`).
+    dynamicGroupPrefixRegex: z.string().optional(),
     children: z.array(z.lazy(() => SectionSchema)).optional(),
   }).superRefine((section, ctx) => {
     // Folders (sections with children) cannot have dynamic patterns
@@ -249,6 +268,9 @@ export interface Section {
   widgets: Widget[];
   dynamicPattern?: string;
   dynamicPatternMode?: "search" | "regex";
+  dynamicGroupBy?: string[];
+  dynamicGroupPrefixes?: string[];
+  dynamicGroupPrefixRegex?: string;
   children?: Section[];
 }
 

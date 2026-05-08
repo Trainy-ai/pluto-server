@@ -133,7 +133,15 @@ export function ChartWidget({
       }).join(", ")
     : metrics.length > 0 ? `${metrics.length} metrics` : "";
   const displayTitle = config.title || chipLabel;
-  const tooltipSubtitle = chipLabel;
+  // When the widget has its own title (e.g. dynamic-section combined widgets
+  // titled `prefix (max, mean, min)`), avoid duplicating the suffix list as
+  // a long metric-names subtitle — just show the count, matching the
+  // static-section convention for many-metric widgets.
+  const tooltipSubtitle = config.title
+    ? metrics.length > 0
+      ? `${metrics.length} metric${metrics.length === 1 ? "" : "s"}`
+      : ""
+    : chipLabel;
 
   if (!metrics || metrics.length === 0) {
     return (
