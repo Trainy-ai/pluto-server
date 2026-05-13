@@ -2,3 +2,5 @@
 packages:
   - 'app'
   - 'server'
+
+minimumReleaseAge: 7440
