@@ -1252,6 +1252,32 @@ describe('SDK API Endpoints (with API Key)', () => {
         expect(data.runs.length).toBe(0);
         expect(data.total).toBe(0);
       });
+
+      it('Test 12.9: Search-only call returns unfiltered matches (Other-matches dropdown contract)', async () => {
+        // Regression guard: the runs-table "Other matches" dropdown
+        // (SearchOtherMatchesDropdown) issues a runs.list call with only
+        // `search` and `limit` — no tags/status/date/field/metric/system
+        // filters. The contract is that this returns ALL runs whose name
+        // or display ID match the search term, ignoring whatever filters
+        // the main table is currently applying.
+        const response = await makeRequest(
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&search=bulk-run-&limit=30`,
+          {
+            headers: {
+              'Authorization': `Bearer ${TEST_API_KEY}`,
+            },
+          }
+        );
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.runs).toBeDefined();
+        expect(Array.isArray(data.runs)).toBe(true);
+        expect(data.runs.length).toBeGreaterThan(0);
+        for (const run of data.runs) {
+          expect(run.name).toMatch(/bulk-run-/);
+        }
+      });
     });
   });
 

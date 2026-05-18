@@ -21,6 +21,10 @@ interface TableToolbarProps {
   searchQuery: string;
   onSearchChange: (query: string) => void;
   onKeyDown: (e: React.KeyboardEvent<HTMLInputElement>) => void;
+  /** Focus on the search input — used to re-open the "Other matches"
+   *  dropdown after a click-outside dismissal. */
+  onSearchFocus?: () => void;
+  searchOtherMatchesDropdown?: React.ReactNode;
   viewMode: ViewMode;
   onViewModeChange: (mode: ViewMode) => void;
   panelLayout: "both" | "list-only" | "graphs-only";
@@ -75,6 +79,8 @@ export function TableToolbar({
   searchQuery,
   onSearchChange,
   onKeyDown,
+  onSearchFocus,
+  searchOtherMatchesDropdown,
   viewMode,
   onViewModeChange,
   panelLayout,
@@ -230,8 +236,15 @@ export function TableToolbar({
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
             onKeyDown={onKeyDown}
+            onFocus={onSearchFocus}
+            // `onFocus` alone misses the post-Esc reopen path: Esc keeps
+            // focus on the input, so clicking back into it doesn't fire
+            // `focus`. `mousedown` fires on every click regardless of
+            // prior focus state — idempotent with onFocus.
+            onMouseDown={onSearchFocus}
             className="pl-8"
           />
+          {searchOtherMatchesDropdown}
         </div>
         <VisibilityOptions
           selectedRunsWithColors={selectedRunsWithColors}

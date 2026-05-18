@@ -1,6 +1,28 @@
-import { describe, it, expect } from "vitest";
-import { getColorForRun } from "../use-selected-runs";
+import { describe, it, expect, beforeAll } from "vitest";
+import { renderHook, act } from "@testing-library/react";
+import { getColorForRun, useSelectedRuns } from "../use-selected-runs";
 import { COLORS } from "@/components/ui/color-picker";
+import type { Run } from "../../~queries/list-runs";
+
+// jsdom doesn't implement matchMedia; stub it out for hooks that use useTheme
+beforeAll(() => {
+  if (typeof window.matchMedia !== "function") {
+    Object.defineProperty(window, "matchMedia", {
+      writable: true,
+      configurable: true,
+      value: (query: string) => ({
+        matches: false,
+        media: query,
+        onchange: null,
+        addListener: () => {},
+        removeListener: () => {},
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        dispatchEvent: () => false,
+      }),
+    });
+  }
+});
 
 describe("useSelectedRuns", () => {
   describe("getColorForRun", () => {
@@ -112,5 +134,82 @@ describe("useSelectedRuns", () => {
       expect(first).toBe(second);
       expect(second).toBe(third);
     });
+  });
+});
+
+function makeRun(id: string, name = `run-${id}`): Run {
+  return {
+    id,
+    name,
+    displayId: `TES-${id}`,
+    status: "COMPLETED",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    tags: [],
+    notes: null,
+    _flatConfig: {},
+    _flatSystemMetadata: {},
+  } as unknown as Run;
+}
+
+describe("handleRunSelection — runFallback parameter", () => {
+  it("2-arg call with id NOT in runs is a no-op (preserves existing behavior)", () => {
+    const runs = [makeRun("A"), makeRun("B")];
+    const { result } = renderHook(() =>
+      useSelectedRuns(runs, "org-1", "proj-1", { urlRunIds: [], urlHiddenIds: [] }),
+    );
+
+    act(() => {
+      result.current.handleRunSelection("C", true);
+    });
+
+    expect(result.current.selectedRunsWithColors["C"]).toBeUndefined();
+  });
+
+  it("3-arg call with id NOT in runs uses runFallback", () => {
+    const runs = [makeRun("A"), makeRun("B")];
+    const fallback = makeRun("C");
+    const { result } = renderHook(() =>
+      useSelectedRuns(runs, "org-1", "proj-1", { urlRunIds: [], urlHiddenIds: [] }),
+    );
+
+    act(() => {
+      result.current.handleRunSelection("C", true, fallback);
+    });
+
+    expect(result.current.selectedRunsWithColors["C"]).toBeDefined();
+    expect(result.current.selectedRunsWithColors["C"].run.id).toBe("C");
+  });
+
+  it("3-arg call with id IN runs uses the version from runs (not fallback)", () => {
+    const liveRun = makeRun("A", "live-name");
+    const staleFallback = makeRun("A", "stale-name");
+    const runs = [liveRun];
+    const { result } = renderHook(() =>
+      useSelectedRuns(runs, "org-1", "proj-1", { urlRunIds: [], urlHiddenIds: [] }),
+    );
+
+    act(() => {
+      result.current.handleRunSelection("A", true, staleFallback);
+    });
+
+    expect(result.current.selectedRunsWithColors["A"].run.name).toBe("live-name");
+  });
+
+  it("deselect ignores runFallback (no lookup needed)", () => {
+    const runs = [makeRun("A")];
+    const { result } = renderHook(() =>
+      useSelectedRuns(runs, "org-1", "proj-1", { urlRunIds: [], urlHiddenIds: [] }),
+    );
+
+    act(() => {
+      result.current.handleRunSelection("A", true);
+    });
+    expect(result.current.selectedRunsWithColors["A"]).toBeDefined();
+
+    act(() => {
+      result.current.handleRunSelection("A", false, makeRun("A"));
+    });
+    expect(result.current.selectedRunsWithColors["A"]).toBeUndefined();
   });
 });

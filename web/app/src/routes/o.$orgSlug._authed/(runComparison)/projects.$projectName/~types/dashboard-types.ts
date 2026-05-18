@@ -162,6 +162,4 @@ export function createEmptyDashboardConfig(): DashboardViewConfig {
 }
 
 // Helper to generate unique IDs
-export function generateId(): string {
-  return crypto.randomUUID();
-}
+export { generateUuid as generateId } from "@/lib/uuid";

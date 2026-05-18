@@ -28,6 +28,7 @@ import { cn } from "@/lib/utils";
 import type { RunFilter, FilterableField, FilterCondition, MetricAggregation } from "@/lib/run-filters";
 import { getOperatorsForType, getDefaultOperator, formatFilterChip } from "@/lib/run-filters";
 import { FilterValueInput } from "./filter-value-input";
+import { generateUuid } from "@/lib/uuid";
 
 const METRIC_AGGREGATIONS: { value: MetricAggregation; label: string }[] = [
   { value: "LAST", label: "Last" },
@@ -204,7 +205,7 @@ export function FilterButton({
       if (!isBetweenBoundsValid(cond.operator, cond.values)) return;
     }
     const filter: RunFilter = {
-      id: crypto.randomUUID(),
+      id: generateUuid(),
       field: selectedField.id,
       source: selectedField.source,
       dataType: selectedField.dataType,
@@ -291,6 +292,7 @@ export function FilterButton({
         <Button
           variant="outline"
           size="sm"
+          data-testid="filter-button"
           className={cn(
             "h-9 gap-1",
             filters.length > 0 && "border-primary"
@@ -301,6 +303,7 @@ export function FilterButton({
           {filters.length > 0 && (
             <Badge
               variant="secondary"
+              data-testid="filter-button-count"
               className="ml-1 rounded-sm px-1 font-normal"
             >
               {filters.length}
@@ -542,6 +545,7 @@ export function FilterButton({
                   <Button
                     variant="ghost"
                     size="sm"
+                    data-testid="filter-popover-clear-all"
                     className="h-7 w-full text-xs"
                     onClick={onClearFilters}
                   >
@@ -652,6 +656,7 @@ export function FilterButton({
                 </Button>
                 <Button
                   size="sm"
+                  data-testid="filter-popover-apply"
                   className="h-7"
                   disabled={!canApply}
                   onClick={handleApply}

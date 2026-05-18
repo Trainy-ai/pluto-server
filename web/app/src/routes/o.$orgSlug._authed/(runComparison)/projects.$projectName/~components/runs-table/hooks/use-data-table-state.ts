@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import {
   getCoreRowModel,
   useReactTable,
@@ -14,6 +14,7 @@ import { computeColumnOrder } from "../lib/pinned-columns";
 import { getCustomColumnValue } from "../columns-utils";
 import { useColumnDrag } from "./use-column-drag";
 import { useColumnResize } from "./use-column-resize";
+import { useLocalStorageBool } from "../../../~hooks/use-local-storage-bool";
 
 interface UseDataTableStateParams {
   runs: Run[];
@@ -30,6 +31,7 @@ interface UseDataTableStateParams {
   orgSlug: string;
   projectName: string;
   listMode?: "experiments" | "runs";
+  showOnlySelected: boolean;
 }
 
 /**
@@ -110,31 +112,6 @@ export function sortPinnedRuns(
   return sortRunsByColumn(runs, sorting, customColumns);
 }
 
-/**
- * Read a boolean from localStorage, defaulting to false on error or missing key.
- */
-function readBoolFromStorage(key: string): boolean {
-  try {
-    return localStorage.getItem(key) === "true";
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Persist a boolean to localStorage (remove key when false to keep storage clean).
- */
-function writeBoolToStorage(key: string, value: boolean): void {
-  try {
-    if (value) {
-      localStorage.setItem(key, "true");
-    } else {
-      localStorage.removeItem(key);
-    }
-  } catch {
-    // localStorage unavailable
-  }
-}
 
 export function useDataTableState({
   runs,
@@ -151,6 +128,7 @@ export function useDataTableState({
   orgSlug,
   projectName,
   listMode,
+  showOnlySelected,
 }: UseDataTableStateParams) {
   const isExperiments = listMode === "experiments";
 
@@ -164,24 +142,23 @@ export function useDataTableState({
   const { draggedId, dragOverId, handleDragStart, handleDragOver, handleDrop, handleDragEnd } =
     useColumnDrag(customColumns, onReorderColumns);
 
-  // Visibility options state — persisted to localStorage per org/project
-  const showOnlySelectedKey = `run-table-showOnlySelected:${orgSlug}:${projectName}`;
+  // Visibility options state — pinSelectedToTop persisted to localStorage per org/project
+  // showOnlySelected is controlled by parent (lifted state)
   const pinSelectedToTopKey = `run-table-pinSelectedToTop:${orgSlug}:${projectName}`;
 
-  const [showOnlySelected, setShowOnlySelectedRaw] = useState(() => readBoolFromStorage(showOnlySelectedKey));
-  const [pinSelectedToTop, setPinSelectedToTopRaw] = useState(() => readBoolFromStorage(pinSelectedToTopKey));
+  const [pinSelectedToTop, setPinSelectedToTop] = useLocalStorageBool(pinSelectedToTopKey);
 
-  const setShowOnlySelected = useCallback((value: boolean) => {
-    setShowOnlySelectedRaw(value);
-    writeBoolToStorage(showOnlySelectedKey, value);
-    // Reset to page 0 when toggling to avoid landing on an empty page
+  // Reset to page 0 when the user toggles "Display only selected" so they
+  // don't land on an empty page (filtered dataset is smaller than full list).
+  // Guard skips the initial mount so we only reset on actual user toggles.
+  const isFirstShowOnlySelectedRender = useRef(true);
+  useEffect(() => {
+    if (isFirstShowOnlySelectedRender.current) {
+      isFirstShowOnlySelectedRender.current = false;
+      return;
+    }
     setPageIndex(0);
-  }, [showOnlySelectedKey]);
-
-  const setPinSelectedToTop = useCallback((value: boolean) => {
-    setPinSelectedToTopRaw(value);
-    writeBoolToStorage(pinSelectedToTopKey, value);
-  }, [pinSelectedToTopKey]);
+  }, [showOnlySelected]);
 
   // When pinning is active, split into pinned (sticky, always-visible) and unpinned (paginated).
   const isPinningActive = pinSelectedToTop && Object.keys(selectedRunsWithColors).length > 0;
@@ -383,7 +360,6 @@ export function useDataTableState({
     handleDragEnd,
     // Visibility
     showOnlySelected,
-    setShowOnlySelected,
     pinSelectedToTop,
     setPinSelectedToTop,
     isPinningActive,

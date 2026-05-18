@@ -67,3 +67,6 @@ web/app/src/routeTree.gen.ts
 # Screenshots and other junk images
 *.png
 Screenshot*
+
+# Superpowers brainstorming mockups
+.superpowers/

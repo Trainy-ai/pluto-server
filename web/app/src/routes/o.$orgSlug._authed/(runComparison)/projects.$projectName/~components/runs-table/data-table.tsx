@@ -60,6 +60,9 @@ interface DataTableProps {
   isSearchingFields?: boolean;
   searchQuery: string;
   onSearchChange: (query: string) => void;
+  onSearchFocus?: () => void;
+  showOnlySelected: boolean;
+  onShowOnlySelectedChange: (value: boolean) => void;
   viewMode: ViewMode;
   onViewModeChange: (mode: ViewMode) => void;
   panelLayout?: "both" | "list-only" | "graphs-only";
@@ -108,6 +111,7 @@ interface DataTableProps {
   onListModeChange: (mode: ListMode) => void;
   showInherited: boolean;
   onInheritedToggle: () => void;
+  searchOtherMatchesDropdown?: React.ReactNode;
 }
 
 export function DataTable({
@@ -140,6 +144,7 @@ export function DataTable({
   isSearchingFields,
   searchQuery,
   onSearchChange,
+  onSearchFocus,
   viewMode,
   onViewModeChange,
   panelLayout = "both",
@@ -184,6 +189,9 @@ export function DataTable({
   onListModeChange,
   showInherited,
   onInheritedToggle,
+  showOnlySelected,
+  onShowOnlySelectedChange,
+  searchOtherMatchesDropdown,
 }: DataTableProps) {
   const tableBodyRef = useRef<HTMLTableSectionElement>(null);
   const theadRef = useRef<HTMLTableSectionElement>(null);
@@ -326,8 +334,6 @@ export function DataTable({
     handleDragOver,
     handleDrop,
     handleDragEnd,
-    showOnlySelected,
-    setShowOnlySelected,
     pinSelectedToTop,
     setPinSelectedToTop,
     isPinningActive,
@@ -355,6 +361,7 @@ export function DataTable({
     orgSlug,
     projectName,
     listMode,
+    showOnlySelected,
   });
 
   // Handle fetching more data without resetting pagination
@@ -468,6 +475,7 @@ export function DataTable({
         totalRunCount={listMode === "experiments" ? totalExperimentCount : totalRunCount}
         searchQuery={searchQuery}
         onSearchChange={onSearchChange}
+        onSearchFocus={onSearchFocus}
         onKeyDown={handleKeyDown}
         viewMode={viewMode}
         onViewModeChange={onViewModeChange}
@@ -483,7 +491,7 @@ export function DataTable({
         onShowAllRuns={onShowAllRuns}
         onHideAllRuns={onHideAllRuns}
         showOnlySelected={showOnlySelected}
-        onShowOnlySelectedChange={setShowOnlySelected}
+        onShowOnlySelectedChange={onShowOnlySelectedChange}
         pinSelectedToTop={pinSelectedToTop}
         onPinSelectedToTopChange={setPinSelectedToTop}
         pageRunIds={pageRunIds}
@@ -508,6 +516,7 @@ export function DataTable({
         onListModeChange={onListModeChange}
         showInherited={showInherited}
         onInheritedToggle={onInheritedToggle}
+        searchOtherMatchesDropdown={searchOtherMatchesDropdown}
       />
 
       <div className="min-h-0 flex-1 flex flex-col overflow-hidden rounded-md border">

@@ -17,6 +17,9 @@ import { useUpdateNotes } from "./~queries/update-notes";
 import { useDistinctTags } from "./~queries/distinct-tags";
 import { useDistinctColumnKeys, useSearchColumnKeys } from "./~queries/distinct-column-keys";
 import { useColumnConfig, useBaseColumnOverrides, DEFAULT_COLUMNS, type ColumnConfig, type MetricAggregation } from "./~hooks/use-column-config";
+import { useLocalStorageBool } from "./~hooks/use-local-storage-bool";
+import { useSearchOtherMatches } from "./~hooks/use-search-other-matches";
+import { SearchOtherMatchesDropdown } from "./~components/runs-table/components/search-other-matches-dropdown";
 import { useDistinctMetricNames, useSearchMetricNames, useMetricSummaries } from "./~queries/metric-summaries";
 import { groupMetrics } from "./~lib/metrics-utils";
 import { MetricsDisplay } from "./~components/metrics-display";
@@ -495,6 +498,22 @@ function RouteComponent() {
     setAll: setAllFilters,
     serverFilters,
   } = useRunFilters(organizationSlug, projectName);
+
+  const filterActive = useMemo(() => {
+    return (
+      (serverFilters.tags?.length ?? 0) > 0 ||
+      (serverFilters.status?.length ?? 0) > 0 ||
+      (serverFilters.dateFilters?.length ?? 0) > 0 ||
+      (serverFilters.fieldFilters?.length ?? 0) > 0 ||
+      (serverFilters.metricFilters?.length ?? 0) > 0 ||
+      (serverFilters.systemFilters?.length ?? 0) > 0
+    );
+  }, [serverFilters]);
+
+  // showOnlySelected state — persisted to localStorage per org/project (lifted from DataTable)
+  const showOnlySelectedKey = `run-table-showOnlySelected:${organizationSlug}:${projectName}`;
+  const [showOnlySelected, setShowOnlySelected] = useLocalStorageBool(showOnlySelectedKey);
+
   // Search state — persisted to localStorage per org/project
   const searchStorageKey = `run-table-search:${organizationSlug}:${projectName}`;
   const [searchInput, setSearchInput] = useState<string>(() => {
@@ -513,10 +532,16 @@ function RouteComponent() {
     300,
   );
 
+  // Tracks whether the user has dismissed the "Other matches" dropdown
+  // (via Esc or click-outside). Typing in the search input clears the
+  // dismissal so the dropdown can reappear.
+  const [otherMatchesDismissed, setOtherMatchesDismissed] = useState(false);
+
   const handleSearchChange = useCallback(
     (value: string) => {
       setSearchInput(value);
       updateDebouncedSearch(value);
+      setOtherMatchesDismissed(false);
       try {
         if (value) {
           localStorage.setItem(searchStorageKey, value);
@@ -1038,6 +1063,23 @@ function RouteComponent() {
     });
   }, [runs, prefetchedSelectedRuns, selectedRunsWithColors, allLoadedRuns]);
 
+  // Which run IDs are actually rendered in the table right now. The set
+  // depends on whether "Display only selected" is on:
+  // - on  → table renders only selected runs (mergeSelectedRuns)
+  // - off → table renders tableRuns (server fetch) plus any selected runs
+  //         sticky-appended via ensureSelectedRunsIncluded
+  // Used to partition "Other matches" hits into in-view vs out-of-view.
+  const inViewRunIds = useMemo(() => {
+    const ids = new Set<string>();
+    if (showOnlySelected) {
+      for (const id of Object.keys(selectedRunsWithColors)) ids.add(id);
+    } else {
+      for (const r of tableRuns) ids.add(r.id);
+      for (const id of Object.keys(selectedRunsWithColors)) ids.add(id);
+    }
+    return ids;
+  }, [showOnlySelected, tableRuns, selectedRunsWithColors]);
+
   // Fetch logs only for selected runs (lazy loading)
   const selectedRunIds = useMemo(
     () => Object.keys(selectedRunsWithColors),
@@ -1048,6 +1090,33 @@ function RouteComponent() {
     projectName,
     organizationId
   );
+
+  // "Other matches" dropdown — searches across all runs ignoring active filters.
+  // Gated on `!otherMatchesDismissed` so window-focus refetches don't fire
+  // while the popover is hidden.
+  const otherMatches = useSearchOtherMatches({
+    organizationId,
+    projectName,
+    query: debouncedSearch,
+    inViewRunIds,
+    filterActive,
+    displayOnlySelectedActive: showOnlySelected,
+    enabled: !otherMatchesDismissed,
+  });
+
+  // Esc and click-outside both dismiss the dropdown but keep the typed
+  // query in place so the user can refocus the input to bring it back.
+  const handleDismissOtherMatchesDropdown = useCallback(() => {
+    setOtherMatchesDismissed(true);
+  }, []);
+
+  // Refocusing the search input re-opens the dropdown — the user came
+  // back to the search bar, so they probably want to see the results
+  // again. If there's still nothing to show, the dropdown stays hidden
+  // via its own render gate.
+  const handleSearchFocus = useCallback(() => {
+    setOtherMatchesDismissed(false);
+  }, []);
 
   // Per-user / per-browser "best step (with image)" tolerance, scoped to
   // this project. Stored in localStorage — no backend persistence so one
@@ -1302,6 +1371,7 @@ function RouteComponent() {
                 isSearchingFields={isSearchingKeys || isSearchingMetrics}
                 searchQuery={searchInput}
                 onSearchChange={handleSearchChange}
+                onSearchFocus={handleSearchFocus}
                 viewMode={viewMode}
                 onViewModeChange={setViewMode}
                 panelLayout={panelLayout}
@@ -1366,6 +1436,21 @@ function RouteComponent() {
                 onListModeChange={handleListModeChange}
                 showInherited={urlInherited !== "false"}
                 onInheritedToggle={handleInheritedToggle}
+                showOnlySelected={showOnlySelected}
+                onShowOnlySelectedChange={setShowOnlySelected}
+                searchOtherMatchesDropdown={
+                  otherMatchesDismissed ? null : (
+                    <SearchOtherMatchesDropdown
+                      outOfView={otherMatches.outOfView}
+                      inView={otherMatches.inView}
+                      hasMore={otherMatches.hasMore}
+                      isLoading={otherMatches.isLoading}
+                      selectedRunsWithColors={enrichedSelectedRunsWithColors}
+                      onSelectRun={(run) => handleRunSelection(run.id, true, run)}
+                      onDismiss={handleDismissOtherMatchesDropdown}
+                    />
+                  )
+                }
               />
             </div>
           </ResizablePanel>

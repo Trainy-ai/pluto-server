@@ -54,7 +54,7 @@ interface UseSelectedRunsReturn {
   /** Set of run IDs that are selected but hidden from charts */
   hiddenRunIds: Set<RunId>;
   /** Handler for selecting/deselecting runs */
-  handleRunSelection: (runId: RunId, isSelected: boolean) => void;
+  handleRunSelection: (runId: RunId, isSelected: boolean, runFallback?: Run) => void;
   /** Handler for changing a run's color */
   handleColorChange: (runId: RunId, color: Color) => void;
   /** Toggle a run's chart visibility (hidden/shown) */
@@ -555,16 +555,20 @@ export function useSelectedRuns(
   // --- User action handlers ---
 
   const handleRunSelection = useCallback(
-    (runId: RunId, isSelected: boolean) => {
+    (runId: RunId, isSelected: boolean, runFallback?: Run) => {
       const currentRuns = runsRef.current;
-      if (!currentRuns) return;
+      if (!currentRuns && !runFallback) return;
 
       setSelectedRunsWithColors((prev) => {
         const isCurrentlySelected = !!prev[runId];
         if (isSelected === isCurrentlySelected) return prev;
 
         if (isSelected) {
-          const run = currentRuns.find((r) => r.id === runId);
+          // Prefer the freshest run object from the current page; fall back
+          // to the caller-supplied object (used when adding a run that's
+          // outside the current paginated view, e.g. from the
+          // "Other matches" dropdown).
+          const run = currentRuns?.find((r) => r.id === runId) ?? runFallback;
           if (!run) return prev;
 
           const usedColors = new Set(Object.values(prev).map((e) => e.color));

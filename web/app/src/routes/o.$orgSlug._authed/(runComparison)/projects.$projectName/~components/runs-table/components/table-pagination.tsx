@@ -77,9 +77,15 @@ export function TablePagination({
   pageBase = 0,
   onJumpToPage,
 }: TablePaginationProps) {
-  const effectiveCount = isPinningActive
+  // `runCount` is the server-side filter total. `runsLength` is the size of
+  // the actual table-data array (= filter-matching rows + sticky-selected
+  // rows that fall outside the filter and were appended client-side). When
+  // the latter exceeds the former, the trailing sticky rows live past the
+  // filter's last page — bump effectiveCount so the user can reach them.
+  const baseCount = isPinningActive
     ? runCount - pinnedRunCount
     : runCount;
+  const effectiveCount = Math.max(baseCount, runsLength);
   const totalPages = Math.max(
     1,
     Math.ceil(effectiveCount / pageSize),
@@ -191,9 +197,12 @@ function PageInput({
   pageBase,
   onJumpToPage,
 }: PageInputProps) {
-  const effectiveCount = isPinningActive
+  // See note in <TablePagination>: bump effectiveCount so sticky-selected
+  // rows outside the filter still get their own UI page.
+  const baseCount = isPinningActive
     ? runCount - pinnedRunCount
     : runCount;
+  const effectiveCount = Math.max(baseCount, runsLength);
   const totalPages = Math.max(
     1,
     Math.ceil(effectiveCount / table.getState().pagination.pageSize),
