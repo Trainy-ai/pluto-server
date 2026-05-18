@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { LocalCache } from "../local-cache";
+import { renderHook, act, waitFor } from "@testing-library/react";
+import { LocalCache, useLocalStorage } from "../local-cache";
 
 describe("LocalCache", () => {
   describe("when IndexedDB is available", () => {
@@ -127,6 +128,116 @@ describe("LocalCache", () => {
 
       expect(getSpy).not.toHaveBeenCalled();
       expect(putSpy).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe("useLocalStorage — functional updater race-safety", () => {
+  type Settings = { a: boolean; b: boolean; nested: { x: number; y: number } };
+  const DEFAULTS: Settings = {
+    a: true,
+    b: true,
+    nested: { x: 0, y: 0 },
+  };
+
+  it("functional updater merges against the freshest persisted value, not the stale React-state default", async () => {
+    // Simulates the exact race that was clobbering user settings on
+    // pluto.trainy.ai: IndexedDB has a saved record, but the hook's
+    // React state still equals DEFAULTS for ~150ms after mount. A write
+    // that fires inside that window MUST merge against the persisted
+    // value, not the stale closure.
+    const cache = new LocalCache<Settings>(
+      "test-race-functional",
+      "settings",
+      1024 * 1024,
+    );
+    await cache.waitForInit();
+    // Pre-populate IndexedDB with the user's saved preferences
+    await cache.setData("k", { a: false, b: false, nested: { x: 5, y: 7 } });
+
+    const { result } = renderHook(() => useLocalStorage(cache, "k", DEFAULTS));
+
+    // First render: React state is DEFAULTS (the stale-window scenario).
+    // Fire the write IMMEDIATELY, before liveQuery has had a chance to
+    // resolve — exactly mimicking a useEffect that runs on mount.
+    await act(async () => {
+      // Functional form — should read freshest from IndexedDB
+      await result.current[1]((prev) => ({ ...prev, nested: { ...prev.nested, x: 99 } }));
+    });
+
+    // Read back from IndexedDB directly. Both `a: false` and `b: false`
+    // (the user's saved preferences) must be preserved. `nested.y: 7` must
+    // also be preserved. Only `nested.x` should have changed.
+    const persisted = await cache.getData("k");
+    expect(persisted?.data).toEqual({
+      a: false,
+      b: false,
+      nested: { x: 99, y: 7 },
+    });
+  });
+
+  it("value form (non-functional) still writes the value as-is", async () => {
+    const cache = new LocalCache<Settings>(
+      "test-race-value",
+      "settings",
+      1024 * 1024,
+    );
+    await cache.waitForInit();
+    await cache.setData("k", { a: false, b: false, nested: { x: 1, y: 2 } });
+
+    const { result } = renderHook(() => useLocalStorage(cache, "k", DEFAULTS));
+
+    await act(async () => {
+      // Value form bypasses the merge — caller is taking full responsibility
+      await result.current[1]({ a: true, b: true, nested: { x: 9, y: 9 } });
+    });
+
+    const persisted = await cache.getData("k");
+    expect(persisted?.data).toEqual({ a: true, b: true, nested: { x: 9, y: 9 } });
+  });
+
+  it("functional updater falls back to defaultValue when no record exists yet", async () => {
+    // First-visit scenario — IndexedDB is empty, so the updater receives
+    // the configured defaultValue rather than `undefined`.
+    const cache = new LocalCache<Settings>(
+      "test-race-fresh",
+      "settings",
+      1024 * 1024,
+    );
+    await cache.waitForInit();
+
+    const { result } = renderHook(() => useLocalStorage(cache, "k", DEFAULTS));
+
+    await act(async () => {
+      await result.current[1]((prev) => ({ ...prev, a: false }));
+    });
+
+    const persisted = await cache.getData("k");
+    expect(persisted?.data).toEqual({
+      a: false,
+      b: true,
+      nested: { x: 0, y: 0 },
+    });
+  });
+
+  it("React state catches up to persisted value after liveQuery resolves", async () => {
+    const cache = new LocalCache<Settings>(
+      "test-race-livequery",
+      "settings",
+      1024 * 1024,
+    );
+    await cache.waitForInit();
+    await cache.setData("k", { a: false, b: false, nested: { x: 5, y: 7 } });
+
+    const { result } = renderHook(() => useLocalStorage(cache, "k", DEFAULTS));
+
+    // React state starts at DEFAULTS, liveQuery resolves async
+    await waitFor(() => {
+      expect(result.current[0]).toEqual({
+        a: false,
+        b: false,
+        nested: { x: 5, y: 7 },
+      });
     });
   });
 });

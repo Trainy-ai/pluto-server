@@ -147,6 +147,7 @@ const LineSettings = ({
           <Button
             variant="outline"
             className="relative transition-all duration-200 hover:bg-muted/80"
+            data-testid="line-settings-trigger"
           >
             <SettingsIcon className="h-4 w-4" />
             {!settings.showInheritedMetrics && (

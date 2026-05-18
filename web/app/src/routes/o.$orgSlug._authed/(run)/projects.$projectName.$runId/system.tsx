@@ -53,8 +53,6 @@ function RouteComponent() {
   const { lastRefreshTime, handleRefresh } = useRefreshTime({
     runId,
     onRefresh: refreshAllData,
-    defaultAutoRefresh: runData?.status === "RUNNING",
-    refreshInterval: 10000,
   });
 
   const { filteredLogGroups, handleSearch } = useFilteredLogs({

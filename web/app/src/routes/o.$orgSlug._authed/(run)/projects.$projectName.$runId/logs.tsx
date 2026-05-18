@@ -70,8 +70,6 @@ function RouteComponent() {
   const { lastRefreshTime, handleRefresh } = useRefreshTime({
     runId,
     onRefresh: refreshAllData,
-    defaultAutoRefresh: currentRun?.status === "RUNNING",
-    refreshInterval: 5000,
   });
 
   const { data: logs, isLoading } = useGetLogs(

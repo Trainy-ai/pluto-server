@@ -363,3 +363,46 @@ input[type="number"] {
 }
 
 /* Hide companion series (smoothing originals) from sidebar — already hidden via inline style */
+
+/* ── Narrow-sidebar legend layout ─────────────────────────────────────────
+ * When the user resizes the FS legend sidebar small, default uPlot legend
+ * rows wrap their values onto a separate line under the run name, which
+ * looks broken. Force a single-line "label-left + value-right" layout
+ * where the run name is always visible (truncates with ellipsis) and the
+ * value cell scrolls horizontally if its dot-separated content is wider
+ * than what's left over. */
+.fullscreen-legend-sidebar .u-series {
+  flex-wrap: nowrap !important;
+  white-space: nowrap;
+  align-items: center;
+}
+.fullscreen-legend-sidebar .u-series th {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 0.25rem;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fullscreen-legend-sidebar .u-series .u-value {
+  display: block !important;
+  flex: 0 1 auto;
+  min-width: 0 !important;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right !important;
+}
+
+/* Column-header strip: compact (always 1-2 short labels), right-aligned to
+ * hug the same edge the value cell does. Never wrap. */
+[data-fs-legend-header] {
+  white-space: nowrap !important;
+  justify-content: flex-end !important;
+}
+[data-fs-legend-header] > span {
+  white-space: nowrap;
+  flex-shrink: 0;
+}

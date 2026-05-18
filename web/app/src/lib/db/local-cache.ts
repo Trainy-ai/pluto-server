@@ -113,11 +113,13 @@ export const useCheckDatabaseSize = (db: LocalCache<any>) => {
   }, [db]);
 };
 
+export type LocalStorageUpdater<T> = T | ((prev: T) => T);
+
 export function useLocalStorage<T>(
   db: LocalCache<T>,
   key: string,
   defaultValue: T,
-): [T, (value: T, finishedAt?: Date | null) => Promise<void>] {
+): [T, (value: LocalStorageUpdater<T>, finishedAt?: Date | null) => Promise<void>] {
   const [value, setValue] = useState<T>(defaultValue);
 
   useEffect(() => {
@@ -141,15 +143,38 @@ export function useLocalStorage<T>(
     };
   }, [db, key, defaultValue]);
 
+  // Functional-updater support is REQUIRED, not optional. React state starts
+  // at `defaultValue` and is replaced asynchronously by liveQuery — there is
+  // a ~100-300ms window where the React-state value disagrees with the
+  // persisted IndexedDB value. Any caller that does
+  //   setValue({ ...value, foo: 1 })   // ← spreads stale closure
+  // during that window will write back the defaults for every OTHER key,
+  // clobbering the user's saved preferences. Callers must use the
+  // functional form for merges:
+  //   setValue(prev => ({ ...prev, foo: 1 }))
+  // The updater receives the freshest persisted value (read directly from
+  // IndexedDB at call time), not the stale closure.
   const setLocalStorage = useCallback(
-    async (newValue: T, finishedAt: Date | null = null) => {
+    async (
+      newValueOrUpdater: LocalStorageUpdater<T>,
+      finishedAt: Date | null = null,
+    ) => {
       try {
+        let newValue: T;
+        if (typeof newValueOrUpdater === "function") {
+          const record = await db.getData(key);
+          const current =
+            record && record.data !== undefined ? record.data : defaultValue;
+          newValue = (newValueOrUpdater as (prev: T) => T)(current);
+        } else {
+          newValue = newValueOrUpdater;
+        }
         await db.setData(key, newValue, finishedAt);
       } catch (err) {
         console.error("Error writing to LocalCache:", err);
       }
     },
-    [db, key],
+    [db, key, defaultValue],
   );
 
   return [value, setLocalStorage];

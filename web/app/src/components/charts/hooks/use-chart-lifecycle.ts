@@ -124,6 +124,18 @@ export function useChartLifecycle({
   const prevOptionsRef = useRef<uPlot.Options | null>(null);
   const noDataToastShownRef = useRef<string | null>(null);
 
+  // Computed during render: is the *upcoming* effect run a width/height-only
+  // change? When true, the previous run's cleanup must NOT destroy the chart
+  // — otherwise the early-return below is unreachable and we needlessly
+  // tear down + rebuild uPlot on every resize tick. The dedicated setSize
+  // effect handles dim changes via uPlot's setSize() (cheap canvas resize).
+  const isDimsOnlyChangeRef = useRef(false);
+  isDimsOnlyChangeRef.current =
+    !!chartRef.current
+    && chartCreatedRef.current
+    && prevDataRef.current === uplotData
+    && prevOptionsRef.current === options;
+
   // Create chart when container has dimensions and data is ready
   useEffect(() => {
     const dims = { width, height };
@@ -629,6 +641,11 @@ export function useChartLifecycle({
     };
 
     return () => {
+      // When the upcoming render is a dim-only change, the early-return at
+      // the top of the next effect run will keep the chart alive. Skip the
+      // destroy + listener cleanup here so it can fire. (The unmount-only
+      // effect below guarantees final destroy on actual unmount.)
+      if (isDimsOnlyChangeRef.current) return;
       cleanupRef.current?.();
       if (chartRef.current) {
         const lh = (chartRef.current as any)._leaveHandler;
@@ -642,6 +659,22 @@ export function useChartLifecycle({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [options, uplotData, chartId, width, height]);
+
+  // Unmount-only destroy. The main effect's cleanup skips destruction on
+  // dim-only changes; this guarantees the chart is torn down when the
+  // component unmounts for real (e.g., dialog closes, page unmounts).
+  useEffect(() => {
+    return () => {
+      cleanupRef.current?.();
+      if (chartRef.current) {
+        const lh = (chartRef.current as any)._leaveHandler;
+        if (lh) lh.el.removeEventListener("mouseleave", lh.fn);
+        chartRef.current.destroy();
+        chartRef.current = null;
+      }
+      chartCreatedRef.current = false;
+    };
+  }, []);
 
   // Handle resize separately - uses setSize() instead of recreating chart
   useEffect(() => {

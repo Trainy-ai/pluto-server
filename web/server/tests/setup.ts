@@ -1077,6 +1077,24 @@ async function setupTestData(): Promise<TestData> {
       updatedAt: new Date(),
     });
 
+    // Add one RUNNING run for tests that need to exercise auto-refresh
+    // polling behavior on the individual-run page. The `a-running-run-001`
+    // name keeps it grouped near the other media-rich `a-bulk-run-*` runs
+    // in alphabetical order, and `status: 'RUNNING'` is enough — frontend
+    // gates auto-refresh on `runData.status === "RUNNING"`, no actual
+    // ongoing data ingestion or heartbeat needed.
+    bulkRunData.push({
+      name: 'a-running-run-001',
+      organizationId: org.id,
+      projectId: project.id,
+      createdById: user.id,
+      creatorApiKeyId: apiKey.id,
+      status: 'RUNNING' as const,
+      config: { epochs: 100, lr: 0.001, batch_size: 32, dataset: 'running-run-dataset', optimizer: 'AdamW' },
+      systemMetadata: { hostname: 'test-host', python: '3.11' },
+      updatedAt: new Date(),
+    });
+
     // Bulk create all runs at once
     await prisma.runs.createMany({
       data: bulkRunData,
@@ -1091,6 +1109,7 @@ async function setupTestData(): Promise<TestData> {
         OR: [
           { name: { startsWith: 'bulk-run-' } },
           { name: { startsWith: 'a-bulk-run-' } },
+          { name: { startsWith: 'a-running-run-' } },
         ],
       },
       select: { id: true, name: true, createdAt: true },
@@ -1455,6 +1474,148 @@ async function setupTestData(): Promise<TestData> {
     }
   } else {
     console.log(`   ✓ multi-metric-test run already exists (ID: ${multiMetricRun.id})`);
+  }
+
+  // 5d-bis. Two runs with mismatched logging cadences for the tooltip
+  // interpolation (~prefix) regression test. Both share metric `interp/loss`,
+  // but interp-sparse-cadence only logs every 50 steps. With both selected,
+  // the chart's union x-axis has nulls for the sparse run at off-cadence
+  // positions — the tooltip must render those positions with the ~prefix and
+  // italic+0.6 opacity styling. See:
+  //   web/e2e/specs/charts/tooltip-interpolated-value.spec.ts
+  console.log('\n5️⃣d-bis Creating tooltip-interpolation test runs...');
+
+  const interpDense = await prisma.runs.findFirst({
+    where: { projectId: project.id, organizationId: org.id, name: 'interp-dense-cadence' },
+    select: { id: true, name: true, createdAt: true },
+  });
+  const interpSparse = await prisma.runs.findFirst({
+    where: { projectId: project.id, organizationId: org.id, name: 'interp-sparse-cadence' },
+    select: { id: true, name: true, createdAt: true },
+  });
+
+  if (!interpDense || !interpSparse) {
+    // Far past so they don't auto-select on the project page (existing tests
+    // pre-select via TEST_RUNS_ALL — these runs are opted into explicitly via
+    // ?runs= URL params in the interpolation test only).
+    const interpCreatedAt = new Date(Date.now() - 362 * 24 * 60 * 60 * 1000);
+    const dense = interpDense ?? await prisma.runs.create({
+      data: {
+        name: 'interp-dense-cadence',
+        organizationId: org.id,
+        projectId: project.id,
+        createdById: user.id,
+        creatorApiKeyId: apiKey.id,
+        status: 'COMPLETED',
+        config: { cadence: 'every-1-step', steps: 1000 },
+        systemMetadata: { hostname: 'test-host', python: '3.11' },
+        createdAt: interpCreatedAt,
+        updatedAt: interpCreatedAt,
+      },
+    });
+    const sparse = interpSparse ?? await prisma.runs.create({
+      data: {
+        name: 'interp-sparse-cadence',
+        organizationId: org.id,
+        projectId: project.id,
+        createdById: user.id,
+        creatorApiKeyId: apiKey.id,
+        status: 'COMPLETED',
+        config: { cadence: 'every-50-steps', steps: 1000 },
+        systemMetadata: { hostname: 'test-host', python: '3.11' },
+        createdAt: new Date(interpCreatedAt.getTime() + 1000),
+        updatedAt: new Date(interpCreatedAt.getTime() + 1000),
+      },
+    });
+    console.log(`   ✓ Created interp runs (dense ID=${dense.id}, sparse ID=${sparse.id})`);
+
+    // Register metric registry rows
+    await prisma.runLogs.createMany({
+      data: [
+        { runId: dense.id, logName: 'interp/loss', logGroup: 'interp', logType: 'METRIC' as const },
+        { runId: sparse.id, logName: 'interp/loss', logGroup: 'interp', logType: 'METRIC' as const },
+      ],
+      skipDuplicates: true,
+    });
+
+    const clickhouseUrl = process.env.CLICKHOUSE_URL;
+    const clickhouseUser = process.env.CLICKHOUSE_USER || 'default';
+    const clickhousePassword = process.env.CLICKHOUSE_PASSWORD || '';
+    if (clickhouseUrl) {
+      const clickhouse = createClient({
+        url: clickhouseUrl,
+        username: clickhouseUser,
+        password: clickhousePassword,
+      });
+
+      const interpRows: Record<string, unknown>[] = [];
+      // Dense — every step 0..999
+      const denseBase = dense.createdAt.getTime();
+      for (let step = 0; step < 1000; step++) {
+        interpRows.push({
+          tenantId: org.id,
+          projectName: project.name,
+          runId: Number(dense.id),
+          logGroup: 'interp',
+          logName: 'interp/loss',
+          time: new Date(denseBase + step * 1000).toISOString().replace('T', ' ').replace('Z', ''),
+          step,
+          value: 2 * Math.exp(-step / 200) + 0.05,
+        });
+      }
+      // Sparse — every 50 steps, 0, 50, 100, ..., 950 (20 points)
+      const sparseBase = sparse.createdAt.getTime();
+      for (let step = 0; step < 1000; step += 50) {
+        interpRows.push({
+          tenantId: org.id,
+          projectName: project.name,
+          runId: Number(sparse.id),
+          logGroup: 'interp',
+          logName: 'interp/loss',
+          time: new Date(sparseBase + step * 1000).toISOString().replace('T', ' ').replace('Z', ''),
+          step,
+          value: 1.5 * Math.exp(-step / 250) + 0.1,
+        });
+      }
+
+      await clickhouse.insert({
+        table: 'mlop_metrics',
+        values: interpRows,
+        format: 'JSONEachRow',
+      });
+      console.log(`   ✓ Seeded ${interpRows.length} interp/loss rows (1000 dense + 20 sparse)`);
+
+      // Populate metric summaries for both runs so the metric appears in
+      // the project's chart group listing.
+      for (const run of [dense, sparse]) {
+        await clickhouse.command({
+          query: `
+            INSERT INTO mlop_metric_summaries
+            SELECT tenantId, projectName, runId, logName,
+              min(value), max(value), sum(value),
+              toUInt64(count()), argMaxState(value, step),
+              sum(value * value), min(step), max(step)
+            FROM mlop_metrics
+            WHERE tenantId = {tenantId: String}
+              AND projectName = {projectName: String}
+              AND runId = {runId: UInt64}
+              AND isFinite(value)
+            GROUP BY tenantId, projectName, runId, logName
+          `,
+          query_params: {
+            tenantId: org.id,
+            projectName: project.name,
+            runId: Number(run.id),
+          },
+        });
+      }
+      console.log('   ✓ Populated metric summaries for interp runs');
+      await clickhouse.close();
+    } else {
+      console.log('   ⚠ CLICKHOUSE_URL not set, skipping interp run ClickHouse seeding');
+    }
+  } else {
+    console.log(`   ✓ interp-{dense,sparse}-cadence runs already exist`);
   }
 
   // 5e. Create zoom-visibility test runs (different step counts) for hidden-run zoom reset E2E test

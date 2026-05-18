@@ -7,6 +7,10 @@ import { formatAxisLabel } from "./format";
 // Series Configuration — Builder + Emphasis Logic
 // ============================
 
+// Min/Max are NOT shown in the FS sidebar legend — they live only in the
+// tooltip popover where the user can opt them in. The legend stays compact
+// (value, optionally raw) so run names always have room.
+
 export interface SeriesConfigRefs {
   /** Last locally-focused series index (from Y-distance detection) */
   lastFocusedSeriesRef: { current: number | null };
@@ -37,13 +41,21 @@ export function buildSeriesConfig(
   const spanGaps = options?.spanGaps ?? true;
   const isDark = options?.theme === "dark";
 
-  // Build a mapping from smoothed series to their "(original)" companion
-  // so the legend can show combined values like the tooltip: "value (rawValue)"
-  const companionDataIdx = new Map<number, number>();
+  // For each visible main series, locate its smoothing-companion data
+  // index (the (original) raw line). Envelope min/max are intentionally
+  // NOT consulted by the legend formatter — they live only in the
+  // tooltip popover.
+  // uPlot data index = processedLines index + 1 (data[0] is the x-axis).
+  const companionRawIdx = new Map<number, number>();
   for (let i = 0; i < processedLines.length; i++) {
-    if (!processedLines[i].hideFromLegend && processedLines[i + 1]?.hideFromLegend) {
-      // i+2 because uPlot data index 0 is x-axis, so line index i maps to data index i+1
-      companionDataIdx.set(i, i + 2);
+    const main = processedLines[i];
+    if (main.hideFromLegend) continue;
+    for (let j = i + 1; j < processedLines.length; j++) {
+      const cand = processedLines[j];
+      if (!cand.hideFromLegend) break; // hit the next main; companions are contiguous
+      if (cand.label === main.label + " (original)") {
+        companionRawIdx.set(i, j + 1);
+      }
     }
   }
 
@@ -74,6 +86,9 @@ export function buildSeriesConfig(
       return {
         label: line.runId || line.runName || line.label,
         _seriesId: line.seriesId ?? line.label,
+        // Tag for the FS sidebar header: signals whether this series has a
+        // smoothing companion so the header can include "Raw Value".
+        _hasOriginal: companionRawIdx.has(i),
         // Use a function for stroke that checks both local and cross-chart focus
         // and applies per-series opacity (used by smoothing to dim raw data)
         stroke: (u: uPlot, seriesIdx: number) => {
@@ -164,7 +179,7 @@ export function buildSeriesConfig(
             ? chartLineWidth * 0.5
             : !!line.dash
               ? Math.max(chartLineWidth * 1.3, 1.8)
-              : companionDataIdx.has(i)
+              : companionRawIdx.has(i)
                 ? chartLineWidth * 1.5
                 : chartLineWidth;
           return { width: w, _baseWidth: w };
@@ -197,19 +212,21 @@ export function buildSeriesConfig(
             ? applyAlpha(baseColor, line.opacity!)
             : baseColor,
         },
-        // Legend value formatter: combine smoothed + original values like the tooltip
-        value: companionDataIdx.has(i)
-          ? (u: uPlot, val: number | null, _si: number, idx: number | null) => {
-              if (val == null || idx == null) return "--";
-              const rawVal = u.data[companionDataIdx.get(i)!]?.[idx] as number | null;
-              if (rawVal != null) {
-                return `${formatAxisLabel(val)} (${formatAxisLabel(rawVal)})`;
-              }
-              return formatAxisLabel(val);
-            }
-          : ((_u: uPlot, val: number | null) => {
-              return val == null ? "--" : formatAxisLabel(val);
-            }),
+        // Legend value formatter:
+        //   smoothing on  → "<smoothed> (<raw>)"  e.g. "0.7392 (0.7866)"
+        //   smoothing off → "<value>"
+        // Matches the FS sidebar column-header strip ("Value (Raw)" / "Value").
+        // Min/Max never appear here — they're tooltip-only.
+        value: (u: uPlot, val: number | null, _si: number, idx: number | null) => {
+          if (val == null || idx == null) return "--";
+          const valStr = formatAxisLabel(val);
+          const rawIdx = companionRawIdx.get(i);
+          if (rawIdx !== undefined) {
+            const rawVal = u.data[rawIdx]?.[idx] as number | null;
+            return `${valStr} (${rawVal != null ? formatAxisLabel(rawVal) : "—"})`;
+          }
+          return valStr;
+        },
       };
     }),
   ];

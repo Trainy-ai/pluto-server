@@ -7,8 +7,13 @@ import { interpolateValue, isInsideDataGap, type TooltipInterpolation } from "@/
 // Tooltip Column Configuration
 // ============================
 
-/** Available columns for tooltip display */
-export type TooltipColumnId = "name" | "value" | "run-name" | "run-id" | "metric";
+/** Available columns for tooltip display.
+ *  `raw-value` is auto-injected when smoothing is on (chart has an `(original)`
+ *  companion series); it is not user-toggleable and never persists in saved config.
+ *  `min` and `max` read from envelope companion series (bucketed data only); they
+ *  ARE user-toggleable via the gear popover and persist in saved config. When no
+ *  envelope exists for a series, the cell renders an em-dash. */
+export type TooltipColumnId = "value" | "raw-value" | "run-name" | "run-id" | "metric" | "min" | "max";
 
 export interface TooltipColumnConfig {
   id: TooltipColumnId;
@@ -19,13 +24,15 @@ export interface TooltipColumnConfig {
 const TOOLTIP_COLUMNS_KEY = "uplot-tooltip-columns";
 const TOOLTIP_COL_WIDTHS_KEY = "uplot-tooltip-col-widths";
 
-/** All available tooltip columns with defaults */
+/** All available tooltip columns with defaults.
+ *  Min and Max default to disabled — opt-in via the gear popover. */
 const ALL_COLUMNS: TooltipColumnConfig[] = [
   { id: "run-id", label: "Display ID", enabled: true },
   { id: "run-name", label: "Run Name", enabled: true },
   { id: "metric", label: "Metric", enabled: true },
   { id: "value", label: "Value", enabled: true },
-  { id: "name", label: "Series Name", enabled: false },
+  { id: "min", label: "Min", enabled: false },
+  { id: "max", label: "Max", enabled: false },
 ];
 
 /** Module-level cache for column config */
@@ -57,6 +64,15 @@ function getTooltipColumns(): TooltipColumnConfig[] {
   return cachedTooltipColumns ?? ALL_COLUMNS;
 }
 
+/** Append a synthetic `raw-value` column at the END of the tooltip column list.
+ *  Used when the chart is smoothing — see updateTooltipContent.
+ *  The synthetic column is render-only: it never enters saved config, never
+ *  appears in the +Add menu, and never persists across renders.
+ *  Exported for unit testing. */
+export function insertRawValueColumn(cols: TooltipColumnConfig[]): TooltipColumnConfig[] {
+  return [...cols, { id: "raw-value", label: "Raw Value", enabled: true }];
+}
+
 function saveTooltipColumns(columns: TooltipColumnConfig[]) {
   cachedTooltipColumns = columns;
   try {
@@ -66,6 +82,231 @@ function saveTooltipColumns(columns: TooltipColumnConfig[]) {
   }
   // Notify all tooltip instances to rebuild their settings UI
   document.dispatchEvent(new CustomEvent("tooltip-columns-changed"));
+}
+
+/**
+ * Companion-series values collected at a cursor `idx`, keyed by the parent
+ * uPlot `series.label` (= the runId for non-envelope main series after
+ * `buildSeriesConfig`). Same shape returned to both the full-rebuild and
+ * fast-path renderers so they can look up Raw / Min / Max cells uniformly.
+ */
+interface CompanionValues {
+  rawValues: Map<string, number>;
+  rawFlags: Map<string, string>;
+  minValues: Map<string, number>;
+  maxValues: Map<string, number>;
+}
+
+/**
+ * Walk uPlot's series array once and pull out the values that companion
+ * series carry (smoothing-original raw values + envelope min/max). Used by
+ * both `updateTooltipContent` (full rebuild) and `updateTooltipValues`
+ * (fast path) to populate the Raw / Min / Max tooltip cells.
+ *
+ * Detection notes:
+ * - The smoothing path appends " (original)" to the LineData.label, but
+ *   buildSeriesConfig overrides uPlot's series.label to runId for display.
+ *   So we detect via lineData.label and key by series.label (which is the
+ *   same value for the main series and its hidden companion of the same
+ *   run).
+ * - Envelope companions carry `envelopeOf` (= the parent's lineData.label)
+ *   and `envelopeBound: "min" | "max"`. We map parent lineData.label →
+ *   parent series.label first, then keys by series.label too.
+ */
+function collectCompanionValues(
+  u: uPlot,
+  lines: LineData[],
+  idx: number,
+): CompanionValues {
+  const rawValues = new Map<string, number>();
+  const rawFlags = new Map<string, string>();
+  const labelToSeriesLabel = new Map<string, string>();
+  const minValues = new Map<string, number>();
+  const maxValues = new Map<string, number>();
+  const xValues = u.data[0] as number[];
+  const xAtIdx = xValues[idx];
+
+  for (let i = 1; i < u.series.length; i++) {
+    const series = u.series[i];
+    const yVal = u.data[i][idx];
+    const lineData = lines[i - 1];
+    if (!lineData) continue;
+
+    // Build the parent-label → parent-series-label map for envelope lookup
+    // (only for main, non-envelope, non-companion series).
+    if (!lineData.envelopeOf && lineData.label) {
+      const sl = typeof series.label === "string" ? series.label : "";
+      labelToSeriesLabel.set(lineData.label, sl);
+    }
+
+    // Smoothing companion — collect raw values + flags.
+    const lineLabel = typeof lineData.label === "string" ? lineData.label : "";
+    if (
+      series.show !== false &&
+      lineData.hideFromLegend &&
+      lineLabel.endsWith(" (original)")
+    ) {
+      const seriesLabel = typeof series.label === "string" ? series.label : "";
+      if (yVal != null) {
+        rawValues.set(seriesLabel, yVal);
+      } else {
+        const flag = lineData.valueFlags?.get(xAtIdx);
+        if (flag) rawFlags.set(seriesLabel, flag);
+      }
+    }
+  }
+
+  // Envelope companion — second pass so labelToSeriesLabel is fully built.
+  for (let i = 1; i < u.series.length; i++) {
+    const ld = lines[i - 1];
+    if (!ld?.envelopeOf || !ld.envelopeBound) continue;
+    const yVal = u.data[i][idx];
+    if (yVal == null) continue;
+    const parentSeriesLabel = labelToSeriesLabel.get(ld.envelopeOf);
+    if (!parentSeriesLabel) continue;
+    if (ld.envelopeBound === "min") minValues.set(parentSeriesLabel, yVal as number);
+    else maxValues.set(parentSeriesLabel, yVal as number);
+  }
+
+  return { rawValues, rawFlags, minValues, maxValues };
+}
+
+/**
+ * Compensate for a `position: fixed` element's containing block changing
+ * after it gets parented/reparented under an ancestor with a `transform`
+ * (e.g. Radix `DialogContent`). The element's `style.left`/`style.top` are
+ * INTENDED to be viewport coordinates, but a transformed ancestor turns
+ * those coords into ancestor-local coords, shifting the visual position by
+ * the ancestor's translate.
+ *
+ * Pass the desired viewport rect (captured before the reparent, or computed
+ * from positioning math). This function reads the element's actual rect
+ * after the DOM mutation and adjusts style.left/top by the delta so the
+ * visual position matches the desired one.
+ *
+ * Used in three places: pinTooltip + unpinTooltip (when the tooltip moves
+ * between document.body and the FS dialog), and toggleColumnPopover (when
+ * the popover is appended into the same dialog stacking context as its
+ * gear-icon anchor).
+ */
+function compensateFixedPositionAfterReparent(
+  el: HTMLElement,
+  desired: { left: number; top: number },
+): void {
+  const actual = el.getBoundingClientRect();
+  const dx = desired.left - actual.left;
+  const dy = desired.top - actual.top;
+  if (dx === 0 && dy === 0) return;
+  const currLeft = parseFloat(el.style.left) || 0;
+  const currTop = parseFloat(el.style.top) || 0;
+  el.style.left = `${currLeft + dx}px`;
+  el.style.top = `${currTop + dy}px`;
+}
+
+/** Toggle the column-config popover anchored next to the gear icon. The
+ *  popover is appended to document.body so it can extend past the tooltip's
+ *  bounds. Click-outside dismisses it. */
+function toggleColumnPopover(anchor: HTMLElement) {
+  const POPOVER_ATTR = "data-tooltip-column-popover";
+  const existing = document.querySelector(`[${POPOVER_ATTR}]`);
+  if (existing) {
+    existing.remove();
+    return;
+  }
+
+  const popover = document.createElement("div");
+  popover.setAttribute(POPOVER_ATTR, "true");
+  // Use the same CSS-variable theme tokens the main tooltip element uses
+  // (see line ~632) so dark/light mode and any future token changes apply
+  // consistently.
+  popover.style.cssText = `
+    position: fixed; z-index: 10000;
+    background: hsl(var(--popover));
+    border: 1px solid hsl(var(--border));
+    border-radius: 4px; padding: 8px 10px; min-width: 160px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+    color: hsl(var(--foreground));
+    font-size: 11px; user-select: none;
+  `;
+
+  const title = document.createElement("div");
+  title.textContent = "Tooltip Columns";
+  title.style.cssText = "font-weight: 600; margin-bottom: 6px; opacity: 0.7; text-transform: uppercase; font-size: 10px";
+  popover.appendChild(title);
+
+  // Render checkboxes for the user-toggleable columns ONLY (raw-value is
+  // auto-injected when smoothing is on and is intentionally not in this list).
+  const cols = getTooltipColumns();
+  for (const col of cols) {
+    const row = document.createElement("label");
+    row.setAttribute("data-popover-row", col.id);
+    row.style.cssText = "display: flex; align-items: center; gap: 6px; padding: 3px 0; cursor: pointer";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = col.enabled;
+    cb.dataset.colId = col.id;
+    cb.addEventListener("change", () => {
+      const colId = col.id;
+      const updated = getTooltipColumns().map((c) =>
+        c.id === colId ? { ...c, enabled: cb.checked } : c,
+      );
+      saveTooltipColumns(updated);
+    });
+    const labelEl = document.createElement("span");
+    labelEl.textContent = col.label;
+    row.appendChild(cb);
+    row.appendChild(labelEl);
+    popover.appendChild(row);
+  }
+
+  // Append to the same parent the tooltip is in. When the tooltip lives
+  // inside a Radix dialog (fullscreen mode), the dialog has a higher z-index
+  // than document.body, so a popover on document.body would be clicked-
+  // through to the rows underneath. Walking from the gear button to its
+  // tooltip ancestor and using THAT element's parent keeps the popover in
+  // the right stacking context. Same containing-block compensation below
+  // handles the position: fixed coords transform.
+  const tooltipAncestor = anchor.closest('[data-testid="uplot-tooltip"]') as HTMLElement | null;
+  const popoverParent = tooltipAncestor?.parentElement ?? document.body;
+  popoverParent.appendChild(popover);
+
+  // Position below the gear button, aligned right-edge-to-right-edge so it
+  // doesn't extend off the right side of the viewport. Coordinates are
+  // viewport-relative (position: fixed) — but if the parent has a
+  // transform/filter (e.g. Radix DialogContent), the fixed context is
+  // relative to that ancestor, so we measure delta and compensate.
+  const rect = anchor.getBoundingClientRect();
+  const popW = popover.offsetWidth || 180;
+  let left = rect.right - popW;
+  if (left < 8) left = 8;
+  const top = rect.bottom + 4;
+  popover.style.left = `${left}px`;
+  popover.style.top = `${top}px`;
+  compensateFixedPositionAfterReparent(popover, { left, top });
+
+  // Click-outside / Escape dismisses. Use anchor.contains(target) rather
+  // than equality so clicks on any future child of the anchor (e.g. a
+  // wrapped <span>/<svg> icon) still register as "inside the toggle" and
+  // don't dismiss the popover before the click is handled.
+  const onDocPointer = (ev: MouseEvent) => {
+    const target = ev.target as Node;
+    if (popover.contains(target) || anchor.contains(target)) return;
+    popover.remove();
+    document.removeEventListener("mousedown", onDocPointer);
+    document.removeEventListener("keydown", onKey);
+  };
+  const onKey = (ev: KeyboardEvent) => {
+    if (ev.key === "Escape") {
+      popover.remove();
+      document.removeEventListener("mousedown", onDocPointer);
+      document.removeEventListener("keydown", onKey);
+    }
+  };
+  // Defer attach so the click that opened the popover doesn't immediately close it
+  setTimeout(() => {
+    document.addEventListener("mousedown", onDocPointer);
+    document.addEventListener("keydown", onKey);
+  }, 0);
 }
 
 // ============================
@@ -78,7 +319,9 @@ const DEFAULT_COL_WIDTHS: Record<string, number> = {
   "run-name": 110,
   "metric": 160,
   "value": 100,
-  "name": 130,
+  "raw-value": 100,
+  "min": 90,
+  "max": 90,
 };
 
 /** Module-level cache for column widths */
@@ -217,6 +460,10 @@ interface TooltipRowData {
   color: string;
   isHighlighted: boolean;
   rawValue?: number;
+  /** Bucket min from envelope companion series, when bucketed data is available */
+  minValue?: number;
+  /** Bucket max from envelope companion series, when bucketed data is available */
+  maxValue?: number;
   isInterpolated: boolean;
   flagText?: string;
   rawFlagText?: string;
@@ -226,6 +473,10 @@ interface TooltipRowData {
   metricName?: string;
   /** Non-finite flags present in this bucket (for bucketed data) */
   nonFiniteFlags?: Set<"NaN" | "Inf" | "-Inf">;
+  /** When true, the entire row is hidden (user toggled the series off in
+   *  the legend). All numeric cells should render "hidden" warning text
+   *  instead of their normal values. */
+  rowHidden?: boolean;
 }
 
 const ICON_STYLE = "margin-left: 3px; font-size: 10px; opacity: 0.85";
@@ -260,8 +511,9 @@ function appendNonFiniteIcons(
 
 /** Helper to format a value span with proper styling for flags/interpolation.
  *  IMPORTANT: Uses individual style properties instead of cssText to preserve
- *  grid-item overflow/divider styles set by createTooltipRow. */
-function formatValueContent(
+ *  grid-item overflow/divider styles set by createTooltipRow.
+ *  The raw (un-smoothed) value lives in its own column — see formatRawValueContent. */
+export function formatValueContent(
   valueSpan: HTMLSpanElement,
   data: TooltipRowData,
   textColor: string,
@@ -272,32 +524,88 @@ function formatValueContent(
     valueSpan.style.fontStyle = "italic";
     valueSpan.style.opacity = "";
     valueSpan.textContent = data.flagText;
-  } else if (data.rawFlagText) {
-    valueSpan.style.color = textColor;
-    valueSpan.style.fontWeight = "500";
-    valueSpan.style.fontStyle = "";
-    valueSpan.style.opacity = "";
-    const smoothedText = document.createTextNode(`${formatAxisLabel(data.value)} (`);
-    valueSpan.appendChild(smoothedText);
-    const flagSpan = document.createElement("span");
-    flagSpan.style.cssText = "color: #e8a838; font-style: italic";
-    flagSpan.textContent = data.rawFlagText;
-    valueSpan.appendChild(flagSpan);
-    valueSpan.appendChild(document.createTextNode(")"));
   } else {
     valueSpan.style.color = textColor;
     valueSpan.style.fontWeight = "500";
     valueSpan.style.fontStyle = data.isInterpolated ? "italic" : "";
     valueSpan.style.opacity = data.isInterpolated ? "0.6" : "";
-    if (data.rawValue != null && data.rawValue !== data.value) {
-      valueSpan.textContent = `${formatAxisLabel(data.value)} (${formatAxisLabel(data.rawValue)})`;
-    } else {
-      valueSpan.textContent = data.isInterpolated ? `~${formatAxisLabel(data.value)}` : formatAxisLabel(data.value);
-    }
+    valueSpan.textContent = data.isInterpolated ? `~${formatAxisLabel(data.value)}` : formatAxisLabel(data.value);
   }
   // Append non-finite marker icons if this bucket contains NaN/Inf
   if (data.nonFiniteFlags && data.nonFiniteFlags.size > 0) {
     appendNonFiniteIcons(valueSpan, data.nonFiniteFlags);
+  }
+}
+
+/** Render the un-smoothed value into a span. Mirrors formatValueContent's
+ *  styling rules but reads `rawValue` / `rawFlagText` and falls back to an
+ *  em-dash when no raw companion exists for this series (e.g. a series that
+ *  isn't being smoothed in a mixed chart). Exported for unit testing. */
+export function formatRawValueContent(
+  span: HTMLSpanElement,
+  data: TooltipRowData,
+  textColor: string,
+) {
+  if (data.rowHidden) {
+    span.style.color = "#e8a838";
+    span.style.fontWeight = "600";
+    span.style.fontStyle = "italic";
+    span.style.opacity = "";
+    span.textContent = "hidden";
+    return;
+  }
+  if (data.rawFlagText) {
+    span.style.color = "#e8a838";
+    span.style.fontWeight = "600";
+    span.style.fontStyle = "italic";
+    span.style.opacity = "";
+    span.textContent = data.rawFlagText;
+  } else if (data.rawValue != null) {
+    span.style.color = textColor;
+    span.style.fontWeight = "500";
+    span.style.fontStyle = "";
+    span.style.opacity = "0.85";
+    span.textContent = formatAxisLabel(data.rawValue);
+  } else {
+    span.style.color = textColor;
+    span.style.fontWeight = "";
+    span.style.fontStyle = "";
+    span.style.opacity = "0.4";
+    span.textContent = "—"; // em-dash
+  }
+}
+
+/** Render a Min/Max bucket-envelope value into a span. Picks the field on
+ *  TooltipRowData based on `which`. Falls back to em-dash when no envelope
+ *  companion exists for this series (e.g. raw individual-run charts).
+ *  Exported for unit testing. */
+export function formatMinMaxContent(
+  span: HTMLSpanElement,
+  data: TooltipRowData,
+  textColor: string,
+  which: "min" | "max",
+) {
+  if (data.rowHidden) {
+    span.style.color = "#e8a838";
+    span.style.fontWeight = "600";
+    span.style.fontStyle = "italic";
+    span.style.opacity = "";
+    span.textContent = "hidden";
+    return;
+  }
+  const val = which === "min" ? data.minValue : data.maxValue;
+  if (val != null) {
+    span.style.color = textColor;
+    span.style.fontWeight = "500";
+    span.style.fontStyle = "";
+    span.style.opacity = "0.85";
+    span.textContent = formatAxisLabel(val);
+  } else {
+    span.style.color = textColor;
+    span.style.fontWeight = "";
+    span.style.fontStyle = "";
+    span.style.opacity = "0.4";
+    span.textContent = "—"; // em-dash
   }
 }
 
@@ -310,7 +618,12 @@ function createTooltipRow(
 ): HTMLDivElement {
   const enabledColumns = columns.filter((c) => c.enabled);
   const row = document.createElement("div");
-  row.style.cssText = `padding: 2px 4px; display: grid; grid-template-columns: ${buildGridTemplate(enabledColumns)}; align-items: center; gap: 6px; white-space: nowrap${data.isHighlighted ? "; background: rgba(59, 130, 246, 0.15); border-radius: 3px" : ""}`;
+  // min-width: max-content — without this, when the parent scroll container
+  // is narrower than the grid's natural width, the row's box stays at the
+  // container width and the highlighted background only paints across that
+  // width. Forcing min-width to max-content keeps the row's box equal to
+  // its grid contents so the highlight covers ALL columns evenly.
+  row.style.cssText = `padding: 2px 4px; display: grid; grid-template-columns: ${buildGridTemplate(enabledColumns)}; align-items: center; gap: 6px; white-space: nowrap; min-width: max-content${data.isHighlighted ? "; background: rgba(59, 130, 246, 0.15); border-radius: 3px" : ""}`;
 
   // Colored line indicator — SVG with dash pattern matching the chart line
   if (data.dash && data.dash.length > 0) {
@@ -339,21 +652,32 @@ function createTooltipRow(
     const isLast = ci === enabledColumns.length - 1;
     const divider = isLast ? "" : `; border-right: 1px solid ${dividerColor}; padding-right: 4px`;
     switch (col.id) {
-      case "name": {
-        const nameSpan = document.createElement("span");
-        // Use textColor (theme-aware) for both states. The translucent blue
-        // background already signals highlight; hardcoding #fff was illegible
-        // on the light-mode tooltip background. Bold conveys the highlight.
-        nameSpan.style.cssText = `color: ${textColor}; min-width: 0; overflow: hidden; text-overflow: ellipsis${data.isHighlighted ? "; font-weight: 600" : ""}${divider}`;
-        nameSpan.textContent = data.name;
-        row.appendChild(nameSpan);
-        break;
-      }
       case "value": {
         const valueSpan = document.createElement("span");
         valueSpan.style.cssText = `min-width: 0; overflow: hidden; text-overflow: ellipsis${divider}`;
         formatValueContent(valueSpan, data, textColor);
         row.appendChild(valueSpan);
+        break;
+      }
+      case "raw-value": {
+        const span = document.createElement("span");
+        span.style.cssText = `min-width: 0; overflow: hidden; text-overflow: ellipsis${divider}`;
+        formatRawValueContent(span, data, textColor);
+        row.appendChild(span);
+        break;
+      }
+      case "min": {
+        const span = document.createElement("span");
+        span.style.cssText = `min-width: 0; overflow: hidden; text-overflow: ellipsis${divider}`;
+        formatMinMaxContent(span, data, textColor, "min");
+        row.appendChild(span);
+        break;
+      }
+      case "max": {
+        const span = document.createElement("span");
+        span.style.cssText = `min-width: 0; overflow: hidden; text-overflow: ellipsis${divider}`;
+        formatMinMaxContent(span, data, textColor, "max");
+        row.appendChild(span);
         break;
       }
       case "run-name": {
@@ -382,8 +706,6 @@ function createTooltipRow(
 
   return row;
 }
-
-/* Settings panel replaced by Neptune-style column headers with +Add dropdown */
 
 /** Type for hover state that persists across chart recreations */
 export interface HoverState {
@@ -506,7 +828,9 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
   let cachedRows: Map<string, {
     row: HTMLDivElement;
     valueSpan: HTMLSpanElement;
-    nameSpan?: HTMLSpanElement;
+    rawValueSpan?: HTMLSpanElement;
+    minSpan?: HTMLSpanElement;
+    maxSpan?: HTMLSpanElement;
     runNameSpan?: HTMLSpanElement;
     runIdSpan?: HTMLSpanElement;
     metricSpan?: HTMLSpanElement;
@@ -536,8 +860,6 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
   let pendingIdx: number | null = null;
   /** Search state for pinned tooltip */
   const searchInputRef: { value: string; focused: boolean; cursorPos: number } | null = { value: "", focused: false, cursorPos: 0 };
-  /** Whether +Add column dropdown is currently open */
-  let addColumnDropdownOpen = false;
   /** Saved pinned position for re-renders */
   let savedPinnedLeft = "0px";
   let savedPinnedTop = "0px";
@@ -585,13 +907,6 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     }
   };
 
-  /** Close the +Add dropdown if open (remove from body since it's appended there) */
-  const closeAddDropdown = () => {
-    addColumnDropdownOpen = false;
-    const existing = document.querySelector("[data-tooltip-add-dropdown]");
-    if (existing) existing.remove();
-  };
-
   /** Re-render pinned tooltip when column settings change in another instance */
   const handleColumnsChanged = () => {
     tooltipStructureDirty = true;
@@ -604,6 +919,21 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
   function init(u: uPlot) {
     chartInstance = u;
     overEl = u.over;
+
+    // Pin-preservation: if this chartId's previous incarnation just had a
+    // deferred unpin scheduled (see destroy hook), cancel it. This is what
+    // lets a pinned tooltip survive chart recreations driven by data
+    // refetch / dim change / route preload.
+    if (isSharedMode && sharedTooltipEl) {
+      const pendingChartId = (sharedTooltipEl as any)._pendingFinalizeChartId;
+      const pendingTimer = (sharedTooltipEl as any)._pendingFinalizeTimer;
+      if (pendingChartId === pluginChartId && pendingTimer) {
+        clearTimeout(pendingTimer);
+        (sharedTooltipEl as any)._pendingFinalizeTimer = null;
+        (sharedTooltipEl as any)._pendingFinalizeChartId = null;
+        log(`init: cancelled pending unpin finalize — chart recreated`);
+      }
+    }
 
     if (isSharedMode && sharedTooltipEl && sharedContentContainer) {
       // Shared mode: reuse the single tooltip element from ChartSyncProvider.
@@ -860,6 +1190,36 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
         tooltipEl.style.position = "fixed"; // keep fixed positioning
         tooltipEl.appendChild(closeBtn);
       }
+
+      // Gear icon (⚙) — opens the column-toggle popover. Sits OUTSIDE the
+      // column-header grid (appended directly to tooltipEl) so re-introducing
+      // it does NOT widen the header row. PR #373 removed the inline header
+      // controls for exactly that reason; the popover is the safe alternative.
+      if (!tooltipEl.querySelector("[data-tooltip-gear]")) {
+        const gearBtn = document.createElement("button");
+        gearBtn.setAttribute("data-tooltip-gear", "true");
+        gearBtn.title = "Configure tooltip columns";
+        gearBtn.style.cssText = `
+          position: absolute; top: 2px; right: 22px;
+          width: 16px; height: 16px; border: none; background: transparent;
+          color: ${theme === "dark" ? "#888" : "#666"};
+          cursor: pointer; font-size: 12px; line-height: 1;
+          display: flex; align-items: center; justify-content: center;
+          border-radius: 2px; padding: 0;
+        `;
+        gearBtn.textContent = "⚙"; // ⚙
+        gearBtn.addEventListener("mouseenter", () => {
+          gearBtn.style.background = theme === "dark" ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.08)";
+        });
+        gearBtn.addEventListener("mouseleave", () => {
+          gearBtn.style.background = "transparent";
+        });
+        gearBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          toggleColumnPopover(gearBtn);
+        });
+        tooltipEl.appendChild(gearBtn);
+      }
     };
 
     /** Pin the tooltip at its current position */
@@ -872,10 +1232,21 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       // If inside a fullscreen dialog, move tooltip into the dialog so Radix's
       // focus scope allows the search input to receive keystrokes.
       // unpinTooltip() moves it back to body.
+      // IMPORTANT: Radix Dialog applies `transform` to its content, which
+      // establishes a containing block for `position: fixed` descendants.
+      // Reparenting tooltipEl into the dialog therefore changes the meaning
+      // of its left/top from viewport-coords to dialog-local-coords, making
+      // the tooltip jump on pin. Capture the tooltip's visual position
+      // before the reparent and re-apply it afterwards.
       if (isSharedMode && overEl) {
         const dialogContent = overEl.closest("[data-slot='dialog-content']");
         if (dialogContent && tooltipEl.parentElement !== dialogContent) {
+          const before = tooltipEl.getBoundingClientRect();
           dialogContent.appendChild(tooltipEl);
+          compensateFixedPositionAfterReparent(tooltipEl, {
+            left: before.left,
+            top: before.top,
+          });
         }
       }
       // Store pinned chart reference so destroy() can clean up if chart unmounts
@@ -900,9 +1271,17 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     const unpinTooltip = (forceHide = false) => {
       if (!tooltipEl) return;
       tooltipEl.removeAttribute("data-pinned");
-      // Move tooltip back to body if it was reparented into a fullscreen dialog
+      // Move tooltip back to body if it was reparented into a fullscreen dialog.
+      // Same containing-block compensation as in pinTooltip — see the comment
+      // there. Without this the tooltip momentarily jumps before hover
+      // repositioning kicks back in.
       if (isSharedMode && tooltipEl.parentElement !== document.body) {
+        const before = tooltipEl.getBoundingClientRect();
         document.body.appendChild(tooltipEl);
+        compensateFixedPositionAfterReparent(tooltipEl, {
+          left: before.left,
+          top: before.top,
+        });
       }
       _pinState.isPinned = false;
       tooltipStructureDirty = true;
@@ -913,7 +1292,6 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
         searchInputRef.focused = false;
         searchInputRef.cursorPos = 0;
       }
-      closeAddDropdown();
       syncHoverState();
       // Stop observing resize
       if (resizeObserver) {
@@ -943,6 +1321,11 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       if (closeBtn) {
         closeBtn.remove();
       }
+      // Remove gear button + any open popover
+      const gearBtn = tooltipEl.querySelector("[data-tooltip-gear]");
+      if (gearBtn) gearBtn.remove();
+      const openPopover = document.querySelector("[data-tooltip-column-popover]");
+      if (openPopover) openPopover.remove();
       // Check if mouse is actually over a chart right now.
       // isHovering may be stale because handleMouseLeave returned early while pinned.
       // In shared mode, check all chart overlays (the user may have moved to a different chart).
@@ -995,8 +1378,12 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     };
 
     // Escape key unpins — explicit user dismissal, always hide.
+    // EXCEPTION: when the column-config popover is open, the popover's own
+    // Escape handler closes it; we don't want the same keypress to also
+    // unpin the underlying tooltip.
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape" && _pinState.isPinned) {
+        if (document.querySelector("[data-tooltip-column-popover]")) return;
         unpinTooltip(/* forceHide */ true);
       }
     };
@@ -1010,6 +1397,11 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       if (!_pinState.isPinned || !tooltipEl) return;
       const target = e.target as Node;
       if (tooltipEl.contains(target)) return;
+      // Treat clicks inside the column-config popover as "inside the tooltip"
+      // — the popover is appended to document.body so it can extend past the
+      // tooltip's bounds, but for un-pin purposes it's part of the same UI.
+      const colPopover = document.querySelector("[data-tooltip-column-popover]");
+      if (colPopover && colPopover.contains(target)) return;
       const targetEl = target as HTMLElement | null;
       const clickedChart = !!targetEl && !!targetEl.closest?.(".u-over");
       unpinTooltip(/* forceHide */ !clickedChart);
@@ -1136,32 +1528,12 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
 
     // Gather series values
     const textColor = theme === "dark" ? "#fff" : "#000";
-    const seriesItems: { name: string; value: number; color: string; hidden: boolean; seriesHidden: boolean; seriesIdx: number; rawValue?: number; isInterpolated: boolean; flagText?: string; rawFlagText?: string; dash?: number[]; runName?: string; runId?: string; sqid?: string; seriesId?: string; metricName?: string; nonFiniteFlags?: Set<"NaN" | "Inf" | "-Inf"> }[] = [];
+    const seriesItems: { name: string; value: number; color: string; hidden: boolean; seriesHidden: boolean; seriesIdx: number; rawValue?: number; minValue?: number; maxValue?: number; isInterpolated: boolean; flagText?: string; rawFlagText?: string; dash?: number[]; runName?: string; runId?: string; sqid?: string; seriesId?: string; metricName?: string; nonFiniteFlags?: Set<"NaN" | "Inf" | "-Inf"> }[] = [];
 
-    // First pass: collect raw (original) values and flags from hidden smoothing series
-    const rawValues = new Map<string, number>();
-    const rawFlags = new Map<string, string>();
-    for (let i = 1; i < u.series.length; i++) {
-      const series = u.series[i];
-      const yVal = u.data[i][idx];
-      const lineData = lines[i - 1];
-      if (series.show !== false && lineData?.hideFromLegend) {
-        const labelText = typeof series.label === "string" ? series.label : "";
-        if (labelText.endsWith(" (original)")) {
-          const baseName = labelText.slice(0, -" (original)".length);
-          if (yVal != null) {
-            rawValues.set(baseName, yVal);
-          } else {
-            // Check if the raw value has a non-finite flag (NaN/Inf/-Inf)
-            const xAtIdx = (u.data[0] as number[])[idx];
-            const flag = lineData?.valueFlags?.get(xAtIdx);
-            if (flag) {
-              rawFlags.set(baseName, flag);
-            }
-          }
-        }
-      }
-    }
+    // First pass: collect raw (smoothing-original) values + flags and
+    // envelope min/max from companion series. See `collectCompanionValues`.
+    const { rawValues, rawFlags, minValues, maxValues } =
+      collectCompanionValues(u, lines, idx);
 
     const xValues = u.data[0] as number[];
 
@@ -1276,6 +1648,8 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
           seriesHidden: isSeriesHidden,
           seriesIdx: i,
           rawValue: rawValues.get(labelText),
+          minValue: minValues.get(labelText),
+          maxValue: maxValues.get(labelText),
           isInterpolated,
           flagText: bucketFlagText,
           rawFlagText: rawFlags.get(labelText),
@@ -1317,8 +1691,14 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
     // Filter out hideFromLegend series (smoothing originals etc), keep seriesHidden ones
     const visibleItems = seriesItems.filter((s) => !s.hidden);
 
-    // Get current column configuration
-    const columns = getTooltipColumns();
+    // Get current column configuration. When the chart is smoothing (any series
+    // has raw companion data), auto-inject a synthetic Raw Value column right
+    // after Value. The injected column is not persisted and not user-toggleable.
+    const userColumns = getTooltipColumns();
+    const hasRawData = rawValues.size > 0 || rawFlags.size > 0;
+    const columns: TooltipColumnConfig[] = hasRawData
+      ? insertRawValueColumn(userColumns)
+      : userColumns;
 
     // Apply search filter if active
     const searchQuery = searchInputRef?.value?.toLowerCase() ?? "";
@@ -1332,8 +1712,6 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       : visibleItems;
 
     // Clear content container only — close button lives on tooltipEl outside this container
-    // Also remove any body-appended dropdown from previous render
-    closeAddDropdown();
     isRebuilding = true;
     contentContainer.textContent = "";
 
@@ -1413,7 +1791,6 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
           let visibleCount = 0;
           for (const [, entry] of cachedRows) {
             const matchesSearch = !query ||
-              (entry.nameSpan?.textContent?.toLowerCase().includes(query)) ||
               (entry.runNameSpan?.textContent?.toLowerCase().includes(query)) ||
               (entry.runIdSpan?.textContent?.toLowerCase().includes(query)) ||
               (entry.metricSpan?.textContent?.toLowerCase().includes(query));
@@ -1490,15 +1867,18 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       }
     }
 
-    // Neptune-style column header row with resize handles and +Add (when pinned)
+    // Column header row with drag-to-reorder and resize handles (when pinned).
     const enabledColumns = columns.filter((c) => c.enabled);
-    const disabledColumns = columns.filter((c) => !c.enabled);
     const gridTemplate = buildGridTemplate(enabledColumns);
 
-    // Wrapper holds the grid header + the +Add button in a flex row
+    // The header sits INSIDE the same scroll container as the data rows so
+    // horizontal trackpad/swipe scroll moves both together (otherwise rows
+    // and header desync visually). Sticky-top keeps it pinned during
+    // vertical scroll. Use the same popover background so it blends with
+    // the rest of the tooltip rather than reading as a black bar.
     const columnHeaderWrapper = document.createElement("div");
     columnHeaderWrapper.setAttribute("data-tooltip-column-headers", "true");
-    columnHeaderWrapper.style.cssText = `display: flex; align-items: center; border-bottom: 1px solid ${theme === "dark" ? "#333" : "#eee"}; margin-bottom: 1px; flex-shrink: 0`;
+    columnHeaderWrapper.style.cssText = `display: flex; align-items: center; border-bottom: 1px solid ${theme === "dark" ? "#333" : "#eee"}; margin-bottom: 1px; flex-shrink: 0; position: sticky; top: 0; z-index: 2; background: hsl(var(--popover)); min-width: max-content`;
 
     // Grid row for column labels (matches data row grid)
     const columnHeaderRow = document.createElement("div");
@@ -1521,8 +1901,10 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       labelSpan.style.cssText = `color: ${textColor}; opacity: 0.6; font-size: 9px; font-weight: 600; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis`;
       cellWrapper.appendChild(labelSpan);
 
-      // Drag-to-reorder (pinned only, when >1 column)
-      if (_pinState.isPinned && enabledColumns.length > 1) {
+      // Drag-to-reorder (pinned only, when >1 column).
+      // Skip the synthetic raw-value column — it auto-positions next to Value
+      // and is not part of saved config, so reordering it makes no sense.
+      if (_pinState.isPinned && enabledColumns.length > 1 && col.id !== "raw-value") {
         cellWrapper.draggable = true;
         cellWrapper.dataset.colId = col.id;
         cellWrapper.style.cursor = "grab";
@@ -1639,17 +2021,20 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
 
     columnHeaderWrapper.appendChild(columnHeaderRow);
 
-    contentContainer.appendChild(columnHeaderWrapper);
-
-    // Create scrollable content area for all series
+    // Create scrollable content area for all series. The column-header strip
+    // is appended INSIDE this container as the first child (with sticky-top)
+    // so horizontal scroll moves both header and data rows together.
     const content = document.createElement("div");
     content.setAttribute("data-tooltip-content", "true");
-    content.style.cssText = "overflow-y: auto; scrollbar-width: thin; display: flex; flex-direction: column; flex: 1; min-height: 0";
+    content.style.cssText = "overflow-y: auto; overflow-x: auto; scrollbar-width: thin; display: flex; flex-direction: column; flex: 1; min-height: 0";
+    content.appendChild(columnHeaderWrapper);
     cachedRowContainer = content;
 
     // Determine column span indices for caching (child 0 = color indicator, then enabled columns)
     const valueColIdx = enabledColumns.findIndex((c) => c.id === "value");
-    const nameColIdx = enabledColumns.findIndex((c) => c.id === "name");
+    const rawValueColIdx = enabledColumns.findIndex((c) => c.id === "raw-value");
+    const minColIdx = enabledColumns.findIndex((c) => c.id === "min");
+    const maxColIdx = enabledColumns.findIndex((c) => c.id === "max");
     const runNameColIdx = enabledColumns.findIndex((c) => c.id === "run-name");
     const runIdColIdx = enabledColumns.findIndex((c) => c.id === "run-id");
     const metricColIdx = enabledColumns.findIndex((c) => c.id === "metric");
@@ -1676,6 +2061,8 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
         color: s.seriesHidden ? (theme === "dark" ? "#555" : "#bbb") : s.color,
         isHighlighted: isHighlighted && !s.seriesHidden,
         rawValue: s.rawValue,
+        minValue: s.minValue,
+        maxValue: s.maxValue,
         isInterpolated: s.isInterpolated,
         flagText: s.seriesHidden ? "hidden" : s.flagText,
         rawFlagText: s.rawFlagText,
@@ -1684,6 +2071,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
         runId: s.runId,
         metricName: s.metricName,
         nonFiniteFlags: s.nonFiniteFlags,
+        rowHidden: s.seriesHidden,
       }, textColor, columns, theme);
 
       // Grey out hidden series
@@ -1696,7 +2084,9 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       const cacheEntry: {
         row: HTMLDivElement;
         valueSpan: HTMLSpanElement;
-        nameSpan?: HTMLSpanElement;
+        rawValueSpan?: HTMLSpanElement;
+        minSpan?: HTMLSpanElement;
+        maxSpan?: HTMLSpanElement;
         runNameSpan?: HTMLSpanElement;
         runIdSpan?: HTMLSpanElement;
         metricSpan?: HTMLSpanElement;
@@ -1708,7 +2098,9 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
         // valueSpan is always present (value column is always enabled by default)
         valueSpan: (valueColIdx >= 0 ? row.children[valueColIdx + 1] : row.children[1]) as HTMLSpanElement,
       };
-      if (nameColIdx >= 0) cacheEntry.nameSpan = row.children[nameColIdx + 1] as HTMLSpanElement;
+      if (rawValueColIdx >= 0) cacheEntry.rawValueSpan = row.children[rawValueColIdx + 1] as HTMLSpanElement;
+      if (minColIdx >= 0) cacheEntry.minSpan = row.children[minColIdx + 1] as HTMLSpanElement;
+      if (maxColIdx >= 0) cacheEntry.maxSpan = row.children[maxColIdx + 1] as HTMLSpanElement;
       if (runNameColIdx >= 0) cacheEntry.runNameSpan = row.children[runNameColIdx + 1] as HTMLSpanElement;
       if (runIdColIdx >= 0) cacheEntry.runIdSpan = row.children[runIdColIdx + 1] as HTMLSpanElement;
       if (metricColIdx >= 0) cacheEntry.metricSpan = row.children[metricColIdx + 1] as HTMLSpanElement;
@@ -1898,29 +2290,10 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       cachedHeaderLabel.textContent = xAxisLabel;
     }
 
-    // Gather series values (same logic as updateTooltipContent)
-    const rawValues = new Map<string, number>();
-    const rawFlags = new Map<string, string>();
-    for (let i = 1; i < u.series.length; i++) {
-      const series = u.series[i];
-      const yVal = u.data[i][idx];
-      const lineData = lines[i - 1];
-      if (series.show !== false && lineData?.hideFromLegend) {
-        const labelText = typeof series.label === "string" ? series.label : "";
-        if (labelText.endsWith(" (original)")) {
-          const baseName = labelText.slice(0, -" (original)".length);
-          if (yVal != null) {
-            rawValues.set(baseName, yVal);
-          } else {
-            const xAtIdx = (u.data[0] as number[])[idx];
-            const flag = lineData?.valueFlags?.get(xAtIdx);
-            if (flag) {
-              rawFlags.set(baseName, flag);
-            }
-          }
-        }
-      }
-    }
+    // Same companion-values collection as updateTooltipContent —
+    // see `collectCompanionValues`.
+    const { rawValues, rawFlags, minValues, maxValues } =
+      collectCompanionValues(u, lines, idx);
 
     const xValues = u.data[0] as number[];
     const searchQuery = searchInputRef?.value?.toLowerCase() ?? "";
@@ -1983,6 +2356,27 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
             name: labelText, value: 0, color: theme === "dark" ? "#555" : "#bbb",
             isHighlighted: false, isInterpolated: false, flagText: "hidden",
           }, textColor);
+          if (cached.rawValueSpan) {
+            cached.rawValueSpan.textContent = "";
+            formatRawValueContent(cached.rawValueSpan, {
+              name: labelText, value: 0, color: "",
+              isHighlighted: false, isInterpolated: false, rowHidden: true,
+            }, textColor);
+          }
+          if (cached.minSpan) {
+            cached.minSpan.textContent = "";
+            formatMinMaxContent(cached.minSpan, {
+              name: labelText, value: 0, color: "",
+              isHighlighted: false, isInterpolated: false, rowHidden: true,
+            }, textColor, "min");
+          }
+          if (cached.maxSpan) {
+            cached.maxSpan.textContent = "";
+            formatMinMaxContent(cached.maxSpan, {
+              name: labelText, value: 0, color: "",
+              isHighlighted: false, isInterpolated: false, rowHidden: true,
+            }, textColor, "max");
+          }
           cached.row.style.opacity = "0.4";
           cached.lastValueKey = vk;
         }
@@ -2003,21 +2397,38 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
 
       // Non-finite value flag (NaN/Inf/-Inf)
       if (yVal == null && flag) {
-        const vk = `flag:${flag}`;
+        const rawVal = rawValues.get(labelText);
+        const rawFlag = rawFlags.get(labelText);
+        const minVal = minValues.get(labelText);
+        const maxVal = maxValues.get(labelText);
+        const vk = `flag:${flag}|${rawVal ?? ""}|${rawFlag ?? ""}|${minVal ?? ""}|${maxVal ?? ""}`;
         if (cached.lastValueKey !== vk) {
-          cached.valueSpan.textContent = "";
-          formatValueContent(cached.valueSpan, {
+          const flagRow: TooltipRowData = {
             name: labelText, value: 0, color: lineData?.color || "",
             isHighlighted, isInterpolated: false, flagText: flag,
             dash: lineData?.dash, runName: lineData?.runName, runId: lineData?.runId, metricName: lineData?.metricName,
-          }, textColor);
+            rawValue: rawVal, rawFlagText: rawFlag,
+            minValue: minVal, maxValue: maxVal,
+          };
+          cached.valueSpan.textContent = "";
+          formatValueContent(cached.valueSpan, flagRow, textColor);
+          if (cached.rawValueSpan) {
+            cached.rawValueSpan.textContent = "";
+            formatRawValueContent(cached.rawValueSpan, flagRow, textColor);
+          }
+          if (cached.minSpan) {
+            cached.minSpan.textContent = "";
+            formatMinMaxContent(cached.minSpan, flagRow, textColor, "min");
+          }
+          if (cached.maxSpan) {
+            cached.maxSpan.textContent = "";
+            formatMinMaxContent(cached.maxSpan, flagRow, textColor, "max");
+          }
           cached.row.style.background = isHighlighted ? "rgba(59, 130, 246, 0.15)" : "";
-          if (cached.nameSpan) cached.nameSpan.style.fontWeight = isHighlighted ? "600" : "";
           cached.lastValueKey = vk;
           cached.lastHighlight = isHighlighted;
         } else if (cached.lastHighlight !== isHighlighted) {
           cached.row.style.background = isHighlighted ? "rgba(59, 130, 246, 0.15)" : "";
-          if (cached.nameSpan) cached.nameSpan.style.fontWeight = isHighlighted ? "600" : "";
           cached.lastHighlight = isHighlighted;
         }
         cached.row.style.display = "grid";
@@ -2034,21 +2445,38 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
           if (bucketFlags.has("NaN")) parts.push("NaN");
           if (bucketFlags.has("Inf")) parts.push("+Inf");
           if (bucketFlags.has("-Inf")) parts.push("-Inf");
-          const vk = `bucket:${parts.join(',')}`;
+          const rawVal = rawValues.get(labelText);
+          const rawFlag = rawFlags.get(labelText);
+          const minVal = minValues.get(labelText);
+          const maxVal = maxValues.get(labelText);
+          const vk = `bucket:${parts.join(',')}|${rawVal ?? ""}|${rawFlag ?? ""}|${minVal ?? ""}|${maxVal ?? ""}`;
           if (cached.lastValueKey !== vk) {
-            cached.valueSpan.textContent = "";
-            formatValueContent(cached.valueSpan, {
+            const bucketRow: TooltipRowData = {
               name: labelText, value: 0, color: lineData.color || "",
               isHighlighted, isInterpolated: false, flagText: parts.join(", "),
               dash: lineData.dash, runName: lineData.runName, runId: lineData.runId, metricName: lineData.metricName,
-            }, textColor);
+              rawValue: rawVal, rawFlagText: rawFlag,
+              minValue: minVal, maxValue: maxVal,
+            };
+            cached.valueSpan.textContent = "";
+            formatValueContent(cached.valueSpan, bucketRow, textColor);
+            if (cached.rawValueSpan) {
+              cached.rawValueSpan.textContent = "";
+              formatRawValueContent(cached.rawValueSpan, bucketRow, textColor);
+            }
+            if (cached.minSpan) {
+              cached.minSpan.textContent = "";
+              formatMinMaxContent(cached.minSpan, bucketRow, textColor, "min");
+            }
+            if (cached.maxSpan) {
+              cached.maxSpan.textContent = "";
+              formatMinMaxContent(cached.maxSpan, bucketRow, textColor, "max");
+            }
             cached.row.style.background = isHighlighted ? "rgba(59, 130, 246, 0.15)" : "";
-            if (cached.nameSpan) cached.nameSpan.style.fontWeight = isHighlighted ? "600" : "";
             cached.lastValueKey = vk;
             cached.lastHighlight = isHighlighted;
           } else if (cached.lastHighlight !== isHighlighted) {
             cached.row.style.background = isHighlighted ? "rgba(59, 130, 246, 0.15)" : "";
-            if (cached.nameSpan) cached.nameSpan.style.fontWeight = isHighlighted ? "600" : "";
             cached.lastHighlight = isHighlighted;
           }
           cached.row.style.display = "grid";
@@ -2086,27 +2514,42 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
           else if (bucketFlags.has("-Inf")) bucketFlagText = "-Inf";
         }
 
-        // Build a cache key to skip redundant DOM writes
+        // Build a cache key to skip redundant DOM writes. min/max are part of
+        // the key so the cell refreshes when the user moves to a new bucket.
         const rawVal = rawValues.get(labelText);
         const rawFlag = rawFlags.get(labelText);
-        const vk = `${yVal}|${isInterpolated ? 1 : 0}|${bucketFlagText ?? ""}|${rawVal ?? ""}|${rawFlag ?? ""}`;
+        const minVal = minValues.get(labelText);
+        const maxVal = maxValues.get(labelText);
+        const vk = `${yVal}|${isInterpolated ? 1 : 0}|${bucketFlagText ?? ""}|${rawVal ?? ""}|${rawFlag ?? ""}|${minVal ?? ""}|${maxVal ?? ""}`;
         if (cached.lastValueKey !== vk) {
-          cached.valueSpan.textContent = "";
-          formatValueContent(cached.valueSpan, {
+          const rowData: TooltipRowData = {
             name: labelText, value: yVal, color: lineData?.color || "",
             isHighlighted, rawValue: rawVal,
+            minValue: minVal, maxValue: maxVal,
             isInterpolated, rawFlagText: rawFlag,
             flagText: bucketFlagText,
             dash: lineData?.dash, runName: lineData?.runName, runId: lineData?.runId, metricName: lineData?.metricName,
             nonFiniteFlags: bucketFlags,
-          }, textColor);
+          };
+          cached.valueSpan.textContent = "";
+          formatValueContent(cached.valueSpan, rowData, textColor);
+          if (cached.rawValueSpan) {
+            cached.rawValueSpan.textContent = "";
+            formatRawValueContent(cached.rawValueSpan, rowData, textColor);
+          }
+          if (cached.minSpan) {
+            cached.minSpan.textContent = "";
+            formatMinMaxContent(cached.minSpan, rowData, textColor, "min");
+          }
+          if (cached.maxSpan) {
+            cached.maxSpan.textContent = "";
+            formatMinMaxContent(cached.maxSpan, rowData, textColor, "max");
+          }
           cached.row.style.background = isHighlighted ? "rgba(59, 130, 246, 0.15)" : "";
-          if (cached.nameSpan) cached.nameSpan.style.fontWeight = isHighlighted ? "600" : "";
           cached.lastValueKey = vk;
           cached.lastHighlight = isHighlighted;
         } else if (cached.lastHighlight !== isHighlighted) {
           cached.row.style.background = isHighlighted ? "rgba(59, 130, 246, 0.15)" : "";
-          if (cached.nameSpan) cached.nameSpan.style.fontWeight = isHighlighted ? "600" : "";
           cached.lastHighlight = isHighlighted;
         }
         cached.row.style.display = "grid";
@@ -2374,26 +2817,67 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       setCursor,
       destroy(u: uPlot) {
         log(`destroy called - isHovering=${isHovering}, _pinState.isPinned=${_pinState.isPinned}, hideTimeoutId=${hideTimeoutId !== null}`);
-        // If this chart owned the pinned tooltip, unpin and hide it
+        // If this chart owned the pinned tooltip, *defer* the unpin/hide
+        // for ~250ms. Reason: chart recreations (data refetch, dim change,
+        // option ref change) call destroy followed immediately by init for
+        // the SAME chartId. If we clear pin state synchronously here, the
+        // user's pinned tooltip vanishes on every refresh — that's the
+        // source of "Bug A" (RUNNING-run auto-refresh) and "Bug B"
+        // (TanStack Router preload on hover).
+        //
+        // The new chart's init() looks at `_pendingFinalizeChartId` and
+        // cancels this timer when the same chartId comes back, preserving
+        // the pin. If no init runs within 250ms (chart genuinely
+        // unmounted — dialog closed, route navigated), the timer fires and
+        // does the cleanup that used to happen synchronously here.
         if (isSharedMode && _pinState.pinnedChartId === pluginChartId) {
-          _pinState.isPinned = false;
-          // Move tooltip back to body BEFORE the dialog unmounts — otherwise
-          // the tooltip element gets removed with the dialog content and
-          // non-fullscreen charts can never show it again.
-          reparentTooltip?.(null);
-          if (tooltipEl) {
-            tooltipEl.removeAttribute("data-pinned");
-            tooltipEl.style.display = "none";
-            tooltipEl.style.pointerEvents = "none";
-            tooltipEl.style.border = `1px solid hsl(var(--border))`;
-            tooltipEl.style.resize = "none";
-            const closeBtn = tooltipEl.querySelector("[data-tooltip-close]");
-            if (closeBtn) closeBtn.remove();
+          const finalizeUnpin = () => {
+            // Re-check ownership in case another chart took the pin in the
+            // meantime (rare, but possible if the user clicks a different
+            // chart inside the deferral window).
+            if (_pinState.pinnedChartId !== pluginChartId) return;
+            _pinState.isPinned = false;
+            reparentTooltip?.(null);
+            if (tooltipEl) {
+              tooltipEl.removeAttribute("data-pinned");
+              tooltipEl.style.display = "none";
+              tooltipEl.style.pointerEvents = "none";
+              tooltipEl.style.border = `1px solid hsl(var(--border))`;
+              tooltipEl.style.resize = "none";
+              const closeBtn = tooltipEl.querySelector("[data-tooltip-close]");
+              if (closeBtn) closeBtn.remove();
+              const gearBtn = tooltipEl.querySelector("[data-tooltip-gear]");
+              if (gearBtn) gearBtn.remove();
+              const openPopover = document.querySelector("[data-tooltip-column-popover]");
+              if (openPopover) openPopover.remove();
+            }
+          };
+          // Cancel any prior pending finalize (rapid destroy/recreate
+          // cycles shouldn't stack timers).
+          if (sharedTooltipEl) {
+            const prior = (sharedTooltipEl as any)._pendingFinalizeTimer;
+            if (prior) clearTimeout(prior);
+            const timer = setTimeout(finalizeUnpin, 250);
+            (sharedTooltipEl as any)._pendingFinalizeTimer = timer;
+            (sharedTooltipEl as any)._pendingFinalizeChartId = pluginChartId;
+          } else {
+            // Non-shared mode (no shared tooltip element to coordinate
+            // through) — keep original synchronous behavior.
+            finalizeUnpin();
           }
         }
         // Clear stale content and reset active chart so the next chart that mounts
         // under the cursor can take over cleanly without flashing old data.
-        if (isSharedMode) {
+        // EXCEPT: if we just scheduled a deferred unpin for this chartId
+        // (pin-preservation path above), keep the tooltip content + visible
+        // so the user doesn't see it blink off on every chart recreation.
+        // The new init() will cancel the deferred unpin and re-render
+        // content via its existing hover-restore path.
+        const pinDeferredForThisChart =
+          isSharedMode &&
+          sharedTooltipEl &&
+          (sharedTooltipEl as any)._pendingFinalizeChartId === pluginChartId;
+        if (isSharedMode && !pinDeferredForThisChart) {
           if (contentContainer) contentContainer.textContent = "";
           if (tooltipEl) tooltipEl.style.display = "none";
           if (activeTooltipChartRef && activeTooltipChartRef.current === pluginChartId) {
@@ -2420,9 +2904,6 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
         if (tooltipEl) {
           tooltipEl.removeEventListener("mousedown", handleDragMouseDown);
         }
-
-        // Remove any body-appended dropdown
-        closeAddDropdown();
 
         // Remove tooltip element (skip in shared mode — element is owned by the context)
         if (!isSharedMode && tooltipEl && tooltipEl.parentNode) {

@@ -51,6 +51,7 @@ export function ChartFullscreenDialog({
   const chartContentRef = useRef<HTMLDivElement>(null);
   const chartAreaRef = useRef<HTMLDivElement>(null);
   const legendSidebarRef = useRef<HTMLDivElement>(null);
+  const legendHeaderRef = useRef<HTMLDivElement>(null);
   const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth);
   const isDraggingRef = useRef(false);
 
@@ -63,6 +64,27 @@ export function ChartFullscreenDialog({
     let currentLegend: Element | null = null;
     let lastFocusedSeriesId: string | null = null;
 
+    function renderLegendHeader() {
+      const headerEl = legendHeaderRef.current;
+      const chartArea = chartAreaRef.current;
+      if (!headerEl || !chartArea) return;
+      const uplotEl = chartArea.querySelector(".uplot") as HTMLElement | null;
+      const uplot = (uplotEl as any)?._uplot;
+      // Detect smoothing from any series tagged by buildSeriesConfig.
+      let hasOriginal = false;
+      if (uplot?.series) {
+        for (let i = 1; i < uplot.series.length; i++) {
+          if ((uplot.series[i] as any)._hasOriginal) { hasOriginal = true; break; }
+        }
+      }
+      // Header text mirrors the cell format: "Value (Raw)" when smoothing
+      // is on, "Value" otherwise.
+      const text = hasOriginal ? "Value (Raw)" : "Value";
+      if (headerEl.dataset.signature === text) return;
+      headerEl.dataset.signature = text;
+      headerEl.textContent = text;
+    }
+
     function moveLegend() {
       const chartArea = chartAreaRef.current;
       const sidebar = legendSidebarRef.current;
@@ -73,9 +95,20 @@ export function ChartFullscreenDialog({
         while (sidebar.firstChild) {
           sidebar.removeChild(sidebar.firstChild);
         }
+        // Insert a column-header strip ABOVE the moved uPlot legend table.
+        // The strip's labels mirror what the value formatter emits per row,
+        // so users don't have to interpret bare numbers.
+        const headerRow = document.createElement("div");
+        headerRow.setAttribute("data-fs-legend-header", "true");
+        headerRow.style.cssText = "display: flex; gap: 6px; padding: 4px 12px 4px 8px; opacity: 0.6; font-size: 10px; text-transform: uppercase; font-weight: 600; letter-spacing: 0.05em; flex-wrap: nowrap; justify-content: flex-end";
+        sidebar.appendChild(headerRow);
+        legendHeaderRef.current = headerRow;
         currentLegend = legend;
         sidebar.appendChild(legend);
       }
+      // Always re-evaluate the header on each tick so smoothing-toggle changes
+      // and show-min/max changes propagate without needing to re-mount.
+      renderLegendHeader();
 
       // Highlight the focused series row in the legend sidebar.
       // Track by _focusedSeriesId (not _focusedRunId) so the highlight
@@ -117,18 +150,35 @@ export function ChartFullscreenDialog({
     };
   }, [open]);
 
-  // Drag-to-resize sidebar
+  // Drag-to-resize sidebar.
+  //
+  // Critical: do NOT call setSidebarWidth during the drag. The chart subtree
+  // is mounted via this dialog's `children` prop and reads context that can
+  // re-fire when the dialog re-renders — that triggers a useChartLifecycle
+  // pass which destroys + recreates the uPlot instance (including .u-legend).
+  // The user sees that recreation as a flash where the legend rows briefly
+  // disappear from the sidebar.
+  //
+  // Instead, during the drag we write directly to the sidebar's inline style
+  // (no React render). The chart-area is `flex-1` so it grows/shrinks
+  // naturally via CSS. uPlot's internal ResizeObserver still adapts the
+  // canvas via setSize without any React involvement. We only commit React
+  // state once on mouseup, which is when the chart can safely re-render.
   const handleDragStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     isDraggingRef.current = true;
     const startX = e.clientX;
-    const startWidth = sidebarWidth;
+    const startWidth = legendSidebarRef.current?.getBoundingClientRect().width ?? sidebarWidth;
+    let pendingWidth = startWidth;
 
     function onMouseMove(ev: MouseEvent) {
-      // Dragging left increases sidebar width
       const delta = startX - ev.clientX;
-      const newWidth = Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, startWidth + delta));
-      setSidebarWidth(newWidth);
+      pendingWidth = Math.min(
+        MAX_SIDEBAR_WIDTH,
+        Math.max(MIN_SIDEBAR_WIDTH, startWidth + delta),
+      );
+      const sidebar = legendSidebarRef.current;
+      if (sidebar) sidebar.style.width = `${pendingWidth}px`;
     }
 
     function onMouseUp() {
@@ -137,11 +187,10 @@ export function ChartFullscreenDialog({
       document.removeEventListener("mouseup", onMouseUp);
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
-      // Persist
-      setSidebarWidth((w) => {
-        try { localStorage.setItem(SIDEBAR_STORAGE_KEY, String(w)); } catch {}
-        return w;
-      });
+      // Commit final width to React state and persist. This is the only
+      // render triggered by the drag — fires once on release.
+      setSidebarWidth(pendingWidth);
+      try { localStorage.setItem(SIDEBAR_STORAGE_KEY, String(pendingWidth)); } catch {}
     }
 
     document.body.style.cursor = "col-resize";

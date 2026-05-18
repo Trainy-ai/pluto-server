@@ -125,11 +125,18 @@ export function useLineSettings(
     DEFAULT_SETTINGS,
   );
 
+  // IMPORTANT: use functional-updater form so the spread merges against the
+  // freshest persisted value (read from IndexedDB at write time), not the
+  // closure-captured React state. React state initializes to DEFAULT_SETTINGS
+  // and only catches up to the saved value ~150ms later via liveQuery — any
+  // write that happens during that window with the closure-captured spread
+  // would clobber every OTHER saved key with its default. See the
+  // useLocalStorage docs for the full explanation.
   const updateSettings = <K extends keyof LineChartSettings>(
     key: K,
     value: LineChartSettings[K],
   ) => {
-    setSettings({ ...settings, [key]: value });
+    setSettings((prev) => ({ ...prev, [key]: value }));
   };
 
   const updateSmoothingSettings = <
@@ -138,10 +145,10 @@ export function useLineSettings(
     key: K,
     value: LineChartSettings["smoothing"][K],
   ) => {
-    setSettings({
-      ...settings,
-      smoothing: { ...settings.smoothing, [key]: value },
-    });
+    setSettings((prev) => ({
+      ...prev,
+      smoothing: { ...prev.smoothing, [key]: value },
+    }));
   };
 
   const resetSettings = () => {

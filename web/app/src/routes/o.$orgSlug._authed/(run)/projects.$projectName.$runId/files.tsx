@@ -140,8 +140,6 @@ function RouteComponent() {
   const { lastRefreshTime, handleRefresh } = useRefreshTime({
     runId,
     onRefresh: refreshAllData,
-    defaultAutoRefresh: currentRun?.status === "RUNNING",
-    refreshInterval: 10000,
   });
 
   const { data: files, isLoading: isLoadingFiles } = useGetFileTree(
