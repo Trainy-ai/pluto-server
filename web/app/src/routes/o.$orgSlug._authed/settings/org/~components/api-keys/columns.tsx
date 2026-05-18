@@ -66,7 +66,7 @@ function DeleteApiKeyDialog({
     trpc.organization.apiKey.deleteApiKey.mutationOptions({
       onSuccess: () => {
         queryClient.invalidateQueries({
-          queryKey: [["apiKey", "listApiKeys"]],
+          queryKey: trpc.organization.apiKey.listApiKeys.queryKey(),
         });
         toast.success("API key deleted successfully");
         onOpenChange(false);

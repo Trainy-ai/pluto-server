@@ -2,12 +2,14 @@ import type { Context } from "hono";
 import {
   INSECURE_API_KEY_PREFIX,
   SECURE_API_KEY_PREFIX,
+  isApiKeyExpired,
   keyToSearchFor,
 } from "../lib/api-key";
 
 export type ApiKey = {
   id: string;
   key: string;
+  expiresAt: Date | null;
   organization: {
     id: string;
     slug: string;
@@ -51,6 +53,11 @@ export const resolveApiKey = async (c: Context): Promise<ApiKey | null> => {
       user: { select: { id: true } },
     },
   });
+  // Treat an expired key as unauthenticated — callers fall back to other
+  // auth modes (e.g. session) on null, exactly as for a missing key.
+  if (!apiKey || isApiKeyExpired(apiKey.expiresAt)) {
+    return null;
+  }
   return apiKey;
 };
 
@@ -88,6 +95,13 @@ export const withApiKey = async (c: Context, next: () => Promise<void>) => {
 
   if (!apiKey) {
     return c.json({ error: "Unauthorized", message: "Key not found" }, 401);
+  }
+
+  if (isApiKeyExpired(apiKey.expiresAt)) {
+    return c.json(
+      { error: "Unauthorized", message: "API key has expired" },
+      401,
+    );
   }
 
   c.set("apiKey", apiKey);

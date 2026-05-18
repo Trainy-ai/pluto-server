@@ -49,3 +49,19 @@ export const createKeyString = (apiKey: string) => {
 
   return apiKey;
 };
+
+/**
+ * An API key is expired once its `expiresAt` instant has passed.
+ *
+ * `expiresAt` from Prisma is a `Date` — an absolute instant (UTC epoch
+ * milliseconds). Comparing `.getTime()` against `Date.now()` compares two
+ * absolute instants, so the result is timezone-independent: it does not
+ * depend on the timezone of the server, the database, or whoever created
+ * the key. A null/undefined `expiresAt` means the key never expires.
+ *
+ * This mirrors the ingest service's check (`expires_at < Utc::now()` in
+ * ingest/src/db.rs), so both services agree on the exact expiry instant.
+ */
+export const isApiKeyExpired = (
+  expiresAt: Date | null | undefined
+): boolean => expiresAt != null && expiresAt.getTime() < Date.now();

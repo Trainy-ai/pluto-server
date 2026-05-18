@@ -12,11 +12,13 @@ export const createApiKeyProcedure = protectedOrgProcedure
     z.object({
       name: z.string(),
       expiresAt: z.date().optional(),
-      isSecured: z.boolean().optional().default(true),
     })
   )
   .mutation(async ({ ctx, input }) => {
-    const generatedKey = generateApiKey(input.isSecured);
+    // API keys are always created as secure (hashed). Insecure plaintext keys
+    // are no longer offered; existing `mlpi_` keys remain valid via the
+    // prefix-based lookup in keyToSearchFor (see lib/api-key.ts).
+    const generatedKey = generateApiKey(true);
     const hashedKey = await apiKeyToStore(generatedKey);
 
     if (input.expiresAt) {
@@ -37,7 +39,7 @@ export const createApiKeyProcedure = protectedOrgProcedure
         userId: ctx.user.id,
         key: hashedKey,
         keyString: createKeyString(generatedKey),
-        isHashed: input.isSecured,
+        isHashed: true,
         createdAt: new Date(),
         expiresAt: input.expiresAt,
       },

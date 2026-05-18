@@ -14,6 +14,7 @@ import {
   apiKeyToStore,
   keyToSearchFor,
   createKeyString,
+  isApiKeyExpired,
   SECURE_API_KEY_PREFIX,
   INSECURE_API_KEY_PREFIX,
 } from '../lib/api-key';
@@ -135,5 +136,48 @@ describe('createKeyString', () => {
     const starCount = (masked.match(/\*/g) || []).length;
     // numStars = length - 5 (prefix) - 2 (suffix shown) = 29 - 5 - 2 = 22
     expect(starCount).toBe(22);
+  });
+});
+
+describe('isApiKeyExpired', () => {
+  it('returns false for a null expiry (key never expires)', () => {
+    expect(isApiKeyExpired(null)).toBe(false);
+  });
+
+  it('returns false for an undefined expiry', () => {
+    expect(isApiKeyExpired(undefined)).toBe(false);
+  });
+
+  it('returns true for an expiry one minute in the past', () => {
+    expect(isApiKeyExpired(new Date(Date.now() - 60_000))).toBe(true);
+  });
+
+  it('returns false for an expiry one minute in the future', () => {
+    expect(isApiKeyExpired(new Date(Date.now() + 60_000))).toBe(false);
+  });
+
+  it('treats an instant just past as expired and just future as valid', () => {
+    expect(isApiKeyExpired(new Date(Date.now() - 1))).toBe(true);
+    expect(isApiKeyExpired(new Date(Date.now() + 10_000))).toBe(false);
+  });
+
+  it('is timezone-independent: the same instant written in UTC vs an offset gives the same result', () => {
+    // Both strings denote the SAME absolute instant — once in UTC, once
+    // with a -08:00 offset — and both are well in the past. The result
+    // must not depend on how the Date was constructed or the host TZ.
+    const utc = new Date('2020-01-01T00:00:00.000Z');
+    const withOffset = new Date('2019-12-31T16:00:00.000-08:00');
+    expect(utc.getTime()).toBe(withOffset.getTime());
+    expect(isApiKeyExpired(utc)).toBe(true);
+    expect(isApiKeyExpired(withOffset)).toBe(true);
+  });
+
+  it('is timezone-independent for a future instant', () => {
+    // The same future instant, written in UTC and with a +05:30 offset.
+    const utc = new Date('2099-06-01T00:00:00.000Z');
+    const withOffset = new Date('2099-06-01T05:30:00.000+05:30');
+    expect(utc.getTime()).toBe(withOffset.getTime());
+    expect(isApiKeyExpired(utc)).toBe(false);
+    expect(isApiKeyExpired(withOffset)).toBe(false);
   });
 });

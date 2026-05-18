@@ -1,0 +1,17 @@
+# Build context for web/app/Dockerfile is the web/ workspace root.
+#
+# web/.dockerignore is tailored to the server build and strips out the
+# frontend source, so the app build needs its own ignore file. BuildKit
+# uses <dockerfile>.dockerignore in preference to .dockerignore when it
+# exists, so this file applies only to web/app/Dockerfile builds.
+#
+# Keep all app/ source + workspace manifests; drop installed deps and
+# build output.
+node_modules
+app/node_modules
+server/node_modules
+.pnpm-store
+.turbo
+app/dist
+app/.next
+e2e

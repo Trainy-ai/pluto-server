@@ -374,6 +374,23 @@ def send_alert(
             )
 
 
+def is_api_key_expired(expires_at: datetime | None) -> bool:
+    """Return True if the API key's expiry instant has passed.
+
+    ApiKey.expiresAt is a naive TIMESTAMP column, so a value read from the
+    database is offset-naive. Comparing it directly against
+    datetime.now(timezone.utc) (offset-aware) raises TypeError, so a naive
+    expiresAt is interpreted as UTC before the comparison — the same guard
+    this module already applies to updatedAt/lastUpdate elsewhere. A null
+    expiresAt means the key never expires.
+    """
+    if expires_at is None:
+        return False
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return expires_at < datetime.now(timezone.utc)
+
+
 def check_api_key(session: Session, authorization: str):
     raw_api_key = authorization.replace("Bearer ", "")
     hashed_key = hash_api_key(raw_api_key)
@@ -386,9 +403,7 @@ def check_api_key(session: Session, authorization: str):
         logger.warning(f"API key not found")
         return False
 
-    if api_key_record.expiresAt and api_key_record.expiresAt < datetime.now(
-        timezone.utc
-    ):
+    if is_api_key_expired(api_key_record.expiresAt):
         logger.warning(f"API key {api_key_record.id} has expired")
         return False
 

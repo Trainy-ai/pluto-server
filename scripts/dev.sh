@@ -113,8 +113,8 @@ services:
 
   frontend-${FRONTEND_PORT}:
     build:
-      context: ${REPO_ROOT}/web/app
-      dockerfile: Dockerfile
+      context: ${REPO_ROOT}/web
+      dockerfile: app/Dockerfile
     ports:
       - "${FRONTEND_PORT}:${FRONTEND_PORT}"
     networks:

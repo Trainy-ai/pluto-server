@@ -17,7 +17,6 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/utils/trpc";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -37,7 +36,6 @@ export function CreateApiKeyDialog({
 }: CreateApiKeyDialogProps) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
-  const [isSecured, setIsSecured] = useState(true);
   const [expiresAt, setExpiresAt] = useState<Date>();
   const [createdApiKey, setCreatedApiKey] = useState<string>();
   const queryClient = useQueryClient();
@@ -46,7 +44,7 @@ export function CreateApiKeyDialog({
     trpc.organization.apiKey.createApiKey.mutationOptions({
       onSuccess: () => {
         queryClient.invalidateQueries({
-          queryKey: [["organization", "listApiKeys"]],
+          queryKey: trpc.organization.apiKey.listApiKeys.queryKey(),
         });
       },
     }),
@@ -65,7 +63,6 @@ export function CreateApiKeyDialog({
       const result = await createApiKey({
         name,
         organizationId,
-        isSecured,
         expiresAt,
       });
 
@@ -119,25 +116,6 @@ export function CreateApiKeyDialog({
                 </div>
 
                 <div className="grid gap-3">
-                  <Label htmlFor="secured">Security Level</Label>
-                  <div className="flex items-center justify-between rounded-lg border p-3 sm:p-4">
-                    <div className="space-y-0.5">
-                      <Label>Secure API Key</Label>
-                      <div className="mt-1 text-xs text-balance text-muted-foreground sm:text-[0.8rem]">
-                        {isSecured
-                          ? "The API key will be hashed in the database and can't be retrieved later"
-                          : "The API key will be stored in plain text and can be viewed later"}
-                      </div>
-                    </div>
-                    <Switch
-                      id="secured"
-                      checked={isSecured}
-                      onCheckedChange={setIsSecured}
-                    />
-                  </div>
-                </div>
-
-                <div className="grid gap-3">
                   <Label>Expiration Date</Label>
                   <Popover>
                     <PopoverTrigger asChild>
@@ -171,6 +149,14 @@ export function CreateApiKeyDialog({
                   </p>
                 </div>
               </div>
+
+              <Alert variant="info" className="text-sm">
+                <AlertDescription>
+                  Your API key is shown only once, right after creation. Copy
+                  it and store it somewhere safe — you won't be able to view it
+                  again.
+                </AlertDescription>
+              </Alert>
 
               <DialogFooter>
                 <Button
@@ -224,22 +210,13 @@ export function CreateApiKeyDialog({
                     <Copy className="h-4 w-4" />
                   </Button>
                 </div>
-                {isSecured ? (
-                  <Alert variant="warning" className="text-sm">
-                    <AlertDescription>
-                      <span className="font-bold">Warning:</span> Make sure to
-                      copy your API key now. For security reasons, you won't be
-                      able to see it again!
-                    </AlertDescription>
-                  </Alert>
-                ) : (
-                  <Alert variant="info" className="text-sm">
-                    <AlertDescription>
-                      You can view this API key again later since it's stored in
-                      plain text.
-                    </AlertDescription>
-                  </Alert>
-                )}
+                <Alert variant="warning" className="text-sm">
+                  <AlertDescription>
+                    <span className="font-bold">Warning:</span> Make sure to
+                    copy your API key now. For security reasons, you won't be
+                    able to see it again!
+                  </AlertDescription>
+                </Alert>
               </div>
             </div>
 
