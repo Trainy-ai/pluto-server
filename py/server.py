@@ -1,9 +1,12 @@
+import logging
 import os
+import sys
 from datetime import datetime, timezone
 from typing import Union
 
 from dotenv import load_dotenv
-from fastapi import Body, Depends, FastAPI, Header, HTTPException
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -13,6 +16,14 @@ from python.models import Run, RunStatus, RunTriggers, RunTriggerType
 from python.server import check_run, send_alert, check_api_key, process_runs
 
 load_dotenv()
+
+# Log to stdout so k8s/prod log collectors capture it.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
+    stream=sys.stdout,
+)
+logger = logging.getLogger("py-server")
 
 SMTP_CONFIG = get_smtp_config()
 DATABASE_URL = get_database_url()
@@ -24,6 +35,24 @@ engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 app = FastAPI()
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Log uncaught exceptions with request context and a full traceback.
+
+    Starlette's default 500 handler emits a framework-heavy, often-truncated
+    trace with no indication of which endpoint failed. logger.exception()
+    attaches exc_info so log aggregators can group errors correctly.
+    """
+    logger.exception(
+        "Unhandled exception on %s %s",
+        request.method,
+        request.url,
+    )
+    return JSONResponse(
+        status_code=500, content={"detail": "Internal Server Error"}
+    )
 
 
 def get_db():
