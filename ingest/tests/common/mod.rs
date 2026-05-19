@@ -74,7 +74,8 @@ pub async fn setup_test_database(database_url: &str) -> PgPool {
             "key" TEXT NOT NULL,
             "expiresAt" TIMESTAMPTZ,
             "lastUsed" TIMESTAMPTZ,
-            "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            "revokedAt" TIMESTAMPTZ
         )
         "#,
     )

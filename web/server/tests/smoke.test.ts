@@ -251,6 +251,30 @@ describe('SDK API Endpoints (with API Key)', () => {
       expect(data.message).toBe('API key has expired');
     });
 
+    it('Test 6.6: Revoked API Key Rejected', async () => {
+      // Seeded by tests/setup.ts ("Smoke Test Key (Revoked)") with a non-null
+      // revokedAt. Keep this value in sync with setup.ts.
+      const REVOKED_API_KEY = 'mlps_smoke_test_revoked_do_not_use';
+      const response = await makeRequest('/api/runs/create', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${REVOKED_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          projectName: 'test-project',
+          runName: 'test-run',
+          config: JSON.stringify({ lr: 0.001 }),
+        }),
+      });
+
+      // The key exists and has a valid prefix — it must be rejected
+      // specifically because it is revoked, not as "not found".
+      expect(response.status).toBe(401);
+      const data = await response.json();
+      expect(data.message).toBe('API key has been revoked');
+    });
+
     it.skipIf(!hasApiKey)('Test 6.3: Get Organization Slug (SDK)', async () => {
       const response = await makeRequest('/api/slug', {
         method: 'POST',

@@ -65,3 +65,16 @@ export const createKeyString = (apiKey: string) => {
 export const isApiKeyExpired = (
   expiresAt: Date | null | undefined
 ): boolean => expiresAt != null && expiresAt.getTime() < Date.now();
+
+/**
+ * An API key is revoked once it has a `revokedAt` timestamp. Revocation is a
+ * soft delete — the row is kept so runs created with the key (which reference
+ * it via the required `Runs.creatorApiKeyId` FK) stay intact. A revoked key
+ * must be rejected everywhere a key is authenticated.
+ *
+ * This mirrors the ingest service's check (`revoked_at IS NOT NULL` in
+ * ingest/src/db.rs), so both services agree on which keys are usable.
+ */
+export const isApiKeyRevoked = (
+  revokedAt: Date | null | undefined
+): boolean => revokedAt != null;

@@ -856,6 +856,41 @@ async function setupTestData(): Promise<TestData> {
     console.log('   ✓ Updated expired API key');
   }
 
+  // 3d. Create or refresh a REVOKED test API key (revokedAt in the past).
+  // Smoke tests use this to verify the backend rejects revoked (soft-deleted)
+  // keys. Keep this plaintext value in sync with smoke.test.ts (REVOKED_API_KEY).
+  console.log('\n3️⃣d Creating revoked test API key...');
+  const revokedApiKeyValue = 'mlps_smoke_test_revoked_do_not_use';
+  const revokedHashedKey = await hashApiKey(revokedApiKeyValue);
+  const revokedAt = new Date(Date.now() - 24 * 60 * 60 * 1000); // 1 day ago
+
+  const existingRevokedKey = await prisma.apiKey.findFirst({
+    where: { organizationId: org.id, name: 'Smoke Test Key (Revoked)' },
+  });
+
+  if (!existingRevokedKey) {
+    await prisma.apiKey.create({
+      data: {
+        id: nanoid(),
+        name: 'Smoke Test Key (Revoked)',
+        key: revokedHashedKey,
+        keyString: 'mlps_smoke_test_revoked_***',
+        isHashed: true,
+        userId: user.id,
+        organizationId: org.id,
+        createdAt: new Date(),
+        revokedAt,
+      },
+    });
+    console.log('   ✓ Created revoked API key');
+  } else {
+    await prisma.apiKey.update({
+      where: { id: existingRevokedKey.id },
+      data: { key: revokedHashedKey, revokedAt },
+    });
+    console.log('   ✓ Updated revoked API key');
+  }
+
   // 4. Create or get test projects (multiple for pagination tests)
   console.log('\n4️⃣  Creating test projects...');
   // `dedup-e2e-project` exists so dedup-* E2E specs don't pollute

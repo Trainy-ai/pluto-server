@@ -3,6 +3,7 @@ import {
   INSECURE_API_KEY_PREFIX,
   SECURE_API_KEY_PREFIX,
   isApiKeyExpired,
+  isApiKeyRevoked,
   keyToSearchFor,
 } from "../lib/api-key";
 
@@ -10,6 +11,7 @@ export type ApiKey = {
   id: string;
   key: string;
   expiresAt: Date | null;
+  revokedAt: Date | null;
   organization: {
     id: string;
     slug: string;
@@ -53,9 +55,13 @@ export const resolveApiKey = async (c: Context): Promise<ApiKey | null> => {
       user: { select: { id: true } },
     },
   });
-  // Treat an expired key as unauthenticated — callers fall back to other
-  // auth modes (e.g. session) on null, exactly as for a missing key.
-  if (!apiKey || isApiKeyExpired(apiKey.expiresAt)) {
+  // Treat an expired or revoked key as unauthenticated — callers fall back to
+  // other auth modes (e.g. session) on null, exactly as for a missing key.
+  if (
+    !apiKey ||
+    isApiKeyExpired(apiKey.expiresAt) ||
+    isApiKeyRevoked(apiKey.revokedAt)
+  ) {
     return null;
   }
   return apiKey;
@@ -100,6 +106,13 @@ export const withApiKey = async (c: Context, next: () => Promise<void>) => {
   if (isApiKeyExpired(apiKey.expiresAt)) {
     return c.json(
       { error: "Unauthorized", message: "API key has expired" },
+      401,
+    );
+  }
+
+  if (isApiKeyRevoked(apiKey.revokedAt)) {
+    return c.json(
+      { error: "Unauthorized", message: "API key has been revoked" },
       401,
     );
   }

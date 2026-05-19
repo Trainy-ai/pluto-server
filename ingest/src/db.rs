@@ -21,14 +21,15 @@ pub struct ApiKey {
     pub expires_at: Option<DateTime<Utc>>, // Optional expiration timestamp
     pub last_used: Option<DateTime<Utc>>, // Optional last used timestamp
     pub created_at: DateTime<Utc>, // Creation timestamp
+    pub revoked_at: Option<DateTime<Utc>>, // Soft-delete timestamp; non-null => revoked
 }
 
 // SQL query to fetch an API key by its hashed value
 const GET_API_KEY_QUERY: &str = r#"
-    SELECT id, "organizationId" as organization_id, "key" as key, 
+    SELECT id, "organizationId" as organization_id, "key" as key,
            "expiresAt"::timestamptz as expires_at, "lastUsed"::timestamptz as last_used,
-           "createdAt"::timestamptz as created_at
-    FROM "api_key" 
+           "createdAt"::timestamptz as created_at, "revokedAt"::timestamptz as revoked_at
+    FROM "api_key"
     WHERE "key" = $1"#; // Parameter $1 is the hashed key
 
 impl Database {
@@ -120,6 +121,16 @@ impl Database {
                     "API key has expired",
                 ));
             }
+        }
+
+        // Check if the key has been revoked (soft-deleted). Mirrors
+        // isApiKeyRevoked in web/server/lib/api-key.ts.
+        if let Some(revoked_at) = api_key.revoked_at {
+            warn!(key_id = %api_key.id, tenant_id = %api_key.organization_id, revoked = %revoked_at, "API key has been revoked");
+            return Err(AppError::new(
+                ErrorCode::InvalidToken,
+                "API key has been revoked",
+            ));
         }
 
         // Return the organization ID (tenant ID) associated with the valid key

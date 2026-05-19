@@ -233,6 +233,11 @@ model ApiKey {
   isHashed       Boolean          @default(true)
   lastUsed       DateTime?
   expiresAt      DateTime?
+  // Soft-delete timestamp. Keys are revoked, not removed: runs reference the
+  // key via Runs.creatorApiKeyId (a required FK), so a hard delete would
+  // violate that constraint. A revoked key is rejected at every auth path
+  // and hidden from listApiKeys.
+  revokedAt      DateTime?
   Runs           Runs[]
   RunStatusEvent RunStatusEvent[]
 
