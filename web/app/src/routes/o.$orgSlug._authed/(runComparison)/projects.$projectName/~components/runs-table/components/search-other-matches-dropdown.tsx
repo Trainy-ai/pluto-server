@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from "react";
 import type { Run } from "../../../~queries/list-runs";
+import { getDisplayIdForRun } from "../../../~lib/metrics-utils";
 import { cn } from "@/lib/utils";
 
 interface SearchOtherMatchesDropdownProps {
@@ -129,7 +130,7 @@ export function SearchOtherMatchesDropdown({
               {run.name}
             </span>
             <span className="shrink-0 font-mono text-xs text-muted-foreground">
-              {run.displayId ?? run.id}
+              {getDisplayIdForRun(run) ?? run.id}
             </span>
             <span className="shrink-0 text-xs text-muted-foreground">
               {run.status}

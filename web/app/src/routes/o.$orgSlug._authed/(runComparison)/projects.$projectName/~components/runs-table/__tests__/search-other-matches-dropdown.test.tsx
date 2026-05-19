@@ -5,11 +5,15 @@ import type { Run } from "../../../~queries/list-runs";
 
 afterEach(cleanup);
 
-function makeRun(id: string, name = `run-${id}`): Run {
+// Mirrors the real `runs.list` row shape: the API returns `number` +
+// `project.runPrefix` (NOT a precomputed `displayId`). The display ID
+// "PREFIX-number" is derived client-side via getDisplayIdForRun.
+function makeRun(id: string, name = `run-${id}`, number = 1): Run {
   return {
     id,
     name,
-    displayId: `TES-${id}`,
+    number,
+    project: { runPrefix: "UPD" },
     status: "COMPLETED",
     createdAt: "2026-02-22T12:34:56Z",
   } as unknown as Run;
@@ -36,6 +40,29 @@ describe("SearchOtherMatchesDropdown", () => {
     render(<SearchOtherMatchesDropdown {...defaultProps} outOfView={[run]} />);
     const row = screen.getByTestId(`other-match-row-${run.id}`);
     expect(row.getAttribute("aria-disabled")).not.toBe("true");
+  });
+
+  it("shows the project display ID (runPrefix-number), not the SQID", () => {
+    // The run's `id` is an opaque SQID (e.g. "lmiGA"); the row should
+    // instead surface the human-readable "UPD-57".
+    const run = makeRun("lmiGA", "live-running-8", 57);
+    render(<SearchOtherMatchesDropdown {...defaultProps} outOfView={[run]} />);
+    const row = screen.getByTestId(`other-match-row-${run.id}`);
+    expect(row.textContent).toMatch(/UPD-57/);
+    // The SQID must not appear in the row's visible text.
+    expect(row.textContent).not.toMatch(/lmiGA/);
+  });
+
+  it("falls back to the run id when no display ID can be derived", () => {
+    const run = {
+      id: "lmiGA",
+      name: "no-number-run",
+      status: "COMPLETED",
+      createdAt: "2026-02-22T12:34:56Z",
+    } as unknown as Run;
+    render(<SearchOtherMatchesDropdown {...defaultProps} outOfView={[run]} />);
+    const row = screen.getByTestId(`other-match-row-${run.id}`);
+    expect(row.textContent).toMatch(/lmiGA/);
   });
 
   it("renders in-view rows grayed with 'In table' badge", () => {
