@@ -4,7 +4,14 @@ interface ScalesConfigParams {
   logXAxis: boolean;
   logYAxis: boolean;
   isDateTime: boolean;
-  yRange: [number, number, boolean];
+  /**
+   * Ref to the pre-computed y-range, read live (not captured by value).
+   * Passing a ref keeps yRange's always-fresh identity out of the caller's
+   * `options` useMemo deps — that dep was forcing a full chart recreation on
+   * every data refresh. yRange is only consulted as the no-visible-data
+   * fallback below, so the ref read is equivalent to the old by-value read.
+   */
+  yRangeRef: { readonly current: [number, number, boolean] };
   yZoom: boolean;
 }
 
@@ -21,7 +28,7 @@ export function buildScalesConfig({
   logXAxis,
   logYAxis,
   isDateTime,
-  yRange,
+  yRangeRef,
   yZoom,
 }: ScalesConfigParams): uPlot.Scales {
   return {
@@ -38,8 +45,13 @@ export function buildScalesConfig({
           // The range callback adds padding to the auto-computed min/max.
           auto: true,
           range: (_self: uPlot, dataMin: number | null, dataMax: number | null): uPlot.Range.MinMax => {
-            // No visible data — fall back to pre-computed range
-            if (dataMin == null || dataMax == null) return [yRange[0], yRange[1]];
+            // No visible data — fall back to pre-computed range (read live
+            // from the ref so it reflects the latest data without the chart
+            // having to be recreated).
+            if (dataMin == null || dataMax == null) {
+              const yr = yRangeRef.current;
+              return [yr[0], yr[1]];
+            }
 
             const range = dataMax - dataMin;
             const mag = Math.max(Math.abs(dataMax), Math.abs(dataMin), 0.1);

@@ -5,6 +5,22 @@ import { zoomOverlapsData } from "../lib/scales";
 import type { LineData } from "../lib/types";
 
 /**
+ * Detach the drag-finalize listeners registered alongside `chart._leaveHandler`
+ * during chart creation. The `pointerup` listener lives on `document` — a
+ * permanent GC root — so EVERY teardown path must call this. Removing only the
+ * `mouseleave` listener (as two of the three teardown sites previously did)
+ * leaks the listener closure, and with it the whole uPlot instance and its
+ * detached DOM subtree, on every chart recreation.
+ */
+function detachLeaveHandler(chart: uPlot | null): void {
+  const lh = (chart as any)?._leaveHandler;
+  if (!lh) return;
+  lh.el.removeEventListener("mouseleave", lh.fn);
+  lh.el.removeEventListener("pointerdown", lh.pointerDownFn);
+  document.removeEventListener("pointerup", lh.docPointerUpFn);
+}
+
+/**
  * Compute the X-axis range considering only visible (non-hidden) series.
  * Returns null if no visible series have data — caller should fall back to full range.
  */
@@ -188,6 +204,16 @@ export function useChartLifecycle({
                 }
               }
             }
+
+            // Re-apply the user's Y-zoom. setData() re-auto-ranges the Y
+            // scale, so without this the Y-zoom is dropped on every data
+            // refresh. The chart-recreation path restores it (see the
+            // userYZoomRangeRef block after chart creation); this setData
+            // fast path must do the same.
+            if (userYZoomRangeRef.current && userHasZoomedYRef.current) {
+              const [savedYMin, savedYMax] = userYZoomRangeRef.current;
+              chartRef.current!.setScale("y", { min: savedYMin, max: savedYMax });
+            }
           });
         } finally {
           isProgrammaticScaleRef.current = false;
@@ -205,13 +231,8 @@ export function useChartLifecycle({
       if (xScale.min != null && xScale.max != null) {
         zoomStateRef.current = { xMin: xScale.min, xMax: xScale.max, zoomGroup };
       }
-      // Clean up mouseleave handler before destroying
-      const lh = (chartRef.current as any)._leaveHandler;
-      if (lh) {
-        lh.el.removeEventListener("mouseleave", lh.fn);
-        lh.el.removeEventListener("pointerdown", lh.pointerDownFn);
-        document.removeEventListener("pointerup", lh.docPointerUpFn);
-      }
+      // Detach drag-finalize listeners before destroying the chart
+      detachLeaveHandler(chartRef.current);
       chartRef.current.destroy();
       chartRef.current = null;
     }
@@ -648,10 +669,7 @@ export function useChartLifecycle({
       if (isDimsOnlyChangeRef.current) return;
       cleanupRef.current?.();
       if (chartRef.current) {
-        const lh = (chartRef.current as any)._leaveHandler;
-        if (lh) {
-          lh.el.removeEventListener("mouseleave", lh.fn);
-        }
+        detachLeaveHandler(chartRef.current);
         chartRef.current.destroy();
         chartRef.current = null;
       }
@@ -667,8 +685,7 @@ export function useChartLifecycle({
     return () => {
       cleanupRef.current?.();
       if (chartRef.current) {
-        const lh = (chartRef.current as any)._leaveHandler;
-        if (lh) lh.el.removeEventListener("mouseleave", lh.fn);
+        detachLeaveHandler(chartRef.current);
         chartRef.current.destroy();
         chartRef.current = null;
       }

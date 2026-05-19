@@ -203,6 +203,12 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
 
     // Pre-calculate y-axis range with IQR-based outlier detection (extracted hook)
     const yRange = useYRange(uplotData, logYAxis, outlierDetection);
+    // Hold yRange in a ref so buildScalesConfig's no-data fallback reads the
+    // live value without yRange's always-fresh identity entering the `options`
+    // useMemo deps. That dep was rebuilding the entire uPlot chart on every
+    // data refresh — wasteful, and it leaked the old chart (see Bug B).
+    const yRangeRef = useRef(yRange);
+    yRangeRef.current = yRange;
 
     // Callback ref for reset bounds (used by chart lifecycle)
     const onResetBoundsRef = useRef<(() => void) | undefined>(undefined);
@@ -383,7 +389,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             : (_u, val) => val == null ? "--" : formatAxisLabel(val),
       });
 
-      const scales = buildScalesConfig({ logXAxis, logYAxis, isDateTime, yRange, yZoom });
+      const scales = buildScalesConfig({ logXAxis, logYAxis, isDateTime, yRangeRef, yZoom });
       const axes = buildAxesConfig({ showXAxis, showYAxis, axisColor, gridColor, isDateTime, isRelativeTime, logXAxis, logYAxis, xlabel, ylabel, timeRange });
       const cursor = buildCursorConfig(effectiveSyncKey, yZoom);
       const bands = buildBandsConfig(processedLinesRef.current, lastFocusedSeriesRef, crossChartRunIdRef, tableHighlightRef);
@@ -522,7 +528,10 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       effectiveSyncKey, timeRange, chartId,
       handleHoverChange, isActiveChart, isZoomSourceChart,
       chartLineWidth, spanGaps,
-      tooltipInterpolation, yRange, yZoom,
+      // NOTE: yRange is intentionally NOT a dependency — it gets a fresh
+      // identity on every data refresh, and buildScalesConfig reads it live
+      // via yRangeRef. Including it here recreated the chart every refresh.
+      tooltipInterpolation, yZoom,
     ]);
 
     // Chart lifecycle management (extracted hook)
