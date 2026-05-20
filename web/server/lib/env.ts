@@ -42,6 +42,10 @@ const envSchema = z.object({
 
   // Redis (optional - graceful degradation if not available)
   REDIS_URL: z.string().url().optional(),
+  // How long initRedis waits for the first connect before logging degraded
+  // state. Doesn't affect runtime behavior — background reconnect proceeds
+  // regardless. Bump for slow-startup / high-latency environments.
+  REDIS_READY_WAIT_MS: z.coerce.number().int().nonnegative().default(6000),
 
   // Linear OAuth (optional - required for Linear integration)
   LINEAR_OAUTH_CLIENT_ID: z.string().min(1).optional(),
