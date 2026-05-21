@@ -7388,4 +7388,127 @@ describe('SDK API Endpoints (with API Key)', () => {
       }
     });
   });
+
+  // ============================================================
+  // Test Suite 36: konduktorJobPrefix reverse lookup
+  // The canonical pivot from a Konduktor job (full hashed ID or YAML
+  // base name) to its Pluto run(s). Backed by the
+  // runs_konduktor_job_name_idx text_pattern_ops expression index.
+  // ============================================================
+  describe('Test Suite 36: /api/runs/list konduktorJobPrefix filter', () => {
+    const hasApiKey = TEST_API_KEY.length > 0;
+
+    describe.skipIf(!hasApiKey)('Reverse lookup by Konduktor job name', () => {
+      it('Test 36.1: finds a run by its full hashed Konduktor job_name (org-wide)', async () => {
+        // Full Konduktor IDs are unique by construction (4-char random
+        // suffix); prefix-matching a full ID returns exactly that run.
+        const jobName = `konduktor-smoke-${Date.now()}`;
+
+        const createRes = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `konduktor-lookup-${Date.now()}`,
+            systemMetadata: JSON.stringify({
+              konduktor: { job_name: jobName, num_nodes: '2', accelerator_type: 'H100' },
+            }),
+          }),
+        });
+        expect(createRes.status).toBe(200);
+        const { runId } = await createRes.json();
+        expect(typeof runId).toBe('number');
+
+        const listRes = await makeRequest(
+          `/api/runs/list?konduktorJobPrefix=${encodeURIComponent(jobName)}`,
+          { headers: { 'Authorization': `Bearer ${TEST_API_KEY}` } },
+        );
+        expect(listRes.status).toBe(200);
+        const body = await listRes.json();
+        expect(body.runs).toBeDefined();
+        const ids = body.runs.map((r: { id: number }) => r.id);
+        expect(ids).toContain(runId);
+      });
+
+      it('Test 36.2: requires projectName when konduktorJobPrefix absent (400)', async () => {
+        // No filter at all → must reject, not dump every run in the org.
+        const listRes = await makeRequest('/api/runs/list', {
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+        });
+        expect(listRes.status).toBe(400);
+        const body = await listRes.json();
+        expect(body.error).toBeDefined();
+      });
+
+      it('Test 36.3: prefix matches multiple runs sharing a YAML base name', async () => {
+        // Konduktor appends a random per-launch suffix; this test models a
+        // user who has the YAML base name but not the suffix.
+        const base = `konduktor-prefix-${Date.now()}`;
+        const job1 = `${base}-a1b2`;
+        const job2 = `${base}-c3d4`;
+
+        for (const job of [job1, job2]) {
+          const createRes = await makeRequest('/api/runs/create', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+            body: JSON.stringify({
+              projectName: TEST_PROJECT_NAME,
+              runName: `prefix-run-${job}`,
+              systemMetadata: JSON.stringify({ konduktor: { job_name: job } }),
+            }),
+          });
+          expect(createRes.status).toBe(200);
+        }
+
+        const listRes = await makeRequest(
+          `/api/runs/list?konduktorJobPrefix=${encodeURIComponent(base)}`,
+          { headers: { 'Authorization': `Bearer ${TEST_API_KEY}` } },
+        );
+        expect(listRes.status).toBe(200);
+        const body = await listRes.json();
+        // Both runs whose konduktor.job_name starts with `base` should match.
+        expect(body.runs.length).toBeGreaterThanOrEqual(2);
+        expect(body.runs.length).toBeLessThanOrEqual(10);
+        const names = body.runs.map((r: { name: string }) => r.name);
+        expect(names).toContain(`prefix-run-${job1}`);
+        expect(names).toContain(`prefix-run-${job2}`);
+      });
+
+      it('Test 36.4: prefix is anchored — interior substrings do not match', async () => {
+        const realBase = `konduktor-prefix-narrow-${Date.now()}`;
+        const realJob = `${realBase}-real`;
+        const createRes = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `prefix-narrow-${realJob}`,
+            systemMetadata: JSON.stringify({ konduktor: { job_name: realJob } }),
+          }),
+        });
+        expect(createRes.status).toBe(200);
+
+        // A prefix that *starts with* a string the seeded job doesn't.
+        const listRes = await makeRequest(
+          `/api/runs/list?konduktorJobPrefix=${encodeURIComponent(`${realBase}-nomatch`)}`,
+          { headers: { 'Authorization': `Bearer ${TEST_API_KEY}` } },
+        );
+        expect(listRes.status).toBe(200);
+        const body = await listRes.json();
+        expect(body.runs).toEqual([]);
+
+        // An interior fragment of the job name also must NOT match — the
+        // filter is anchored at the start, not "contains".
+        const interior = realBase.slice(5);
+        const listRes2 = await makeRequest(
+          `/api/runs/list?konduktorJobPrefix=${encodeURIComponent(interior)}`,
+          { headers: { 'Authorization': `Bearer ${TEST_API_KEY}` } },
+        );
+        expect(listRes2.status).toBe(200);
+        const body2 = await listRes2.json();
+        const names = body2.runs.map((r: { name: string }) => r.name);
+        expect(names).not.toContain(`prefix-narrow-${realJob}`);
+      });
+    });
+  });
 });

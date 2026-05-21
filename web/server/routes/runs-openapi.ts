@@ -1048,10 +1048,23 @@ const listRunsRoute = createRoute({
   security: [{ bearerAuth: [] }],
   request: {
     query: z.object({
-      projectName: z.string().openapi({ description: "Project name", example: "my-project" }),
+      projectName: z.string().optional().openapi({ description: "Project name. Required unless `konduktorJob` is provided (which scopes to the org instead).", example: "my-project" }),
       search: z.string().optional().openapi({ description: "Search term for run names (substring match)", example: "training" }),
       tags: z.string().optional().openapi({ description: "Comma-separated list of tags to filter by (OR logic)", example: "baseline,experiment" }),
       limit: z.coerce.number().min(1).max(200).default(50).openapi({ description: "Maximum number of runs to return", example: 50 }),
+      // Reverse lookup for runs launched on Konduktor: anchored-prefix
+      // match on systemMetadata.konduktor.job_name. Accepts either the
+      // full hashed ID (`train-model-db87`) — in which case the result
+      // is 0-or-1 because Konduktor IDs are unique — or the YAML's base
+      // name (`train-model`), which matches the family of every launch
+      // sharing that base. Backed by an expression index using
+      // `text_pattern_ops` (see migration 20260520000000_*); O(log N)
+      // regardless of project size. Returns ALL matches; the agent layer
+      // disambiguates when there's more than one.
+      konduktorJobPrefix: z.string().optional().openapi({
+        description: "Anchored prefix match on systemMetadata.konduktor.job_name. Accepts a full Konduktor job ID or a YAML base name (Konduktor appends a 4-char random suffix per launch). When provided, projectName becomes optional (search scopes to the org).",
+        example: "mcp-konduktor-e2e",
+      }),
       // Opt-in flag for the V8-heap CI probe. When true, attaches
       // `_flatConfig` / `_flatSystemMetadata` blobs per run — the same shape
       // tRPC runs.list produces for the frontend. Default false keeps the
@@ -1091,6 +1104,10 @@ const listRunsRoute = createRoute({
         },
       },
     },
+    400: {
+      description: "Bad request (e.g. missing both projectName and konduktorJobPrefix)",
+      content: { "application/json": { schema: ErrorSchema } },
+    },
     401: {
       description: "Unauthorized",
       content: { "application/json": { schema: ErrorSchema } },
@@ -1101,7 +1118,7 @@ const listRunsRoute = createRoute({
 router.use(listRunsRoute.path, withApiKey);
 router.openapi(listRunsRoute, async (c) => {
   const apiKey = c.get("apiKey");
-  const { projectName, search, tags: tagsParam, limit, includeFieldValues, visibleColumns: visibleColumnsRaw } = c.req.valid("query");
+  const { projectName, search, tags: tagsParam, limit, includeFieldValues, visibleColumns: visibleColumnsRaw, konduktorJobPrefix } = c.req.valid("query");
   const prisma = c.get("prisma");
 
   // Parse tags from comma-separated string
@@ -1131,17 +1148,26 @@ router.openapi(listRunsRoute, async (c) => {
     }
   }
 
-  // Get the project
-  const project = await prisma.projects.findFirst({
-    where: {
-      name: projectName,
-      organizationId: apiKey.organization.id,
-    },
-    select: { id: true, runPrefix: true },
-  });
+  // Resolve project scope. Required unless the caller is doing a Konduktor
+  // job-name lookup, which is an org-wide search (job names are typically
+  // globally unique within the org regardless of project).
+  let projectId: bigint | undefined;
+  if (projectName) {
+    const project = await prisma.projects.findFirst({
+      where: {
+        name: projectName,
+        organizationId: apiKey.organization.id,
+      },
+      select: { id: true },
+    });
 
-  if (!project) {
-    return c.json({ runs: [], total: 0 }, 200);
+    if (!project) {
+      return c.json({ runs: [], total: 0 }, 200);
+    }
+    projectId = project.id;
+  } else if (!konduktorJobPrefix) {
+    // Need at least one scoping filter — refuse to dump every run in the org.
+    return c.json({ error: "projectName is required unless konduktorJobPrefix is provided" }, 400);
   }
 
   // If search is provided, get matching run IDs via search
@@ -1149,7 +1175,7 @@ router.openapi(listRunsRoute, async (c) => {
   if (search && search.trim()) {
     const matchIds = await searchRunIds(prisma, {
       organizationId: apiKey.organization.id,
-      projectId: project.id,
+      ...(projectId ? { projectId } : {}),
       search: search.trim(),
     });
 
@@ -1160,18 +1186,30 @@ router.openapi(listRunsRoute, async (c) => {
     searchMatchIds = matchIds;
   }
 
-  // Build where clause with optional tag filtering
+  // Build where clause with optional tag filtering. konduktorJobPrefix
+  // filters via Prisma's string_starts_with against the JSON path; the
+  // text_pattern_ops expression index runs_konduktor_job_name_idx makes
+  // this O(log N) instead of a sequential JSON scan.
   const whereClause = {
-    projectId: project.id,
     organizationId: apiKey.organization.id,
+    ...(projectId ? { projectId } : {}),
     ...(searchMatchIds ? { id: { in: searchMatchIds } } : {}),
     ...(tags.length > 0 ? { tags: { hasSome: tags } } : {}),
+    ...(konduktorJobPrefix
+      ? {
+          systemMetadata: {
+            path: ["konduktor", "job_name"],
+            string_starts_with: konduktorJobPrefix,
+          },
+        }
+      : {}),
   };
 
   // Get total count
   const total = await prisma.runs.count({ where: whereClause });
 
-  // Fetch runs
+  // Fetch runs. Pull the project's runPrefix per run so the displayId is
+  // correct in cross-project lookups (e.g. konduktorJob without projectName).
   const runs = await prisma.runs.findMany({
     where: whereClause,
     orderBy: { createdAt: "desc" },
@@ -1183,6 +1221,7 @@ router.openapi(listRunsRoute, async (c) => {
       status: true,
       tags: true,
       createdAt: true,
+      project: { select: { runPrefix: true } },
     },
   });
 
@@ -1217,8 +1256,8 @@ router.openapi(listRunsRoute, async (c) => {
       id: Number(run.id),
       name: run.name,
       number: run.number,
-      displayId: run.number != null && project?.runPrefix
-        ? `${project.runPrefix}-${run.number}`
+      displayId: run.number != null && run.project?.runPrefix
+        ? `${run.project.runPrefix}-${run.number}`
         : null,
       status: run.status,
       tags: run.tags,
