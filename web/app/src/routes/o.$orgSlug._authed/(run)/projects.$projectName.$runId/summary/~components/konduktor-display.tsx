@@ -188,12 +188,12 @@ function InfoRow({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between rounded-lg bg-muted/50 px-3 py-2">
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+    <div className="flex items-center justify-between gap-2 rounded-lg bg-muted/50 px-3 py-2">
+      <div className="flex shrink-0 items-center gap-2 text-sm text-muted-foreground">
         {icon}
         <span>{label}</span>
       </div>
-      <div>{children}</div>
+      <div className="flex min-w-0 flex-1 justify-end">{children}</div>
     </div>
   );
 }
@@ -220,13 +220,13 @@ function CopyableText({ text }: { text: string }) {
   return (
     <button
       onClick={handleCopy}
-      className="flex items-center gap-1.5 rounded px-1.5 py-0.5 font-mono text-sm transition-colors hover:bg-muted"
+      className="flex min-w-0 max-w-full items-center gap-1.5 rounded px-1.5 py-0.5 font-mono text-sm transition-colors hover:bg-muted"
     >
-      <span className="max-w-[200px] truncate">{text}</span>
+      <span className="truncate">{text}</span>
       {copied ? (
-        <Check className="h-3 w-3 text-green-500" />
+        <Check className="h-3 w-3 shrink-0 text-green-500" />
       ) : (
-        <Copy className="h-3 w-3 text-muted-foreground" />
+        <Copy className="h-3 w-3 shrink-0 text-muted-foreground" />
       )}
     </button>
   );
