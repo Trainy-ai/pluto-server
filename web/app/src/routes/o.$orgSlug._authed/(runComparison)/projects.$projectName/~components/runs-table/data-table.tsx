@@ -470,6 +470,9 @@ export function DataTable({
   return (
     <div className="relative flex h-full min-h-0 w-full min-w-[200px] flex-col overflow-hidden">
       <TableToolbar
+        organizationId={organizationId}
+        projectName={projectName}
+        onRunsDeleted={onDeselectAll}
         selectedRunsWithColors={selectedRunsWithColors}
         runCount={listMode === "experiments" ? displayedRunCount : runCount}
         totalRunCount={listMode === "experiments" ? totalExperimentCount : totalRunCount}

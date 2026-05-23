@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import type { Run } from "../../../~queries/list-runs";
 import type { ColumnConfig } from "../../../~hooks/use-column-config";
 import { VisibilityOptions } from "../visibility-options";
+import { DeleteRunsButton } from "./delete-runs-button";
 import { ColumnPicker } from "../column-picker";
 import { FilterButton } from "../filter-button";
 import type { RunFilter, FilterableField } from "@/lib/run-filters";
@@ -15,6 +16,10 @@ import { ExperimentRunsToggle, type ListMode } from "./experiment-runs-toggle";
 type ViewMode = "charts" | "side-by-side";
 
 interface TableToolbarProps {
+  organizationId?: string;
+  projectName: string;
+  /** Called after selected runs are deleted, with the deleted run IDs. */
+  onRunsDeleted: (deletedRunIds: string[]) => void;
   selectedRunsWithColors: Record<string, { run: Run; color: string }>;
   runCount: number;
   totalRunCount: number;
@@ -73,6 +78,9 @@ interface TableToolbarProps {
 }
 
 export function TableToolbar({
+  organizationId,
+  projectName,
+  onRunsDeleted,
   selectedRunsWithColors,
   runCount,
   totalRunCount,
@@ -246,6 +254,14 @@ export function TableToolbar({
           />
           {searchOtherMatchesDropdown}
         </div>
+        {organizationId && (
+          <DeleteRunsButton
+            organizationId={organizationId}
+            projectName={projectName}
+            selectedRunsWithColors={selectedRunsWithColors}
+            onDeleted={onRunsDeleted}
+          />
+        )}
         <VisibilityOptions
           selectedRunsWithColors={selectedRunsWithColors}
           onSelectFirstN={onSelectFirstN}

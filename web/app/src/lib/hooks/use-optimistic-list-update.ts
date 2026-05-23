@@ -52,6 +52,41 @@ export function patchRunsListCache(
 }
 
 /**
+ * Snapshot all cached `runs.list` infinite queries, then remove every run
+ * whose `id` is in `runIds`.
+ *
+ * Returns the snapshots so the caller can roll back on error.
+ */
+export function removeRunsFromListCache(
+  queryClient: QueryClient,
+  runIds: string[],
+): ListQuerySnapshot[] {
+  const toRemove = new Set(runIds);
+  const snapshots: ListQuerySnapshot[] = [];
+
+  queryClient
+    .getQueriesData<InfiniteData<ListRunResponse>>({
+      predicate: (q) => {
+        const key = q.queryKey[0] as string[];
+        return key?.[0] === "runs" && key?.[1] === "list";
+      },
+    })
+    .forEach(([queryKey, data]) => {
+      snapshots.push([queryKey, data]);
+      if (!data) return;
+      queryClient.setQueryData<InfiniteData<ListRunResponse>>(queryKey, {
+        ...data,
+        pages: data.pages.map((page) => ({
+          ...page,
+          runs: page.runs.filter((run: Run) => !toRemove.has(run.id)),
+        })),
+      });
+    });
+
+  return snapshots;
+}
+
+/**
  * Restore all cached `runs.list` infinite queries from snapshots.
  */
 export function rollbackRunsListCache(

@@ -9,6 +9,7 @@ import { triggerRouter } from "./routers/trigger/router";
 import { countRunsProcedure } from "./procs/runs-count";
 import { updateTagsProcedure } from "./procs/update-tags";
 import { updateNotesProcedure } from "./procs/update-notes";
+import { deleteRunsProcedure } from "./procs/delete-runs";
 import { distinctTagsProcedure } from "./procs/distinct-tags";
 import { distinctColumnKeysProcedure, searchColumnKeysProcedure } from "./procs/distinct-column-keys";
 import { getLogsByRunIdsProcedure } from "./procs/get-logs-by-run-ids";
@@ -30,6 +31,7 @@ export const runsRouter = router({
   count: countRunsProcedure,
   updateTags: updateTagsProcedure,
   updateNotes: updateNotesProcedure,
+  delete: deleteRunsProcedure,
   distinctTags: distinctTagsProcedure,
   distinctColumnKeys: distinctColumnKeysProcedure,
   searchColumnKeys: searchColumnKeysProcedure,

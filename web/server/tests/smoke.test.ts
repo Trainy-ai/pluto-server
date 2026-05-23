@@ -7511,4 +7511,48 @@ describe('SDK API Endpoints (with API Key)', () => {
       });
     });
   });
+
+  describe('Test Suite 37: Delete Runs (runs.delete)', () => {
+    it('Test 37.1: Delete runs - Unauthorized (no session)', async () => {
+      const response = await makeTrpcRequest('runs.delete', {
+        organizationId: 'test-org-id',
+        projectName: TEST_PROJECT_NAME,
+        runIds: ['abc'],
+      }, {}, 'POST');
+
+      // Should fail without authentication
+      expect(response.status).toBe(401);
+    });
+
+    it('Test 37.2: Delete runs - Invalid input (empty runIds)', async () => {
+      const response = await makeTrpcRequest('runs.delete', {
+        organizationId: 'test-org-id',
+        projectName: TEST_PROJECT_NAME,
+        runIds: [],
+      }, {}, 'POST');
+
+      // min(1) on runIds → validation error (400), or 401 if auth runs first
+      expect([400, 401]).toContain(response.status);
+    });
+
+    it('Test 37.3: Delete runs - Invalid input (missing projectName)', async () => {
+      const response = await makeTrpcRequest('runs.delete', {
+        organizationId: 'test-org-id',
+        runIds: ['abc'],
+      }, {}, 'POST');
+
+      // Should return 400 (validation error) or 401 (auth check comes first)
+      expect([400, 401]).toContain(response.status);
+    });
+
+    it('Test 37.4: Delete runs - Invalid input (missing organizationId)', async () => {
+      const response = await makeTrpcRequest('runs.delete', {
+        projectName: TEST_PROJECT_NAME,
+        runIds: ['abc'],
+      }, {}, 'POST');
+
+      // Should return 400 (validation error) or 401 (auth check comes first)
+      expect([400, 401]).toContain(response.status);
+    });
+  });
 });
