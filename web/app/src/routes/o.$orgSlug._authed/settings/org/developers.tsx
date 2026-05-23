@@ -1,5 +1,5 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
-import { columns } from "./~components/api-keys/columns";
+import { columns, isApiKeyStale } from "./~components/api-keys/columns";
 import { DataTable } from "./~components/api-keys/data-table";
 import { useQuery } from "@tanstack/react-query";
 import { trpc } from "@/utils/trpc";
@@ -68,7 +68,9 @@ function RouteComponent() {
                 ) : (
                   <DataTable
                     columns={columns({ organizationId: orgId })}
-                    data={keys ?? []}
+                    data={(keys ?? []).filter(
+                      (key) => !isApiKeyStale(key.expiresAt),
+                    )}
                   />
                 )}
               </div>

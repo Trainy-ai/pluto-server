@@ -1,3 +1,4 @@
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -29,6 +30,19 @@ import type { inferOutput } from "@trpc/tanstack-react-query";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 type ApiKey = inferOutput<typeof trpc.organization.apiKey.listApiKeys>[0];
+
+const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+export const isApiKeyExpired = (expiresAt: Date | string | null) => {
+  if (!expiresAt) return false;
+  return new Date(expiresAt).getTime() < Date.now();
+};
+
+// Hide keys that expired more than a week ago.
+export const isApiKeyStale = (expiresAt: Date | string | null) => {
+  if (!expiresAt) return false;
+  return new Date(expiresAt).getTime() < Date.now() - ONE_WEEK_MS;
+};
 
 const formatDate = (date: Date | null) => {
   if (!date) return "Never";
@@ -272,8 +286,15 @@ export const columns = ({
     cell: ({ row }) => {
       const expiresAt = row.original.expiresAt;
       return (
-        <div className="max-w-[100px] truncate text-sm sm:max-w-[180px]">
-          {expiresAt ? formatDate(new Date(expiresAt)) : "Never"}
+        <div className="flex max-w-[100px] items-center gap-2 text-sm sm:max-w-[180px]">
+          <span className="truncate">
+            {expiresAt ? formatDate(new Date(expiresAt)) : "Never"}
+          </span>
+          {isApiKeyExpired(expiresAt) && (
+            <Badge variant="destructive" className="shrink-0">
+              Expired
+            </Badge>
+          )}
         </div>
       );
     },
