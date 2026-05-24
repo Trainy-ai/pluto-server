@@ -84,7 +84,7 @@ export const InviteUser = ({
   // });
 
   const maxSeats =
-    session?.activeOrganization?.OrganizationSubscription?.seats || 0;
+    session?.activeOrganization?.OrganizationSubscription?.maxMembers || 0;
 
   const createInvite = useMutation({
     ...trpc.organization.invite.createInvite.mutationOptions(),

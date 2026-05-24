@@ -845,6 +845,74 @@ describe('SDK API Endpoints (with API Key)', () => {
     });
   });
 
+  describe('Test Suite 9.5: Plan Member Cap (maxMembers)', () => {
+    const TEST_EMAIL = process.env.TEST_USER_EMAIL || 'test-smoke@mlop.local';
+    const TEST_PASSWORD = 'TestPassword123!';
+    let sessionCookie: string | null = null;
+
+    beforeAll(async () => {
+      const signInResponse = await makeRequest('/api/auth/sign-in/email', {
+        method: 'POST',
+        body: JSON.stringify({ email: TEST_EMAIL, password: TEST_PASSWORD }),
+      });
+      const setCookie = signInResponse.headers.get('set-cookie');
+      if (setCookie) {
+        const match = setCookie.match(/better_auth\.session_token=([^;]+)/);
+        if (match) {
+          sessionCookie = `better_auth.session_token=${match[1]}`;
+        }
+      }
+    });
+
+    it('Test 9.5.1: auth endpoint exposes maxMembers (plan cap) on PRO org', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+
+      const response = await makeTrpcRequest('auth', {}, { 'Cookie': sessionCookie }, 'GET');
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      const sub = data.result?.data?.activeOrganization?.OrganizationSubscription;
+
+      // Seeded test org is on PRO; plan cap should be 10 (PRO_PLAN_CONFIG.maxMembers).
+      expect(sub?.plan).toBe('PRO');
+      expect(sub?.maxMembers).toBe(10);
+      // Field must NOT be named `seats` (legacy column name; see rename migration).
+      expect(sub?.seats).toBeUndefined();
+    });
+
+    it('Test 9.5.2: maxMembers exceeds current member count (catches corruption regression)', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+
+      const authResponse = await makeTrpcRequest('auth', {}, { 'Cookie': sessionCookie }, 'GET');
+      const auth = await authResponse.json();
+      const orgId = auth.result?.data?.activeOrganization?.id;
+      const maxMembers = auth.result?.data?.activeOrganization?.OrganizationSubscription?.maxMembers;
+      expect(orgId).toBeTruthy();
+      expect(typeof maxMembers).toBe('number');
+
+      const membersResponse = await makeTrpcRequest(
+        'organization.listMembers',
+        { organizationId: orgId },
+        { 'Cookie': sessionCookie },
+        'GET',
+      );
+      expect(membersResponse.status).toBe(200);
+      const members = await membersResponse.json();
+      const memberCount = Array.isArray(members.result?.data) ? members.result.data.length : 0;
+
+      // If maxMembers == memberCount on a PRO org, the column was clobbered with the
+      // live member count (the bug we're fixing). PRO cap is 10; we should always
+      // have headroom on the test org. Bar should never read 100% on a healthy PRO org.
+      expect(maxMembers).toBeGreaterThan(memberCount);
+      expect(maxMembers).toBe(10);
+    });
+  });
+
   describe('Test Suite 10: Invite Management', () => {
     it('Test 10.1: Delete invite - Unauthorized (no session)', async () => {
       // Try to delete an invite without authentication

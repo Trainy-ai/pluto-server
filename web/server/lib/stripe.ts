@@ -23,15 +23,16 @@ export function isStripeConfigured(): boolean {
   return Boolean(env.STRIPE_SECRET_KEY && env.STRIPE_PRO_PRICE_ID);
 }
 
-// Plan configurations
+// Plan configurations. `maxMembers` is the org's member cap for the plan;
+// Stripe billing quantity is the live member count, set via syncSubscriptionSeats.
 export const FREE_PLAN_CONFIG = {
-  seats: 2,
+  maxMembers: 2,
   dataUsageGB: 2,
   trainingHoursPerMonth: 50,
 };
 
 export const PRO_PLAN_CONFIG = {
-  seats: 10,
+  maxMembers: 10,
   dataUsageGB: 10000, // 10 TB
   trainingHoursPerMonth: 999999, // Effectively unlimited
 };

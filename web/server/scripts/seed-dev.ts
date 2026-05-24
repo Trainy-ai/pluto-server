@@ -1523,7 +1523,7 @@ async function main() {
         stripeCustomerId: `cus_dev_${org.id.substring(0, 8)}`,
         stripeSubscriptionId: `sub_dev_${org.id.substring(0, 8)}`,
         plan: 'PRO',
-        seats: 10,
+        maxMembers: 10,
         usageLimits: {
           dataUsageGB: 100,
           trainingHoursPerMonth: 750,

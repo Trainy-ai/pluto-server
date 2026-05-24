@@ -5,7 +5,7 @@ import { nanoid } from "nanoid";
 import { OrganizationRole, SubscriptionPlan } from "@prisma/client";
 import { getLimits } from "../../../../lib/limits";
 import { isEduEmail } from "../../../../lib/edu";
-import { EDU_SUBSCRIPTION_ID, PRO_PLAN_CONFIG } from "../../../../lib/stripe";
+import { EDU_SUBSCRIPTION_ID, FREE_PLAN_CONFIG, PRO_PLAN_CONFIG } from "../../../../lib/stripe";
 
 export const createOrgProcedure = protectedProcedure
   .input(
@@ -67,7 +67,7 @@ export const createOrgProcedure = protectedProcedure
     const plan = isEdu ? SubscriptionPlan.PRO : SubscriptionPlan.FREE;
     const stripeCustomerId = "";
     const stripeSubscriptionId = isEdu ? EDU_SUBSCRIPTION_ID : "";
-    const seats = isEdu ? PRO_PLAN_CONFIG.seats : 2;
+    const maxMembers = isEdu ? PRO_PLAN_CONFIG.maxMembers : FREE_PLAN_CONFIG.maxMembers;
 
     // 1. Create the Organization first
     const newOrgId = nanoid();
@@ -103,7 +103,7 @@ export const createOrgProcedure = protectedProcedure
           createdAt: new Date(),
           stripeCustomerId,
           stripeSubscriptionId,
-          seats,
+          maxMembers,
           usageLimits: getLimits(plan),
         },
       });

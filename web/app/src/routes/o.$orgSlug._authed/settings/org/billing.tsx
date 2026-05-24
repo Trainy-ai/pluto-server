@@ -251,7 +251,7 @@ function RouteComponent() {
         <div className="grid gap-4">
           <h2 className="text-xl font-semibold">Usage</h2>
           <MembersLimit
-            maxMembers={orgSubscription.seats}
+            maxMembers={orgSubscription.maxMembers}
             memberCount={actualMemberCount}
             isLoading={isMembersLoading}
           />

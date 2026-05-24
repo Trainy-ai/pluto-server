@@ -81,12 +81,9 @@ export const removeMemberProcedure = protectedOrgProcedure
         where: { organizationId: input.organizationId },
       });
       try {
+        // Stripe billing quantity tracks live member count. The local
+        // `maxMembers` column is the plan cap and must NOT be overwritten here.
         await syncSubscriptionSeats(orgSub.stripeSubscriptionId, newMemberCount);
-        // Update local seat count
-        await ctx.prisma.organizationSubscription.update({
-          where: { organizationId: input.organizationId },
-          data: { seats: newMemberCount },
-        });
       } catch (error) {
         console.error("Failed to update Stripe seat count:", error);
         // Don't throw - member was already removed, billing update can be retried

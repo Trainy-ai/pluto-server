@@ -148,16 +148,16 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
     // Continue - local DB update is still important
   }
 
-  // Update organization subscription to PRO
-  // Note: seats is the max allowed seats for the plan, not current member count
-  // Stripe billing uses memberCount for per-seat charges
+  // Update organization subscription to PRO.
+  // maxMembers is the plan cap; Stripe billing quantity (live member count) is
+  // synced separately via syncSubscriptionSeats.
   await prisma.organizationSubscription.update({
     where: { organizationId },
     data: {
       plan: SubscriptionPlan.PRO,
       stripeCustomerId: customerId,
       stripeSubscriptionId: subscriptionId,
-      seats: PRO_PLAN_CONFIG.seats,
+      maxMembers: PRO_PLAN_CONFIG.maxMembers,
       usageLimits: {
         dataUsageGB: PRO_PLAN_CONFIG.dataUsageGB,
         trainingHoursPerMonth: PRO_PLAN_CONFIG.trainingHoursPerMonth,
@@ -165,7 +165,7 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
     },
   });
 
-  console.log(`Organization ${organizationId} upgraded to PRO plan (${memberCount} members, ${PRO_PLAN_CONFIG.seats} seats max)`);
+  console.log(`Organization ${organizationId} upgraded to PRO plan (${memberCount} members, ${PRO_PLAN_CONFIG.maxMembers} max)`);
 
   // Send admin notification
   await notifyAdminOfBillingEvent("New PRO Upgrade", {
@@ -206,7 +206,7 @@ async function handleSubscriptionUpdated(subscription: Stripe.Subscription) {
       data: {
         plan: SubscriptionPlan.PRO,
         stripeSubscriptionId: subscription.id,
-        seats: PRO_PLAN_CONFIG.seats,
+        maxMembers: PRO_PLAN_CONFIG.maxMembers,
         usageLimits: {
           dataUsageGB: PRO_PLAN_CONFIG.dataUsageGB,
           trainingHoursPerMonth: PRO_PLAN_CONFIG.trainingHoursPerMonth,
@@ -234,7 +234,7 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
     data: {
       plan: SubscriptionPlan.FREE,
       stripeSubscriptionId: CANCELLED_SUBSCRIPTION_ID,
-      seats: FREE_PLAN_CONFIG.seats,
+      maxMembers: FREE_PLAN_CONFIG.maxMembers,
       usageLimits: {
         dataUsageGB: FREE_PLAN_CONFIG.dataUsageGB,
         trainingHoursPerMonth: FREE_PLAN_CONFIG.trainingHoursPerMonth,

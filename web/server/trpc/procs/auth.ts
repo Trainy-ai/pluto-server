@@ -22,7 +22,7 @@ export const enhancedAuthProcedure = publicProcedure.query(async ({ ctx }) => {
       OrganizationSubscription: {
         select: {
           plan: true,
-          seats: true,
+          maxMembers: true,
           usageLimits: true,
         },
       },
@@ -48,7 +48,7 @@ export const enhancedAuthProcedure = publicProcedure.query(async ({ ctx }) => {
       OrganizationSubscription: {
         select: {
           plan: true,
-          seats: true,
+          maxMembers: true,
           usageLimits: true,
           stripeSubscriptionId: true,
         },
@@ -68,7 +68,7 @@ export const enhancedAuthProcedure = publicProcedure.query(async ({ ctx }) => {
     activeOrganization?.OrganizationSubscription
       ? {
           plan: activeOrganization.OrganizationSubscription.plan,
-          seats: activeOrganization.OrganizationSubscription.seats,
+          maxMembers: activeOrganization.OrganizationSubscription.maxMembers,
           usageLimits: limitsSchema.parse(
             activeOrganization.OrganizationSubscription.usageLimits
           ),

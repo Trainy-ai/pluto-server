@@ -5,7 +5,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { protectedProcedure } from "../../../../../../lib/trpc";
 import { nanoid } from "nanoid";
-import { syncSubscriptionSeats, isActiveStripeSubscription, FREE_PLAN_CONFIG, PRO_PLAN_CONFIG } from "../../../../../../lib/stripe";
+import { syncSubscriptionSeats, isActiveStripeSubscription, FREE_PLAN_CONFIG } from "../../../../../../lib/stripe";
 
 export const acceptInviteProcedure = protectedProcedure
   .input(z.object({ invitationId: z.string() }))
@@ -34,19 +34,22 @@ export const acceptInviteProcedure = protectedProcedure
       },
     });
 
-    // Check member limit based on plan (not current billed seats)
+    // Plan cap lives on the subscription row (set at plan-change time). Read
+    // it directly so per-org overrides are respected; fall back to the FREE
+    // default only when no subscription record exists.
     const currentMemberCount = organization?.members.length ?? 0;
     const plan = organization?.OrganizationSubscription?.plan;
-    const maxSeats = plan === SubscriptionPlan.PRO
-      ? PRO_PLAN_CONFIG.seats
-      : FREE_PLAN_CONFIG.seats;
+    const dbMaxMembers = organization?.OrganizationSubscription?.maxMembers;
+    const maxMembers = Number.isFinite(dbMaxMembers)
+      ? (dbMaxMembers as number)
+      : FREE_PLAN_CONFIG.maxMembers;
 
-    if (currentMemberCount >= maxSeats) {
+    if (currentMemberCount >= maxMembers) {
       throw new TRPCError({
         code: "BAD_REQUEST",
         message:
           plan === SubscriptionPlan.PRO
-            ? "Organization has reached the maximum of 10 members."
+            ? `Organization has reached the maximum of ${maxMembers} members.`
             : "Organization is full. Please ask your administrator to upgrade your organization.",
       });
     }
@@ -79,12 +82,9 @@ export const acceptInviteProcedure = protectedProcedure
         where: { organizationId: invitation.organizationId },
       });
       try {
+        // Stripe billing quantity tracks live member count. The local
+        // `maxMembers` column is the plan cap and must NOT be overwritten here.
         await syncSubscriptionSeats(orgSub.stripeSubscriptionId, newMemberCount);
-        // Update local seat count
-        await ctx.prisma.organizationSubscription.update({
-          where: { organizationId: invitation.organizationId },
-          data: { seats: newMemberCount },
-        });
       } catch (error) {
         console.error("Failed to update Stripe seat count:", error);
         // Don't throw - member was already added, billing update can be retried

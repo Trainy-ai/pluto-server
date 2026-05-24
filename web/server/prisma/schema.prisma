@@ -142,7 +142,7 @@ model OrganizationSubscription {
   stripeCustomerId     String
   stripeSubscriptionId String
   plan                 SubscriptionPlan
-  seats                Int
+  maxMembers           Int              @map("seats")
   usageLimits          Json // flexible, so you can customize per org
   createdAt            DateTime         @default(now())
   updatedAt            DateTime         @updatedAt
