@@ -19,3 +19,7 @@ const PRO_LIMITS = {
 export const getLimits = (plan: SubscriptionPlan) => {
   return plan === SubscriptionPlan.FREE ? FREE_LIMITS : PRO_LIMITS;
 };
+
+/** Hard cap on tags per run. Enforced at every write boundary
+ *  (HTTP /api/runs/create, /api/runs/tags/update, tRPC runs.updateTags). */
+export const MAX_TAGS_PER_RUN = 50;

@@ -1,13 +1,32 @@
+import { useMemo, useState } from "react";
 import { Input } from "@/components/ui/input";
 import {
   Command,
+  CommandEmpty,
   CommandGroup,
+  CommandInput,
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
-import { Check } from "lucide-react";
+import { Check, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { fuzzyFilter } from "@/lib/fuzzy-search";
+import { useTagSearch, TAG_SEARCH_LIMIT } from "@/hooks/use-tag-search";
 import type { ColumnDataType } from "@/lib/filters";
+
+/** Identifies a project so a value dropdown can search the backend. */
+export interface TagSearchContext {
+  organizationId: string;
+  projectName: string;
+}
+
+/**
+ * Max option rows mounted at once. A project can accumulate thousands of
+ * distinct values (e.g. tags); rendering them all would bloat the DOM.
+ * Search filters the full list *before* this cap is applied, so every
+ * value stays reachable — only the rendered slice is bounded.
+ */
+const OPTION_RENDER_LIMIT = 500;
 
 interface FilterValueInputProps {
   dataType: ColumnDataType;
@@ -16,6 +35,8 @@ interface FilterValueInputProps {
   onChange: (values: unknown[]) => void;
   options?: { label: string; value: string }[];
   showValidation?: boolean;
+  /** When set, option dropdowns search the backend instead of the loaded set. */
+  tagSearch?: TagSearchContext;
 }
 
 export function FilterValueInput({
@@ -25,6 +46,7 @@ export function FilterValueInput({
   onChange,
   options,
   showValidation,
+  tagSearch,
 }: FilterValueInputProps) {
   // "exists" / "not exists" need no value input
   if (operator === "exists" || operator === "not exists") {
@@ -134,6 +156,7 @@ export function FilterValueInput({
           selected={values as string[]}
           onChange={onChange}
           multi={operator === "is any of" || operator === "is none of"}
+          tagSearch={tagSearch}
         />
       );
 
@@ -144,6 +167,7 @@ export function FilterValueInput({
           selected={Array.isArray(values[0]) ? (values[0] as string[]) : (values as string[])}
           onChange={(selected) => onChange([selected])}
           multi
+          tagSearch={tagSearch}
         />
       );
 
@@ -237,13 +261,52 @@ function OptionSelect({
   selected,
   onChange,
   multi,
+  tagSearch,
 }: {
   options: { label: string; value: string }[];
   selected: string[];
   onChange: (values: string[]) => void;
   multi: boolean;
+  tagSearch?: TagSearchContext;
 }) {
-  if (options.length === 0) {
+  const [query, setQuery] = useState("");
+
+  // When tagSearch is set, typing queries the backend across every run in
+  // the project; otherwise we fuzzy-filter the locally-provided options.
+  const serverMode = !!tagSearch;
+  const { results, isSearching } = useTagSearch(
+    tagSearch?.organizationId,
+    tagSearch?.projectName,
+    serverMode ? query : ""
+  );
+
+  const matched = useMemo(() => {
+    const q = query.trim();
+    if (serverMode) {
+      // Empty query → loaded-run tags; active query → backend results.
+      if (!q) {
+        return options;
+      }
+      return results.map((t) => ({ label: t, value: t }));
+    }
+    // Fuzzy-filter the FULL option list (not just the rendered slice) so
+    // search reaches every value, including ones past the render cap.
+    if (!q) {
+      return options;
+    }
+    const ranked = fuzzyFilter(
+      options.map((o) => o.label),
+      q
+    );
+    const rankByLabel = new Map(ranked.map((label, i) => [label, i] as const));
+    return options
+      .filter((o) => rankByLabel.has(o.label))
+      .sort((a, b) => rankByLabel.get(a.label)! - rankByLabel.get(b.label)!);
+  }, [serverMode, options, query, results]);
+
+  // Free-text fallback for option fields with no known values (and never
+  // for tag search, which always wants the searchable dropdown).
+  if (options.length === 0 && !serverMode) {
     return (
       <Input
         placeholder="Enter value..."
@@ -255,11 +318,53 @@ function OptionSelect({
     );
   }
 
+  // Tag search always shows the box; plain option lists only once long.
+  const showSearch = serverMode || options.length > 7;
+
+  // Cap how many rows we mount. Already-selected values are always kept
+  // mounted so they stay uncheckable even when they fall past the cap.
+  const visible = matched.slice(0, OPTION_RENDER_LIMIT);
+  let rendered = visible;
+  if (matched.length > visible.length) {
+    const visibleValues = new Set(visible.map((o) => o.value));
+    const selectedValues = new Set(selected);
+    const hiddenSelected = matched.filter(
+      (o) => selectedValues.has(o.value) && !visibleValues.has(o.value)
+    );
+    if (hiddenSelected.length > 0) {
+      rendered = [...visible, ...hiddenSelected];
+    }
+  }
+  const clientTruncated = matched.length > visible.length;
+  const serverTruncated =
+    serverMode && query.trim().length > 0 && results.length >= TAG_SEARCH_LIMIT;
+
   return (
-    <Command className="max-h-40">
+    <Command className="max-h-52" shouldFilter={false}>
+      {showSearch && (
+        <div className="relative">
+          <CommandInput
+            placeholder={serverMode ? "Search all tags..." : "Search options..."}
+            autoFocus
+            value={query}
+            onValueChange={setQuery}
+            data-testid="filter-option-search"
+          />
+          {isSearching && (
+            <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-muted-foreground" />
+          )}
+        </div>
+      )}
       <CommandList>
+        <CommandEmpty>
+          {isSearching
+            ? "Searching…"
+            : serverMode && !query.trim()
+              ? "Type to search tags."
+              : "No matches."}
+        </CommandEmpty>
         <CommandGroup>
-          {options.map((opt) => {
+          {rendered.map((opt) => {
             const isSelected = selected.includes(opt.value);
             return (
               <CommandItem
@@ -292,6 +397,11 @@ function OptionSelect({
           })}
         </CommandGroup>
       </CommandList>
+      {(clientTruncated || serverTruncated) && (
+        <div className="border-t px-2 py-1.5 text-xs text-muted-foreground">
+          max {OPTION_RENDER_LIMIT} — search for more
+        </div>
+      )}
     </Command>
   );
 }

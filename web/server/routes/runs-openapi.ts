@@ -34,6 +34,7 @@ import {
 import type { prisma } from "../lib/prisma";
 import type { ApiKey, Organization, User } from "@prisma/client";
 import { extractAndUpsertColumnKeys } from "../lib/extract-column-keys";
+import { MAX_TAGS_PER_RUN } from "../lib/limits";
 import { deepMerge } from "../lib/deep-merge";
 import { generateRunPrefix } from "../lib/run-prefix";
 import { transitionRunStatus, recordRunCreatedEvent } from "../lib/run-status";
@@ -80,7 +81,7 @@ const createRunRoute = createRoute({
             runName: z.string().openapi({ description: "Name of the run", example: "training-run-1" }),
             projectName: z.string().openapi({ description: "Name of the project", example: "my-project" }),
             externalId: z.string().min(1).optional().nullable().openapi({ description: "User-provided run ID for multi-node distributed training. If provided and a run with this ID exists, the existing run is returned.", example: "my-ddp-run-2024" }),
-            tags: z.array(z.string()).optional().nullable().openapi({ description: "Tags for the run", example: ["experiment", "v1"] }),
+            tags: z.array(z.string()).max(MAX_TAGS_PER_RUN, { message: `A run can have at most ${MAX_TAGS_PER_RUN} tags` }).optional().nullable().openapi({ description: `Tags for the run (max ${MAX_TAGS_PER_RUN})`, example: ["experiment", "v1"] }),
             loggerSettings: z.string().optional().nullable().openapi({ description: "Logger settings as JSON string" }),
             systemMetadata: z.string().optional().nullable().openapi({ description: "System metadata as JSON string" }),
             config: z.string().optional().nullable().openapi({ description: "Run configuration as JSON string", example: '{"lr": 0.001}' }),
@@ -860,7 +861,7 @@ const updateTagsRoute = createRoute({
         "application/json": {
           schema: z.object({
             runId: z.number().openapi({ description: "Numeric ID of the run" }),
-            tags: z.array(z.string()).openapi({ description: "New tags for the run", example: ["production", "v2"] }),
+            tags: z.array(z.string()).max(MAX_TAGS_PER_RUN, { message: `A run can have at most ${MAX_TAGS_PER_RUN} tags` }).openapi({ description: `New tags for the run (max ${MAX_TAGS_PER_RUN})`, example: ["production", "v2"] }),
           }),
         },
       },

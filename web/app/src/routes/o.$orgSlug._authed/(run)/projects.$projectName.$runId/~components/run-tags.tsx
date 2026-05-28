@@ -7,9 +7,10 @@ interface RunTagsProps {
   tags: string[];
   onTagsUpdate: (tags: string[]) => void;
   organizationId?: string;
+  projectName?: string;
 }
 
-export function RunTags({ tags, onTagsUpdate, organizationId }: RunTagsProps) {
+export function RunTags({ tags, onTagsUpdate, organizationId, projectName }: RunTagsProps) {
   return (
     <div className="flex items-center gap-2">
       <div className="flex flex-wrap items-center gap-1">
@@ -24,9 +25,10 @@ export function RunTags({ tags, onTagsUpdate, organizationId }: RunTagsProps) {
         tags={tags}
         onTagsUpdate={onTagsUpdate}
         organizationId={organizationId}
+        projectName={projectName}
         emptyText="No tags found. Type to create a new tag."
         trigger={
-          <Button variant="ghost" size="sm" className="h-7 gap-1">
+          <Button variant="ghost" size="sm" className="h-7 gap-1" data-testid="run-tags-edit">
             <Tag className="h-3 w-3" />
             <span className="text-xs">Edit Tags</span>
           </Button>

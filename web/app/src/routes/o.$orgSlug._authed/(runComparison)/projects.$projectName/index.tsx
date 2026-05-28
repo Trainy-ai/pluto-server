@@ -14,7 +14,6 @@ import { prefetchListRuns, useListRuns, type Run } from "./~queries/list-runs";
 import { useSelectedRunLogs } from "./~queries/selected-run-logs";
 import { useUpdateTags } from "./~queries/update-tags";
 import { useUpdateNotes } from "./~queries/update-notes";
-import { useDistinctTags } from "./~queries/distinct-tags";
 import { useDistinctColumnKeys, useSearchColumnKeys } from "./~queries/distinct-column-keys";
 import { useColumnConfig, useBaseColumnOverrides, DEFAULT_COLUMNS, type ColumnConfig, type MetricAggregation } from "./~hooks/use-column-config";
 import { useLocalStorageBool } from "./~hooks/use-local-storage-bool";
@@ -627,10 +626,6 @@ function RouteComponent() {
   // Mutation for updating notes
   const updateNotesMutation = useUpdateNotes(organizationId, projectName);
 
-  // Fetch all distinct tags across all runs in the project
-  // This ensures the filter dropdown shows all available tags, not just those from loaded runs
-  const { data: distinctTagsData } = useDistinctTags(organizationId, projectName);
-  const allTags = distinctTagsData?.tags ?? [];
   const { data: columnKeysData, isLoading: columnKeysLoading } = useDistinctColumnKeys(organizationId, projectName);
 
   // Metric names for column picker and filter dropdown (initial load: last 100)
@@ -785,6 +780,34 @@ function RouteComponent() {
 
     return Array.from(uniqueRuns.values());
   }, [data, prefetchedUrlRuns]);
+
+  // Candidate tags for the filter and tag-editor dropdowns, derived from the
+  // runs already loaded in the table — NOT a project-wide fetch. The
+  // dropdowns search the backend (runs.distinctTags) for anything beyond
+  // this set, so a project with tens of thousands of tags stays bounded.
+  //
+  // Ordered most-common-first, with the newest run carrying the tag as
+  // the tiebreaker (alphabetical as final stable order). Matches the
+  // server-side ORDER BY in runs.distinctTags.
+  const allTags = useMemo(() => {
+    const counts = new Map<string, number>();
+    const latest = new Map<string, number>();
+    for (const run of allLoadedRuns) {
+      const ts = run.createdAt ? new Date(run.createdAt).getTime() : 0;
+      for (const tag of (run.tags ?? []) as string[]) {
+        counts.set(tag, (counts.get(tag) ?? 0) + 1);
+        const prev = latest.get(tag) ?? 0;
+        if (ts > prev) latest.set(tag, ts);
+      }
+    }
+    return Array.from(counts.keys()).sort((a, b) => {
+      const dc = (counts.get(b) ?? 0) - (counts.get(a) ?? 0);
+      if (dc !== 0) return dc;
+      const dt = (latest.get(b) ?? 0) - (latest.get(a) ?? 0);
+      if (dt !== 0) return dt;
+      return a.localeCompare(b);
+    });
+  }, [allLoadedRuns]);
 
   // Pre-fetch selected runs' FULL data via runs.getByIds.
   //

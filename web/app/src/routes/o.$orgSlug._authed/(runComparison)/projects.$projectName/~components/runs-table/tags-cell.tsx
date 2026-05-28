@@ -15,13 +15,14 @@ interface TagsCellProps {
   allTags: string[];
   onTagsUpdate: (tags: string[]) => void;
   organizationId?: string;
+  projectName?: string;
 }
 
 const GAP_PX = 4; // gap-1 = 0.25rem = 4px
 const EDIT_BUTTON_WIDTH = 28; // h-6 w-6 button + gap
 const OVERFLOW_BADGE_WIDTH = 36; // approximate "+N" badge width
 
-export function TagsCell({ tags, allTags, onTagsUpdate, organizationId }: TagsCellProps) {
+export function TagsCell({ tags, allTags, onTagsUpdate, organizationId, projectName }: TagsCellProps) {
   const [isHovered, setIsHovered] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const leaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -129,6 +130,7 @@ export function TagsCell({ tags, allTags, onTagsUpdate, organizationId }: TagsCe
         allTags={allTags}
         onTagsUpdate={onTagsUpdate}
         organizationId={organizationId}
+        projectName={projectName}
         onOpenChange={setIsEditing}
         stopPropagation
         trigger={
@@ -138,6 +140,7 @@ export function TagsCell({ tags, allTags, onTagsUpdate, organizationId }: TagsCe
             className="h-6 w-6 shrink-0"
             onClick={(e) => e.stopPropagation()}
             title="Edit tags"
+            data-testid="tags-cell-edit"
           >
             <Pencil className="h-3 w-3" />
           </Button>

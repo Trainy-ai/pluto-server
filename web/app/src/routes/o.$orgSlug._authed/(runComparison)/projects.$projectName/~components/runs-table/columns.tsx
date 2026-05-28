@@ -410,6 +410,7 @@ export const columns = ({
               allTags={getAllTags()}
               onTagsUpdate={(newTags) => onTagsUpdate(runId, newTags)}
               organizationId={organizationId}
+              projectName={projectName}
             />
           );
         },

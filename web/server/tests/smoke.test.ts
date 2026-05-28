@@ -2431,6 +2431,207 @@ describe('SDK API Endpoints (with API Key)', () => {
     });
   });
 
+  describe('Test Suite 17: Distinct Tags Search (Authenticated)', () => {
+    const TEST_EMAIL = process.env.TEST_USER_EMAIL || 'test-smoke@mlop.local';
+    const TEST_PASSWORD = 'TestPassword123!';
+    let sessionCookie: string | null = null;
+    let serverAvailable = false;
+
+    beforeAll(async () => {
+      try {
+        const healthCheck = await makeRequest('/api/health');
+        serverAvailable = healthCheck.status === 200;
+      } catch {
+        serverAvailable = false;
+      }
+      if (!serverAvailable) return;
+
+      try {
+        const signInResponse = await makeRequest('/api/auth/sign-in/email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: TEST_EMAIL, password: TEST_PASSWORD }),
+        });
+        const setCookie = signInResponse.headers.get('set-cookie');
+        const match = setCookie?.match(/better_auth\.session_token=([^;]+)/);
+        if (match) {
+          sessionCookie = `better_auth.session_token=${match[1]}`;
+        }
+      } catch (e) {
+        console.log('   Sign in failed:', e);
+      }
+    });
+
+    it('Test 17.1: distinctTags requires authentication', async () => {
+      const response = await makeTrpcRequest('runs.distinctTags', {
+        projectName: TEST_PROJECT_NAME,
+      }, {}, 'GET');
+      expect(response.status).toBe(401);
+    });
+
+    it('Test 17.2: distinctTags returns a bounded tag list', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+      const response = await makeTrpcRequest('runs.distinctTags', {
+        projectName: TEST_PROJECT_NAME,
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      const tags = data.result?.data?.tags;
+      expect(Array.isArray(tags)).toBe(true);
+      // Hard cap mirrors the frontend render limit.
+      expect(tags.length).toBeLessThanOrEqual(500);
+    });
+
+    it('Test 17.3: search returns only matching tags', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+      const response = await makeTrpcRequest('runs.distinctTags', {
+        projectName: TEST_PROJECT_NAME,
+        search: 'train',
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(response.status).toBe(200);
+      const tags: string[] = (await response.json()).result?.data?.tags ?? [];
+      // Every result must contain the (case-insensitive) query substring.
+      expect(tags.every((t) => t.toLowerCase().includes('train'))).toBe(true);
+      // The seeded TAG_POOL includes "training".
+      expect(tags).toContain('training');
+    });
+
+    it('Test 17.4: non-matching search returns an empty list', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+      const response = await makeTrpcRequest('runs.distinctTags', {
+        projectName: TEST_PROJECT_NAME,
+        search: 'zzz-no-such-tag-xyz',
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(response.status).toBe(200);
+      const tags = (await response.json()).result?.data?.tags;
+      expect(tags).toEqual([]);
+    });
+
+    it('Test 17.5: limit caps the number of returned tags', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+      const response = await makeTrpcRequest('runs.distinctTags', {
+        projectName: TEST_PROJECT_NAME,
+        limit: 2,
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(response.status).toBe(200);
+      const tags = (await response.json()).result?.data?.tags;
+      expect(Array.isArray(tags)).toBe(true);
+      expect(tags.length).toBeLessThanOrEqual(2);
+    });
+
+    it('Test 17.6: distinctTags ranks most-common tag first', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+      // setup.ts distributes TAG_POOL across the first 10 bulk runs such
+      // that `training` is on 10 runs (highest count). The SQL ORDER BY
+      // COUNT(*) DESC, MAX("createdAt") DESC, tag ASC must surface it
+      // first — a regression to alphabetical or unsorted would not.
+      const response = await makeTrpcRequest('runs.distinctTags', {
+        projectName: TEST_PROJECT_NAME,
+        limit: 50,
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(response.status).toBe(200);
+      const tags: string[] = (await response.json()).result?.data?.tags ?? [];
+      expect(tags[0]).toBe('training');
+    });
+  });
+
+  describe('Test Suite 17b: Tag-count cap (MAX_TAGS_PER_RUN=50)', () => {
+    const hasApiKey = TEST_API_KEY.length > 0;
+
+    describe.skipIf(!hasApiKey)('HTTP write boundaries', () => {
+      it('Test 17b.1: POST /api/runs/create rejects 51-tag body', async () => {
+        const tooMany = Array.from({ length: 51 }, (_, i) => `cap-${i}`);
+        const response = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `tag-cap-test-${Date.now()}`,
+            tags: tooMany,
+          }),
+        });
+        expect(response.status).toBe(400);
+      });
+
+      it('Test 17b.2: POST /api/runs/tags/update rejects 51-tag body', async () => {
+        const tooMany = Array.from({ length: 51 }, (_, i) => `cap-${i}`);
+        const response = await makeRequest('/api/runs/tags/update', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TEST_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          // runId=1 is fine — Zod rejects before the row is fetched.
+          body: JSON.stringify({ runId: 1, tags: tooMany }),
+        });
+        expect(response.status).toBe(400);
+      });
+    });
+
+    describe('tRPC write boundary', () => {
+      let sessionCookie: string | null = null;
+      const TEST_EMAIL = process.env.TEST_USER_EMAIL || 'test-smoke@mlop.local';
+      const TEST_PASSWORD = 'TestPassword123!';
+
+      beforeAll(async () => {
+        try {
+          const signInResponse = await makeRequest('/api/auth/sign-in/email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: TEST_EMAIL, password: TEST_PASSWORD }),
+          });
+          const setCookie = signInResponse.headers.get('set-cookie');
+          const match = setCookie?.match(/better_auth\.session_token=([^;]+)/);
+          if (match) sessionCookie = `better_auth.session_token=${match[1]}`;
+        } catch (e) {
+          console.log('   Sign in failed:', e);
+        }
+      });
+
+      it('Test 17b.3: runs.updateTags rejects 51 tags via tRPC', async () => {
+        if (!sessionCookie) {
+          console.log('   No session - skipping');
+          return;
+        }
+        const tooMany = Array.from({ length: 51 }, (_, i) => `cap-${i}`);
+        // Use any valid SQID — Zod validation happens before the runId
+        // is resolved or the row is fetched.
+        const response = await makeTrpcRequest('runs.updateTags', {
+          runId: 'aB',
+          projectName: TEST_PROJECT_NAME,
+          tags: tooMany,
+        }, { 'Cookie': sessionCookie }, 'POST');
+
+        expect(response.status).toBe(400);
+        const body = await response.json();
+        expect(JSON.stringify(body)).toMatch(/at most 50 tags/i);
+      });
+    });
+  });
+
   describe('Test Suite 18: Run Table Views (Unauthenticated)', () => {
     it('Test 18.1: List run table views - Unauthorized (no session)', async () => {
       const response = await makeTrpcRequest('runTableViews.list', {

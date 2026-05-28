@@ -27,7 +27,7 @@ import { Check, ChevronRight, Filter, Loader2, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { RunFilter, FilterableField, FilterCondition, MetricAggregation } from "@/lib/run-filters";
 import { getOperatorsForType, getDefaultOperator, formatFilterChip } from "@/lib/run-filters";
-import { FilterValueInput } from "./filter-value-input";
+import { FilterValueInput, type TagSearchContext } from "./filter-value-input";
 import { generateUuid } from "@/lib/uuid";
 
 const METRIC_AGGREGATIONS: { value: MetricAggregation; label: string }[] = [
@@ -48,6 +48,9 @@ interface FilterButtonProps {
   onClearFilters: () => void;
   onFieldSearch?: (search: string) => void;
   isSearching?: boolean;
+  /** Org + project context so value dropdowns (tags) can search the backend. */
+  organizationId?: string;
+  projectName?: string;
 }
 
 type Step = "field" | "configure";
@@ -62,6 +65,8 @@ export function FilterButton({
   onClearFilters,
   onFieldSearch,
   isSearching,
+  organizationId,
+  projectName,
 }: FilterButtonProps) {
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState<Step>("field");
@@ -166,6 +171,13 @@ export function FilterButton({
     () => (selectedField ? getOperatorsForType(selectedField.dataType) : []),
     [selectedField]
   );
+
+  // The tags field has an unbounded value set, so its dropdown searches the
+  // backend instead of a static option list. Other fields stay client-side.
+  const tagSearch: TagSearchContext | undefined =
+    selectedField?.id === "tags" && organizationId && projectName
+      ? { organizationId, projectName }
+      : undefined;
 
   const handleSelectField = (field: FilterableField) => {
     setSelectedField(field);
@@ -585,6 +597,7 @@ export function FilterButton({
               onChange={(v) => { setValues(v); setShowValidation(false); }}
               options={selectedField?.options}
               showValidation={showValidation}
+              tagSearch={tagSearch}
             />
 
             {/* Extra AND conditions */}
@@ -626,6 +639,7 @@ export function FilterButton({
                   onChange={(v) => { handleUpdateCondition(idx, { values: v }); setShowValidation(false); }}
                   options={selectedField?.options}
                   showValidation={showValidation}
+                  tagSearch={tagSearch}
                 />
               </div>
             ))}

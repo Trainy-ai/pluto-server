@@ -3,13 +3,16 @@ import { TRPCError } from "@trpc/server";
 import { protectedOrgProcedure } from "../../../../lib/trpc";
 import { resolveRunId } from "../../../../lib/resolve-run-id";
 import { triggerLinearSyncForTags } from "../../../../lib/linear-sync";
+import { MAX_TAGS_PER_RUN } from "../../../../lib/limits";
 
 export const updateTagsProcedure = protectedOrgProcedure
   .input(
     z.object({
       runId: z.string(),
       projectName: z.string(),
-      tags: z.array(z.string()),
+      tags: z.array(z.string()).max(MAX_TAGS_PER_RUN, {
+        message: `A run can have at most ${MAX_TAGS_PER_RUN} tags`,
+      }),
     })
   )
   .mutation(async ({ ctx, input }) => {

@@ -295,6 +295,8 @@ export function TableToolbar({
             onClearFilters={onClearFilters}
             onFieldSearch={onFieldSearch}
             isSearching={isSearchingFields}
+            organizationId={organizationId}
+            projectName={projectName}
           />
           {onColumnToggle && onClearColumns && (
             <ColumnPicker
