@@ -235,6 +235,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           <img
             src={url}
             alt={fileName}
+            loading="lazy"
+            decoding="async"
+            width={256}
+            height={256}
             className="absolute inset-0 h-full w-full object-contain"
           />
         ) : (

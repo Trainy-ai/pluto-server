@@ -284,6 +284,10 @@ export function ImageCard({
                 <img
                   src={url}
                   alt={fileName}
+                  loading="lazy"
+                  decoding="async"
+                  width={256}
+                  height={256}
                   className="h-full w-full object-contain"
                 />
                 <Button
