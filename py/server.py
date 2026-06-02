@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from compat.migrate import get_client, list_runs, migrate_all, migrate_run_v1
 from python.env import get_database_url, get_smtp_config
 from python.models import Run, RunStatus, RunTriggers, RunTriggerType
-from python.server import check_run, send_alert, check_api_key, process_runs
+from python.server import check_run, send_alert, process_runs
 
 load_dotenv()
 
@@ -31,7 +31,39 @@ DOMAIN = os.getenv("W_DOMAIN", "localhost")
 if not DATABASE_URL:
     raise ValueError("DATABASE_URL environment variable is not set")
 
-engine = create_engine(DATABASE_URL)
+
+def build_engine(database_url: str):
+    """Create the SQLAlchemy engine with an explicitly sized connection pool.
+
+    The default pool (size 5 + overflow 10 = 15 per process) is too small for
+    the high-concurrency /api/runs/trigger endpoint, which every active SDK run
+    polls for cancel triggers. Under load a single replica exhausted its pool
+    and requests timed out with QueuePool TimeoutError.
+
+    Sizing: 20 base + 20 overflow = 40 per pod. With 3 replicas that is 120
+    connections, well under RDS Postgres max_connections (~400+ on db.t4g.*).
+    pool_pre_ping discards connections silently reaped by RDS/k8s instead of
+    surfacing them as errors; pool_recycle keeps long-lived connections fresh.
+
+    sqlite (tests/local) uses its own pool implementation that does not accept
+    these QueuePool-only kwargs, so they are applied for real DB URLs only.
+    """
+    kwargs = {}
+    if database_url and database_url.startswith("sqlite"):
+        # Sync handlers run in FastAPI's threadpool, so a sqlite connection may
+        # be reused across threads (local/test only). Allow that.
+        kwargs = {"connect_args": {"check_same_thread": False}}
+    elif database_url:
+        kwargs = {
+            "pool_size": 20,
+            "max_overflow": 20,
+            "pool_pre_ping": True,
+            "pool_recycle": 1800,
+        }
+    return create_engine(database_url, **kwargs)
+
+
+engine = build_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 app = FastAPI()
@@ -79,17 +111,18 @@ async def version():
     }
 
 
+# Sync `def`: FastAPI runs it in its worker threadpool so the synchronous
+# SQLAlchemy calls below do not block the event loop (and thus do not hold a
+# pooled connection while the loop is stalled).
 @app.post("/api/runs/trigger")
-async def get_run_triggers(
+def get_run_triggers(
     runId: int = Body(..., embed=True),
     session: Session = Depends(get_db),
     authorization: str = Header(None),
 ):
-    api_key_record = check_api_key(session, authorization)
-    if api_key_record:
-        run = check_run(session, runId, authorization)
-    else:
-        return HTTPException(status_code=401, detail="Invalid API token")
+    # check_run validates the API key (raising 401 for a missing/invalid token)
+    # and loads the run, so no separate check_api_key call is needed here.
+    run = check_run(session, runId, authorization)
 
     if not run.status == RunStatus.CANCELLED:
         triggers = session.query(RunTriggers).filter(
@@ -115,7 +148,7 @@ async def get_run_triggers(
 
 
 @app.post("/api/runs/alert")
-async def set_run_alerts(
+def set_run_alerts(
     runId: int = Body(..., embed=True),
     alert: dict[str, Union[str, int, bool, None]] = Body(..., embed=True),
     session: Session = Depends(get_db),
@@ -153,7 +186,7 @@ async def set_run_alerts(
 
 
 @app.post("/api/stale-runs/trigger")
-async def trigger_stale_run_check():
+def trigger_stale_run_check():
     """Manually trigger one cycle of the stale run job."""
     from clickhouse_connect import get_client as get_clickhouse_client
 
