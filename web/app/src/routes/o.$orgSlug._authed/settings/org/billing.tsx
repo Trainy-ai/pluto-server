@@ -261,24 +261,21 @@ function RouteComponent() {
           />
         </div>
 
-        {!isPro && (
-          <>
-            <Separator />
-            <div className="grid gap-2">
-              <h2 className="text-xl font-semibold">Need a custom plan?</h2>
-              <p className="text-sm text-muted-foreground">
-                For enterprise needs or custom requirements, please{" "}
-                <a
-                  href="mailto:founders@trainy.ai"
-                  className="text-primary underline hover:no-underline"
-                >
-                  contact us
-                </a>{" "}
-                and we&apos;ll work with you to find the right solution.
-              </p>
-            </div>
-          </>
-        )}
+        <Separator />
+        <div className="grid gap-2">
+          <h2 className="text-xl font-semibold">None of these a good fit?</h2>
+          <p className="text-sm text-muted-foreground">
+            If none of our plans are a good fit for your needs, please{" "}
+            <a
+              href="mailto:founders@trainy.ai"
+              className="text-primary underline hover:no-underline"
+            >
+              contact us at founders@trainy.ai
+            </a>
+            . We&apos;re open to new suggestions and happy to work with you to
+            find the right solution.
+          </p>
+        </div>
       </div>
     </SettingsLayout>
   );
