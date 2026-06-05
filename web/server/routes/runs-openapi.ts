@@ -1094,6 +1094,7 @@ const listRunsRoute = createRoute({
               name: z.string().openapi({ description: "Run name" }),
               number: z.number().nullable().openapi({ description: "Sequential run number within the project" }),
               displayId: z.string().nullable().openapi({ description: "Human-readable display ID (e.g., 'MMP-1')" }),
+              projectName: z.string().openapi({ description: "Name of the project this run belongs to" }),
               status: z.string().openapi({ description: "Run status" }),
               tags: z.array(z.string()).openapi({ description: "Run tags" }),
               createdAt: z.string().openapi({ description: "Creation timestamp" }),
@@ -1222,7 +1223,7 @@ router.openapi(listRunsRoute, async (c) => {
       status: true,
       tags: true,
       createdAt: true,
-      project: { select: { runPrefix: true } },
+      project: { select: { name: true, runPrefix: true } },
     },
   });
 
@@ -1260,6 +1261,7 @@ router.openapi(listRunsRoute, async (c) => {
       displayId: run.number != null && run.project?.runPrefix
         ? `${run.project.runPrefix}-${run.number}`
         : null,
+      projectName: run.project?.name ?? "",
       status: run.status,
       tags: run.tags,
       createdAt: run.createdAt.toISOString(),

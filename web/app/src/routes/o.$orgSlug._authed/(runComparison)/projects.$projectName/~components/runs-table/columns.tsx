@@ -354,7 +354,10 @@ export const columns = ({
                   params={{ orgSlug, projectName, runId: displayId ?? runId }}
                   search={activeChartViewId ? { chart: activeChartViewId } : {}}
                 >
-                  <span className="truncate text-sm font-medium group-hover:underline">
+                  <span
+                    className="truncate text-xs font-medium group-hover:underline"
+                    title={name}
+                  >
                     {name}
                   </span>
                 </Link>

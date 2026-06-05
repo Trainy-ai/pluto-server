@@ -6,7 +6,7 @@ import {
   AlertCircle,
   Settings,
   ExternalLink,
-  Trash2,
+  Eraser,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -528,7 +528,7 @@ export const NotificationsDropdown = () => {
                       onClick={handleClearAll}
                       disabled={markAsReadMutation.isPending}
                     >
-                      <Trash2 className="mr-1 h-4 w-4" />
+                      <Eraser className="mr-1 h-4 w-4" />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>Clear all notifications</TooltipContent>

@@ -1221,6 +1221,27 @@ describe('SDK API Endpoints (with API Key)', () => {
         expect(data.runs.some((r: { name: string }) => r.name === 'hidden-needle-experiment')).toBe(true);
       });
 
+      it('Test 12.1b: List rows include projectName equal to queried project', async () => {
+        // Regression for #3: list handler must return projectName so MCP/clients
+        // do not fall back to "Unknown".
+        const response = await makeRequest(
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&limit=10`,
+          {
+            headers: {
+              'Authorization': `Bearer ${TEST_API_KEY}`,
+            },
+          }
+        );
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.runs).toBeDefined();
+        expect(data.runs.length).toBeGreaterThan(0);
+        for (const run of data.runs as { projectName: string }[]) {
+          expect(run.projectName).toBe(TEST_PROJECT_NAME);
+        }
+      });
+
       it('Test 12.2: Empty results for non-matching search', async () => {
         const response = await makeRequest(
           `/api/runs/list?projectName=${TEST_PROJECT_NAME}&search=zzz-nonexistent-xyz&limit=50`,

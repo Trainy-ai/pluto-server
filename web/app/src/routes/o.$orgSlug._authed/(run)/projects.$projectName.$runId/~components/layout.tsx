@@ -23,7 +23,7 @@ import {
   TooltipTrigger,
   UnstyledTooltipContent,
 } from "@/components/ui/tooltip";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Check, Copy } from "lucide-react";
 import { RunTags } from "./run-tags";
 import { useUpdateTags } from "../~queries/update-tags";
 
@@ -141,9 +141,15 @@ export const Layout = ({
     [organizationId, projectName, runId, updateTagsMutation]
   );
 
+  const [copied, setCopied] = useState(false);
+
   const displayId = run.number != null && run.project?.runPrefix
     ? `${run.project.runPrefix}-${run.number}`
     : null;
+  // Always surface a copyable identifier: prefer the human displayId
+  // (e.g. "MMP-1"), fall back to the route id so runs without a number /
+  // project runPrefix still show and copy something in the header.
+  const headerId = displayId ?? runId;
 
   return (
     <RunsLayout>
@@ -156,17 +162,40 @@ export const Layout = ({
                 { title: "Home", to: "/o/$orgSlug" },
                 { title: "Projects", to: "/o/$orgSlug/projects" },
                 { title: projectName, to: "/o/$orgSlug/projects/$projectName" },
-                {
-                  title: displayId ?? runId,
-                  to: "/o/$orgSlug/projects/$projectName/$runId",
-                },
               ]}
               title={title}
             />
-            {displayId && (
-              <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs font-medium text-muted-foreground">
-                {displayId}
-              </span>
+            {headerId && (
+              <Tooltip delayDuration={0}>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label="Copy run ID"
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(headerId);
+                        setCopied(true);
+                        setTimeout(() => setCopied(false), 1500);
+                        toast(`Copied run ID ${headerId}`);
+                      } catch (err) {
+                        console.error("Failed to copy run ID to clipboard", err);
+                        toast.error("Failed to copy run ID to clipboard.");
+                      }
+                    }}
+                    className="flex cursor-pointer items-center gap-1 rounded bg-muted px-1.5 py-0.5 font-mono text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/80 hover:text-foreground"
+                  >
+                    {headerId}
+                    {copied ? (
+                      <Check className="size-3 shrink-0" />
+                    ) : (
+                      <Copy className="size-3 shrink-0" />
+                    )}
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {copied ? "Copied!" : "Copy run ID"}
+                </TooltipContent>
+              </Tooltip>
             )}
             <RunStatusBadge run={run} />
             <RunTags
