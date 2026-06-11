@@ -20,6 +20,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Settings,
+  Repeat,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -69,6 +70,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   );
   const [isMuted, setIsMuted] = useState(
     () => localStorage.getItem("videoMuted") === "true",
+  );
+  // Loop + autoplay defaults to on (helps side-by-side video comparison).
+  // Stored as a string so the default-true behaviour survives a reload.
+  const [isLooping, setIsLooping] = useState(
+    () => localStorage.getItem("videoLoop") !== "false",
   );
   const [showControls, setShowControls] = useState(!isGifFile);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -127,6 +133,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
   }, [isGifFile, volume, isMuted]);
 
+  // Persist loop preference across sessions/players
+  useEffect(() => {
+    localStorage.setItem("videoLoop", String(isLooping));
+  }, [isLooping]);
+
+  // Autoplay when looping is enabled (on mount and when toggled on). Browsers
+  // block autoplay with sound, so a rejected play() is swallowed — the user can
+  // still start playback manually via the controls.
+  useEffect(() => {
+    if (isGifFile) return;
+    const video = videoRef.current;
+    if (!video || !isLooping) return;
+    video.play().catch(() => {});
+  }, [isGifFile, isLooping, url]);
+
   // Auto-hide controls (only for non-GIF files)
   const resetHide = useCallback(() => {
     if (isGifFile) return;
@@ -181,6 +202,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         case "KeyM":
           videoRef.current.muted = !isMuted;
           setIsMuted(!isMuted);
+          break;
+        case "KeyL":
+          setIsLooping((prev) => !prev);
           break;
         case "KeyF":
           toggleFullscreen();
@@ -248,6 +272,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               src={url}
               className="absolute inset-0 h-full w-full object-contain"
               muted={isMuted}
+              loop={isLooping}
               controls={false}
               disablePictureInPicture
               controlsList="nodownload noremoteplayback"
@@ -386,6 +411,25 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                             />
                           </DropdownMenuContent>
                         </DropdownMenu>
+
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-8 w-8"
+                          aria-label={isLooping ? "Disable loop" : "Enable loop"}
+                          aria-pressed={isLooping}
+                          data-testid="video-loop-toggle"
+                          title="Loop (L)"
+                          onClick={() => setIsLooping((prev) => !prev)}
+                        >
+                          <Repeat
+                            className={
+                              isLooping
+                                ? "h-4 w-4 text-white"
+                                : "h-4 w-4 text-white/40"
+                            }
+                          />
+                        </Button>
                       </div>
 
                       <Button
