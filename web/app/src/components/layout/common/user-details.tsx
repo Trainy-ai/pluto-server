@@ -22,6 +22,7 @@ import {
   type SidebarGroupProps,
 } from "@/components/ui/sidebar";
 import { ThemeSwitcher } from "@/components/ui/theme-switcher";
+import { VersionSwitcher } from "@/components/shared/version-switcher";
 import { Skeleton } from "@/components/ui/skeleton";
 import { signOut } from "@/lib/auth/sign";
 import { bustAuthCache } from "@/lib/auth/check";
@@ -133,6 +134,7 @@ export function UserDetails({ ...other }: UserDetailsProps): React.JSX.Element {
                   <div className="flex items-center">Theme</div>
                   <ThemeSwitcher />
                 </DropdownMenuItem>
+                <VersionSwitcher />
               </DropdownMenuGroup>
               <DropdownMenuSeparator />
               <DropdownMenuItem

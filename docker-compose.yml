@@ -164,8 +164,11 @@ services:
 
   frontend:
     build:
-      context: ./web/app
-      dockerfile: Dockerfile
+      # Context is the web/ workspace root (matches the backend service and CI)
+      # so the Dockerfile can use the monorepo pnpm-lock.yaml / workspace
+      # manifests. The Dockerfile lives at web/app/Dockerfile.
+      context: ./web
+      dockerfile: app/Dockerfile
       args:
         - GIT_COMMIT
         - GIT_BRANCH

@@ -6,6 +6,7 @@ import Loader from "./components/loader";
 import { routeTree } from "./routeTree.gen";
 import { queryClient, trpc } from "./utils/trpc";
 import { Button } from "@/components/ui/button";
+import { applyVersionParamFromUrl } from "@/lib/frontend-version";
 
 const router = createRouter({
   routeTree,
@@ -58,11 +59,15 @@ const App = () => {
   );
 };
 
-const rootElement = document.getElementById("app")!;
+// Honour a `?fe=<version>` pin link before rendering. When it triggers a
+// redirect we skip mounting React — the reload will serve the pinned build.
+if (!applyVersionParamFromUrl()) {
+  const rootElement = document.getElementById("app")!;
 
-if (!rootElement.innerHTML) {
-  const root = ReactDOM.createRoot(rootElement);
-  root.render(<App />);
+  if (!rootElement.innerHTML) {
+    const root = ReactDOM.createRoot(rootElement);
+    root.render(<App />);
+  }
 }
 
 type RouterType = typeof router;
