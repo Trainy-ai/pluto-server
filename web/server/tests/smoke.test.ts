@@ -1394,6 +1394,248 @@ describe('SDK API Endpoints (with API Key)', () => {
     });
   });
 
+  describe('Test Suite 12b: Server-Side Ordering & Pagination (REST list)', () => {
+    const hasApiKey = TEST_API_KEY.length > 0;
+
+    describe.skipIf(!hasApiKey)('Ordering & pagination via HTTP API', () => {
+      const auth = { headers: { 'Authorization': `Bearer ${TEST_API_KEY}` } };
+
+      it('Test 12b.1: sort=name returns names in ascending order', async () => {
+        const response = await makeRequest(
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&sort=name&limit=20`,
+          auth
+        );
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        const names = data.runs.map((r: { name: string }) => r.name);
+        expect(names.length).toBeGreaterThan(1);
+        expect(names).toEqual([...names].sort());
+      });
+
+      it('Test 12b.2: sort=-name returns names in descending order', async () => {
+        const response = await makeRequest(
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&sort=-name&limit=20`,
+          auth
+        );
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        const names = data.runs.map((r: { name: string }) => r.name);
+        expect(names.length).toBeGreaterThan(1);
+        expect(names).toEqual([...names].sort().reverse());
+      });
+
+      it('Test 12b.3: default order is createdAt desc (newest first)', async () => {
+        const response = await makeRequest(
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&limit=20`,
+          auth
+        );
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        const ts = data.runs.map((r: { createdAt: string }) => new Date(r.createdAt).getTime());
+        for (let i = 1; i < ts.length; i++) {
+          expect(ts[i]).toBeLessThanOrEqual(ts[i - 1]);
+        }
+      });
+
+      it('Test 12b.4: sort=created_at ascending (oldest first; snake_case alias accepted)', async () => {
+        const response = await makeRequest(
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&sort=created_at&limit=20`,
+          auth
+        );
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        const ts = data.runs.map((r: { createdAt: string }) => new Date(r.createdAt).getTime());
+        for (let i = 1; i < ts.length; i++) {
+          expect(ts[i]).toBeGreaterThanOrEqual(ts[i - 1]);
+        }
+      });
+
+      it('Test 12b.5: offset pagination yields disjoint, continuous pages under a stable sort', async () => {
+        const page1Res = await makeRequest(
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&sort=name&limit=10&offset=0`,
+          auth
+        );
+        const page2Res = await makeRequest(
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&sort=name&limit=10&offset=10`,
+          auth
+        );
+        expect(page1Res.status).toBe(200);
+        expect(page2Res.status).toBe(200);
+        const page1 = await page1Res.json();
+        const page2 = await page2Res.json();
+        // total is stable across pages
+        expect(page1.total).toBe(page2.total);
+        // No id overlap between consecutive pages
+        const ids1 = new Set(page1.runs.map((r: { id: number }) => r.id));
+        for (const run of page2.runs) {
+          expect(ids1.has(run.id)).toBe(false);
+        }
+        // Continuous order: page 2's first name >= page 1's last name
+        if (page1.runs.length === 10 && page2.runs.length > 0) {
+          expect(page2.runs[0].name >= page1.runs[9].name).toBe(true);
+        }
+      });
+
+      it('Test 12b.6: invalid sort field returns 400', async () => {
+        const response = await makeRequest(
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&sort=bogusfield&limit=10`,
+          auth
+        );
+        expect(response.status).toBe(400);
+      });
+
+      it('Test 12b.7: offset beyond total returns an empty page with unchanged total', async () => {
+        const baseRes = await makeRequest(
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&limit=1`,
+          auth
+        );
+        const total = (await baseRes.json()).total;
+        const response = await makeRequest(
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&limit=10&offset=${total + 50}`,
+          auth
+        );
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.runs.length).toBe(0);
+        expect(data.total).toBe(total);
+      });
+
+      // ── Custom (config / systemMetadata / metric) ordering ──────────────
+      // Bulk runs seed config.lr (mostly 0.001, the needle run 0.01) and
+      // config.batch_size: 32, plus metric `train/metric_00`. Total is
+      // preserved across custom sorts (ordering only changes row order).
+
+      it('Test 12b.8: sort=config.lr.value ascending puts the smallest lr first', async () => {
+        const response = await makeRequest(
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&sort=config.lr.value&limit=20&includeFieldValues=true&visibleColumns=${encodeURIComponent('[{"source":"config","key":"lr"}]')}`,
+          auth
+        );
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.total).toBeGreaterThan(1);
+        const lrs = data.runs
+          .map((r: { _flatConfig?: Record<string, unknown> }) => r._flatConfig?.lr)
+          .filter((v: unknown): v is number => typeof v === 'number');
+        // Non-decreasing ascending order among runs that have a numeric lr.
+        for (let i = 1; i < lrs.length; i++) {
+          expect(lrs[i]).toBeGreaterThanOrEqual(lrs[i - 1]);
+        }
+      });
+
+      it('Test 12b.9: sort=-config.lr.value descending puts the largest lr first', async () => {
+        const response = await makeRequest(
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&sort=-config.lr.value&limit=20&includeFieldValues=true&visibleColumns=${encodeURIComponent('[{"source":"config","key":"lr"}]')}`,
+          auth
+        );
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        const lrs = data.runs
+          .map((r: { _flatConfig?: Record<string, unknown> }) => r._flatConfig?.lr)
+          .filter((v: unknown): v is number => typeof v === 'number');
+        expect(lrs.length).toBeGreaterThan(0);
+        // The needle run's lr (0.01) is the largest seeded value — it should be
+        // at or near the top under descending order.
+        expect(lrs[0]).toBeGreaterThanOrEqual(lrs[lrs.length - 1]);
+        for (let i = 1; i < lrs.length; i++) {
+          expect(lrs[i]).toBeLessThanOrEqual(lrs[i - 1]);
+        }
+      });
+
+      it('Test 12b.10: sort=-config.batch_size.value returns runs and preserves total', async () => {
+        const baseRes = await makeRequest(
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&limit=1`,
+          auth
+        );
+        const total = (await baseRes.json()).total;
+        const response = await makeRequest(
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&sort=-config.batch_size.value&limit=20`,
+          auth
+        );
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.runs.length).toBeGreaterThan(0);
+        // Custom sort changes order only — the match count is unchanged.
+        expect(data.total).toBe(total);
+      });
+
+      it('Test 12b.11: sort=summary_metrics.train/metric_00 orders by metric and preserves total', async () => {
+        const baseRes = await makeRequest(
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&limit=1`,
+          auth
+        );
+        const total = (await baseRes.json()).total;
+        const response = await makeRequest(
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&sort=${encodeURIComponent('summary_metrics.train/metric_00')}&limit=10`,
+          auth
+        );
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        // Only runs that logged the metric appear in the ordered page, but the
+        // overall match total (the candidate count) is unchanged.
+        expect(data.total).toBe(total);
+        expect(Array.isArray(data.runs)).toBe(true);
+        expect(data.runs.length).toBeGreaterThan(0);
+      });
+
+      it('Test 12b.12: ascending vs descending metric sort produce reversed leading runs', async () => {
+        const ascRes = await makeRequest(
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&sort=${encodeURIComponent('summary_metrics.train/metric_00')}&limit=20`,
+          auth
+        );
+        const descRes = await makeRequest(
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&sort=${encodeURIComponent('-summary_metrics.train/metric_00')}&limit=20`,
+          auth
+        );
+        expect(ascRes.status).toBe(200);
+        expect(descRes.status).toBe(200);
+        const asc = await ascRes.json();
+        const desc = await descRes.json();
+        if (asc.runs.length > 1 && desc.runs.length > 1) {
+          // The first run under ascending should be the last under descending
+          // (the metric extremes), so the two orderings disagree at the top.
+          expect(asc.runs[0].id).not.toBe(desc.runs[0].id);
+        }
+      });
+
+      it('Test 12b.13: sort=config. (no key) returns 400', async () => {
+        const response = await makeRequest(
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&sort=config.&limit=10`,
+          auth
+        );
+        expect(response.status).toBe(400);
+      });
+
+      it('Test 12b.14: sort=summary_metrics. (no name) returns 400', async () => {
+        const response = await makeRequest(
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&sort=${encodeURIComponent('summary_metrics.')}&limit=10`,
+          auth
+        );
+        expect(response.status).toBe(400);
+      });
+
+      it('Test 12b.15: sort=heartbeat_at (CH MAX(time)) asc vs desc disagree at the top', async () => {
+        const ascRes = await makeRequest(
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&sort=heartbeat_at&limit=5`,
+          auth
+        );
+        const descRes = await makeRequest(
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&sort=-heartbeat_at&limit=5`,
+          auth
+        );
+        expect(ascRes.status).toBe(200);
+        expect(descRes.status).toBe(200);
+        const asc = await ascRes.json();
+        const desc = await descRes.json();
+        expect(asc.runs.length).toBeGreaterThan(0);
+        expect(desc.runs.length).toBeGreaterThan(0);
+        // total reflects the full filtered set, stable across directions
+        expect(asc.total).toBe(desc.total);
+        // oldest-heartbeat-first vs newest-first differ at the top
+        expect(asc.runs[0].id).not.toBe(desc.runs[0].id);
+      });
+    });
+  });
+
   describe('Test Suite 13: URL Encoding in Run URLs', () => {
     const hasApiKey = TEST_API_KEY.length > 0;
 
@@ -7843,6 +8085,119 @@ describe('SDK API Endpoints (with API Key)', () => {
 
       // Should return 400 (validation error) or 401 (auth check comes first)
       expect([400, 401]).toContain(response.status);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Test Suite 38: /api/runs/list fieldFilters (config.* / systemMetadata.*)
+  //
+  // Exercises server-side filtering on arbitrary config/systemMetadata fields
+  // via the indexed run_field_values builder shared with tRPC runs.list.
+  // Seed data: the `config-filter-target` run (setup.ts) has
+  //   config.checkpoint.r2_prefix = "checkpoints/run-37a9f2/step-1000"
+  //   config.model.name           = "dit"
+  //   config.trainer.lr           = 0.05
+  // while the bulk runs all have config.lr = 0.001 and config.batch_size = 32.
+  // ---------------------------------------------------------------------------
+  describe('Test Suite 38: /api/runs/list fieldFilters', () => {
+    const hasApiKey = TEST_API_KEY.length > 0;
+
+    function listWithFilters(filters: unknown[]) {
+      const qs = new URLSearchParams({
+        projectName: TEST_PROJECT_NAME,
+        limit: '200',
+        fieldFilters: JSON.stringify(filters),
+      });
+      return makeRequest(`/api/runs/list?${qs.toString()}`, {
+        headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+      });
+    }
+
+    describe.skipIf(!hasApiKey)('Field filtering with valid API key', () => {
+      it('Test 38.1: contains (text) on nested config.checkpoint.r2_prefix', async () => {
+        const res = await listWithFilters([
+          { source: 'config', key: 'checkpoint.r2_prefix', dataType: 'text', operator: 'contains', values: ['37a'] },
+        ]);
+        expect(res.status).toBe(200);
+        const body = await res.json();
+        const names = body.runs.map((r: { name: string }) => r.name);
+        // Only the target run has a checkpoint.r2_prefix containing "37a".
+        expect(names).toContain('config-filter-target');
+        expect(names.every((n: string) => n === 'config-filter-target')).toBe(true);
+
+        // A non-matching substring returns nothing.
+        const resNone = await listWithFilters([
+          { source: 'config', key: 'checkpoint.r2_prefix', dataType: 'text', operator: 'contains', values: ['zzz-no-match'] },
+        ]);
+        expect(resNone.status).toBe(200);
+        expect((await resNone.json()).runs).toEqual([]);
+      });
+
+      it('Test 38.2: is (text) on config.model.name', async () => {
+        const res = await listWithFilters([
+          { source: 'config', key: 'model.name', dataType: 'text', operator: 'is', values: ['dit'] },
+        ]);
+        expect(res.status).toBe(200);
+        const body = await res.json();
+        const names = body.runs.map((r: { name: string }) => r.name);
+        expect(names).toContain('config-filter-target');
+        expect(names.every((n: string) => n === 'config-filter-target')).toBe(true);
+      });
+
+      it('Test 38.3: numeric > on config.trainer.lr', async () => {
+        // trainer.lr = 0.05 on the target; bulk runs have no trainer.lr at all.
+        const res = await listWithFilters([
+          { source: 'config', key: 'trainer.lr', dataType: 'number', operator: '>', values: [0.01] },
+        ]);
+        expect(res.status).toBe(200);
+        const body = await res.json();
+        const names = body.runs.map((r: { name: string }) => r.name);
+        expect(names).toContain('config-filter-target');
+
+        // Threshold above the value excludes it.
+        const resNone = await listWithFilters([
+          { source: 'config', key: 'trainer.lr', dataType: 'number', operator: '>', values: [1] },
+        ]);
+        expect(resNone.status).toBe(200);
+        const noneNames = (await resNone.json()).runs.map((r: { name: string }) => r.name);
+        expect(noneNames).not.toContain('config-filter-target');
+      });
+
+      it('Test 38.4: filters AND together across terms', async () => {
+        const res = await listWithFilters([
+          { source: 'config', key: 'model.name', dataType: 'text', operator: 'is', values: ['dit'] },
+          { source: 'config', key: 'trainer.lr', dataType: 'number', operator: '>', values: [0.01] },
+        ]);
+        expect(res.status).toBe(200);
+        const names = (await res.json()).runs.map((r: { name: string }) => r.name);
+        expect(names).toContain('config-filter-target');
+
+        // One matching term + one impossible term => empty.
+        const resNone = await listWithFilters([
+          { source: 'config', key: 'model.name', dataType: 'text', operator: 'is', values: ['dit'] },
+          { source: 'config', key: 'model.name', dataType: 'text', operator: 'is', values: ['not-dit'] },
+        ]);
+        expect(resNone.status).toBe(200);
+        expect((await resNone.json()).runs).toEqual([]);
+      });
+
+      it('Test 38.5: malformed fieldFilters JSON returns 400', async () => {
+        const qs = new URLSearchParams({
+          projectName: TEST_PROJECT_NAME,
+          fieldFilters: '{not valid json',
+        });
+        const res = await makeRequest(`/api/runs/list?${qs.toString()}`, {
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+        });
+        expect(res.status).toBe(400);
+        expect((await res.json()).error).toBeDefined();
+      });
+
+      it('Test 38.6: invalid fieldFilters shape returns 400', async () => {
+        const res = await listWithFilters([{ source: 'bogus', key: 1 }]);
+        expect(res.status).toBe(400);
+        expect((await res.json()).error).toBeDefined();
+      });
     });
   });
 });

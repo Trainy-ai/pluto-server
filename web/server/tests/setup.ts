@@ -1130,6 +1130,31 @@ async function setupTestData(): Promise<TestData> {
       updatedAt: new Date(),
     });
 
+    // Add a dedicated run with a nested config.checkpoint.r2_prefix and a
+    // distinctive model.name + trainer.lr so the /api/runs/list fieldFilters
+    // smoke tests (and MCP config_filter parsing) have deterministic targets
+    // mirroring the feedback example ("checkpoint.r2_prefix contains 37a").
+    bulkRunData.push({
+      name: 'config-filter-target',
+      organizationId: org.id,
+      projectId: project.id,
+      createdById: user.id,
+      creatorApiKeyId: apiKey.id,
+      status: 'COMPLETED' as const,
+      config: {
+        epochs: 100,
+        lr: 0.001,
+        batch_size: 32,
+        dataset: 'config-filter-dataset',
+        optimizer: 'AdamW',
+        checkpoint: { r2_prefix: 'checkpoints/run-37a9f2/step-1000' },
+        trainer: { lr: 0.05 },
+        model: { name: 'dit' },
+      },
+      systemMetadata: { hostname: 'config-filter-host', python: '3.11' },
+      updatedAt: new Date(),
+    });
+
     // Bulk create all runs at once
     await prisma.runs.createMany({
       data: bulkRunData,

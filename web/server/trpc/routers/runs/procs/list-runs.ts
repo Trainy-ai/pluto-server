@@ -16,13 +16,15 @@ const dateFilterSchema = z.object({
   value2: z.string().datetime().optional(),
 });
 
-const fieldFilterSchema = z.object({
+export const fieldFilterSchema = z.object({
   source: z.enum(["config", "systemMetadata"]),
   key: z.string(),
   dataType: z.enum(["text", "number", "date", "option"]),
   operator: z.string(),
   values: z.array(z.any()),
 });
+
+export type FieldFilter = z.infer<typeof fieldFilterSchema>;
 
 const metricFilterSchema = z.object({
   logName: z.string(),
@@ -48,8 +50,9 @@ const SYSTEM_SORT_FIELDS: Record<string, string> = {
 };
 
 /** Maximum offset for JSON sort queries to prevent catastrophic deep-pagination.
- *  At 100k rows, OFFSET > 10k + full JSON extract is too slow. */
-const MAX_JSON_SORT_OFFSET = 100_000;
+ *  At 100k rows, OFFSET > 10k + full JSON extract is too slow.
+ *  Exported so the REST /api/runs/list custom-sort path clamps the same way. */
+export const MAX_JSON_SORT_OFFSET = 100_000;
 
 export type VisibleColumn = { source: "config" | "systemMetadata"; key: string };
 
@@ -741,8 +744,6 @@ async function jsonFieldSortQuery(
   },
 ) {
   const offset = Math.min(input.offset ?? 0, MAX_JSON_SORT_OFFSET);
-  const dir = input.sortDirection === "asc" ? "ASC" : "DESC";
-  const nullsOrder = "NULLS LAST";
   const sortSource = input.sortSource === "config" ? "config" : "systemMetadata";
   const sortKey = input.sortField!;
 
@@ -823,38 +824,27 @@ async function jsonFieldSortQuery(
     conditions.push(`r.id = ANY($${queryParams.length}::bigint[])`);
   }
 
-  // LEFT JOIN run_field_values for the sort column
-  queryParams.push(sortSource);
-  const srcIdx = queryParams.length;
-  queryParams.push(sortKey);
-  const keyIdx = queryParams.length;
-
-  // Determine sort expression — use numericValue if the column has numeric data
-  const sortExpr = `v."numericValue"`;
-  const textSortExpr = `v."textValue"`;
-
   const jsonCreatorJoin = jsonNeedsCreator ? `LEFT JOIN "user" u ON r."createdById" = u.id` : "";
 
-  const query = `
-    WITH ${searchCTE}
-    sorted AS (
-      SELECT r.id
-      FROM "runs" r
-      JOIN "projects" p ON r."projectId" = p.id
-      ${jsonCreatorJoin}
-      LEFT JOIN "run_field_values" v
-        ON v."runId" = r.id AND v."source" = $${srcIdx} AND v."key" = $${keyIdx}
-      WHERE ${conditions.join(" AND ")}
-      ORDER BY ${sortExpr} ${dir} ${nullsOrder},
-               ${textSortExpr} ${dir} ${nullsOrder},
-               r."createdAt" DESC
-      LIMIT ${input.limit}
-      OFFSET ${offset}
-    )
-    SELECT id FROM sorted
-  `;
-
-  const sortedIds: { id: bigint }[] = await ctx.prisma.$queryRawUnsafe(query, ...queryParams);
+  // Delegate the run_field_values ORDER BY to the shared helper so tRPC and the
+  // REST /api/runs/list `sort=config.*` path run ONE implementation. We hand it
+  // our fully-assembled filter fragment (search CTE + conditions + params +
+  // creator join); the helper appends the LEFT JOIN sort column and ORDER BY.
+  const sortedRunIds = await queryFieldSortedRunIds(ctx.prisma, {
+    organizationId: input.organizationId,
+    source: sortSource,
+    key: sortKey,
+    direction: input.sortDirection === "asc" ? "asc" : "desc",
+    limit: input.limit,
+    offset,
+    prefilter: {
+      conditions,
+      params: queryParams,
+      searchCTE,
+      creatorJoin: jsonCreatorJoin,
+    },
+  });
+  const sortedIds: { id: bigint }[] = sortedRunIds.map((id) => ({ id }));
 
   if (sortedIds.length === 0) {
     return { runs: [], nextCursor: null, nextOffset: null };
@@ -1147,6 +1137,156 @@ const NEGATED_TO_POSITIVE: Record<string, string> = {
   "is not between": "is between",
   "is none of": "is any of",
 };
+
+/**
+ * Resolve the set of run IDs matching a list of field filters, scoped to an
+ * organization (and optionally a project). Reuses {@link buildFieldFilterConditions}
+ * so the operator semantics are IDENTICAL to the tRPC runs.list path — the
+ * OpenAPI/REST handler feeds the result into its existing Prisma query via
+ * `id: { in: ... }` rather than re-implementing operators in Prisma.
+ *
+ * Returns an empty array when no filters are supplied (caller should treat this
+ * as "no field-filter constraint", i.e. skip the id intersection).
+ */
+export async function queryFieldFilteredRunIds(
+  prisma: { $queryRawUnsafe: (q: string, ...p: unknown[]) => Promise<{ id: bigint }[]> },
+  input: {
+    organizationId: string;
+    projectId?: bigint;
+    fieldFilters?: FieldFilter[];
+  },
+): Promise<bigint[]> {
+  if (!input.fieldFilters?.length) return [];
+
+  const conditions: string[] = [`r."organizationId" = $1`];
+  const queryParams: (string | bigint | string[] | number)[] = [input.organizationId];
+
+  if (input.projectId != null) {
+    queryParams.push(input.projectId);
+    conditions.push(`r."projectId" = $${queryParams.length}`);
+  }
+
+  buildFieldFilterConditions(conditions, queryParams, input.fieldFilters);
+
+  const query = `
+    SELECT r.id
+    FROM "runs" r
+    WHERE ${conditions.join(" AND ")}
+  `;
+
+  const rows = await prisma.$queryRawUnsafe(query, ...queryParams);
+  return rows.map((row) => row.id);
+}
+
+/**
+ * Resolve an ORDERED list of run IDs sorted by a single config/systemMetadata
+ * field, scoped to an organization (and optionally a project). This is the
+ * ONE shared implementation of the run_field_values ORDER BY used by BOTH the
+ * tRPC runs.list `jsonFieldSortQuery` strategy and the REST `/api/runs/list`
+ * `sort=config.*.value` / `sort=systemMetadata.*.value` path.
+ *
+ * Ordering semantics (identical to the tRPC keyset/JSON-sort path):
+ *   - numericValue first, then textValue, both NULLS LAST in the chosen
+ *     direction, with `createdAt DESC` as a deterministic tiebreaker.
+ *   - `direction` is "asc" | "desc"; default behavior matches the caller.
+ *
+ * Filtering: callers may either pass a flat `idFilter` (REST — the candidate
+ * set that already satisfies every non-sort filter) and/or a pre-assembled
+ * `prefilter` (tRPC — its search CTE + conditions + params + creator join).
+ * Both are optional; when neither is supplied the sort runs over the full
+ * org/project scope.
+ *
+ * `offset` is clamped to {@link MAX_JSON_SORT_OFFSET} to cap deep pagination.
+ */
+export async function queryFieldSortedRunIds(
+  prisma: { $queryRawUnsafe: (q: string, ...p: unknown[]) => Promise<{ id: bigint }[]> },
+  input: {
+    organizationId: string;
+    projectId?: bigint;
+    source: "config" | "systemMetadata";
+    key: string;
+    direction: "asc" | "desc";
+    limit: number;
+    offset?: number;
+    /** Flat candidate id set (REST path); ordering+limit+offset apply within it. */
+    idFilter?: bigint[];
+    /**
+     * Pre-assembled filter fragment from a caller that builds its own complex
+     * WHERE (tRPC path). `conditions`/`params` are spliced verbatim; `searchCTE`
+     * and `creatorJoin` are injected into the same positions the legacy inline
+     * query used so behavior is byte-for-byte preserved.
+     */
+    prefilter?: {
+      conditions: string[];
+      params: (string | bigint | string[] | number)[];
+      searchCTE?: string;
+      creatorJoin?: string;
+    };
+  },
+): Promise<bigint[]> {
+  const offset = Math.min(input.offset ?? 0, MAX_JSON_SORT_OFFSET);
+  const dir = input.direction === "asc" ? "ASC" : "DESC";
+  const nullsOrder = "NULLS LAST";
+
+  // Seed conditions/params from the caller-supplied prefilter (tRPC) or build
+  // a minimal org/project scope ourselves (REST).
+  const conditions: string[] = input.prefilter
+    ? [...input.prefilter.conditions]
+    : [`r."organizationId" = $1`];
+  const queryParams: (string | bigint | string[] | number)[] = input.prefilter
+    ? [...input.prefilter.params]
+    : [input.organizationId];
+
+  if (!input.prefilter && input.projectId != null) {
+    queryParams.push(input.projectId);
+    conditions.push(`r."projectId" = $${queryParams.length}`);
+  }
+
+  // Flat candidate id set (REST). Empty array means "no candidates" — short out.
+  if (input.idFilter) {
+    if (input.idFilter.length === 0) return [];
+    // Postgres array param — matches the tRPC path's `r.id = ANY($N::bigint[])`.
+    queryParams.push(input.idFilter as unknown as string[]);
+    conditions.push(`r.id = ANY($${queryParams.length}::bigint[])`);
+  }
+
+  // Sort column join params come last so the $N indices stay stable.
+  queryParams.push(input.source);
+  const srcIdx = queryParams.length;
+  queryParams.push(input.key);
+  const keyIdx = queryParams.length;
+
+  const sortExpr = `v."numericValue"`;
+  const textSortExpr = `v."textValue"`;
+  // The project JOIN is only needed when a caller filters on p.* (tRPC builds
+  // `p.name = $N`); REST scopes by r."projectId" so it can skip the join, but
+  // keeping it is harmless and keeps a single SQL shape.
+  const projectJoin = input.prefilter ? `JOIN "projects" p ON r."projectId" = p.id` : "";
+  const creatorJoin = input.prefilter?.creatorJoin ?? "";
+  const searchCTE = input.prefilter?.searchCTE ?? "";
+
+  const query = `
+    WITH ${searchCTE}
+    sorted AS (
+      SELECT r.id
+      FROM "runs" r
+      ${projectJoin}
+      ${creatorJoin}
+      LEFT JOIN "run_field_values" v
+        ON v."runId" = r.id AND v."source" = $${srcIdx} AND v."key" = $${keyIdx}
+      WHERE ${conditions.join(" AND ")}
+      ORDER BY ${sortExpr} ${dir} ${nullsOrder},
+               ${textSortExpr} ${dir} ${nullsOrder},
+               r."createdAt" DESC
+      LIMIT ${input.limit}
+      OFFSET ${offset}
+    )
+    SELECT id FROM sorted
+  `;
+
+  const rows = await prisma.$queryRawUnsafe(query, ...queryParams);
+  return rows.map((row) => row.id);
+}
 
 /**
  * Append EXISTS subqueries for field filters against run_field_values.

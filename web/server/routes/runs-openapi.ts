@@ -29,6 +29,7 @@ import { resolveForkParent, validateForkStep } from "../lib/fork-helpers";
 import {
   queryDistinctMetrics,
   queryMetricSortedRunIds,
+  queryHeartbeatSortedRunIds,
   type MetricAggregation,
 } from "../lib/queries/metric-summaries";
 import type { prisma } from "../lib/prisma";
@@ -38,7 +39,7 @@ import { MAX_TAGS_PER_RUN } from "../lib/limits";
 import { deepMerge } from "../lib/deep-merge";
 import { generateRunPrefix } from "../lib/run-prefix";
 import { transitionRunStatus, recordRunCreatedEvent } from "../lib/run-status";
-import { attachFieldValues } from "../trpc/routers/runs/procs/list-runs";
+import { attachFieldValues, queryFieldFilteredRunIds, queryFieldSortedRunIds, MAX_JSON_SORT_OFFSET, fieldFilterSchema, type FieldFilter } from "../trpc/routers/runs/procs/list-runs";
 
 // Type for API key with relations
 type ApiKeyWithRelations = ApiKey & {
@@ -1081,6 +1082,41 @@ const listRunsRoute = createRoute({
         description: "JSON-encoded array of {source:'config'|'systemMetadata', key:string}. Restricts _flatConfig/_flatSystemMetadata to the listed keys. Empty array = no field values.",
         example: '[{"source":"config","key":"lr"}]',
       }),
+      // JSON-encoded array of structured field-filter terms. Each term has the
+      // same shape the tRPC runs.list `fieldFilters` input accepts:
+      //   {source:'config'|'systemMetadata', key, dataType:'text'|'number'|'date'|'option', operator, values:[]}
+      // Operators mirror the table filter UI ("contains", "is", ">", etc.) and
+      // are applied via the SAME indexed run_field_values builder the frontend
+      // uses — no Mongo-style query language. Filters AND together.
+      fieldFilters: z.string().optional().openapi({
+        description: "JSON-encoded array of field-filter terms {source, key, dataType, operator, values}. Filters config.*/systemMetadata.* fields via the indexed run_field_values table; terms AND together. Operators: contains, does not contain, is, is not, starts with, ends with, regex, >, <, >=, <=, is between, is any of, is none of.",
+        example: '[{"source":"config","key":"checkpoint.r2_prefix","dataType":"text","operator":"contains","values":["37a"]}]',
+      }),
+      // Ordering. A leading `-` means descending (a leading `+` or none means
+      // ascending), mirroring the wandb `order` convention. Three families:
+      //   1. Built-in columns: createdAt/updatedAt/name/status (snake_case
+      //      created_at/updated_at accepted). An `id` tiebreaker is appended so
+      //      offset pagination is deterministic.
+      //   2. config/systemMetadata fields, wandb-style:
+      //      `config.<key>.value` / `systemMetadata.<key>.value` (the trailing
+      //      `.value` is stripped; the middle may itself be dotted, e.g.
+      //      `config.checkpoint.r2_prefix.value`). Ordered via the indexed
+      //      run_field_values table (shared with the tRPC runs.list path).
+      //   3. Metric summaries: `summary_metrics.<name>` — ordered by the metric's
+      //      LAST value (wandb summary semantics) from the pre-aggregated
+      //      mlop_metric_summaries table (never raw points).
+      // For (2) and (3) the candidate set matching all OTHER filters is resolved
+      // first and capped at MAX_CUSTOM_SORT_CANDIDATES (10k) to bound work; sort
+      // + offset/limit then apply within that set. `offset` is clamped to
+      // MAX_JSON_SORT_OFFSET (100k).
+      sort: z.string().optional().openapi({
+        description: "Sort field with optional '-' (desc) or '+' (asc) prefix. Built-in: createdAt, updatedAt, name, status (snake_case accepted). heartbeat_at: last time the run logged data (computed on-demand from ClickHouse MAX(time); runs that never logged are excluded from the ordering). Config/sysmeta: config.<key>.value / systemMetadata.<key>.value. Metric: summary_metrics.<name> (LAST value). Default: createdAt desc. Invalid/unknown field → 400. For config/metric/heartbeat sorts the candidate set is capped at 10000 runs.",
+        example: "-config.lr.value",
+      }),
+      offset: z.coerce.number().min(0).max(100000).optional().openapi({
+        description: "Number of runs to skip before returning results (offset pagination). Combine with `limit` to page through results; `total` reports the full match count.",
+        example: 0,
+      }),
     }),
   },
   responses: {
@@ -1120,8 +1156,95 @@ const listRunsRoute = createRoute({
 router.use(listRunsRoute.path, withApiKey);
 router.openapi(listRunsRoute, async (c) => {
   const apiKey = c.get("apiKey");
-  const { projectName, search, tags: tagsParam, limit, includeFieldValues, visibleColumns: visibleColumnsRaw, konduktorJobPrefix } = c.req.valid("query");
+  const { projectName, search, tags: tagsParam, limit, includeFieldValues, visibleColumns: visibleColumnsRaw, konduktorJobPrefix, fieldFilters: fieldFiltersRaw, sort: sortRaw, offset } = c.req.valid("query");
   const prisma = c.get("prisma");
+
+  // Resolve ordering from the `sort` param. A leading `-` is descending, a
+  // leading `+` (or no prefix) is ascending. Three families are accepted:
+  //   - built-in columns (createdAt/updatedAt/name/status) → Prisma orderBy
+  //   - config.<key>.value / systemMetadata.<key>.value    → run_field_values
+  //   - summary_metrics.<name>                             → mlop_metric_summaries
+  // Built-in sorts append an `id` tiebreaker so offset pagination is stable.
+  // Custom (field/metric) sorts run through dedicated helpers further down.
+  // Default: createdAt desc.
+  const SORTABLE_COLUMNS: Record<string, "createdAt" | "updatedAt" | "name" | "status"> = {
+    createdAt: "createdAt", created_at: "createdAt",
+    updatedAt: "updatedAt", updated_at: "updatedAt",
+    name: "name", status: "status",
+  };
+  // Cap the candidate set fed into a custom (config/metric) sort. Bounds the
+  // PG id scan + the array passed to the helper so a huge project can't drag
+  // the sort path into an unbounded scan. Mirrors the spirit of the tRPC
+  // candidate pre-filter. Documented in the OpenAPI `sort` description.
+  const MAX_CUSTOM_SORT_CANDIDATES = 10_000;
+
+  type CustomSort =
+    | { kind: "field"; source: "config" | "systemMetadata"; key: string; direction: "asc" | "desc" }
+    | { kind: "metric"; metricName: string; direction: "asc" | "desc" }
+    | { kind: "heartbeat"; direction: "asc" | "desc" };
+
+  let orderBy: Prisma.RunsOrderByWithRelationInput[] = [{ createdAt: "desc" }, { id: "desc" }];
+  let customSort: CustomSort | undefined;
+
+  if (sortRaw) {
+    const desc = sortRaw.startsWith("-");
+    const rawField = sortRaw.startsWith("-") || sortRaw.startsWith("+") ? sortRaw.slice(1) : sortRaw;
+    const direction = desc ? ("desc" as const) : ("asc" as const);
+
+    if (rawField.startsWith("config.") || rawField.startsWith("systemMetadata.")) {
+      // wandb-style `config.<key>.value` / `systemMetadata.<key>.value`. Strip
+      // the source prefix and a trailing `.value`; what remains is the (possibly
+      // dotted) key, e.g. config.checkpoint.r2_prefix.value → key
+      // "checkpoint.r2_prefix".
+      const source: "config" | "systemMetadata" = rawField.startsWith("config.") ? "config" : "systemMetadata";
+      let key = rawField.slice(source.length + 1); // drop "config." / "systemMetadata."
+      if (key.endsWith(".value")) {
+        key = key.slice(0, -".value".length);
+      }
+      if (!key) {
+        return c.json({ error: `invalid sort field '${rawField}'; expected ${source}.<key>.value` }, 400);
+      }
+      customSort = { kind: "field", source, key, direction };
+    } else if (rawField.startsWith("summary_metrics.")) {
+      const metricName = rawField.slice("summary_metrics.".length);
+      if (!metricName) {
+        return c.json({ error: `invalid sort field '${rawField}'; expected summary_metrics.<name>` }, 400);
+      }
+      customSort = { kind: "metric", metricName, direction };
+    } else if (rawField === "heartbeat_at" || rawField === "heartbeatAt" || rawField === "heartbeat") {
+      // wandb's `heartbeat_at` = last time the run reported data. There's no
+      // materialized column for this; it's computed on-demand from ClickHouse
+      // (MAX(time) over mlop_metrics) — the same signal the Python stale-run
+      // monitor uses. Bounded by the candidate set like the metric sort.
+      customSort = { kind: "heartbeat", direction };
+    } else {
+      const column = SORTABLE_COLUMNS[rawField];
+      if (!column) {
+        return c.json({ error: `invalid sort field '${rawField}'; allowed: createdAt, updatedAt, name, status, heartbeat_at, config.<key>.value, systemMetadata.<key>.value, summary_metrics.<name>` }, 400);
+      }
+      orderBy = [{ [column]: direction }, { id: direction }];
+    }
+  }
+
+  // Parse fieldFilters if provided (JSON-encoded array of structured terms).
+  // Validate against the same schema the tRPC runs.list input uses so malformed
+  // terms are rejected up front (400) rather than producing surprising SQL.
+  let fieldFilters: FieldFilter[] | undefined;
+  if (fieldFiltersRaw) {
+    let parsedFieldFilters: unknown;
+    try {
+      parsedFieldFilters = JSON.parse(fieldFiltersRaw);
+    } catch {
+      return c.json({ error: "fieldFilters must be a valid JSON array" }, 400);
+    }
+    const result = z.array(fieldFilterSchema).max(50).safeParse(parsedFieldFilters);
+    if (!result.success) {
+      return c.json({ error: "fieldFilters has invalid shape; expected array of {source, key, dataType, operator, values}" }, 400);
+    }
+    if (result.data.length > 0) {
+      fieldFilters = result.data;
+    }
+  }
 
   // Parse tags from comma-separated string
   const tags = tagsParam ? tagsParam.split(",").map((t) => t.trim()).filter(Boolean) : [];
@@ -1188,6 +1311,39 @@ router.openapi(listRunsRoute, async (c) => {
     searchMatchIds = matchIds;
   }
 
+  // If fieldFilters are provided, resolve the matching run IDs via the SAME
+  // indexed run_field_values builder the tRPC runs.list path uses, then feed
+  // them into the existing Prisma query through `id: { in: ... }`. This avoids
+  // re-implementing operator semantics in Prisma while keeping pagination,
+  // tag/search/konduktor filters, and field-value enrichment intact.
+  let fieldFilterMatchIds: bigint[] | undefined;
+  if (fieldFilters) {
+    const ffIds = await queryFieldFilteredRunIds(prisma, {
+      organizationId: apiKey.organization.id,
+      ...(projectId ? { projectId } : {}),
+      fieldFilters,
+    });
+    if (ffIds.length === 0) {
+      return c.json({ runs: [], total: 0 }, 200);
+    }
+    fieldFilterMatchIds = ffIds;
+  }
+
+  // Intersect search and field-filter id sets when both are present so the
+  // single `id: { in: ... }` Prisma clause respects both constraints (AND).
+  let combinedIdFilter: bigint[] | undefined;
+  if (searchMatchIds && fieldFilterMatchIds) {
+    // Both id arrays are bigint[]; bigint is a primitive that works directly
+    // with Set/=== so no string conversion is needed.
+    const ffSet = new Set(fieldFilterMatchIds);
+    combinedIdFilter = searchMatchIds.filter((id) => ffSet.has(id));
+    if (combinedIdFilter.length === 0) {
+      return c.json({ runs: [], total: 0 }, 200);
+    }
+  } else {
+    combinedIdFilter = searchMatchIds ?? fieldFilterMatchIds;
+  }
+
   // Build where clause with optional tag filtering. konduktorJobPrefix
   // filters via Prisma's string_starts_with against the JSON path; the
   // text_pattern_ops expression index runs_konduktor_job_name_idx makes
@@ -1195,7 +1351,7 @@ router.openapi(listRunsRoute, async (c) => {
   const whereClause = {
     organizationId: apiKey.organization.id,
     ...(projectId ? { projectId } : {}),
-    ...(searchMatchIds ? { id: { in: searchMatchIds } } : {}),
+    ...(combinedIdFilter ? { id: { in: combinedIdFilter } } : {}),
     ...(tags.length > 0 ? { tags: { hasSome: tags } } : {}),
     ...(konduktorJobPrefix
       ? {
@@ -1210,22 +1366,111 @@ router.openapi(listRunsRoute, async (c) => {
   // Get total count
   const total = await prisma.runs.count({ where: whereClause });
 
-  // Fetch runs. Pull the project's runPrefix per run so the displayId is
-  // correct in cross-project lookups (e.g. konduktorJob without projectName).
-  const runs = await prisma.runs.findMany({
-    where: whereClause,
-    orderBy: { createdAt: "desc" },
-    take: limit,
-    select: {
-      id: true,
-      name: true,
-      number: true,
-      status: true,
-      tags: true,
-      createdAt: true,
-      project: { select: { name: true, runPrefix: true } },
-    },
-  });
+  // Per-run selection shared by the default and custom-sort paths. Pull the
+  // project's runPrefix per run so displayId is correct in cross-project
+  // lookups (e.g. konduktorJob without projectName).
+  const runSelect = {
+    id: true,
+    name: true,
+    number: true,
+    status: true,
+    tags: true,
+    createdAt: true,
+    project: { select: { name: true, runPrefix: true } },
+  } as const;
+
+  type ListRun = Prisma.RunsGetPayload<{ select: typeof runSelect }>;
+  let runs: ListRun[];
+
+  if (customSort) {
+    // ── Custom (config/systemMetadata/metric) ordering ──────────────────
+    // Ordering can't be expressed as a Prisma orderBy, so we: (1) resolve the
+    // candidate id set matching every OTHER filter (org/project/tags/search/
+    // fieldFilters/konduktor) via `whereClause`, capped to bound work; (2) hand
+    // those ids to the shared sort helper (config) or ClickHouse summaries
+    // helper (metric) which applies ordering + offset + limit; (3) re-fetch the
+    // resulting page and reorder in JS to match the helper's id order.
+    const candidates = await prisma.runs.findMany({
+      where: whereClause,
+      select: { id: true },
+      take: MAX_CUSTOM_SORT_CANDIDATES,
+    });
+    const candidateIds = candidates.map((r) => r.id);
+
+    if (candidateIds.length === 0) {
+      return c.json({ runs: [], total }, 200);
+    }
+
+    // Clamp offset the same way the tRPC custom-sort paths do.
+    const clampedOffset = Math.min(offset ?? 0, MAX_JSON_SORT_OFFSET);
+
+    let pageIds: bigint[];
+    if (customSort.kind === "field") {
+      pageIds = await queryFieldSortedRunIds(prisma, {
+        organizationId: apiKey.organization.id,
+        source: customSort.source,
+        key: customSort.key,
+        direction: customSort.direction,
+        limit,
+        offset: clampedOffset,
+        idFilter: candidateIds,
+      });
+    } else if (customSort.kind === "metric") {
+      // Metric sort reads the pre-aggregated mlop_metric_summaries via the
+      // shared helper. It is keyed by projectName, so a project scope is
+      // required (a konduktorJobPrefix-only org-wide call cannot metric-sort).
+      if (!projectName) {
+        return c.json({ error: "summary_metrics.* sort requires projectName" }, 400);
+      }
+      const sortedRows = await queryMetricSortedRunIds(clickhouse, {
+        organizationId: apiKey.organization.id,
+        projectName,
+        sortLogName: customSort.metricName,
+        sortAggregation: "LAST",
+        sortDirection: customSort.direction === "asc" ? "ASC" : "DESC",
+        limit,
+        offset: clampedOffset,
+        candidateRunIds: candidateIds.map((id) => Number(id)),
+      });
+      pageIds = sortedRows.map((r) => BigInt(r.runId));
+    } else {
+      // Heartbeat sort: MAX(time) over mlop_metrics, computed on-demand. Scoped
+      // to the candidate set (and projectName when present); runs that have
+      // never logged are absent from the ordering. projectName is optional here
+      // because the query is bounded by the candidate ids regardless.
+      const sortedRows = await queryHeartbeatSortedRunIds(clickhouse, {
+        organizationId: apiKey.organization.id,
+        ...(projectName ? { projectName } : {}),
+        sortDirection: customSort.direction === "asc" ? "ASC" : "DESC",
+        limit,
+        offset: clampedOffset,
+        candidateRunIds: candidateIds.map((id) => Number(id)),
+      });
+      pageIds = sortedRows.map((r) => BigInt(r.runId));
+    }
+
+    if (pageIds.length === 0) {
+      return c.json({ runs: [], total }, 200);
+    }
+
+    const fetched = await prisma.runs.findMany({
+      where: { id: { in: pageIds } },
+      select: runSelect,
+    });
+    // Reorder to match the helper's id order (findMany does not preserve it).
+    const idOrder = new Map(pageIds.map((id, i) => [id, i]));
+    fetched.sort((a, b) => (idOrder.get(a.id) ?? 0) - (idOrder.get(b.id) ?? 0));
+    runs = fetched;
+  } else {
+    // ── Built-in column ordering ────────────────────────────────────────
+    runs = await prisma.runs.findMany({
+      where: whereClause,
+      orderBy,
+      ...(offset ? { skip: offset } : {}),
+      take: limit,
+      select: runSelect,
+    });
+  }
 
   // Optional flat-blob enrichment — the failure surface the V8-heap CI probe
   // exercises. `attachFieldValues` is the same helper tRPC runs.list uses, so

@@ -964,6 +964,63 @@ export async function queryMetricSortedRunIds(
 }
 
 /**
+ * Sort run IDs by their ClickHouse "heartbeat" — the most recent metric
+ * timestamp (`MAX(time)` over `mlop_metrics`) for each run. This is wandb's
+ * `heartbeat_at` semantics (the last time a run reported data) and is the same
+ * signal the Python stale-run monitor uses. Computed on-demand (no materialized
+ * column), bounded by the supplied candidate set.
+ *
+ * Runs with no metrics in ClickHouse are absent from the GROUP BY and so do not
+ * appear in the ordering (same behavior as metric sort).
+ */
+export async function queryHeartbeatSortedRunIds(
+  ch: typeof clickhouse,
+  params: {
+    organizationId: string;
+    projectName?: string;
+    sortDirection: "ASC" | "DESC";
+    limit: number;
+    offset: number;
+    candidateRunIds?: number[];
+  },
+): Promise<{ runId: number; sortValue: string }[]> {
+  const { organizationId, projectName, sortDirection, limit, offset, candidateRunIds } = params;
+
+  // A custom sort always supplies the (filtered) candidate set; an empty set
+  // means nothing matches, so short-circuit rather than scan the whole tenant.
+  if (candidateRunIds && candidateRunIds.length === 0) return [];
+
+  const queryParams: Record<string, unknown> = { tenantId: organizationId, limit, offset };
+
+  let scope = "tenantId = {tenantId: String}";
+  if (projectName) {
+    scope += " AND projectName = {projectName: String}";
+    queryParams.projectName = projectName;
+  }
+
+  let candidateFilter = "";
+  if (candidateRunIds && candidateRunIds.length > 0) {
+    candidateFilter = "AND runId IN ({candidateRunIds: Array(UInt64)})";
+    queryParams.candidateRunIds = candidateRunIds;
+  }
+
+  const query = `
+    SELECT runId, MAX(time) AS sortValue
+    FROM mlop_metrics
+    WHERE ${scope}
+      ${candidateFilter}
+    GROUP BY runId
+    ORDER BY sortValue ${sortDirection}
+    LIMIT {limit: UInt32}
+    OFFSET {offset: UInt32}
+  `;
+
+  const result = await ch.query(query, queryParams);
+  const rows = (await result.json()) as { runId: number; sortValue: string }[];
+  return rows;
+}
+
+/**
  * Query ClickHouse for run IDs matching metric filters (no sort — just filtering).
  * Used when sort is by a non-metric column but metric filters are active.
  */
