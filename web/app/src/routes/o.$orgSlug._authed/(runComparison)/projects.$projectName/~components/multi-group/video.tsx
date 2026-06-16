@@ -15,6 +15,7 @@ interface Video {
   step: number;
   fileName: string;
   fileType: string;
+  caption?: string | null;
   runId?: string;
 }
 
@@ -201,8 +202,15 @@ export const MultiGroupVideo = ({
                 ) : (
                   <div className="flex h-full flex-col">
                     <VideoPlayer url={video.url} fileName={video.fileName} />
-                    <p className="truncate border-t p-2 font-mono text-xs">
-                      {video.fileName}
+                    <p
+                      className="truncate border-t p-2 font-mono text-xs"
+                      title={
+                        video.caption
+                          ? `${video.caption} (${video.fileName})`
+                          : video.fileName
+                      }
+                    >
+                      {video.caption || video.fileName}
                     </p>
                   </div>
                 )}

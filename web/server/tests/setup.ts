@@ -4087,7 +4087,60 @@ async function setupTestData(): Promise<TestData> {
             }),
           ),
         );
+
+        // Captioned media samples (linum feedback #6): one image WITH a
+        // caption and one WITHOUT, under a dedicated logName. The smoke test
+        // queries `media/captioned_samples` and asserts the caption survives
+        // the ingest→ClickHouse→backend path (and is null when absent).
+        const captionLogName = 'media/captioned_samples';
+        const captionLogGroup = 'media';
+        const captionedSamples = [
+          { step: 0, caption: 'ground truth vs prediction' },
+          { step: 1, caption: null as string | null },
+        ];
+        for (const { step, caption } of captionedSamples) {
+          const fileName = `captioned_step_${String(step).padStart(5, '0')}.png`;
+          const png = createSimplePNG(8, 8, (step * 40) % 256, 120, 200);
+          const s3Key = `${org.id}/${project.name}/${run.id}/${captionLogName}/${fileName}`;
+          imageFileRows.push({
+            tenantId: org.id,
+            projectName: project.name,
+            runId: Number(run.id),
+            logGroup: captionLogGroup,
+            logName: captionLogName,
+            time: new Date(baseTime + step * 1000)
+              .toISOString()
+              .replace('T', ' ')
+              .replace('Z', ''),
+            step,
+            fileName,
+            fileType: 'image/png',
+            fileSize: png.length,
+            caption,
+          });
+          s3Uploads.push(
+            s3.send(
+              new PutObjectCommand({
+                Bucket: storageBucket,
+                Key: s3Key,
+                Body: png,
+                ContentType: 'image/png',
+              }),
+            ),
+          );
+        }
       }
+
+      // Register the captioned-samples IMAGE log so it appears in run logs.
+      await prisma.runLogs.createMany({
+        data: fileSeedRuns.map((run) => ({
+          runId: run.id,
+          logName: 'media/captioned_samples',
+          logGroup: 'media',
+          logType: 'IMAGE' as const,
+        })),
+        skipDuplicates: true,
+      });
 
       // Insert ClickHouse rows
       if (imageFileRows.length > 0) {

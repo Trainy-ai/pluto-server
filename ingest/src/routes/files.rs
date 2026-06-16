@@ -223,6 +223,11 @@ pub struct FileUploadInfo {
     pub file_type: FileType, // Type of the file (used for Content-Type)
     pub step: u64, // Step associated with the file (e.g., training step)
     pub time: u64, // Timestamp associated with the file
+    // Optional user-provided caption (e.g. pluto.Image(caption=...)).
+    // `#[serde(default)]` keeps this back-compatible with older SDKs
+    // that don't send the field.
+    #[serde(default)]
+    pub caption: Option<String>,
 }
 
 /// Response containing presigned URLs for requested files
@@ -275,6 +280,7 @@ pub async fn generate_presigned_urls(
             time: file.time,
             file_size: file.file_size,
             step: file.step,
+            caption: file.caption.clone(),
         };
 
         // Create the full database row structure
@@ -496,6 +502,49 @@ mod tests {
         assert_eq!(req.files[0].file_size, 1024);
         assert_eq!(req.files[0].step, 100);
         assert!(matches!(req.files[0].file_type, FileType::Pt));
+        // Back-compat: payloads without a caption deserialize to None.
+        assert_eq!(req.files[0].caption, None);
+    }
+
+    #[test]
+    fn test_deserialize_file_upload_request_with_caption() {
+        let json = r#"{
+            "files": [
+                {
+                    "fileName": "cat.png",
+                    "logName": "eval/images",
+                    "fileSize": 1024,
+                    "fileType": "png",
+                    "step": 5,
+                    "time": 1704067200,
+                    "caption": "a fluffy cat"
+                }
+            ]
+        }"#;
+        let req: FileUploadRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.files.len(), 1);
+        // Caption round-trips through deserialization.
+        assert_eq!(req.files[0].caption.as_deref(), Some("a fluffy cat"));
+    }
+
+    #[test]
+    fn test_deserialize_file_upload_request_null_caption() {
+        // An explicit JSON null caption is treated the same as absent (None).
+        let json = r#"{
+            "files": [
+                {
+                    "fileName": "a.png",
+                    "logName": "images",
+                    "fileSize": 100,
+                    "fileType": "png",
+                    "step": 1,
+                    "time": 1000,
+                    "caption": null
+                }
+            ]
+        }"#;
+        let req: FileUploadRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.files[0].caption, None);
     }
 
     #[test]

@@ -173,6 +173,7 @@ export const MultiGroupAudio = ({
                 <AudioPlayer
                   url={audioFile.url}
                   fileName={audioFile.fileName}
+                  caption={audioFile.caption}
                   runLabel={{ name: run.runName, color: run.color }}
                 />
                 <MultiIndexNav

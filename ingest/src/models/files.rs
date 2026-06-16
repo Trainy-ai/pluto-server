@@ -32,6 +32,13 @@ pub struct FilesRow {
     pub file_type: String,
     #[serde(rename = "fileSize")]
     pub file_size: u64,
+    // Optional user-provided caption for media files (image/audio/video).
+    // Maps to the Nullable(String) `caption` column in mlop_files.
+    // Must stay the last field to match the column order in files.sql.
+    // `#[serde(default)]` lets old DLQ envelopes (serialized before this
+    // field existed) deserialize cleanly to None.
+    #[serde(rename = "caption", default)]
+    pub caption: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -72,6 +79,8 @@ pub struct FileInput {
     pub time: u64,
     pub step: u64,
     pub file_size: u64,
+    #[serde(default)]
+    pub caption: Option<String>,
 }
 
 impl InputData for FileInput {
@@ -99,6 +108,7 @@ impl DatabaseRow<FileInput, FilesEnrichment> for FilesRow {
             file_name: input.file_name,
             file_type: input.file_type,
             file_size: input.file_size,
+            caption: input.caption,
         })
     }
 
@@ -160,6 +170,7 @@ mod tests {
             time: 1000,
             step: 1,
             file_size: 2048,
+            caption: Some("a cute cat".to_string()),
         };
         let row =
             <FilesRow as DatabaseRow<FileInput, FilesEnrichment>>::from(input, make_enrichment())
@@ -171,6 +182,24 @@ mod tests {
         assert_eq!(row.file_size, 2048);
         assert_eq!(row.tenant_id, "tenant-1");
         assert_eq!(row.run_id, 42);
+        assert_eq!(row.caption.as_deref(), Some("a cute cat"));
+    }
+
+    #[test]
+    fn test_files_row_caption_none_passthrough() {
+        let input = FileInput {
+            log_name: "images/val".to_string(),
+            file_name: "sample.png".to_string(),
+            file_type: "png".to_string(),
+            time: 1000,
+            step: 1,
+            file_size: 2048,
+            caption: None,
+        };
+        let row =
+            <FilesRow as DatabaseRow<FileInput, FilesEnrichment>>::from(input, make_enrichment())
+                .unwrap();
+        assert_eq!(row.caption, None);
     }
 
     #[test]
@@ -182,6 +211,7 @@ mod tests {
             time: 1000,
             step: 1,
             file_size: 1024,
+            caption: None,
         };
         let row =
             <FilesRow as DatabaseRow<FileInput, FilesEnrichment>>::from(input, make_enrichment())
@@ -205,6 +235,7 @@ mod tests {
             time: 0,
             step: 0,
             file_size: 0,
+            caption: None,
         };
         assert!(input.validate().is_ok());
     }

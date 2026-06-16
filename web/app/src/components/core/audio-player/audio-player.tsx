@@ -16,6 +16,8 @@ import { AudioAnalysis } from "./audio-analysis";
 interface AudioPlayerProps {
   url: string;
   fileName: string;
+  /** Optional user-provided caption shown instead of the raw filename. */
+  caption?: string | null;
   /** Optional run label with color dot shown above the player */
   runLabel?: {
     name: string;
@@ -23,7 +25,7 @@ interface AudioPlayerProps {
   };
 }
 
-export function AudioPlayer({ url, fileName, runLabel }: AudioPlayerProps) {
+export function AudioPlayer({ url, fileName, caption, runLabel }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -151,8 +153,11 @@ export function AudioPlayer({ url, fileName, runLabel }: AudioPlayerProps) {
       )}
       <div className="flex flex-col gap-3 rounded-lg bg-muted/15 p-3">
         <div className="flex items-center justify-between gap-2">
-          <p className="truncate font-mono text-xs text-muted-foreground">
-            {fileName}
+          <p
+            className="truncate font-mono text-xs text-muted-foreground"
+            title={caption ? `${caption} (${fileName})` : fileName}
+          >
+            {caption || fileName}
           </p>
           <div className="flex gap-1.5">
             <Button

@@ -25,6 +25,7 @@ export interface RunFileEntry {
   time: string;
   step: number;
   url: string;
+  caption: string | null;
 }
 
 /**
@@ -68,7 +69,7 @@ export async function queryRunFiles(
   }
 
   const query = `
-    SELECT fileName, fileType, fileSize, logName, logGroup, time, step
+    SELECT fileName, fileType, fileSize, logName, logGroup, time, step, caption
     FROM mlop_files
     WHERE ${whereClause}
     ORDER BY step ASC
@@ -85,6 +86,7 @@ export async function queryRunFiles(
     logGroup: string;
     time: string;
     step: number;
+    caption: string | null;
   }[];
 
   // Generate presigned URLs for all files in parallel
@@ -100,6 +102,7 @@ export async function queryRunFiles(
       return {
         ...file,
         fileSize: file.fileSize ?? 0, // Ensure fileSize is always a number
+        caption: file.caption ?? null,
         url,
       };
     })
@@ -121,7 +124,16 @@ export async function queryRunFilesByLogName(
     runId: number;
     logName: string;
   }
-): Promise<{ time: string; step: number; fileName: string; fileType: string; url: string }[]> {
+): Promise<
+  {
+    time: string;
+    step: number;
+    fileName: string;
+    fileType: string;
+    url: string;
+    caption: string | null;
+  }[]
+> {
   const { organizationId, projectName, runId, logName } = params;
   const logGroup = getLogGroupName(logName);
 
@@ -129,7 +141,7 @@ export async function queryRunFilesByLogName(
   const MAX_FILES = 10000;
 
   const query = `
-    SELECT time, step, fileName, fileType
+    SELECT time, step, fileName, fileType, caption
     FROM mlop_files
     WHERE tenantId = {tenantId: String}
     AND projectName = {projectName: String}
@@ -158,6 +170,7 @@ export async function queryRunFilesByLogName(
     step: number;
     fileName: string;
     fileType: string;
+    caption: string | null;
   }[];
 
   // Generate presigned URLs for all files in parallel
@@ -170,7 +183,7 @@ export async function queryRunFilesByLogName(
         logName,
         file.fileName
       );
-      return { ...file, url };
+      return { ...file, caption: file.caption ?? null, url };
     })
   );
 

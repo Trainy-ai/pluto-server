@@ -2153,6 +2153,7 @@ const getFilesRoute = createRoute({
               time: z.string(),
               step: z.number(),
               url: z.string(),
+              caption: z.string().nullable(),
             })),
           }).openapi("GetFilesResponse"),
         },

@@ -342,6 +342,7 @@ export const MultiGroupImage = ({
                 key={run.runId}
                 url={image?.url}
                 fileName={image?.fileName}
+                caption={image?.caption}
                 runLabel={{ name: run.runName, color: run.color }}
                 isPinned={isPinned}
                 pinnedStep={pinnedStep}

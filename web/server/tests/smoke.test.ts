@@ -8088,6 +8088,91 @@ describe('SDK API Endpoints (with API Key)', () => {
     });
   });
 
+  // Test Suite 39: Image/Media Captions (linum feedback #6)
+  // Verifies the caption flows through ingest→ClickHouse→backend on the
+  // /api/runs/files response. setup.ts seeds media/captioned_samples with one
+  // captioned image (step 0) and one un-captioned (step 1) for bulk-run-000.
+  describe('Test Suite 39: Image/Media Captions', () => {
+    const hasApiKey = TEST_API_KEY.length > 0;
+
+    async function resolveBulkRun000Id(): Promise<number | null> {
+      const listRes = await makeRequest(
+        `/api/runs/list?projectName=${TEST_PROJECT_NAME}&search=bulk-run-000&limit=10`,
+        { headers: { 'Authorization': `Bearer ${TEST_API_KEY}` } }
+      );
+      if (listRes.status !== 200) {
+        return null;
+      }
+      const data = await listRes.json();
+      const run = (data.runs as { id: number; name: string }[]).find(
+        (r) => r.name === 'bulk-run-000'
+      );
+      return run ? run.id : null;
+    }
+
+    it('Test 39.1: /api/runs/files returns the caption for a captioned file', async () => {
+      if (!hasApiKey) {
+        console.log('   ⊘ Skipping: TEST_API_KEY not set');
+        return;
+      }
+
+      const runId = await resolveBulkRun000Id();
+      if (runId == null) {
+        console.log('   ⊘ Skipping: bulk-run-000 not seeded');
+        return;
+      }
+
+      const response = await makeRequest(
+        `/api/runs/files?runId=${runId}&projectName=${TEST_PROJECT_NAME}&logName=media/captioned_samples`,
+        { headers: { 'Authorization': `Bearer ${TEST_API_KEY}` } }
+      );
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      expect(Array.isArray(data.files)).toBe(true);
+
+      // Every file object exposes a `caption` field (string | null).
+      for (const f of data.files) {
+        expect('caption' in f).toBe(true);
+      }
+
+      // The step-0 sample carries the seeded caption.
+      const captioned = (data.files as { step: number; caption: string | null }[]).find(
+        (f) => f.step === 0
+      );
+      expect(captioned).toBeDefined();
+      expect(captioned?.caption).toBe('ground truth vs prediction');
+    });
+
+    it('Test 39.2: /api/runs/files returns null caption for an un-captioned file', async () => {
+      if (!hasApiKey) {
+        console.log('   ⊘ Skipping: TEST_API_KEY not set');
+        return;
+      }
+
+      const runId = await resolveBulkRun000Id();
+      if (runId == null) {
+        console.log('   ⊘ Skipping: bulk-run-000 not seeded');
+        return;
+      }
+
+      const response = await makeRequest(
+        `/api/runs/files?runId=${runId}&projectName=${TEST_PROJECT_NAME}&logName=media/captioned_samples`,
+        { headers: { 'Authorization': `Bearer ${TEST_API_KEY}` } }
+      );
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+
+      // The step-1 sample was logged without a caption → null.
+      const uncaptioned = (data.files as { step: number; caption: string | null }[]).find(
+        (f) => f.step === 1
+      );
+      expect(uncaptioned).toBeDefined();
+      expect(uncaptioned?.caption).toBeNull();
+    });
+  });
+
   // ---------------------------------------------------------------------------
   // Test Suite 38: /api/runs/list fieldFilters (config.* / systemMetadata.*)
   //

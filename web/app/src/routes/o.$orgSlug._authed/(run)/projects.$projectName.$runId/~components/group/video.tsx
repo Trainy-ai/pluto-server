@@ -539,8 +539,15 @@ export const VideoView: React.FC<VideoViewProps> = ({
                 url={currentStepVideos[0].url}
                 fileName={currentStepVideos[0].fileName}
               />
-              <p className="truncate border-t p-2 font-mono text-xs">
-                {currentStepVideos[0].fileName}
+              <p
+                className="truncate border-t p-2 font-mono text-xs"
+                title={
+                  currentStepVideos[0].caption
+                    ? `${currentStepVideos[0].caption} (${currentStepVideos[0].fileName})`
+                    : currentStepVideos[0].fileName
+                }
+              >
+                {currentStepVideos[0].caption || currentStepVideos[0].fileName}
               </p>
             </div>
           </div>
@@ -555,8 +562,15 @@ export const VideoView: React.FC<VideoViewProps> = ({
               >
                 <div className="flex flex-1 flex-col">
                   <VideoPlayer url={video.url} fileName={video.fileName} />
-                  <p className="truncate border-t p-2 font-mono text-xs">
-                    {video.fileName}
+                  <p
+                    className="truncate border-t p-2 font-mono text-xs"
+                    title={
+                      video.caption
+                        ? `${video.caption} (${video.fileName})`
+                        : video.fileName
+                    }
+                  >
+                    {video.caption || video.fileName}
                   </p>
                 </div>
               </div>

@@ -34,6 +34,10 @@ interface ImageCardStepNavigation {
 interface ImageCardProps {
   url?: string;
   fileName?: string;
+  /** Optional user-provided caption (e.g. pluto.Image(caption=...)). When
+   * present it is shown under the tile (and in the fullscreen footer) instead
+   * of the raw UUID filename. Falls back to fileName when null/undefined. */
+  caption?: string | null;
   /** Optional run label with color dot. Shown above the image on the
    * card and again in the fullscreen footer (where there's otherwise no
    * indication of which run a maximised image came from). The name
@@ -106,6 +110,7 @@ async function handleDownload(url: string, fileName: string) {
 export function ImageCard({
   url,
   fileName,
+  caption,
   runLabel,
   stepNavigation,
   sharedScale,
@@ -122,6 +127,11 @@ export function ImageCard({
   currentImageIndex,
   onIndexChange,
 }: ImageCardProps) {
+  // Prefer the user-supplied caption over the raw (usually UUID) filename
+  // for the label shown under the tile and in the fullscreen footer.
+  // Use `||` (not `??`) so an empty-string caption still falls back to the
+  // filename instead of rendering a blank label / hiding the footer entirely.
+  const displayLabel = caption || fileName;
   // Build provenance lines for the pin badge tooltip. Only populated when
   // the pin came from "find best step" — other pin sources get no extra
   // tooltip and fall back to the raw "Step N ★" visual.
@@ -445,8 +455,11 @@ export function ImageCard({
                 )
               )}
               <div className="relative flex items-center gap-3">
-                <p className="font-mono text-sm text-muted-foreground">
-                  {fileName ?? "No image"}
+                <p
+                  className="font-mono text-sm text-muted-foreground"
+                  title={caption ? `${caption} (${fileName})` : fileName}
+                >
+                  {displayLabel ?? "No image"}
                 </p>
                 {totalIndices != null && totalIndices > 1 && onIndexChange && (
                   <MultiIndexNav
@@ -513,10 +526,13 @@ export function ImageCard({
           onIndexChange={onIndexChange}
         />
       )}
-      {fileName && (
+      {displayLabel && (
         <div className="flex justify-center">
-          <p className="truncate text-center text-xs text-muted-foreground">
-            {fileName}
+          <p
+            className="truncate text-center text-xs text-muted-foreground"
+            title={caption ? `${caption} (${fileName})` : fileName}
+          >
+            {displayLabel}
           </p>
         </div>
       )}

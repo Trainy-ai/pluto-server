@@ -15,6 +15,7 @@ type FileData = {
   fileName: string;
   fileType: string;
   url: string;
+  caption: string | null;
 }[];
 
 export const filesProcedure = protectedOrgProcedure

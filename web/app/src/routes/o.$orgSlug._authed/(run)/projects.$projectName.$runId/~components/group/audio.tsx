@@ -154,6 +154,7 @@ export const AudioView = ({
             key={audio.fileName}
             url={audio.url}
             fileName={audio.fileName}
+            caption={audio.caption}
           />
         ))}
       </div>

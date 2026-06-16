@@ -157,6 +157,7 @@ export const ImagesView = ({
             key={index}
             url={image.url}
             fileName={image.fileName}
+            caption={image.caption}
             stepNavigation={
               availableSteps.length > 1
                 ? {

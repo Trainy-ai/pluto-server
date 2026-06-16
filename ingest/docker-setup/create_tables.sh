@@ -78,6 +78,27 @@ done
 
 echo "Finished processing SQL files."
 
+# ── Idempotent column migrations for existing deployments ──
+#
+# `CREATE TABLE IF NOT EXISTS` in files.sql adds the `caption` column on a
+# fresh DB, but existing deployments (persisted ClickHouse volume) created
+# mlop_files before the column existed. `ADD COLUMN IF NOT EXISTS` backfills
+# it and is a no-op once present, so it's safe on every startup. Run here as
+# a separate statement because the ClickHouse HTTP interface rejects
+# multi-statement SQL files.
+echo "Ensuring mlop_files.caption column exists..."
+caption_status=$(curl -sS \
+    -u "${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}" \
+    -w "%{http_code}" -o /dev/null \
+    --connect-timeout "$REQUEST_TIMEOUT" --max-time "$REQUEST_TIMEOUT" \
+    -d "ALTER TABLE mlop_files ADD COLUMN IF NOT EXISTS caption Nullable(String) CODEC(ZSTD(1))" \
+    "$CLICKHOUSE_URL")
+if [ "$caption_status" = "200" ]; then
+    echo "mlop_files.caption column OK"
+else
+    echo "Warning: failed to ensure mlop_files.caption column (HTTP ${caption_status})"
+fi
+
 # ── Backfill mlop_metrics_v2 + force first v2 summaries refresh ──
 #
 # On a fresh container with pre-existing mlop_metrics data (e.g. a dev
@@ -121,7 +142,7 @@ if [ "${v2_metrics_count:-0}" = "0" ] && [ "${metrics_count:-0}" != "0" ] && [ "
     backfill_end=$(date +%s)
     backfill_elapsed=$((backfill_end - backfill_start))
 
-    if [ "$backfill_status" -eq 200 ]; then
+    if [ "$backfill_status" = "200" ]; then
         new_v2_count=$(curl -sS -u "${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}" \
             --connect-timeout "$REQUEST_TIMEOUT" --max-time 30 \
             -d "SELECT count() FROM mlop_metrics_v2" "$CLICKHOUSE_URL" 2>/dev/null | tr -d '[:space:]')
