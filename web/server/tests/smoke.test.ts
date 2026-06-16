@@ -8200,4 +8200,77 @@ describe('SDK API Endpoints (with API Key)', () => {
       });
     });
   });
+
+  // Test Suite 39: OpenAPI input schema exposure.
+  //
+  // The pluto client SDK consumes /api/openapi.json for contract testing in CI.
+  // Response schemas have always been registered as named components
+  // (CreateRunResponse, etc.), but the request bodies the SDK actually SENDS
+  // were inline/anonymous, which means no stable, codegen-friendly named
+  // contract to validate against. These tests pin that every POST endpoint's
+  // request body is exposed as a named component in components.schemas so the
+  // SDK can $ref it.
+  describe('Test Suite 39: OpenAPI input schema exposure (contract testing)', () => {
+    // The named request-body components the SDK relies on. Each corresponds to
+    // a POST /api/runs/* endpoint defined in routes/runs-openapi.ts.
+    const REQUIRED_INPUT_SCHEMAS = [
+      'CreateRunRequest',
+      'ResumeRunRequest',
+      'UpdateStatusRequest',
+      'AddLogNameRequest',
+      'UpdateTagsRequest',
+      'UpdateNotesRequest',
+      'UpdateConfigRequest',
+      'CreateModelGraphRequest',
+    ] as const;
+
+    let spec: any;
+
+    beforeAll(async () => {
+      const res = await makeRequest('/api/openapi.json');
+      expect(res.status).toBe(200);
+      spec = await res.json();
+    });
+
+    it('Test 39.1: openapi.json is a valid OpenAPI 3.0 document with component schemas', () => {
+      expect(spec.openapi).toBe('3.0.0');
+      expect(spec.components).toBeDefined();
+      expect(spec.components.schemas).toBeDefined();
+      expect(typeof spec.components.schemas).toBe('object');
+    });
+
+    it('Test 39.2: every request-body input schema is exposed as a named component', () => {
+      const schemas = spec.components.schemas;
+      for (const name of REQUIRED_INPUT_SCHEMAS) {
+        expect(schemas[name], `missing component schema: ${name}`).toBeDefined();
+        // Components are object schemas with properties the SDK validates against.
+        expect(schemas[name].type, `${name} should be an object schema`).toBe('object');
+        expect(schemas[name].properties, `${name} should expose properties`).toBeDefined();
+      }
+    });
+
+    it('Test 39.3: POST request bodies reference the named input components ($ref)', () => {
+      // Pull the request body schema for a representative endpoint and assert it
+      // is a $ref to the named component rather than an inline anonymous schema.
+      const createBody =
+        spec.paths?.['/api/runs/create']?.post?.requestBody?.content?.['application/json']?.schema;
+      expect(createBody).toBeDefined();
+      expect(createBody.$ref).toBe('#/components/schemas/CreateRunRequest');
+    });
+
+    it('Test 39.4: CreateRunRequest contract pins the SDK-required fields', () => {
+      // Guards against silent contract drift: the SDK constructs these fields,
+      // so they must remain present (and required ones required) in the schema.
+      const createRun = spec.components.schemas.CreateRunRequest;
+      expect(createRun.properties.runName).toBeDefined();
+      expect(createRun.properties.projectName).toBeDefined();
+      expect(createRun.properties.externalId).toBeDefined();
+      expect(createRun.properties.tags).toBeDefined();
+      expect(createRun.properties.config).toBeDefined();
+      // runName + projectName are the minimum required to create a run.
+      expect(createRun.required).toEqual(
+        expect.arrayContaining(['runName', 'projectName']),
+      );
+    });
+  });
 });
