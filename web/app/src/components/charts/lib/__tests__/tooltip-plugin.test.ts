@@ -4,6 +4,8 @@ import {
   formatRawValueContent,
   formatMinMaxContent,
   formatValueContent,
+  createPinHintRow,
+  PIN_HINT_TEXT,
   type TooltipColumnConfig,
 } from "../tooltip-plugin";
 import { formatAxisLabel } from "../format";
@@ -318,5 +320,28 @@ describe("formatValueContent", () => {
     expect(span.textContent).toBe(formatAxisLabel(0.8));
     expect(span.style.fontStyle).toBe("");
     expect(span.style.opacity).toBe("");
+  });
+});
+
+// ── createPinHintRow ─────────────────────────────────────────────────────────
+// Small header hint telling the user a left-click pins the tooltip for resizing.
+
+describe("createPinHintRow", () => {
+  it("renders the pin-hint copy and is tagged for lookup", () => {
+    const row = createPinHintRow();
+    expect(row.textContent).toBe(PIN_HINT_TEXT);
+    expect(row.getAttribute("data-tooltip-pin-hint")).toBe("true");
+  });
+
+  it("mentions left-click, pinning, and resizing so the affordance is clear", () => {
+    expect(PIN_HINT_TEXT.toLowerCase()).toContain("left-click");
+    expect(PIN_HINT_TEXT.toLowerCase()).toContain("pin");
+    expect(PIN_HINT_TEXT.toLowerCase()).toContain("resize");
+  });
+
+  it("reads as muted via opacity and inherits color (no hardcoded color)", () => {
+    const row = createPinHintRow();
+    expect(row.style.opacity).toBe("0.5");
+    expect(row.style.color).toBe("");
   });
 });

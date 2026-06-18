@@ -707,6 +707,24 @@ function createTooltipRow(
   return row;
 }
 
+/** Hint text shown in the tooltip header (unpinned only) telling the user they
+ *  can left-click the chart to pin the tooltip, which makes it resizable and
+ *  draggable. Exported so the copy can be asserted in unit tests. */
+export const PIN_HINT_TEXT = "Left-click chart to pin · resize & adjust";
+
+/** Build the small pin-hint row for the tooltip header. Rendered only while the
+ *  tooltip is unpinned — once pinned, the action has been taken and the hint is
+ *  redundant. No explicit color: inherits the header's theme-aware textColor and
+ *  reads as muted via opacity, matching the existing subtitle row. Exported for
+ *  unit testing. */
+export function createPinHintRow(): HTMLDivElement {
+  const hint = document.createElement("div");
+  hint.setAttribute("data-tooltip-pin-hint", "true");
+  hint.style.cssText = "font-weight: normal; font-size: 9px; opacity: 0.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap";
+  hint.textContent = PIN_HINT_TEXT;
+  return hint;
+}
+
 /** Type for hover state that persists across chart recreations */
 export interface HoverState {
   isHovering: boolean;
@@ -1345,6 +1363,15 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
         tooltipEl.style.display = "none";
         onHoverChange?.(false);
       }
+      // If the tooltip is still visible after unpinning (e.g. the user clicked
+      // the chart to toggle pin off while still hovering), rebuild content so
+      // the header reflects the unpinned state — pin hint shown — instead of
+      // leaving the stale pinned build until the next cursor move. Mirrors the
+      // rebuild pinTooltip does; updateTooltipContent repositions to the cursor
+      // when unpinned, matching normal hover behavior.
+      if (tooltipEl.style.display !== "none" && chartInstance && lastIdx != null) {
+        updateTooltipContent(chartInstance, lastIdx);
+      }
       syncHoverState();
       log("tooltip unpinned");
     };
@@ -1759,6 +1786,12 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       infoRow.style.cssText = `font-weight: normal; font-size: 10px; opacity: 0.6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap`;
       infoRow.textContent = infoText;
       header.appendChild(infoRow);
+    }
+
+    // Pin hint — shown only while unpinned. Tells the user a left-click on the
+    // chart pins this tooltip, after which it can be resized and dragged.
+    if (!_pinState.isPinned) {
+      header.appendChild(createPinHintRow());
     }
 
     contentContainer.appendChild(header);
