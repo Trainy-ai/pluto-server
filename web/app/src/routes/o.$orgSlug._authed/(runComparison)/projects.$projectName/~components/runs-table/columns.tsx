@@ -4,7 +4,7 @@ import { Eye, EyeOff, X } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ColorPicker } from "@/components/ui/color-picker";
 import { SELECTED_RUNS_LIMIT } from "./config";
-import { StatusIndicator } from "@/components/layout/dashboard/sidebar";
+import { RunStatusBadge } from "@/components/core/runs/run-status-badge";
 import type { Run } from "../../~queries/list-runs";
 import { TagsCell } from "./tags-cell";
 import type { ColumnConfig } from "../../~hooks/use-column-config";
@@ -295,15 +295,23 @@ export const columns = ({
     },
     {
       id: "status",
-      header: "",
-      size: 36,
-      minSize: 36,
-      maxSize: 36,
+      header: "Status",
+      size: 116,
+      minSize: 116,
+      maxSize: 116,
       enableResizing: false,
+      enableSorting: false,
       cell: ({ row }) => {
         return (
-          <div className="flex items-center justify-end pr-1">
-            <StatusIndicator status={row.original.status} />
+          <div className="flex items-center">
+            <RunStatusBadge
+              run={{
+                status: row.original.status,
+                updatedAt: row.original.updatedAt
+                  ? new Date(row.original.updatedAt)
+                  : new Date(),
+              }}
+            />
           </div>
         );
       },
