@@ -8,7 +8,10 @@ import { HistogramView } from "./histogram-view";
 import { VideoView } from "./video";
 import { TableView } from "./table";
 import { TextView } from "./text-view";
-import { ImageStepSyncProvider } from "../../~context/image-step-sync-context";
+import {
+  ImageStepSyncProvider,
+  useImageStepSyncContext,
+} from "../../~context/image-step-sync-context";
 
 interface DataGroupProps {
   group: LogGroup;
@@ -19,6 +22,10 @@ interface DataGroupProps {
   runCreatedAt?: string;
   runName?: string;
 }
+
+// Log types whose widgets expose step navigation (and thus participate in
+// step sync). Module-level so it's a stable reference across renders.
+const STEP_NAV_TYPES = new Set(["IMAGE", "VIDEO", "AUDIO", "HISTOGRAM"]);
 
 // Internal base component that handles the rendering logic
 const DataGroupBase = ({
@@ -56,8 +63,12 @@ const DataGroupBase = ({
     ));
   }, [sortedLogs, tenantId, projectName, runId, boundsResetKey, runCreatedAt, runName]);
 
-  // Wrap in ImageStepSyncProvider if the group contains any logs with step navigation
-  const STEP_NAV_TYPES = new Set(["IMAGE", "VIDEO", "AUDIO", "HISTOGRAM"]);
+  // Step navigation can sync across panels. When a parent already provides an
+  // ImageStepSyncProvider (e.g. the All-Metrics view wraps every group in one
+  // shared provider so steppers sync across sections), reuse it. Only spin up
+  // our own provider when there's no parent — keeps standalone usages (e.g.
+  // the system-metrics page) working while enabling cross-section sync.
+  const parentSync = useImageStepSyncContext();
   const hasStepNavLogs = useMemo(
     () => group.logs.some((log) => STEP_NAV_TYPES.has(log.logType)),
     [group.logs],
@@ -71,7 +82,7 @@ const DataGroupBase = ({
     />
   );
 
-  if (hasStepNavLogs) {
+  if (hasStepNavLogs && !parentSync) {
     return <ImageStepSyncProvider>{content}</ImageStepSyncProvider>;
   }
 

@@ -8,6 +8,10 @@ import { useSyncedStepNavigation } from "@/routes/o.$orgSlug._authed/(run)/proje
 import { AudioPlayer } from "@/components/core/audio-player";
 import { MediaCardWrapper } from "@/components/core/media-card-wrapper";
 import { MultiIndexNav } from "@/components/core/multi-index-nav";
+import { MediaPinLabel } from "@/components/core/media-pin-label";
+import { ClearAllPinsButton } from "@/components/core/clear-all-pins-button";
+import { pinRingClass } from "@/components/core/image-viewer/pin-styles";
+import { useMediaPins } from "./use-media-pins";
 
 interface MultiGroupAudioProps {
   logName: string;
@@ -83,24 +87,54 @@ export const MultiGroupAudio = ({
     hasSyncContext,
   } = useSyncedStepNavigation(allAudio);
 
-  // Filter audio for current step and group by run. A run can log multiple
-  // audio samples at the same step (e.g. wandb list-of-audio) so we keep the
-  // full array and expose an index selector below the player.
-  const audioByRun = useMemo(() => {
-    const currentStepAudio = allAudio.filter(
-      (file) => file.step === currentStepValue,
-    );
+  const { getPinInfo, handlePin, handleUnpin, pinnedRunCount, clearAllPins } =
+    useMediaPins({ logName, runs });
 
-    return runs.map((run) => {
-      const runAudio = currentStepAudio.filter(
-        (file: any) => file.runId === run.runId,
-      );
-      return {
-        run,
-        audio: runAudio,
-      };
-    });
-  }, [allAudio, currentStepValue, runs]);
+  // Group audio by run, honoring per-run pins. Each run resolves its own
+  // effective step (pinned step when pinned, else the widget's current step)
+  // so a pinned run stays frozen while the rest follow the stepper. A run can
+  // log multiple audio samples at the same step (wandb list-of-audio) so we
+  // keep the full array and expose an index selector below the player.
+  const audioByRun = useMemo(() => {
+    const lookup = new Map<string, typeof allAudio>();
+    for (const file of allAudio) {
+      const key = `${file.runId}-${file.step}`;
+      const existing = lookup.get(key);
+      if (existing) {
+        existing.push(file);
+      } else {
+        lookup.set(key, [file]);
+      }
+    }
+
+    // Only include runs with at least one audio file for this logName across
+    // all steps; a run with data at some other step still gets a cell with a
+    // "No audio at step N" placeholder.
+    const runIdsWithAnyData = new Set(allAudio.map((file) => file.runId));
+
+    return runs
+      .filter((run) => runIdsWithAnyData.has(run.runId))
+      .map((run) => {
+        const pinInfo = getPinInfo(run.runId);
+        const effectiveStep = pinInfo?.step ?? currentStepValue;
+        const runAudio = lookup.get(`${run.runId}-${effectiveStep}`) ?? [];
+        const pinnedIndexForThisWidget =
+          pinInfo?.index != null &&
+          (pinInfo.originLogName == null || pinInfo.originLogName === logName)
+            ? pinInfo.index
+            : null;
+        return {
+          run,
+          audio: runAudio,
+          isPinned: pinInfo !== null,
+          pinnedStep: pinInfo?.step ?? null,
+          pinSource: pinInfo?.source ?? null,
+          pinBestStepMeta: pinInfo?.bestStepMeta ?? null,
+          pinnedIndexForThisWidget,
+          effectiveStep,
+        };
+      });
+  }, [allAudio, currentStepValue, runs, getPinInfo, logName]);
 
   // Per-run sample index for multi-sample-per-step. Resets on step change.
   const [indexByRun, setIndexByRun] = useState<Map<string, number>>(new Map());
@@ -148,7 +182,16 @@ export const MultiGroupAudio = ({
   }
 
   return (
-    <MediaCardWrapper title={logName} className="h-full w-full">
+    <MediaCardWrapper
+      title={logName}
+      className="h-full w-full"
+      toolbarExtra={
+        <ClearAllPinsButton
+          pinnedRunCount={pinnedRunCount}
+          onClearAllPins={clearAllPins}
+        />
+      }
+    >
       <div
         data-testid="audio-widget"
         className={cn("flex h-full w-full flex-col space-y-4 p-4", className)}
@@ -157,25 +200,62 @@ export const MultiGroupAudio = ({
           {logName}
         </h3>
         <div className="grid flex-1 grid-cols-1 gap-4 overflow-auto">
-          {audioByRun.map(({ run, audio }) => {
-            if (audio.length === 0) return null;
-            const rawIndex = indexByRun.get(run.runId) ?? 0;
-            const safeIndex = Math.min(rawIndex, audio.length - 1);
+          {audioByRun.map((entry) => {
+            const {
+              run,
+              audio,
+              isPinned,
+              pinnedStep,
+              pinSource,
+              pinBestStepMeta,
+              pinnedIndexForThisWidget,
+              effectiveStep,
+            } = entry;
+            // User's local arrow navigation wins; otherwise fall back to the
+            // pinned sample index for this widget, then 0.
+            const rawIndex =
+              indexByRun.get(run.runId) ?? pinnedIndexForThisWidget ?? 0;
+            const safeIndex =
+              audio.length > 0 ? Math.min(rawIndex, audio.length - 1) : 0;
             const audioFile = audio[safeIndex];
 
             return (
               <div
                 key={run.runId}
-                className="flex flex-col gap-1"
+                className="flex flex-col gap-1 rounded-md"
                 data-testid="audio-card"
                 data-run-name={run.runName}
+                data-pin-source={pinSource ?? ""}
               >
-                <AudioPlayer
-                  url={audioFile.url}
-                  fileName={audioFile.fileName}
-                  caption={audioFile.caption}
+                <MediaPinLabel
                   runLabel={{ name: run.runName, color: run.color }}
+                  isPinned={isPinned}
+                  pinnedStep={pinnedStep}
+                  pinSource={pinSource}
+                  pinBestStepMeta={pinBestStepMeta}
+                  currentStepValue={effectiveStep}
+                  onPin={(scope) =>
+                    handlePin(run.runId, effectiveStep, safeIndex, scope)
+                  }
+                  onUnpin={(scope) => handleUnpin(run.runId, scope)}
+                  hasSyncContext={hasSyncContext}
+                  noun="Audio"
                 />
+                {/* Ring only the media (player/placeholder) — not the label or
+                    index nav — to match the image and video widgets. */}
+                <div className={cn("rounded-lg", isPinned && pinRingClass(pinSource))}>
+                  {audioFile ? (
+                    <AudioPlayer
+                      url={audioFile.url}
+                      fileName={audioFile.fileName}
+                      caption={audioFile.caption}
+                    />
+                  ) : (
+                    <div className="flex h-20 items-center justify-center rounded-lg border border-dashed bg-muted/15 text-sm text-muted-foreground">
+                      No audio at step {effectiveStep}
+                    </div>
+                  )}
+                </div>
                 <MultiIndexNav
                   currentIndex={safeIndex}
                   totalCount={audio.length}

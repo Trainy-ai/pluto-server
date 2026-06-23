@@ -13,6 +13,12 @@ import {
 import { StepNavigator } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/shared/step-navigator";
 import { formatAxisLabel } from "@/components/charts/lib/format";
 import { PinButton } from "./pin-button";
+import {
+  pinRingClass,
+  pinBadgeClass,
+  pinBadgeSymbol,
+  buildPinBadgeLines,
+} from "./pin-styles";
 import { MultiIndexNav } from "@/components/core/multi-index-nav";
 import {
   Tooltip,
@@ -135,55 +141,9 @@ export function ImageCard({
   // Build provenance lines for the pin badge tooltip. Only populated when
   // the pin came from "find best step" — other pin sources get no extra
   // tooltip and fall back to the raw "Step N ★" visual.
-  const pinBadgeLines =
-    pinSource === "best-step" && pinBestStepMeta
-      ? (() => {
-          const {
-            metricStep,
-            metricValue,
-            metricLogName,
-            operation,
-            distance,
-            tiedAlternativeImageStep,
-          } = pinBestStepMeta;
-          const opLabel = operation === "argmin" ? "min" : "max";
-          // Headline reminds the user *what* they pinned (metric + op +
-          // value) so they don't have to remember which button they hit.
-          const headline = metricLogName
-            ? metricValue != null
-              ? `Pinned at ${opLabel} ${metricLogName} = ${formatAxisLabel(metricValue)}`
-              : `Pinned at ${opLabel} ${metricLogName}`
-            : `Pinned at ${opLabel} value`;
-          const lines = [
-            headline,
-            `Metric step: ${metricStep}`,
-            distance === 0
-              ? "Image step matches metric step exactly"
-              : `Image step ${pinnedStep} is ${distance} step${distance === 1 ? "" : "s"} away`,
-          ];
-          if (tiedAlternativeImageStep != null) {
-            lines.push(
-              `Tied with step ${tiedAlternativeImageStep} at the same distance — later step preferred`,
-            );
-          }
-          return lines;
-        })()
-      : null;
-  const pinRingClass = isPinned
-    ? pinSource === "best-step"
-      ? "ring-2 ring-amber-500/40"
-      : pinSource === "cross-panel"
-        ? "ring-2 ring-violet-500/40"
-        : "ring-2 ring-primary/30"
-    : "";
-
-  const pinBadgeClass = isPinned
-    ? pinSource === "best-step"
-      ? "bg-amber-500/15 text-amber-400"
-      : pinSource === "cross-panel"
-        ? "bg-violet-500/15 text-violet-400"
-        : "bg-muted text-muted-foreground"
-    : "";
+  const pinBadgeLines = buildPinBadgeLines(pinSource, pinBestStepMeta, pinnedStep);
+  const pinRingClassName = isPinned ? pinRingClass(pinSource) : "";
+  const pinBadgeClassName = isPinned ? pinBadgeClass(pinSource) : "";
 
   const [localScale, setLocalScale] = useState(1);
   const scale = sharedScale ?? localScale;
@@ -234,10 +194,10 @@ export function ImageCard({
               data-testid="pin-step-badge"
               className={cn(
                 "shrink-0 whitespace-nowrap rounded px-1 py-0.5 font-mono text-[10px]",
-                pinBadgeClass || "bg-muted text-muted-foreground",
+                pinBadgeClassName || "bg-muted text-muted-foreground",
               )}
             >
-              Step {pinnedStep} {pinSource === "local" ? "◇" : pinSource === "cross-panel" ? "◈" : pinSource === "best-step" ? "★" : ""}
+              Step {pinnedStep} {pinBadgeSymbol(pinSource)}
             </span>
           )}
           {isPinned && pinnedStep != null && pinBadgeLines && (
@@ -286,7 +246,7 @@ export function ImageCard({
         <DialogTrigger asChild>
           <div className={cn(
               "group relative flex aspect-[16/9] cursor-zoom-in items-center justify-center overflow-hidden rounded-md bg-background/50",
-              pinRingClass,
+              pinRingClassName,
               !url && "border border-dashed cursor-default",
             )}>
             {url ? (

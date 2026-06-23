@@ -21,6 +21,7 @@ import {
   useDashboardView,
 } from "../../(runComparison)/projects.$projectName/~queries/dashboard-views";
 import { ChartSyncProvider } from "@/components/charts/context/chart-sync-context";
+import { ImageStepSyncProvider } from "./~context/image-step-sync-context";
 import { searchUtils, type SearchState } from "../../(runComparison)/projects.$projectName/~lib/search-utils";
 import { useRunDashboardData } from "./~hooks/use-run-dashboard";
 
@@ -247,7 +248,10 @@ function RouteComponent() {
             </ChartSyncProvider>
           ) : (
             <ChartSyncProvider syncKey={`run-all-metrics-${runId}`}>
-              {dataGroups}
+              {/* One shared step-sync provider so media steppers sync across
+                  every section in the All-Metrics view (each DataGroup reuses
+                  this instead of creating its own per-section provider). */}
+              <ImageStepSyncProvider>{dataGroups}</ImageStepSyncProvider>
             </ChartSyncProvider>
           )}
         </div>

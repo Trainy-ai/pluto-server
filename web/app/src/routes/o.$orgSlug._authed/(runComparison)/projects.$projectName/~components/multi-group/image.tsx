@@ -5,10 +5,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { StepNavigator } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/shared/step-navigator";
 import { useSyncedStepNavigation } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~hooks/use-synced-step-navigation";
-import { useImageStepSyncContext, type PinSource, type PinInfo } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~context/image-step-sync-context";
 import { ImageCard } from "@/components/core/image-viewer";
 import { MediaCardWrapper } from "@/components/core/media-card-wrapper";
 import { ImageSettingsPopover } from "@/components/core/image-viewer/image-settings-popover";
+import { useMediaPins } from "./use-media-pins";
 
 interface MultiGroupImageProps {
   logName: string;
@@ -80,104 +80,8 @@ export const MultiGroupImage = ({
     hasSyncContext,
   } = useSyncedStepNavigation(allImages);
 
-  const syncContext = useImageStepSyncContext();
-  const [localPins, setLocalPins] = useState<Map<string, PinInfo>>(new Map());
-
-  // Clean up pins for runs that are no longer in the comparison
-  const runIdSet = useMemo(() => new Set(runs.map((r) => r.runId)), [runs]);
-  useEffect(() => {
-    setLocalPins((prev) => {
-      let changed = false;
-      const next = new Map(prev);
-      for (const runId of next.keys()) {
-        if (!runIdSet.has(runId)) {
-          next.delete(runId);
-          changed = true;
-        }
-      }
-      return changed ? next : prev;
-    });
-  }, [runIdSet]);
-
-  const getPinInfo = useCallback(
-    (runId: string): PinInfo | null => {
-      // Per-widget pins (most specific — keyed by runId:logName)
-      const perWidget = syncContext?.pinnedRunsByWidget.get(`${runId}:${logName}`);
-      if (perWidget) return perWidget;
-      // Cross-panel pins (same step for all widgets) — unless this widget is
-      // excluded (user unpinned just this one)
-      const crossPanel = syncContext?.pinnedRuns.get(runId);
-      if (crossPanel && !crossPanel.excludedWidgets?.has(logName)) {
-        return crossPanel;
-      }
-      // Local (this panel only)
-      const local = localPins.get(runId);
-      if (local) return local;
-      return null;
-    },
-    [syncContext?.pinnedRuns, syncContext?.pinnedRunsByWidget, localPins, logName],
-  );
-
-  const handlePin = useCallback(
-    (
-      runId: string,
-      step: number,
-      currentIndex: number,
-      scope: "local" | "all-panels",
-    ) => {
-      if (scope === "all-panels" && syncContext) {
-        // Cross-panel pin overrides everything (handled in context.pinRun).
-        // Capture the currently-visible sample index so this widget remembers
-        // it even across Charts ↔ Dashboards tab switches. Other widgets that
-        // receive the same cross-panel pin fall back to their own index state.
-        syncContext.pinRun(runId, step, "cross-panel", {
-          originLogName: logName,
-          index: currentIndex,
-        });
-        setLocalPins((prev) => {
-          const next = new Map(prev);
-          next.delete(runId);
-          return next;
-        });
-      } else {
-        // Local pin overrides any pre-existing cross-panel/per-widget pin
-        // FOR THIS WIDGET ONLY (other widgets keep their pins).
-        syncContext?.unpinRunForWidget(runId, logName);
-        setLocalPins((prev) =>
-          new Map(prev).set(runId, {
-            step,
-            source: "local",
-            originLogName: logName,
-            index: currentIndex,
-          }),
-        );
-      }
-    },
-    [syncContext, logName],
-  );
-
-  const handleUnpin = useCallback(
-    (runId: string, scope: "this-widget" | "all-widgets") => {
-      if (scope === "all-widgets") {
-        // Remove everywhere — cross-panel + per-widget + local
-        syncContext?.unpinRun(runId);
-        setLocalPins((prev) => {
-          const next = new Map(prev);
-          next.delete(runId);
-          return next;
-        });
-      } else {
-        // Remove only from this widget
-        syncContext?.unpinRunForWidget(runId, logName);
-        setLocalPins((prev) => {
-          const next = new Map(prev);
-          next.delete(runId);
-          return next;
-        });
-      }
-    },
-    [syncContext, logName],
-  );
+  const { getPinInfo, handlePin, handleUnpin, pinnedRunCount, clearAllPins } =
+    useMediaPins({ logName, runs });
 
   const imagesByRun = useMemo(() => {
     // Group all images into a (runId, step) → file[] lookup so a run can
@@ -241,19 +145,6 @@ export const MultiGroupImage = ({
 
   const runsWithImages = imagesByRun.length;
 
-  // Count unique runs that have at least one pin applied — not the raw sum
-  // of all pin entries (per-widget pins otherwise inflate the count by N).
-  const pinnedRunCount = useMemo(() => {
-    const pinnedRunIds = new Set<string>();
-    syncContext?.pinnedRuns.forEach((_, runId) => pinnedRunIds.add(runId));
-    syncContext?.pinnedRunsByWidget.forEach((_, key) => {
-      const runId = key.split(":")[0];
-      if (runId) pinnedRunIds.add(runId);
-    });
-    localPins.forEach((_, runId) => pinnedRunIds.add(runId));
-    return pinnedRunIds.size;
-  }, [syncContext?.pinnedRuns, syncContext?.pinnedRunsByWidget, localPins]);
-
   const [syncZoom, setSyncZoom] = useState(false);
   const [sharedScale, setSharedScale] = useState(1);
 
@@ -300,10 +191,7 @@ export const MultiGroupImage = ({
           syncZoom={syncZoom}
           onSyncZoomChange={setSyncZoom}
           pinnedRunCount={pinnedRunCount}
-          onClearAllPins={() => {
-            syncContext?.unpinAllRuns();
-            setLocalPins(new Map());
-          }}
+          onClearAllPins={clearAllPins}
         />
       }
     >
