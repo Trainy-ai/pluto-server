@@ -30,6 +30,10 @@ import { RunRow } from "./components/run-row";
 
 type ViewMode = "charts" | "side-by-side";
 
+// Width (px) of the right-edge zone of a pinned header cell that initiates a
+// column resize on mousedown. Matches the visible resize handle's grab area.
+const RESIZE_EDGE_ZONE_PX = 6;
+
 interface DataTableProps {
   runs: Run[];
   orgSlug: string;
@@ -412,6 +416,23 @@ export function DataTable({
     const isDragOver = isCustom && dragOverId === header.column.id && draggedId !== header.column.id;
     const pinned = pinnedColumnMap[header.column.id];
 
+    // Pinned (sticky, z-20) header cells float above columns that scroll beneath
+    // them. Their resize handle sits at the column's right edge — exactly the
+    // boundary the neighbouring non-pinned column scrolls under — so the handle
+    // can intercept pointer events meant for that neighbour (Playwright hovers
+    // land on it). For pinned columns we therefore make the handle visual-only
+    // (pointer-events-none) and initiate the resize from a mousedown on the
+    // cell's own right-edge zone instead, which keeps resizing working without
+    // overlaying neighbouring cells. Non-pinned handles are same-layer as their
+    // neighbours and keep their original interactive behaviour.
+    const resizeFromEdge = (e: React.MouseEvent<HTMLTableCellElement>) => {
+      if (!canResize) return;
+      const rect = e.currentTarget.getBoundingClientRect();
+      if (rect.right - e.clientX <= RESIZE_EDGE_ZONE_PX) {
+        handleMouseDown(header.column.id, w, e);
+      }
+    };
+
     return (
       <TableHead
         key={header.id}
@@ -438,6 +459,7 @@ export function DataTable({
         onDragOver={isCustom ? (e) => handleDragOver(header.column.id, e) : undefined}
         onDrop={isCustom ? (e) => handleDrop(header.column.id, e) : undefined}
         onDragEnd={isCustom ? handleDragEnd : undefined}
+        onMouseDown={canResize && pinned ? resizeFromEdge : undefined}
       >
         <div className="flex items-center">
           {isCustom && (
@@ -455,8 +477,14 @@ export function DataTable({
         </div>
         {canResize && (
           <div
-            onMouseDown={(e) => handleMouseDown(header.column.id, w, e)}
-            className="absolute top-0 right-0 h-full w-1 cursor-col-resize select-none touch-none bg-transparent transition-colors hover:bg-primary/50"
+            onMouseDown={pinned ? undefined : (e) => handleMouseDown(header.column.id, w, e)}
+            className={cn(
+              "absolute top-0 right-0 h-full w-1 cursor-col-resize select-none touch-none bg-transparent transition-colors hover:bg-primary/50",
+              // For pinned cells the handle is purely a visual affordance; the
+              // mousedown is handled by the cell so the overlay never intercepts
+              // pointer events meant for the column scrolling beneath it.
+              pinned && "pointer-events-none",
+            )}
           />
         )}
       </TableHead>
