@@ -74,11 +74,20 @@ const DataGroupBase = ({
     [group.logs],
   );
 
+  // Histogram-only groups default to 1 col (denser than line charts; user
+  // can still adjust via the settings popover and we'll honor it next
+  // render). Mixed groups use the default 3-col layout.
+  const histogramOnly = useMemo(
+    () => group.logs.length > 0 && group.logs.every((log) => log.logType === "HISTOGRAM"),
+    [group.logs],
+  );
+
   const content = (
     <DropdownRegion
       title={group.groupName}
       components={children}
       groupId={groupId}
+      defaultColumns={histogramOnly ? 1 : undefined}
     />
   );
 

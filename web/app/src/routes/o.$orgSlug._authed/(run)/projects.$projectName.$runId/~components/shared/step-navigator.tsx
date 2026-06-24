@@ -1,12 +1,22 @@
 import React, { useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Link, Unlink } from "lucide-react";
-import { Slider } from "@/components/ui/slider";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
+
+// Inline step-row stepper shared across every media widget
+// (image/audio/video/text, both Charts tab and Dashboard tab,
+// per-run pages and multi-run comparison view). Visually identical
+// to HistogramFooterSliders' StepSliderRow so the steppers in the
+// histogram widgets and the other media widgets read as one design.
+//
+// Fixed-width labels keep the slider track length stable while
+// scrubbing — without this the thumb visually jumps as the step
+// number / total step count gain digits.
 
 interface StepNavigatorProps {
   currentStepIndex: number;
@@ -15,12 +25,20 @@ interface StepNavigatorProps {
   onStepChange: (index: number) => void;
   onStepValueChange?: (value: number) => void;
   className?: string;
-  /** Whether this panel's step is synced with other panels */
   isLocked?: boolean;
-  /** Callback to toggle sync lock for this panel */
   onLockChange?: (locked: boolean) => void;
-  /** Whether the sync system is available (provider exists) */
   showLock?: boolean;
+}
+
+// Reserved width for the current step number. 6ch comfortably covers
+// 999,999 steps; anything beyond truncates with an ellipsis + tooltip
+// showing the full value. Trailing "/ N" suffix has been dropped
+// since the slider thumb's position already visualizes progress.
+const STEP_NUMBER_MAX_DIGITS = 6;
+
+function truncate(text: string, max: number): string {
+  if (text.length <= max) return text;
+  return text.slice(0, max - 1) + "…";
 }
 
 export const StepNavigator: React.FC<StepNavigatorProps> = ({
@@ -36,15 +54,15 @@ export const StepNavigator: React.FC<StepNavigatorProps> = ({
 }) => {
   const totalSteps = availableSteps.length;
 
-  const handleSliderChange = useCallback(
-    (values: number[]) => {
-      const index = values[0] ?? 0;
+  const handleRangeChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const index = Number(e.target.value);
       onStepChange(index);
       if (onStepValueChange) {
         onStepValueChange(availableSteps[index] ?? 0);
       }
     },
-    [onStepChange, onStepValueChange, availableSteps]
+    [onStepChange, onStepValueChange, availableSteps],
   );
 
   if (totalSteps <= 1) {
@@ -52,43 +70,35 @@ export const StepNavigator: React.FC<StepNavigatorProps> = ({
   }
 
   const maxIndex = totalSteps - 1;
-  const percentage = maxIndex > 0 ? (currentStepIndex / maxIndex) * 100 : 0;
 
   return (
-    <div data-testid="step-navigator" className={`flex items-center gap-3 ${className}`}>
-      <div className="relative flex w-full min-w-[120px] flex-col">
-        {/* Value label positioned above thumb */}
-        <div
-          className="pointer-events-none absolute -top-5 font-mono text-xs tabular-nums text-foreground"
-          style={{
-            left: `${percentage}%`,
-            transform: "translateX(-50%)",
-          }}
+    <div
+      data-testid="step-navigator"
+      className={cn("flex items-center gap-3", className)}
+    >
+      <span className="shrink-0 text-[11px] font-medium text-muted-foreground tabular-nums">
+        step{" "}
+        <span
+          className="inline-block text-right text-foreground"
+          style={{ width: `${STEP_NUMBER_MAX_DIGITS}ch` }}
+          title={`${currentStepValue} / ${availableSteps[maxIndex] ?? 0}`}
         >
-          {currentStepValue}
-        </div>
-
-        {/* Index-based slider */}
-        <Slider
-          min={0}
-          max={maxIndex}
-          step={1}
-          value={[currentStepIndex]}
-          onValueChange={handleSliderChange}
-        />
-
-        {/* Min/Max step value labels */}
-        <div className="mt-1 flex justify-between">
-          <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
-            {availableSteps[0]}
-          </span>
-          <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
-            {availableSteps[maxIndex]}
-          </span>
-        </div>
-      </div>
-
-      {/* Sync link/unlink toggle */}
+          {truncate(String(currentStepValue), STEP_NUMBER_MAX_DIGITS)}
+        </span>
+      </span>
+      <input
+        type="range"
+        role="slider"
+        min={0}
+        max={maxIndex}
+        value={Math.min(currentStepIndex, maxIndex)}
+        onChange={handleRangeChange}
+        className="h-1 min-w-[40px] flex-1 cursor-pointer accent-primary focus:outline-none focus-visible:outline-none focus-visible:ring-0"
+        aria-label="step"
+        aria-valuemin={0}
+        aria-valuemax={maxIndex}
+        aria-valuenow={Math.min(currentStepIndex, maxIndex)}
+      />
       {showLock && onLockChange && (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -96,7 +106,7 @@ export const StepNavigator: React.FC<StepNavigatorProps> = ({
               variant="ghost"
               size="icon"
               onClick={() => onLockChange(!isLocked)}
-              className="h-6 w-6"
+              className="h-6 w-6 shrink-0"
             >
               {isLocked ? (
                 <Link className="h-3 w-3 text-muted-foreground" />

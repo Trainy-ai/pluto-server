@@ -40,6 +40,7 @@ import { useDebouncedCallback } from "@/lib/hooks/use-debounced-callback";
 import { RunTableViewSelector } from "./~components/runs-table/run-table-view-selector";
 import { DEFAULT_PAGE_SIZE } from "./~components/runs-table/config";
 import { ImageStepSyncProvider } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~context/image-step-sync-context";
+import { RunSyncProvider } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~context/run-sync-context";
 
 // Search params type for the route
 // Note: runs is stored as comma-separated string in URL for cleaner URLs
@@ -1339,6 +1340,7 @@ function RouteComponent() {
         }
       >
         <ImageStepSyncProvider>
+        <RunSyncProvider>
         <ResizablePanelGroup
           orientation="horizontal"
           className="h-[calc(100vh-4rem)] w-full p-2"
@@ -1538,6 +1540,7 @@ function RouteComponent() {
             </div>
           </ResizablePanel>
         </ResizablePanelGroup>
+        </RunSyncProvider>
         </ImageStepSyncProvider>
       </PageLayout>
     </RunComparisonLayout>

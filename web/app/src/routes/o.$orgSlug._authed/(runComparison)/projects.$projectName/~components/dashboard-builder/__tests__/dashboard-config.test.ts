@@ -22,8 +22,15 @@ import {
   pasteWidget,
   sanitizeConfig,
   handleEditWidgetSave,
+  migrateDashboardConfig,
+  liftFileGroupHistograms,
 } from "../use-dashboard-config";
-import type { DashboardViewConfig, Section, Widget } from "../../../~types/dashboard-types";
+import type {
+  DashboardViewConfig,
+  Section,
+  Widget,
+  DistributionsWidgetConfig,
+} from "../../../~types/dashboard-types";
 
 // Helper to create a minimal config for testing
 function createTestConfig(sections: Section[] = []): DashboardViewConfig {
@@ -671,3 +678,377 @@ describe("global widget operations across folders", () => {
     expect(result.sections[0].children![0].widgets[0].layout.y).toBe(9999);
   });
 });
+
+// ─── Distributions read-time migration shim ──────────────────────────────
+// migrateDashboardConfig is called every time a saved dashboard config
+// enters component state. It rewrites three legacy shapes:
+//   1. chart widget with `bars` field         → chart + distributions
+//   2. file-group with `categoricalPrefixes`  → file-group + distributions
+//   3. standalone `histogram` widget          → distributions (1 entry)
+// All three must be idempotent — running twice does nothing.
+
+describe("migrateDashboardConfig — chart with legacy bars[]", () => {
+  it("strips bars and emits a sibling distributions widget", () => {
+    const legacy: Widget = {
+      id: "w-1",
+      type: "chart",
+      // Cast the legacy `bars` field through unknown — the current schema
+      // dropped it, but at read time we still receive it from old saves.
+      config: {
+        metrics: ["train/loss"],
+        xAxis: "step",
+        yAxisScale: "linear",
+        xAxisScale: "linear",
+        aggregation: "LAST",
+        showOriginal: false,
+        bars: [
+          { prefix: "training/dataset/", viewMode: "heatmap", depthAxis: "run" },
+        ],
+      } as unknown as Widget["config"],
+      layout: { x: 0, y: 0, w: 6, h: 4 },
+    };
+    const config = createTestConfig([createTestSection({ id: "s1", widgets: [legacy] })]);
+    const out = migrateDashboardConfig(config);
+    const widgets = out.sections[0].widgets;
+    expect(widgets).toHaveLength(2);
+
+    const chart = widgets.find((w) => w.type === "chart")!;
+    expect(chart.id).toBe("w-1");
+    // The bars field has been stripped from the chart config.
+    expect((chart.config as unknown as Record<string, unknown>).bars).toBeUndefined();
+    expect((chart.config as { metrics: string[] }).metrics).toEqual(["train/loss"]);
+
+    const dist = widgets.find((w) => w.type === "distributions")!;
+    expect(dist.id).toBe("w-1-distributions");
+    const distCfg = dist.config as DistributionsWidgetConfig;
+    expect(distCfg.entries).toHaveLength(1);
+    expect(distCfg.entries[0]).toMatchObject({
+      kind: "bars",
+      prefix: "training/dataset/",
+      viewMode: "heatmap",
+      depthAxis: "run",
+    });
+  });
+
+  it("drops the original chart entirely when it carried bars but no metrics", () => {
+    const legacy: Widget = {
+      id: "w-1",
+      type: "chart",
+      config: {
+        metrics: [],
+        xAxis: "step",
+        yAxisScale: "linear",
+        xAxisScale: "linear",
+        aggregation: "LAST",
+        showOriginal: false,
+        bars: [{ prefix: "training/dataset/" }],
+      } as unknown as Widget["config"],
+      layout: { x: 0, y: 0, w: 6, h: 4 },
+    };
+    const out = migrateDashboardConfig(
+      createTestConfig([createTestSection({ id: "s1", widgets: [legacy] })]),
+    );
+    const widgets = out.sections[0].widgets;
+    expect(widgets).toHaveLength(1);
+    expect(widgets[0].type).toBe("distributions");
+  });
+
+  it("normalizes single-bars-object (pre-array shape) into a 1-entry distributions", () => {
+    const legacy: Widget = {
+      id: "w-1",
+      type: "chart",
+      config: {
+        metrics: [],
+        xAxis: "step",
+        yAxisScale: "linear",
+        xAxisScale: "linear",
+        aggregation: "LAST",
+        showOriginal: false,
+        // Pre-array shape: a single object, not an array.
+        bars: { prefix: "sys/" },
+      } as unknown as Widget["config"],
+      layout: { x: 0, y: 0, w: 6, h: 4 },
+    };
+    const out = migrateDashboardConfig(
+      createTestConfig([createTestSection({ id: "s1", widgets: [legacy] })]),
+    );
+    const distCfg = out.sections[0].widgets[0].config as DistributionsWidgetConfig;
+    expect(distCfg.entries).toHaveLength(1);
+    expect(distCfg.entries[0]).toMatchObject({ kind: "bars", prefix: "sys/" });
+  });
+
+  it("is a no-op for a chart widget without bars", () => {
+    const chart: Widget = {
+      id: "w-1",
+      type: "chart",
+      config: {
+        metrics: ["train/loss"],
+        xAxis: "step",
+        yAxisScale: "linear",
+        xAxisScale: "linear",
+        aggregation: "LAST",
+        showOriginal: false,
+      } as unknown as Widget["config"],
+      layout: { x: 0, y: 0, w: 6, h: 4 },
+    };
+    const config = createTestConfig([createTestSection({ id: "s1", widgets: [chart] })]);
+    const out = migrateDashboardConfig(config);
+    expect(out.sections[0].widgets).toHaveLength(1);
+    expect(out.sections[0].widgets[0].type).toBe("chart");
+  });
+});
+
+describe("migrateDashboardConfig — file-group with legacy categoricalPrefixes[]", () => {
+  it("emits sibling distributions per prefix, threading per-prefix overrides", () => {
+    const legacy: Widget = {
+      id: "w-fg",
+      type: "file-group",
+      config: {
+        files: ["images/training_viz"],
+        categoricalPrefixes: ["training/dataset/", "sys/"],
+        viewModes: { "training/dataset/": "heatmap" },
+        depthAxes: { "sys/": "run" },
+      } as unknown as Widget["config"],
+      layout: { x: 0, y: 0, w: 6, h: 4 },
+    };
+    const out = migrateDashboardConfig(
+      createTestConfig([createTestSection({ id: "s1", widgets: [legacy] })]),
+    );
+    const widgets = out.sections[0].widgets;
+    expect(widgets).toHaveLength(2);
+
+    const fg = widgets.find((w) => w.type === "file-group")!;
+    expect(fg.id).toBe("w-fg");
+    expect((fg.config as { files: string[] }).files).toEqual(["images/training_viz"]);
+    // Legacy categoricalPrefixes is stripped from the cleaned config.
+    expect(
+      (fg.config as unknown as Record<string, unknown>).categoricalPrefixes,
+    ).toBeUndefined();
+
+    const dist = widgets.find((w) => w.type === "distributions")!;
+    const entries = (dist.config as DistributionsWidgetConfig).entries;
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toMatchObject({
+      kind: "bars",
+      prefix: "training/dataset/",
+      viewMode: "heatmap",
+    });
+    expect(entries[1]).toMatchObject({
+      kind: "bars",
+      prefix: "sys/",
+      depthAxis: "run",
+    });
+  });
+
+  it("drops the file-group entirely when it had no files alongside the bars prefixes", () => {
+    const legacy: Widget = {
+      id: "w-fg",
+      type: "file-group",
+      config: {
+        files: [],
+        categoricalPrefixes: ["training/dataset/"],
+      } as unknown as Widget["config"],
+      layout: { x: 0, y: 0, w: 6, h: 4 },
+    };
+    const out = migrateDashboardConfig(
+      createTestConfig([createTestSection({ id: "s1", widgets: [legacy] })]),
+    );
+    expect(out.sections[0].widgets).toHaveLength(1);
+    expect(out.sections[0].widgets[0].type).toBe("distributions");
+  });
+});
+
+describe("migrateDashboardConfig — standalone histogram widget", () => {
+  it("retypes the widget to distributions, preserving id + layout", () => {
+    const legacy: Widget = {
+      id: "w-h",
+      type: "histogram",
+      config: {
+        metric: "distributions/weights",
+        viewMode: "heatmap",
+        ignoreOutliers: false,
+        stepsOnX: true,
+      } as unknown as Widget["config"],
+      layout: { x: 2, y: 3, w: 6, h: 5 },
+    };
+    const out = migrateDashboardConfig(
+      createTestConfig([createTestSection({ id: "s1", widgets: [legacy] })]),
+    );
+    const widgets = out.sections[0].widgets;
+    expect(widgets).toHaveLength(1);
+    const w = widgets[0];
+    expect(w.id).toBe("w-h");
+    expect(w.type).toBe("distributions");
+    expect(w.layout).toEqual({ x: 2, y: 3, w: 6, h: 5 });
+    const entries = (w.config as DistributionsWidgetConfig).entries;
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      kind: "histogram",
+      metric: "distributions/weights",
+      viewMode: "heatmap",
+      ignoreOutliers: false,
+      stepsOnX: true,
+    });
+  });
+
+  it("leaves a histogram widget with no metric untouched (skip, don't crash)", () => {
+    const legacy: Widget = {
+      id: "w-h",
+      type: "histogram",
+      config: {} as unknown as Widget["config"],
+      layout: { x: 0, y: 0, w: 6, h: 4 },
+    };
+    const out = migrateDashboardConfig(
+      createTestConfig([createTestSection({ id: "s1", widgets: [legacy] })]),
+    );
+    expect(out.sections[0].widgets[0].type).toBe("histogram");
+  });
+});
+
+describe("migrateDashboardConfig — idempotence + folder traversal", () => {
+  it("running twice yields the same result", () => {
+    const legacy: Widget = {
+      id: "w-1",
+      type: "chart",
+      config: {
+        metrics: ["train/loss"],
+        xAxis: "step",
+        yAxisScale: "linear",
+        xAxisScale: "linear",
+        aggregation: "LAST",
+        showOriginal: false,
+        bars: [{ prefix: "training/dataset/" }],
+      } as unknown as Widget["config"],
+      layout: { x: 0, y: 0, w: 6, h: 4 },
+    };
+    const config = createTestConfig([createTestSection({ id: "s1", widgets: [legacy] })]);
+    const once = migrateDashboardConfig(config);
+    const twice = migrateDashboardConfig(once);
+    expect(twice).toEqual(once);
+  });
+
+  it("descends into folder children", () => {
+    const legacy: Widget = {
+      id: "w-h",
+      type: "histogram",
+      config: { metric: "distributions/weights" } as unknown as Widget["config"],
+      layout: { x: 0, y: 0, w: 6, h: 4 },
+    };
+    const child = createTestSection({ id: "c1", widgets: [legacy] });
+    const folder: Section = {
+      id: "f1",
+      name: "Folder",
+      collapsed: false,
+      widgets: [],
+      children: [child],
+    };
+    const out = migrateDashboardConfig(createTestConfig([folder]));
+    const childWidgets = out.sections[0].children![0].widgets;
+    expect(childWidgets).toHaveLength(1);
+    expect(childWidgets[0].type).toBe("distributions");
+  });
+});
+
+// ─── Save-time auto-lift for legacy file-group histograms ────────────────
+// liftFileGroupHistograms runs right before each save mutation. It rewrites
+// file-group widgets whose HISTOGRAM file entries were detected at render
+// time into a clean file-group + sibling distributions widget. Detection
+// is plumbed in via the `detectedHistograms` map from dashboard-builder.
+
+describe("liftFileGroupHistograms", () => {
+  function fileGroupWidget(id: string, files: string[]): Widget {
+    return {
+      id,
+      type: "file-group",
+      config: { files } as unknown as Widget["config"],
+      layout: { x: 0, y: 1, w: 6, h: 4 },
+    };
+  }
+
+  it("no-op when the detected-histograms map is empty", () => {
+    const fg = fileGroupWidget("w-fg", ["distributions/weights"]);
+    const config = createTestConfig([createTestSection({ id: "s1", widgets: [fg] })]);
+    expect(liftFileGroupHistograms(config, {})).toEqual(config);
+  });
+
+  it("no-op when no file-group is in the map", () => {
+    const fg = fileGroupWidget("w-fg", ["images/x"]);
+    const config = createTestConfig([createTestSection({ id: "s1", widgets: [fg] })]);
+    expect(liftFileGroupHistograms(config, { "other-id": ["x"] })).toEqual(config);
+  });
+
+  it("replaces the file-group in place when ALL files are histograms", () => {
+    const fg = fileGroupWidget("w-fg", ["distributions/weights", "distributions/grads"]);
+    const config = createTestConfig([createTestSection({ id: "s1", widgets: [fg] })]);
+    const out = liftFileGroupHistograms(config, {
+      "w-fg": ["distributions/weights", "distributions/grads"],
+    });
+    const widgets = out.sections[0].widgets;
+    expect(widgets).toHaveLength(1);
+    expect(widgets[0].id).toBe("w-fg");
+    expect(widgets[0].type).toBe("distributions");
+    expect(widgets[0].layout).toEqual({ x: 0, y: 1, w: 6, h: 4 });
+    const entries = (widgets[0].config as DistributionsWidgetConfig).entries;
+    expect(entries.map((e) => (e.kind === "histogram" ? e.metric : null))).toEqual([
+      "distributions/weights",
+      "distributions/grads",
+    ]);
+  });
+
+  it("splits when file-group mixes histograms with images", () => {
+    const fg = fileGroupWidget("w-fg", [
+      "images/training_viz",
+      "distributions/weights",
+      "video/animation",
+    ]);
+    const config = createTestConfig([createTestSection({ id: "s1", widgets: [fg] })]);
+    const out = liftFileGroupHistograms(config, {
+      "w-fg": ["distributions/weights"],
+    });
+    const widgets = out.sections[0].widgets;
+    expect(widgets).toHaveLength(2);
+
+    const cleanedFg = widgets.find((w) => w.id === "w-fg")!;
+    expect(cleanedFg.type).toBe("file-group");
+    expect((cleanedFg.config as { files: string[] }).files).toEqual([
+      "images/training_viz",
+      "video/animation",
+    ]);
+
+    const sibling = widgets.find((w) => w.id === "w-fg-lifted-distributions")!;
+    expect(sibling.type).toBe("distributions");
+    // Sibling is placed one row below the file-group so save-side
+    // auto-pack lays them out without overlap.
+    expect(sibling.layout.y).toBe(1 + 4);
+    expect((sibling.config as DistributionsWidgetConfig).entries).toEqual([
+      {
+        kind: "histogram",
+        metric: "distributions/weights",
+        viewMode: "ridgeline",
+        ignoreOutliers: true,
+        stepsOnX: false,
+      },
+    ]);
+  });
+
+  it("ignores non-file-group widgets in the map (defensive)", () => {
+    const chart: Widget = {
+      id: "w-c",
+      type: "chart",
+      config: {
+        metrics: ["train/loss"],
+        xAxis: "step",
+        yAxisScale: "linear",
+        xAxisScale: "linear",
+        aggregation: "LAST",
+        showOriginal: false,
+      } as unknown as Widget["config"],
+      layout: { x: 0, y: 0, w: 6, h: 4 },
+    };
+    const config = createTestConfig([createTestSection({ id: "s1", widgets: [chart] })]);
+    const out = liftFileGroupHistograms(config, { "w-c": ["distributions/x"] });
+    // Chart widgets are skipped — never rewritten.
+    expect(out).toEqual(config);
+  });
+});
+

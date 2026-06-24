@@ -15,7 +15,6 @@
     "lib/dashboard-types.ts"
   ],
   "ignoreDependencies": [
-    "@hono/node-server",
     "@hono/zod-validator",
     "@types/nanoid",
     "@types/bcrypt",

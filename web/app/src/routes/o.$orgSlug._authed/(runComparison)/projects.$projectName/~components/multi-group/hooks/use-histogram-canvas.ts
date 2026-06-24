@@ -30,6 +30,10 @@ export interface SingleRunHistogramProps {
   isSingleRun?: boolean;
   color?: string;
   hideStepLabel?: boolean;
+  /** When set, paint a 1.5px outline column at this bin index after the
+   *  bars are drawn — same hover affordance the categorical Step view
+   *  uses for {bars}. -1 (or undefined) skips the highlight. */
+  highlightBinIdx?: number;
 }
 
 export interface MultiRunHistogramProps {
@@ -348,6 +352,7 @@ export const useHistogramCanvas = () => {
       globalMaxFreq,
       color,
       hideStepLabel,
+      highlightBinIdx,
     }: SingleRunHistogramProps) => {
       if (!canvas || !data) return;
       const ctx = canvas.getContext("2d");
@@ -444,6 +449,39 @@ export const useHistogramCanvas = () => {
           displayWidth - padding,
           padding - titleFontSize - 5,
         );
+      }
+
+      // Hover highlight: a 1.5px outline column at the hovered bin,
+      // full plot height. Mirrors drawCategoricalHighlight for {bars}
+      // so the Step-mode hover affordance is consistent between the
+      // numeric and categorical histograms.
+      if (highlightBinIdx !== undefined && highlightBinIdx >= 0) {
+        const { bins } = data.histogramData;
+        if (bins.num > 0 && highlightBinIdx < bins.num) {
+          const xRange = xAxisRange.max - xAxisRange.min;
+          const dataBinWidth = (bins.max - bins.min) / bins.num;
+          if (xRange > 0 && dataBinWidth > 0) {
+            const binStart = bins.min + highlightBinIdx * dataBinWidth;
+            const binEnd = binStart + dataBinWidth;
+            const xStartRaw = padding + ((binStart - xAxisRange.min) / xRange) * availableWidth;
+            const xEndRaw = padding + ((binEnd - xAxisRange.min) / xRange) * availableWidth;
+            const x0 = Math.max(padding, xStartRaw);
+            const x1 = Math.min(displayWidth - padding, xEndRaw);
+            if (x1 - x0 > 0) {
+              const strokeColor = theme === "dark" ? "rgba(255,255,255,0.75)" : "rgba(0,0,0,0.75)";
+              ctx.save();
+              ctx.strokeStyle = strokeColor;
+              ctx.lineWidth = 1.5;
+              ctx.strokeRect(
+                x0 + 0.75,
+                padding + 0.75,
+                x1 - x0 - 1.5,
+                (displayHeight - padding * 2) - 1.5,
+              );
+              ctx.restore();
+            }
+          }
+        }
       }
     },
     [],

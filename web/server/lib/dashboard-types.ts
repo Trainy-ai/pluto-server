@@ -1,6 +1,18 @@
 import { z } from "zod";
 
-// Widget type enum
+// Widget type enum.
+//
+// `"histogram"` is kept here for LEGACY PARSE ONLY. The UI no longer
+// creates standalone histogram widgets — they live as entries inside
+// `"distributions"` widgets. Saved dashboards from before the split
+// still arrive on the wire with `type: "histogram"`, so this enum
+// entry plus HistogramWidgetConfigSchema below must stay around so
+// validation succeeds; migrateDashboardConfig (frontend) immediately
+// converts them to a single-entry distributions widget on read. Once
+// every saved dashboard has been opened-and-resaved (which rewrites
+// it as `"distributions"` on disk), this enum entry, the schema, and
+// the HistogramWidget component / "histogram" case in widget-renderer
+// can all be deleted.
 export const WidgetTypeSchema = z.enum([
   "chart",
   "scatter",
@@ -9,6 +21,11 @@ export const WidgetTypeSchema = z.enum([
   "logs",
   "file-series",
   "file-group",
+  // "distributions" hosts a list of mixed entries: categorical {bars}
+  // rollups and numeric histograms. Replaces the older paths where
+  // bars lived inside chart widgets and histograms lived inside
+  // file-group widgets (or as standalone "histogram" widgets).
+  "distributions",
 ]);
 export type WidgetType = z.infer<typeof WidgetTypeSchema>;
 
@@ -47,7 +64,39 @@ export const BaseWidgetConfigSchema = z.object({
   title: z.string().optional(),
 });
 
-// Chart widget config (line graph)
+// Optional bar-rollup config carried inside a chart widget. When set,
+// the widget renders the categorical bar view (N sibling scalar
+// metrics under a shared prefix, drawn as Step bars / Ridgeline /
+// Heatmap) INSTEAD of the line chart that the other fields describe.
+// This sits inside ChartWidgetConfig (rather than its own widget type)
+// so the dashboard's Add Widget → Metrics flow can create EITHER a
+// line chart OR a bar group depending on whether the user picks a
+// metric name or a `prefix/{bars}` entry.
+export const BarsConfigSchema = z.object({
+  prefix: z.string(), // e.g. "training/dataset/"
+  viewMode: z.enum(["step", "ridgeline", "heatmap"]).default("ridgeline"),
+  depthAxis: z.enum(["step", "run"]).default("step"),
+  binRange: z
+    .object({
+      start: z.number().int().min(1).max(10000),
+      end: z.number().int().min(1).max(10000),
+    })
+    .optional(),
+  // W&B-style "Ignore outliers" toggle. When true, the global maxFreq used
+  // to normalize ridge heights / heatmap colors / step bars is Tukey-fenced
+  // so one extreme step doesn't squish every other step's bars into a flat
+  // baseline. Default true on the read side to match HistogramWidgetConfig.
+  ignoreOutliers: z.boolean().default(true),
+  // Transpose the Ridgeline/Heatmap views so STEP runs along the X axis
+  // and the categorical bins stack vertically. Only meaningful when
+  // viewMode ∈ {ridgeline, heatmap} AND depthAxis === "step"; the
+  // settings popover disables the checkbox otherwise. Default false
+  // (current orientation). Step mode + depthAxis="run" ignore this.
+  stepsOnX: z.boolean().default(false),
+});
+export type BarsConfig = z.infer<typeof BarsConfigSchema>;
+
+// Chart widget config (line graph OR bar group)
 export const ChartWidgetConfigSchema = BaseWidgetConfigSchema.extend({
   metrics: z.array(z.string()), // ["training/loss", "validation/loss"]
   // X-axis mode:
@@ -63,6 +112,10 @@ export const ChartWidgetConfigSchema = BaseWidgetConfigSchema.extend({
   smoothing: SmoothingConfigSchema.optional(),
   maxPoints: z.number().positive().optional(), // Server-side bucketed downsampling
   showOriginal: z.boolean().default(false),
+  // `bars` field removed — chart widgets are line-only. Categorical
+  // {bars} rollups live in distributions widgets now. Legacy chart
+  // widgets with a `bars` field round-trip through the union's
+  // .passthrough() and migrateDashboardConfig splits them on read.
 });
 export type ChartWidgetConfig = z.infer<typeof ChartWidgetConfigSchema>;
 
@@ -87,17 +140,93 @@ export const SingleValueWidgetConfigSchema = BaseWidgetConfigSchema.extend({
 });
 export type SingleValueWidgetConfig = z.infer<typeof SingleValueWidgetConfigSchema>;
 
-// Histogram widget config
+// Histogram widget view mode:
+//   "step"       → existing single-step viewer with step navigator + animation (backward-compat default)
+//   "ridgeline"  → joyplot of per-step distributions over training
+//   "heatmap"    → 2D density map, Y=step, X=bin, color=freq
+export const HistogramViewModeSchema = z.enum(["step", "ridgeline", "heatmap"]);
+export type HistogramViewMode = z.infer<typeof HistogramViewModeSchema>;
+
+// Histogram depth axis (Ridgeline/Heatmap only — Step mode ignores it):
+//   "step" → ridges/rows = steps, panels side-by-side per run
+//   "run"  → ridges/rows = runs, slider scrubs the current step
+export const HistogramDepthAxisSchema = z.enum(["step", "run"]);
+export type HistogramDepthAxis = z.infer<typeof HistogramDepthAxisSchema>;
+
+// Histogram widget config — LEGACY PARSE ONLY. UI never creates this
+// shape anymore; it lives as a `DistributionsEntry` (kind: "histogram")
+// inside a distributions widget. Schema kept here so dashboards saved
+// before the distributions split still validate on read;
+// migrateDashboardConfig (frontend) rewrites them on the fly.
+// Safe to delete once all dashboards have been opened-and-resaved.
 export const HistogramWidgetConfigSchema = BaseWidgetConfigSchema.extend({
   metric: z.string(),
+  viewMode: HistogramViewModeSchema.default("step"),
+  // W&B-style "Ignore outliers" toggle. When true, the X domain and
+  // globalMaxFreq are clamped to 5th/95th-percentile fences computed
+  // from per-step bin ranges; outlier steps still draw but clip at
+  // the edges. Default true so a fresh widget renders cleanly out of
+  // the box. See histogram-outlier-fences.ts for the math.
+  ignoreOutliers: z.boolean().default(true),
+  // Transpose Ridgeline/Heatmap views so STEP runs along the X axis
+  // and bins stack vertically. Only meaningful when viewMode ∈
+  // {ridgeline, heatmap} AND depthAxis === "step" (numeric histograms
+  // currently force depthAxis=step at the view level when stepsOnX
+  // would apply). Default false. Step viewMode ignores this.
+  stepsOnX: z.boolean().default(false),
 });
 export type HistogramWidgetConfig = z.infer<typeof HistogramWidgetConfigSchema>;
 
-// File group widget config (multiple files: histograms, images, videos, audio)
+// File group widget config (multiple files: images, videos, audio).
+// HISTOGRAM file entries and `{bars}` prefix entries used to live here too
+// — they're in distributions widgets now. Legacy file-group configs that
+// still carry `categoricalPrefixes`, `viewModes`, `depthAxes`, `binRanges`,
+// or the per-entry `ignoreOutliers` / `stepsOnX` maps round-trip through
+// the union's .passthrough(); migrateDashboardConfig lifts them out into a
+// distributions widget on read.
 export const FileGroupWidgetConfigSchema = BaseWidgetConfigSchema.extend({
   files: z.array(z.string()), // literal names or "glob:..."/"regex:..." patterns
 });
 export type FileGroupWidgetConfig = z.infer<typeof FileGroupWidgetConfigSchema>;
+
+// ─── Distributions widget ───────────────────────────────────────────
+//
+// A single distributions widget hosts a list of mixed entries:
+// categorical {bars} rollups (kind="bars") and numeric histograms
+// (kind="histogram"). Renderer dispatches per-entry. Replaces the
+// historic paths where bars lived inside chart widgets and histograms
+// lived inside file-group widgets. The two entry shapes deliberately
+// reuse `BarsConfigSchema` and the existing histogram fields, tagged
+// with a discriminator so legacy migration is straightforward.
+
+export const DistributionsBarsEntrySchema = BarsConfigSchema.extend({
+  kind: z.literal("bars"),
+});
+export type DistributionsBarsEntry = z.infer<typeof DistributionsBarsEntrySchema>;
+
+export const DistributionsHistogramEntrySchema = z.object({
+  kind: z.literal("histogram"),
+  metric: z.string(),
+  viewMode: HistogramViewModeSchema.default("ridgeline"),
+  ignoreOutliers: z.boolean().default(true),
+  stepsOnX: z.boolean().default(false),
+});
+export type DistributionsHistogramEntry = z.infer<
+  typeof DistributionsHistogramEntrySchema
+>;
+
+export const DistributionsEntrySchema = z.discriminatedUnion("kind", [
+  DistributionsBarsEntrySchema,
+  DistributionsHistogramEntrySchema,
+]);
+export type DistributionsEntry = z.infer<typeof DistributionsEntrySchema>;
+
+export const DistributionsWidgetConfigSchema = BaseWidgetConfigSchema.extend({
+  entries: z.array(DistributionsEntrySchema),
+});
+export type DistributionsWidgetConfig = z.infer<
+  typeof DistributionsWidgetConfigSchema
+>;
 
 // Logs widget config
 export const LogsWidgetConfigSchema = BaseWidgetConfigSchema.extend({
@@ -125,7 +254,8 @@ type WidgetConfigType =
   | z.infer<typeof HistogramWidgetConfigSchema>
   | z.infer<typeof FileGroupWidgetConfigSchema>
   | z.infer<typeof LogsWidgetConfigSchema>
-  | z.infer<typeof FileSeriesWidgetConfigSchema>;
+  | z.infer<typeof FileSeriesWidgetConfigSchema>
+  | z.infer<typeof DistributionsWidgetConfigSchema>;
 
 // Union of all widget configs
 // IMPORTANT: .passthrough() prevents z.union from stripping unknown keys when
@@ -141,6 +271,7 @@ export const WidgetConfigSchema = z.union([
   HistogramWidgetConfigSchema.passthrough(),
   LogsWidgetConfigSchema.passthrough(),
   FileSeriesWidgetConfigSchema.passthrough(),
+  DistributionsWidgetConfigSchema.passthrough(),
 ]) as unknown as z.ZodType<WidgetConfigType, z.ZodTypeDef, WidgetConfigType>;
 export type WidgetConfig = WidgetConfigType;
 
@@ -186,6 +317,9 @@ export const WidgetSchema = z.object({
       break;
     case "file-series":
       schema = FileSeriesWidgetConfigSchema;
+      break;
+    case "distributions":
+      schema = DistributionsWidgetConfigSchema;
       break;
     default:
       return;
@@ -235,6 +369,17 @@ export const SectionSchema: z.ZodType<Section, z.ZodTypeDef, any> = z.lazy(() =>
     // one path segment varies independently (e.g. dataset and stat name in
     // `validation/<dataset>/original/<stat>`).
     dynamicGroupPrefixRegex: z.string().optional(),
+    // Per-metric Step/Ridgeline/Heatmap viewMode overrides for
+    // dynamically-generated widgets in this section (applies to both
+    // numeric histogram entries AND `{bars}` prefix entries — both share
+    // the same view-mode set). Dynamic widgets don't exist in widgets[] —
+    // they're regenerated from `dynamicPattern` on every render — so any
+    // user preference has to live on the section itself, keyed by the
+    // metric/file name. Read-side fallback is "ridgeline" when a metric
+    // isn't in the map. Other section types (static, folder) ignore this
+    // field. Field name kept as `histogramViewModes` for on-disk
+    // backwards-compat.
+    histogramViewModes: z.record(z.string(), HistogramViewModeSchema).optional(),
     children: z.array(z.lazy(() => SectionSchema)).optional(),
   }).superRefine((section, ctx) => {
     // Folders (sections with children) cannot have dynamic patterns
@@ -271,6 +416,7 @@ export interface Section {
   dynamicGroupBy?: string[];
   dynamicGroupPrefixes?: string[];
   dynamicGroupPrefixRegex?: string;
+  histogramViewModes?: Record<string, HistogramViewMode>;
   children?: Section[];
 }
 
@@ -316,6 +462,9 @@ export const createDefaultWidgetConfig = (type: WidgetType): WidgetConfig => {
     case "histogram":
       return {
         metric: "",
+        viewMode: "ridgeline",
+        ignoreOutliers: true,
+        stepsOnX: false,
       };
     case "file-group":
       return {
@@ -330,6 +479,10 @@ export const createDefaultWidgetConfig = (type: WidgetType): WidgetConfig => {
       return {
         logName: "",
         mediaType: "IMAGE",
+      };
+    case "distributions":
+      return {
+        entries: [],
       };
   }
 };

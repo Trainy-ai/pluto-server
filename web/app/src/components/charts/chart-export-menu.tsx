@@ -9,7 +9,11 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { copyChartToClipboard, downloadChartAsPng } from "./chart-export-utils";
+import {
+  copyChartToClipboard,
+  downloadChartAsPng,
+  type ExportCaption,
+} from "./chart-export-utils";
 
 interface ChartExportMenuProps {
   /** Returns the container element that holds the chart canvas */
@@ -19,6 +23,13 @@ interface ChartExportMenuProps {
   className?: string;
   /** "toolbar" = icon-only ghost button; "header" = outlined button with text */
   variant?: "toolbar" | "header";
+  /**
+   * Returns caption metadata (current step + run chips) to render between
+   * the chart and the legend. Called at click time so the values are
+   * current with the slider position. Optional — widgets without a
+   * meaningful step or run list omit this and export without a caption.
+   */
+  getCaption?: () => ExportCaption | null;
 }
 
 export function ChartExportMenu({
@@ -26,6 +37,7 @@ export function ChartExportMenu({
   fileName,
   className,
   variant = "toolbar",
+  getCaption,
 }: ChartExportMenuProps) {
   const sanitizedName = fileName.replace(/[/\\?%*:|"<>]/g, "-");
 
@@ -33,7 +45,7 @@ export function ChartExportMenu({
     const container = getContainer();
     if (!container) return;
     try {
-      await copyChartToClipboard(container);
+      await copyChartToClipboard(container, getCaption?.() ?? undefined);
       toast.success("Chart copied to clipboard");
     } catch {
       toast.error("Failed to copy chart");
@@ -44,7 +56,11 @@ export function ChartExportMenu({
     const container = getContainer();
     if (!container) return;
     try {
-      await downloadChartAsPng(container, sanitizedName);
+      await downloadChartAsPng(
+        container,
+        sanitizedName,
+        getCaption?.() ?? undefined,
+      );
     } catch {
       toast.error("Failed to download chart");
     }

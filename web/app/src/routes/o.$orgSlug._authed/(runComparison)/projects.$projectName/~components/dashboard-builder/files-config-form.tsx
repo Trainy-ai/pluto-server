@@ -5,7 +5,12 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SparklesIcon } from "lucide-react";
 import { makeRegexValue, makeGlobValue, globToRegex } from "./glob-utils";
-import { useDistinctFileLogNames, useRunFileLogNames, useSearchFileLogNames, useRegexSearchFileLogNames } from "../../~queries/file-log-names";
+import {
+  useDistinctFileLogNames,
+  useRunFileLogNames,
+  useSearchFileLogNames,
+  useRegexSearchFileLogNames,
+} from "../../~queries/file-log-names";
 import { fuzzyFilter } from "@/lib/fuzzy-search";
 import { SYNTHETIC_CONSOLE_ENTRIES } from "./console-log-constants";
 import type { FileGroupWidgetConfig } from "../../~types/dashboard-types";
@@ -13,6 +18,12 @@ import { MetricResultsList } from "./metric-results-list";
 import { RegexSearchPanel } from "./regex-search-panel";
 import { SelectedBadges } from "./selected-badges";
 import { isValidRe2Regex } from "../../~lib/validate-re2-regex";
+
+/** Frontend dropdown rendering cap. Backend can return up to 10k items
+ *  for run-scoped queries (a path widget pattern-resolution needs but
+ *  the dropdown shouldn't render). Past ~500 DOM nodes the list interaction
+ *  starts to chug; user can search to find anything past the cap. */
+const DROPDOWN_MAX_RESULTS = 500;
 
 interface FilesConfigFormProps {
   config: Partial<FileGroupWidgetConfig>;
@@ -76,15 +87,26 @@ export function FilesConfigForm({
     return map;
   }, [regexResults]);
 
+  // The Files tab used to ALSO surface `prefix/{bars}` rollups in the
+  // dropdown — that surface moved to the Metrics tab (chart-config-form)
+  // because the data source is scalar metrics from pluto.log(), not
+  // files. The auto-migration in use-dashboard-config rewrites any
+  // legacy file-group widget with categoricalPrefixes into a chart
+  // widget with bars[] on read, so saved dashboards still render. This
+  // form no longer reads or writes config.categoricalPrefixes.
   const selectedValues = config.files ?? [];
 
-  const handleToggle = (file: string) => {
+  const handleToggle = (entry: string) => {
     const current = config.files ?? [];
-    if (current.includes(file)) {
-      onChange({ ...config, files: current.filter((f) => f !== file) });
+    if (current.includes(entry)) {
+      onChange({ ...config, files: current.filter((f) => f !== entry) });
     } else {
-      onChange({ ...config, files: [...current, file] });
+      onChange({ ...config, files: [...current, entry] });
     }
+  };
+
+  const handleRemoveSelected = (entry: string) => {
+    onChange({ ...config, files: (config.files ?? []).filter((f) => f !== entry) });
   };
 
   const handleRegexSelectAll = () => {
@@ -122,15 +144,16 @@ export function FilesConfigForm({
           selectedRunIds={selectedRunIds}
           selectedValues={selectedValues}
           onToggle={handleToggle}
-          onSelectAll={(files) => {
-            const current = new Set(selectedValues);
-            for (const f of files) { current.add(f); }
+          onSelectAll={(entries) => {
+            const current = new Set(config.files ?? []);
+            for (const f of entries) current.add(f);
             onChange({ ...config, files: Array.from(current) });
           }}
           onApplyGlob={(pattern) => {
             const globVal = makeGlobValue(pattern);
-            if (!selectedValues.includes(globVal)) {
-              onChange({ ...config, files: [...selectedValues, globVal] });
+            const current = config.files ?? [];
+            if (!current.includes(globVal)) {
+              onChange({ ...config, files: [...current, globVal] });
             }
           }}
         />
@@ -151,7 +174,7 @@ export function FilesConfigForm({
 
       <SelectedBadges
         values={selectedValues}
-        onRemove={(v) => onChange({ ...config, files: selectedValues.filter((f) => f !== v) })}
+        onRemove={handleRemoveSelected}
       />
     </div>
   );
@@ -188,7 +211,16 @@ function SearchFilePanel({
 
   const { data: initialFiles, isLoading: isLoadingInitial } =
     useDistinctFileLogNames(organizationId, projectName);
-  const { data: runFiles } = useRunFileLogNames(organizationId, projectName, selectedRunIds ?? []);
+  const { data: runFiles, isLoading: isLoadingRun } = useRunFileLogNames(
+    organizationId,
+    projectName,
+    selectedRunIds ?? [],
+  );
+  // Hide the dropdown contents behind a skeleton until BOTH the project-
+  // wide and run-scoped lists arrive. Otherwise the hardcoded synthetic
+  // console entries (sys.stderr / sys.stdout) render instantly and the
+  // real file list pops in 1-2s later, causing a visible flash.
+  const isInitialDataLoading = isLoadingInitial || isLoadingRun;
   const runFileSet = useMemo(() => {
     if (!runFiles?.files) return null;
     const set = new Set(runFiles.files.map((f) => f.logName));
@@ -207,21 +239,38 @@ function SearchFilePanel({
     return map;
   }, [initialFiles, searchResults, runFiles]);
 
-  const filteredFiles = useMemo(() => {
+  const { filteredFiles, filteredFilesTruncated } = useMemo(() => {
     const syntheticNames = SYNTHETIC_CONSOLE_ENTRIES.map((e) => e.logName);
     const initial = (initialFiles?.files ?? []).map((f) => f.logName);
     const searched = (searchResults?.files ?? []).map((f) => f.logName);
-    const merged = Array.from(new Set([...syntheticNames, ...searched, ...initial]));
+    // HISTOGRAM files moved to the Distributions tab. Strip them out
+    // here so the Files dropdown only surfaces image/video/audio/console
+    // entries.
+    const hideHistograms = (n: string) => typeMap.get(n) !== "HISTOGRAM";
+    const merged = Array.from(new Set([...syntheticNames, ...searched, ...initial])).filter(hideHistograms);
     const trimmed = search.trim();
-    if (!trimmed) return merged.sort((a, b) => a.localeCompare(b));
-    if (isGlob) {
+    let result: string[];
+    if (!trimmed) {
+      result = merged.sort((a, b) => a.localeCompare(b));
+    } else if (isGlob) {
       try {
         const regex = globToRegex(trimmed);
-        return merged.filter((m) => regex.test(m)).sort((a, b) => a.localeCompare(b));
-      } catch { return []; }
+        result = merged.filter((m) => regex.test(m)).sort((a, b) => a.localeCompare(b));
+      } catch {
+        result = [];
+      }
+    } else {
+      result = fuzzyFilter(merged, search);
     }
-    return fuzzyFilter(merged, search);
-  }, [initialFiles, searchResults, search, isGlob]);
+    // Cap rendered list — same reasoning as chart-config-form. Backend
+    // can return up to 500 (project-wide) or 10k (run-scoped); past ~500
+    // DOM nodes the list chugs. Search/glob narrows past the cap.
+    const wasTruncated = result.length > DROPDOWN_MAX_RESULTS;
+    return {
+      filteredFiles: wasTruncated ? result.slice(0, DROPDOWN_MAX_RESULTS) : result,
+      filteredFilesTruncated: wasTruncated,
+    };
+  }, [initialFiles, searchResults, search, isGlob, typeMap]);
 
   const isLoading = isLoadingInitial || isSearching;
 
@@ -235,11 +284,13 @@ function SearchFilePanel({
           onChange={(e) => setSearch(e.target.value)}
         />
         <p className="text-xs text-muted-foreground">
-          Fuzzy text search. Use <code>*</code> / <code>?</code> for glob patterns (e.g., <code>distributions/*</code>).
+          Fuzzy text search. Use <code>*</code> / <code>?</code> for glob patterns (e.g., <code>images/*</code>).
         </p>
       </div>
       <MetricResultsList
         metrics={filteredFiles}
+        truncated={filteredFilesTruncated}
+        showSkeleton={isInitialDataLoading}
         selectedValues={selectedValues}
         isLoading={isLoading}
         emptyMessage="No files found."

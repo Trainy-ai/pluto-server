@@ -21,6 +21,8 @@ import { globToRegex } from "./glob-utils";
 import { fuzzyFilter } from "@/lib/fuzzy-search";
 import { SYNTHETIC_CONSOLE_ENTRIES } from "./console-log-constants";
 import { useLineSettings } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/use-line-settings";
+import { useEligiblePrefixesForRuns } from "../../~queries/file-log-names";
+import { encodeBarsEntry } from "./bars-entry-encoding";
 
 const MAX_PREVIEW = 100;
 
@@ -170,6 +172,19 @@ export function DynamicPatternPreview({
     ),
   );
 
+  // --- Source: eligible {bars} prefixes ---
+  // Match the Add Widget panel (chart-config-form.tsx:259) — pull every
+  // bars-eligible prefix unconditionally and let the pattern's regex/fuzzy
+  // filter decide which survive. The Add Widget search shows `sys/{bars}`
+  // intermixed with `sys/cpu.percentage.N` when you type `sys/*`; the
+  // dynamic-section preview now does the same so users don't have to know
+  // the literal `{bars}` substring to discover them.
+  const { data: eligiblePrefixes = [] } = useEligiblePrefixesForRuns(
+    organizationId,
+    projectName,
+    hasPattern && hasRuns ? selectedRunIds : [],
+  );
+
   const isLoading =
     hasPattern &&
     hasRuns &&
@@ -199,11 +214,16 @@ export function DynamicPatternPreview({
       // Regex: backend handles filtering, use results directly
       filteredMetricNames = regexMetrics.data?.metricNames ?? [];
       filteredFileItems = regexFiles.data?.files ?? [];
-      // Test synthetic entries against the regex client-side
+      // Test synthetic entries + bars-eligible prefixes against the regex
+      // client-side — neither pass through the server's regex query.
       try {
         const re = new RegExp(trimmed);
         const syntheticMatches = SYNTHETIC_CONSOLE_ENTRIES.filter((e) => re.test(e.logName));
         filteredFileItems = [...syntheticMatches, ...filteredFileItems];
+        const barsMatches = eligiblePrefixes
+          .map((e: { prefix: string }) => encodeBarsEntry(e.prefix))
+          .filter((n: string) => re.test(n));
+        filteredMetricNames = [...barsMatches, ...filteredMetricNames];
       } catch {
         // invalid regex — skip synthetic injection
       }
@@ -211,7 +231,10 @@ export function DynamicPatternPreview({
       // Search: merge initial + search results, then client-side filter
       const initM = initialMetrics.data?.metricNames ?? [];
       const searchM = searchMetrics.data?.metricNames ?? [];
-      const mergedMetrics = Array.from(new Set([...searchM, ...initM]));
+      const barsEncoded = eligiblePrefixes.map((e: { prefix: string }) =>
+        encodeBarsEntry(e.prefix),
+      );
+      const mergedMetrics = Array.from(new Set([...searchM, ...initM, ...barsEncoded]));
 
       const initF = initialFiles.data?.files ?? [];
       const searchF = searchFiles.data?.files ?? [];
@@ -262,6 +285,7 @@ export function DynamicPatternPreview({
     initialMetrics.data, initialFiles.data,
     searchMetrics.data, searchFiles.data,
     regexMetrics.data, regexFiles.data,
+    eligiblePrefixes,
   ]);
 
   if (!hasPattern) return null;

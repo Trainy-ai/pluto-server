@@ -13,6 +13,9 @@ interface MediaFullscreenDialogProps {
   onOpenChange: (open: boolean) => void;
   title: string;
   children: React.ReactNode;
+  /** Optional controls rendered right of the title (e.g. Export, Chart
+   *  Settings buttons), matching ChartFullscreenDialog's header. */
+  headerExtra?: React.ReactNode;
 }
 
 export function MediaFullscreenDialog({
@@ -20,6 +23,7 @@ export function MediaFullscreenDialog({
   onOpenChange,
   title,
   children,
+  headerExtra,
 }: MediaFullscreenDialogProps) {
   const contentRef = useRef<HTMLDivElement>(null);
 
@@ -41,10 +45,13 @@ export function MediaFullscreenDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-w-[95vw] h-[90vh] flex-col p-6 data-[state=open]:!animate-none">
         <DialogHeader>
-          <div className="flex items-center justify-between pr-8 min-w-0">
+          <div className="flex items-center justify-between pr-8 min-w-0 gap-2">
             <DialogTitle className="truncate" title={title}>
               {title}
             </DialogTitle>
+            {headerExtra && (
+              <div className="flex items-center gap-2">{headerExtra}</div>
+            )}
           </div>
         </DialogHeader>
         <div ref={contentRef} className="flex-1 min-h-0 overflow-auto">

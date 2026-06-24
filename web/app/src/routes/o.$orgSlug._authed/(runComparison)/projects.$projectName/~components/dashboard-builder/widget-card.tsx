@@ -27,11 +27,18 @@ import {
 } from "@/components/ui/tooltip";
 import { ChartScalePopover } from "@/components/charts/chart-scale-popover";
 import { ChartExportMenu } from "@/components/charts/chart-export-menu";
+import { extractCaptionFromDOM } from "@/components/charts/chart-export-utils";
 import { VirtualizedChart } from "@/components/core/virtualized-chart";
 import { ArrowRightIcon, FolderIcon } from "lucide-react";
-import type { Widget, ChartWidgetConfig } from "../../~types/dashboard-types";
+import type {
+  Widget,
+  ChartWidgetConfig,
+  HistogramWidgetConfig,
+  HistogramViewMode,
+} from "../../~types/dashboard-types";
 import { getWidgetTitle, hasWidgetPatterns } from "./widget-utils";
 import type { SectionLocation } from "./use-dashboard-config";
+import { HistogramModeToggle } from "../multi-group/histogram-view";
 
 /** Height of the widget card header in pixels. */
 const WIDGET_HEADER_HEIGHT = 40;
@@ -52,6 +59,7 @@ interface WidgetCardProps {
   moveTargets?: MoveTarget[];
   onFullscreen?: () => void;
   onUpdateScale?: (axis: "x" | "y", value: boolean) => void;
+  onUpdateHistogramMode?: (mode: HistogramViewMode) => void;
   renderWidget: () => ReactNode;
 }
 
@@ -65,10 +73,13 @@ export function WidgetCard({
   moveTargets,
   onFullscreen,
   onUpdateScale,
+  onUpdateHistogramMode,
   renderWidget,
 }: WidgetCardProps) {
   const contentRef = useRef<HTMLDivElement | null>(null);
   const chartConfig = widget.type === "chart" ? (widget.config as ChartWidgetConfig) : null;
+  const histogramConfig =
+    widget.type === "histogram" ? (widget.config as HistogramWidgetConfig) : null;
 
   return (
     <div
@@ -91,7 +102,10 @@ export function WidgetCard({
           )}
           <Tooltip>
             <TooltipTrigger asChild>
-              <span className="min-w-0 truncate text-sm font-medium">
+              <span
+                className="min-w-0 truncate text-sm font-medium"
+                data-testid="widget-card-title"
+              >
                 {widget.config.title || getWidgetTitle(widget)}
               </span>
             </TooltipTrigger>
@@ -102,13 +116,30 @@ export function WidgetCard({
         </div>
 
         <div className="flex shrink-0 items-center gap-1">
-          {/* Chart-specific actions (visible on hover) */}
+          {/* Histogram-specific actions */}
+          {widget.type === "histogram" && histogramConfig && (
+            <div className="widget-drag-cancel">
+              <HistogramModeToggle
+                mode={histogramConfig.viewMode ?? "step"}
+                onChange={(mode) => onUpdateHistogramMode?.(mode)}
+              />
+            </div>
+          )}
+
+          {/* Chart-specific actions — pure line chart now (bars/histograms
+              live in distributions widgets). Camera, Log-scale, and
+              Fullscreen buttons all show on hover; per-distribution-entry
+              panels render their own per-panel chrome inside the
+              distributions widget. */}
           {widget.type === "chart" && (
             <>
               <ChartExportMenu
                 getContainer={() => contentRef.current}
                 fileName={widget.config.title || getWidgetTitle(widget)}
                 className="widget-drag-cancel size-7 opacity-0 group-hover:opacity-100"
+                getCaption={() =>
+                  contentRef.current ? extractCaptionFromDOM(contentRef.current) : null
+                }
               />
               <ChartScalePopover
                 logXAxis={chartConfig?.xAxisScale === "log"}

@@ -1,11 +1,27 @@
 // Dashboard view configuration types
 // These types mirror the server-side types in web/server/lib/dashboard-types.ts
 
-export type WidgetType = "chart" | "scatter" | "single-value" | "histogram" | "logs" | "file-series" | "file-group";
+export type WidgetType =
+  | "chart"
+  | "scatter"
+  | "single-value"
+  | "histogram"
+  | "logs"
+  | "file-series"
+  | "file-group"
+  // `distributions` hosts a list of mixed entries: categorical {bars}
+  // rollups and numeric histograms. Replaces the older paths where bars
+  // lived inside chart widgets and histograms lived inside file-group
+  // widgets. Legacy "histogram" widgets and legacy file-group widgets
+  // with categoricalPrefixes / HISTOGRAM file entries are migrated into
+  // distributions on read by migrateDashboardConfig.
+  | "distributions";
 
 export type AggregationType = "LAST" | "AVG" | "MIN" | "MAX" | "VARIANCE";
 
 export type ScaleType = "linear" | "log";
+
+export type HistogramViewMode = "step" | "ridgeline" | "heatmap";
 
 export type SmoothingAlgorithm = "none" | "exponential" | "moving-average" | "gaussian";
 
@@ -19,7 +35,29 @@ export interface BaseWidgetConfig {
   title?: string;
 }
 
-// Chart widget config (line graph)
+// One bar-rollup entry inside a chart widget. A widget can hold
+// zero, one, or many; combined with `metrics` to mix line + bar
+// views in a single stacked-scrollable widget.
+export interface BarsConfig {
+  prefix: string;
+  viewMode: "step" | "ridgeline" | "heatmap";
+  depthAxis: "step" | "run";
+  binRange?: { start: number; end: number };
+  // W&B-style "Ignore outliers" toggle. When true, the per-step maxFreq
+  // values are Tukey-fenced so one extreme step doesn't dominate the
+  // shared Y scale. Default true on the read side.
+  ignoreOutliers?: boolean;
+  // Transpose: when true (and viewMode is Ridgeline/Heatmap with
+  // depthAxis=step), steps run along the X axis and bin labels stack
+  // along Y. Default false. Step mode + depthAxis="run" ignore it.
+  stepsOnX?: boolean;
+}
+
+// Chart widget config — pure line chart. Categorical {bars} rollups
+// moved out into the new distributions widget; chart no longer carries
+// a `bars` field. Legacy chart configs that still have one round-trip
+// through the union (TypeScript marks it `unknown`) and the read-time
+// migration in use-dashboard-config splits them.
 export interface ChartWidgetConfig extends BaseWidgetConfig {
   metrics: string[];
   // X-axis mode:
@@ -57,13 +95,70 @@ export interface SingleValueWidgetConfig extends BaseWidgetConfig {
 }
 
 // Histogram widget config
+//
+// `viewMode` is populated by the server-side Zod default (`"step"` for legacy
+// widgets) before reaching the frontend, but we declare it optional so that
+// synthetic in-memory configs (tests, ad-hoc construction) compile without
+// having to spell it out. Consumers should fall back to `"step"` when reading.
 export interface HistogramWidgetConfig extends BaseWidgetConfig {
   metric: string;
+  viewMode?: HistogramViewMode;
+  // W&B-style "Ignore outliers" toggle. When true, X domain + globalMaxFreq
+  // are clamped to 5th/95th percentile fences so outlier steps don't
+  // squish the readable bulk. Default true on the read side.
+  ignoreOutliers?: boolean;
+  // Transpose: when true (Ridgeline/Heatmap modes), steps run along the
+  // X axis and bin values stack along Y. Default false.
+  stepsOnX?: boolean;
 }
 
-// File group widget config (multiple files: histograms, images, videos, audio)
+// Histogram depth axis (Ridgeline / Heatmap only — Step mode ignores it):
+//   "step" → ridges/rows = steps, panels side-by-side per run
+//   "run"  → ridges/rows = runs, slider scrubs the current step
+export type HistogramDepthAxis = "step" | "run";
+
+// File group widget config — images, videos, audio. Numeric histogram
+// file entries and {bars} prefix entries moved into distributions
+// widgets. Legacy file-group configs that still carry the histogram /
+// {bars} metadata round-trip through the union (TypeScript marks the
+// extra fields `unknown`) and migrateDashboardConfig lifts them out.
 export interface FileGroupWidgetConfig extends BaseWidgetConfig {
   files: string[];
+}
+
+// ─── Distributions widget ───────────────────────────────────────────
+//
+// A distributions widget holds a list of mixed entries:
+//   • {bars} rollups (categorical, sourced from a scalar prefix)
+//   • Numeric histograms (sourced from a `mlop_data` histogram metric)
+// Entries are tagged with `kind` so the renderer dispatches the right
+// view component per entry. Replaces the older paths where bars lived
+// inside chart widgets and histograms lived inside file-group widgets.
+
+export interface DistributionsBarsEntry {
+  kind: "bars";
+  prefix: string;
+  viewMode: HistogramViewMode;
+  depthAxis: HistogramDepthAxis;
+  binRange?: { start: number; end: number };
+  ignoreOutliers?: boolean;
+  stepsOnX?: boolean;
+}
+
+export interface DistributionsHistogramEntry {
+  kind: "histogram";
+  metric: string;
+  viewMode: HistogramViewMode;
+  ignoreOutliers?: boolean;
+  stepsOnX?: boolean;
+}
+
+export type DistributionsEntry =
+  | DistributionsBarsEntry
+  | DistributionsHistogramEntry;
+
+export interface DistributionsWidgetConfig extends BaseWidgetConfig {
+  entries: DistributionsEntry[];
 }
 
 // Logs widget config
@@ -86,7 +181,8 @@ export type WidgetConfig =
   | HistogramWidgetConfig
   | FileGroupWidgetConfig
   | LogsWidgetConfig
-  | FileSeriesWidgetConfig;
+  | FileSeriesWidgetConfig
+  | DistributionsWidgetConfig;
 
 // Widget position and size in the grid
 export interface WidgetLayout {
@@ -131,6 +227,10 @@ export interface Section {
   // buckets; metrics with the same captured tuple combine into one widget.
   // Zero captures = match-anything filter → one big combined widget.
   dynamicGroupPrefixRegex?: string;
+  // Per-metric Step/Ridgeline/Heatmap viewMode override for dynamically-
+  // generated widgets (applies to both numeric histogram entries and
+  // `{bars}` prefix entries). Field name kept for on-disk backwards-compat.
+  histogramViewModes?: Record<string, HistogramViewMode>;
   children?: Section[];
 }
 

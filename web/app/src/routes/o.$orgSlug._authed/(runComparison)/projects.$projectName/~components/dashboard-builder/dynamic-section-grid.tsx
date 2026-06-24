@@ -4,6 +4,9 @@ import { Button } from "@/components/ui/button";
 import { VirtualizedChart } from "@/components/core/virtualized-chart";
 import { ChartScalePopover } from "@/components/charts/chart-scale-popover";
 import { ChartExportMenu } from "@/components/charts/chart-export-menu";
+import { extractCaptionFromDOM } from "@/components/charts/chart-export-utils";
+import { BarsSettingsPopover } from "../multi-group/categorical-view";
+import { getWidgetTitle } from "./widget-utils";
 import { useDynamicSectionWidgets } from "./use-dynamic-section";
 import { WidgetRenderer } from "./widget-renderer";
 import { ChartFullscreenDialog } from "@/components/charts/chart-fullscreen-dialog";
@@ -14,7 +17,12 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useHiddenRunIds } from "@/hooks/use-hidden-run-ids";
-import type { Widget, ChartWidgetConfig } from "../../~types/dashboard-types";
+import type {
+  Widget,
+  ChartWidgetConfig,
+  FileGroupWidgetConfig,
+  HistogramViewMode,
+} from "../../~types/dashboard-types";
 import type { GroupedMetrics } from "@/lib/grouping/types";
 import type { SelectedRunWithColor } from "../../~hooks/use-selected-runs";
 import { searchUtils, type SearchState } from "../../~lib/search-utils";
@@ -37,6 +45,21 @@ interface DynamicSectionGridProps {
   searchState?: SearchState;
   onWidgetCountChange?: (count: number) => void;
   settingsRunId?: string;
+  /**
+   * Per-metric Step/Ridgeline/Heatmap viewMode overrides saved on this
+   * section. Applies to both numeric histogram entries and `{bars}`
+   * prefix entries (both share the same view-mode set). Read here and
+   * injected into each dynamic file-group widget's effective config so
+   * the view renders in the saved mode. Field name kept for on-disk
+   * backwards-compat.
+   */
+  histogramViewModes?: Record<string, HistogramViewMode>;
+  /** Persists user view-mode toggles on dynamic widgets back into the section's map. */
+  onUpdateSectionHistogramViewMode?: (
+    sectionId: string,
+    metric: string,
+    mode: HistogramViewMode,
+  ) => void;
 }
 
 interface WidgetBounds {
@@ -60,6 +83,8 @@ export function DynamicSectionGrid({
   searchState,
   onWidgetCountChange,
   settingsRunId,
+  histogramViewModes,
+  onUpdateSectionHistogramViewMode,
 }: DynamicSectionGridProps) {
   const hiddenRunIds = useHiddenRunIds();
 
@@ -101,6 +126,13 @@ export function DynamicSectionGrid({
   const { setFullscreen } = useFullscreenContext();
   useEffect(() => { setFullscreen(!!fullscreenWidget); }, [fullscreenWidget, setFullscreen]);
   const [widgetBounds, setWidgetBounds] = useState<Record<string, WidgetBounds>>({});
+  // Per-widget log-scale + zoom overrides live in widgetBounds above.
+  // The bars-on-chart per-widget controls (viewMode/depthAxis/binRange/
+  // ignoreOutliers/stepsOnX) used to live here too — they're gone now
+  // that bars moved out into the distributions widget. Distributions
+  // widgets emitted dynamically render with their initial config and
+  // don't persist per-widget customization (matching how line-chart
+  // dynamic widgets already behaved).
   const widgetContentRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   useEffect(() => {
@@ -147,14 +179,19 @@ export function DynamicSectionGrid({
           const isChart = widget.type === "chart";
           const title = widget.config.title || getWidgetTitle(widget);
 
-          // Apply local bounds to widget config for rendering
+          // Apply local bounds (log-scale toggles) to chart widgets so the
+          // renderer picks them up without prop threading.
           const effectiveWidget: Widget = isChart
             ? {
                 ...widget,
                 config: {
                   ...widget.config,
-                  xAxisScale: bounds.logXAxis ? "log" : (widget.config as ChartWidgetConfig).xAxisScale,
-                  yAxisScale: bounds.logYAxis ? "log" : (widget.config as ChartWidgetConfig).yAxisScale,
+                  xAxisScale: bounds.logXAxis
+                    ? "log"
+                    : (widget.config as ChartWidgetConfig).xAxisScale,
+                  yAxisScale: bounds.logYAxis
+                    ? "log"
+                    : (widget.config as ChartWidgetConfig).yAxisScale,
                 } as ChartWidgetConfig,
               }
             : widget;
@@ -200,6 +237,16 @@ export function DynamicSectionGrid({
                       getContainer={() => widgetContentRefs.current[widget.id] ?? null}
                       fileName={title}
                       className="size-7 opacity-0 group-hover:opacity-100"
+                      getCaption={() => {
+                        // Bars + histogram widget bodies stamp
+                        // `data-export-step` + `data-export-runs` on a
+                        // descendant. Reading via extractCaptionFromDOM
+                        // ensures the PNG download includes the same
+                        // caption strip the static-section widgets and
+                        // fullscreen exports render.
+                        const el = widgetContentRefs.current[widget.id];
+                        return el ? extractCaptionFromDOM(el) : null;
+                      }}
                     />
                     <ChartScalePopover
                       logXAxis={bounds.logXAxis}
@@ -254,38 +301,54 @@ export function DynamicSectionGrid({
         })}
       </div>
 
-      {fullscreenWidget && fullscreenWidget.type === "chart" && (
-        <ChartFullscreenDialog
-          open={true}
-          onOpenChange={(open) => { if (!open) setFullscreenWidget(null); }}
-          title={fullscreenWidget.config.title || (fullscreenWidget.config as ChartWidgetConfig).metrics[0] || "Chart"}
-          logXAxis={(fullscreenWidget.config as ChartWidgetConfig).xAxisScale === "log"}
-          logYAxis={(fullscreenWidget.config as ChartWidgetConfig).yAxisScale === "log"}
-          onLogScaleChange={(axis, value) => {
-            updateScale(fullscreenWidget.id, axis, value);
-            const scaleValue = value ? "log" : "linear";
-            setFullscreenWidget((prev) =>
-              prev
-                ? { ...prev, config: { ...prev.config, ...(axis === "x" ? { xAxisScale: scaleValue } : { yAxisScale: scaleValue }) } as ChartWidgetConfig } as Widget
-                : null
-            );
-          }}
-        >
-          <WidgetRenderer
-            widget={fullscreenWidget}
-            groupedMetrics={groupedMetrics}
-            selectedRuns={selectedRuns}
-            organizationId={organizationId}
-            projectName={projectName}
-            settingsRunId={settingsRunId}
-            yZoomRange={widgetBounds[fullscreenWidget.id]?.yZoomRange ?? null}
-            onYZoomRangeChange={(range) => setWidgetBounds((prev) => ({
-              ...prev,
-              [fullscreenWidget.id]: { ...prev[fullscreenWidget.id], yZoomRange: range },
-            }))}
-          />
-        </ChartFullscreenDialog>
-      )}
+      {fullscreenWidget && fullscreenWidget.type === "chart" && (() => {
+        const fsConfig = fullscreenWidget.config as ChartWidgetConfig;
+        return (
+          <ChartFullscreenDialog
+            open={true}
+            onOpenChange={(open) => { if (!open) setFullscreenWidget(null); }}
+            title={fullscreenWidget.config.title || getWidgetTitle(fullscreenWidget)}
+            logXAxis={fsConfig.xAxisScale === "log"}
+            logYAxis={fsConfig.yAxisScale === "log"}
+            onLogScaleChange={(axis, value) => {
+              updateScale(fullscreenWidget.id, axis, value);
+              const scaleValue = value ? "log" : "linear";
+              setFullscreenWidget((prev) =>
+                prev
+                  ? ({
+                      ...prev,
+                      config: {
+                        ...prev.config,
+                        ...(axis === "x"
+                          ? { xAxisScale: scaleValue }
+                          : { yAxisScale: scaleValue }),
+                      } as ChartWidgetConfig,
+                    } as Widget)
+                  : null,
+              );
+            }}
+          >
+            <WidgetRenderer
+              widget={fullscreenWidget}
+              groupedMetrics={groupedMetrics}
+              selectedRuns={selectedRuns}
+              organizationId={organizationId}
+              projectName={projectName}
+              settingsRunId={settingsRunId}
+              yZoomRange={widgetBounds[fullscreenWidget.id]?.yZoomRange ?? null}
+              onYZoomRangeChange={(range) =>
+                setWidgetBounds((prev) => ({
+                  ...prev,
+                  [fullscreenWidget.id]: {
+                    ...prev[fullscreenWidget.id],
+                    yZoomRange: range,
+                  },
+                }))
+              }
+            />
+          </ChartFullscreenDialog>
+        );
+      })()}
     </>
   );
 
@@ -300,19 +363,3 @@ export function DynamicSectionGrid({
   return gridContent;
 }
 
-function getWidgetTitle(widget: Widget): string {
-  if (widget.type === "chart") {
-    const config = widget.config as ChartWidgetConfig;
-    if (config.metrics?.length === 1) return config.metrics[0];
-    if (config.metrics && config.metrics.length <= 3) return config.metrics.join(", ");
-    if (config.metrics && config.metrics.length > 3) return `${config.metrics.length} metrics`;
-    return "Chart";
-  }
-  if (widget.type === "file-group") {
-    const config = widget.config as { files?: string[] };
-    if (config.files?.length === 1) return config.files[0];
-    if (config.files && config.files.length > 1) return `${config.files.length} files`;
-    return "Files";
-  }
-  return "Widget";
-}

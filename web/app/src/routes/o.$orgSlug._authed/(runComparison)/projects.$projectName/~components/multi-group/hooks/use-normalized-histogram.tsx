@@ -11,7 +11,7 @@ export interface NormalizedHistogramData {
     globalMin: number;
     globalMax: number;
   };
-  normalizedData: any[]; // refine type as needed based on RunHistogram and HistogramStep
+  normalizedData: any[];
 }
 
 export function useNormalizedHistogramData(
@@ -46,104 +46,46 @@ export function useNormalizedHistogramData(
       };
     }
 
+    // W&B-style: pass each step's histogram through UNCHANGED. We don't
+    // re-bin to a shared uniform grid — every step keeps its native
+    // bin edges (bins.min, bins.max, bins.num, freq[]) and its
+    // logged maxFreq. The canvases (drawSingleHistogram,
+    // drawRidgeline, drawHeatmap) all map per-step bin positions
+    // onto a shared X axis at draw time, so the visual stays comparable
+    // across rows / runs without rewriting the underlying data.
+    //
+    // The only cross-run aggregates we still compute are:
+    //   xAxisRange — union of all bins.min/max plus a 10% buffer, used
+    //     as the shared X domain in Step mode and as a fallback in
+    //     Ridgeline/Heatmap when no explicit domain is supplied.
+    //   globalMaxFreq — max of any bin's freq across every run/step,
+    //     used to normalize ridge / cell heights to a comparable scale.
     const runHistograms = runs.map((run, index) => ({
       runId: run.runId,
       runName: run.runName,
       color: run.color,
-      data: histogramQueries[index].data || [],
+      data: histogramQueries[index].data?.rows ?? [],
     }));
 
     let globalMin = Infinity;
     let globalMax = -Infinity;
-    let maxBinCount = 0;
-
-    // First pass: find global min/max and max bin count
-    runHistograms.forEach((run) => {
-      run.data.forEach((step) => {
-        globalMin = Math.min(globalMin, step.histogramData.bins.min);
-        globalMax = Math.max(globalMax, step.histogramData.bins.max);
-        maxBinCount = Math.max(maxBinCount, step.histogramData.bins.num);
-      });
-    });
-
-    const globalBinWidth = (globalMax - globalMin) / maxBinCount;
-
-    const normalized = runHistograms.map((run) => {
-      // Calculate the maximum frequency for this run across all steps iteratively
-      let runMaxFreq = 0;
-      for (const step of run.data) {
-        for (const freq of step.histogramData.freq) {
-          if (freq > runMaxFreq) {
-            runMaxFreq = freq;
-          }
-        }
-      }
-
-      return {
-        ...run,
-        data: run.data.map((stepData) => {
-          const { freq, bins } = stepData.histogramData;
-          const oldBinWidth = (bins.max - bins.min) / bins.num;
-          const newFreq = new Array(maxBinCount).fill(0);
-
-          freq.forEach((frequency, i) => {
-            if (frequency <= 0) return;
-            const oldBinStart = bins.min + i * oldBinWidth;
-            const oldBinEnd = oldBinStart + oldBinWidth;
-            const startBinFloat = (oldBinStart - globalMin) / globalBinWidth;
-            const endBinFloat = (oldBinEnd - globalMin) / globalBinWidth;
-            const startBin = Math.max(0, Math.floor(startBinFloat));
-            const endBin = Math.min(maxBinCount - 1, Math.ceil(endBinFloat));
-
-            if (startBin === endBin) {
-              newFreq[startBin] += frequency;
-            } else {
-              for (let newBin = startBin; newBin <= endBin; newBin++) {
-                const binStart = globalMin + newBin * globalBinWidth;
-                const binEnd = binStart + globalBinWidth;
-                const overlapStart = Math.max(oldBinStart, binStart);
-                const overlapEnd = Math.min(oldBinEnd, binEnd);
-                const overlapWidth = Math.max(0, overlapEnd - overlapStart);
-                if (overlapWidth > 0) {
-                  const proportion = overlapWidth / oldBinWidth;
-                  newFreq[newBin] += frequency * proportion;
-                }
-              }
-            }
-          });
-
-          const cleanedFreq = newFreq.map((f) =>
-            Math.max(0, Math.round(f * 1e6) / 1e6),
-          );
-
-          return {
-            ...stepData,
-            histogramData: {
-              freq: cleanedFreq,
-              bins: {
-                min: globalMin,
-                max: globalMax,
-                num: maxBinCount,
-              },
-              maxFreq: runMaxFreq, // Use run-specific max frequency
-            },
-          };
-        }),
-      };
-    });
-
-    // Calculate global max frequency iteratively
     let globalMaxFreq = 0;
-    for (const run of normalized) {
+
+    for (const run of runHistograms) {
       for (const step of run.data) {
-        for (const freq of step.histogramData.freq) {
-          if (freq > globalMaxFreq) {
-            globalMaxFreq = freq;
-          }
+        const { bins, freq } = step.histogramData;
+        if (bins.min < globalMin) globalMin = bins.min;
+        if (bins.max > globalMax) globalMax = bins.max;
+        for (const f of freq) {
+          if (f > globalMaxFreq) globalMaxFreq = f;
         }
       }
     }
 
+    if (!Number.isFinite(globalMin) || !Number.isFinite(globalMax)) {
+      globalMin = 0;
+      globalMax = 1;
+    }
     const rangeBuffer = (globalMax - globalMin) * 0.1;
 
     return {
@@ -154,7 +96,7 @@ export function useNormalizedHistogramData(
         globalMin,
         globalMax,
       },
-      normalizedData: normalized,
+      normalizedData: runHistograms,
     };
   }, [runs, histogramQueries, isLoading, hasError]);
 
