@@ -3648,6 +3648,85 @@ async function setupTestData(): Promise<TestData> {
   });
   console.log('   ✓ Created Image Pinning Test dashboard view');
 
+  // 11b-bis-2. Create "Media Pinning Test" dashboard view for the
+  // video-audio-pinning E2E tests. Mirrors "Image Pinning Test": a static
+  // section with TWO widgets per media type, each a DISTINCT logName
+  // (audio/tone_sample + audio/speech_sample, video/animation +
+  // video/reconstruction), plus a dynamic section whose regex matches both
+  // logNames of each type. Distinct logNames are REQUIRED: per-widget pin
+  // scoping (excludedWidgets / pinnedRunsByWidget) is keyed by logName, so
+  // "unpin this widget only" can only keep the pin on a sibling widget when
+  // that sibling renders a different logName. (The general "Media Widgets
+  // Test" dashboard intentionally reuses the same logName across its two
+  // audio/video widgets, which makes per-widget unpin ambiguous there.)
+  console.log('\n1️⃣1️⃣b-bis-2 Creating Media Pinning Test dashboard view...');
+
+  const mediaPinningDashboardConfig = {
+    version: 1,
+    sections: [
+      {
+        id: 'media-pinning-dynamic-section',
+        name: 'Media Pinning Dynamic',
+        collapsed: false,
+        widgets: [],
+        dynamicPattern: '^(audio/(tone_sample|speech_sample)|video/(animation|reconstruction))$',
+        dynamicPatternMode: 'regex',
+      },
+      {
+        id: 'media-pinning-static-section',
+        name: 'Media Pinning Static',
+        collapsed: false,
+        widgets: [
+          {
+            id: 'media-pinning-static-audio-1',
+            type: 'file-group',
+            config: { files: ['audio/tone_sample'] },
+            layout: { x: 0, y: 0, w: 6, h: 5 },
+          },
+          {
+            id: 'media-pinning-static-audio-2',
+            type: 'file-group',
+            config: { files: ['audio/speech_sample'] },
+            layout: { x: 6, y: 0, w: 6, h: 5 },
+          },
+          {
+            id: 'media-pinning-static-video-1',
+            type: 'file-group',
+            config: { files: ['video/animation'] },
+            layout: { x: 0, y: 5, w: 6, h: 5 },
+          },
+          {
+            id: 'media-pinning-static-video-2',
+            type: 'file-group',
+            config: { files: ['video/reconstruction'] },
+            layout: { x: 6, y: 5, w: 6, h: 5 },
+          },
+        ],
+      },
+    ],
+    settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
+  };
+
+  await prisma.dashboardView.upsert({
+    where: {
+      organizationId_projectId_name: {
+        organizationId: org.id,
+        projectId: project.id,
+        name: 'Media Pinning Test',
+      },
+    },
+    update: { config: mediaPinningDashboardConfig },
+    create: {
+      name: 'Media Pinning Test',
+      organizationId: org.id,
+      projectId: project.id,
+      createdById: user.id,
+      isDefault: false,
+      config: mediaPinningDashboardConfig,
+    },
+  });
+  console.log('   ✓ Created Media Pinning Test dashboard view');
+
   // 11b-ter. Create "Multi-Index Media Test" dashboard view for the
   // multi-index-nav E2E tests. Used together with multi-index-run-A/B/C.
   // Static section: one widget per logName so each test can target a
