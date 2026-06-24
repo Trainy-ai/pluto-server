@@ -898,7 +898,7 @@ async function setupTestData(): Promise<TestData> {
   // those specs create stay status=RUNNING for a brief moment and would
   // otherwise show up at the top of smoke-test-project's runs table,
   // tripping pagination assertions.
-  const projectNames = ['smoke-test-project', 'test-project-2', 'test-project-3', 'dedup-e2e-project'];
+  const projectNames = ['smoke-test-project', 'test-project-2', 'test-project-3', 'dedup-e2e-project', 'bars-test-project'];
   const projects = [];
 
   for (const projectName of projectNames) {
@@ -3728,6 +3728,357 @@ async function setupTestData(): Promise<TestData> {
     },
   });
   console.log('   ✓ Created Multi-Index Media Test dashboard view');
+
+  // 11d. Seed bars-test-project for {bars} categorical-histogram E2E tests
+  // Lives in its own project so the existing smoke-test-project isn't polluted
+  // with the 3.8K metric rows / 36-sibling prefix family the bars tests need.
+  console.log('\n1️⃣1️⃣d Seeding bars-test-project (metrics + dashboard)...');
+
+  const barsProject = projects[4]; // 'bars-test-project'
+  const BARS_RUN_NAMES = ['bars-run-A', 'bars-run-B', 'bars-run-C'];
+  const CATEGORICAL_SUFFIXES = ['classA', 'classB', 'classC', 'classD', 'classE'];
+  const CATEGORICAL_BIG_COUNT = 36; // >30 forces the X-axis label threshold (test 4)
+  const BARS_STEPS = Array.from({ length: 30 }, (_, i) => i); // 0..29
+  const OUTLIER_STEP = 20;
+  const OUTLIER_RUN_NAME = 'bars-run-C';
+
+  const barsRuns: { id: bigint; name: string; createdAt: Date }[] = [];
+  for (const runName of BARS_RUN_NAMES) {
+    let run = await prisma.runs.findFirst({
+      where: { projectId: barsProject.id, organizationId: org.id, name: runName },
+      select: { id: true, name: true, createdAt: true },
+    });
+    if (!run) {
+      // Backdate so these runs aren't auto-selected by other tests that pick
+      // newest runs.
+      const createdAt = new Date(Date.now() - 100 * 24 * 60 * 60 * 1000);
+      run = await prisma.runs.create({
+        data: {
+          name: runName,
+          organizationId: org.id,
+          projectId: barsProject.id,
+          createdById: user.id,
+          creatorApiKeyId: apiKey.id,
+          status: 'COMPLETED',
+          config: { epochs: 30, lr: 0.001 },
+          systemMetadata: { hostname: 'bars-test-host', python: '3.11' },
+          createdAt,
+          updatedAt: createdAt,
+        },
+        select: { id: true, name: true, createdAt: true },
+      });
+      console.log(`   ✓ Created bars-test run ${runName} (ID: ${run.id})`);
+    }
+    barsRuns.push(run);
+  }
+
+  // Register RunLogs for every metric these tests reference
+  const barsLogData: { runId: bigint; logName: string; logGroup: string; logType: 'METRIC' | 'HISTOGRAM' }[] = [];
+  for (const run of barsRuns) {
+    for (const suffix of CATEGORICAL_SUFFIXES) {
+      barsLogData.push({ runId: run.id, logName: `categorical/${suffix}`, logGroup: 'categorical', logType: 'METRIC' });
+    }
+    for (let i = 1; i <= CATEGORICAL_BIG_COUNT; i++) {
+      const suffix = `c${String(i).padStart(2, '0')}`;
+      barsLogData.push({ runId: run.id, logName: `categorical_big/${suffix}`, logGroup: 'categorical_big', logType: 'METRIC' });
+    }
+    barsLogData.push({ runId: run.id, logName: 'distributions/weights', logGroup: 'distributions', logType: 'HISTOGRAM' });
+    barsLogData.push({ runId: run.id, logName: 'train/loss', logGroup: 'train', logType: 'METRIC' });
+  }
+  await prisma.runLogs.createMany({ data: barsLogData, skipDuplicates: true });
+  console.log(`   ✓ Registered ${barsLogData.length} bars-test runLog entries`);
+
+  // ClickHouse data — scalar metrics + numeric histogram bins
+  const barsClickhouseUrl = process.env.CLICKHOUSE_URL;
+  if (barsClickhouseUrl) {
+    const barsCh = createClient({
+      url: barsClickhouseUrl,
+      username: process.env.CLICKHOUSE_USER || 'default',
+      password: process.env.CLICKHOUSE_PASSWORD || '',
+    });
+
+    const barsMetricRows: Record<string, unknown>[] = [];
+    const barsHistRows: Record<string, unknown>[] = [];
+
+    for (const run of barsRuns) {
+      const baseTime = run.createdAt.getTime();
+      const isOutlierRun = run.name === OUTLIER_RUN_NAME;
+      const runIdx = BARS_RUN_NAMES.indexOf(run.name);
+
+      for (const step of BARS_STEPS) {
+        const isOutlierStep = isOutlierRun && step === OUTLIER_STEP;
+        const tsStr = new Date(baseTime + step * 1000).toISOString().replace('T', ' ').replace('Z', '');
+
+        // categorical/* — 5 siblings, the workhorse bars widget data
+        for (let i = 0; i < CATEGORICAL_SUFFIXES.length; i++) {
+          const suffix = CATEGORICAL_SUFFIXES[i];
+          const base = 10 + 5 * Math.sin(step / 5 + i + runIdx * 0.7) + 2 * runIdx;
+          const value = isOutlierStep ? base * 1000 : base;
+          barsMetricRows.push({
+            tenantId: org.id,
+            projectName: barsProject.name,
+            runId: Number(run.id),
+            logGroup: 'categorical',
+            logName: `categorical/${suffix}`,
+            time: tsStr,
+            step,
+            value,
+          });
+        }
+
+        // categorical_big/* — 36 siblings, drives the >30-label X-axis path
+        for (let i = 1; i <= CATEGORICAL_BIG_COUNT; i++) {
+          const suffix = `c${String(i).padStart(2, '0')}`;
+          const base = 5 + 3 * Math.cos(step / 4 + i * 0.3);
+          const value = isOutlierStep ? base * 500 : base;
+          barsMetricRows.push({
+            tenantId: org.id,
+            projectName: barsProject.name,
+            runId: Number(run.id),
+            logGroup: 'categorical_big',
+            logName: `categorical_big/${suffix}`,
+            time: tsStr,
+            step,
+            value,
+          });
+        }
+
+        // train/loss line metric (used by the mixed line+bars widget)
+        barsMetricRows.push({
+          tenantId: org.id,
+          projectName: barsProject.name,
+          runId: Number(run.id),
+          logGroup: 'train',
+          logName: 'train/loss',
+          time: tsStr,
+          step,
+          value: 1 - step / 30 + Math.sin(step + runIdx) * 0.05,
+        });
+
+        // distributions/weights numeric histogram — for tests 6 + 10
+        const std = 0.5 * Math.exp(-step / 30) + 0.05;
+        const numBins = 30;
+        // Outlier step blows out min/max so the IQR fence is visually obvious
+        const min = isOutlierStep ? -60 : -3 * std;
+        const max = isOutlierStep ? 60 : 3 * std;
+        const freq: number[] = [];
+        for (let b = 0; b < numBins; b++) {
+          const center = min + (max - min) * (b + 0.5) / numBins;
+          const density = Math.exp(-0.5 * (center / std) ** 2) / (std * Math.sqrt(2 * Math.PI));
+          freq.push(Math.round(density * 1000 * (1 + 0.1 * Math.sin(runIdx + b))));
+        }
+        const maxFreq = Math.max(...freq);
+        const histData = JSON.stringify({
+          freq,
+          bins: { min: parseFloat(min.toFixed(6)), max: parseFloat(max.toFixed(6)), num: numBins },
+          shape: 'uniform',
+          type: 'Histogram',
+          maxFreq,
+        });
+        barsHistRows.push({
+          tenantId: org.id,
+          projectName: barsProject.name,
+          runId: Number(run.id),
+          logGroup: 'distributions',
+          logName: 'distributions/weights',
+          dataType: 'histogram',
+          time: tsStr,
+          step,
+          data: histData,
+        });
+      }
+    }
+
+    if (barsMetricRows.length > 0) {
+      await barsCh.insert({ table: 'mlop_metrics', values: barsMetricRows, format: 'JSONEachRow' });
+      console.log(`   ✓ Inserted ${barsMetricRows.length} bars-test metric rows`);
+    }
+    if (barsHistRows.length > 0) {
+      await barsCh.insert({ table: 'mlop_data', values: barsHistRows, format: 'JSONEachRow' });
+      console.log(`   ✓ Inserted ${barsHistRows.length} bars-test histogram rows`);
+    }
+    await barsCh.close();
+  } else {
+    console.log('   ⚠ CLICKHOUSE_URL not set, skipping bars-test ClickHouse seeding');
+  }
+
+  // Distributions Test dashboard (the seeded name "Bars Variants Test" is
+  // preserved to avoid renaming churn in lookups). One static section with
+  // 6 widgets covering every distributions variant the E2E specs reach for,
+  // plus a dynamic section that emits distributions via the `*{bars}*`
+  // glob — exercises the dynamic-section bars-surfacing path.
+  const barsDashboardConfig = {
+    version: 1,
+    sections: [
+      {
+        id: 'bars-dynamic-section',
+        name: 'Bars Variants (Dynamic)',
+        collapsed: false,
+        widgets: [],
+        // Glob matches the encoded `categorical/{bars}` + `categorical_big/{bars}`
+        // entries that use-dynamic-section pushes into mergedMetrics when
+        // patternTargetsBars is true.
+        dynamicPattern: '*{bars}*',
+        dynamicPatternMode: 'search',
+      },
+      {
+        id: 'bars-static-section',
+        name: 'Bars Variants (Static)',
+        collapsed: false,
+        widgets: [
+          {
+            // W1: single bars distributions over the 5-sibling
+            // categorical/ prefix.
+            id: 'bars-w1-single-categorical',
+            type: 'distributions',
+            config: {
+              entries: [
+                {
+                  kind: 'bars',
+                  prefix: 'categorical/',
+                  viewMode: 'step',
+                  depthAxis: 'step',
+                  ignoreOutliers: true,
+                  stepsOnX: false,
+                },
+              ],
+            },
+            layout: { x: 0, y: 0, w: 6, h: 5 },
+          },
+          {
+            // W2: single bars distributions over the 36-sibling
+            // categorical_big/ prefix — forces the >30 X-axis-label threshold.
+            id: 'bars-w2-single-big',
+            type: 'distributions',
+            config: {
+              entries: [
+                {
+                  kind: 'bars',
+                  prefix: 'categorical_big/',
+                  viewMode: 'step',
+                  depthAxis: 'step',
+                  ignoreOutliers: true,
+                  stepsOnX: false,
+                },
+              ],
+            },
+            layout: { x: 6, y: 0, w: 6, h: 5 },
+          },
+          {
+            // W3: multi-entry distributions — two bars entries in one
+            // widget. Drives the per-entry fullscreen + multi-panel
+            // scrolling tests.
+            id: 'bars-w3-multi-panel',
+            type: 'distributions',
+            config: {
+              entries: [
+                {
+                  kind: 'bars',
+                  prefix: 'categorical/',
+                  viewMode: 'step',
+                  depthAxis: 'step',
+                  ignoreOutliers: true,
+                  stepsOnX: false,
+                },
+                {
+                  kind: 'bars',
+                  prefix: 'categorical_big/',
+                  viewMode: 'step',
+                  depthAxis: 'step',
+                  ignoreOutliers: true,
+                  stepsOnX: false,
+                },
+              ],
+            },
+            layout: { x: 0, y: 5, w: 6, h: 5 },
+          },
+          {
+            // W4: mixed distributions — one bars entry + one histogram
+            // entry. Used to verify the multi-entry widget shape works
+            // across both kinds in a single widget. (Replaces the old
+            // chart-with-mixed-line-and-bars shape which no longer
+            // exists; line + bars are now separate widgets.)
+            id: 'bars-w4-mixed-distributions',
+            type: 'distributions',
+            config: {
+              entries: [
+                {
+                  kind: 'bars',
+                  prefix: 'categorical/',
+                  viewMode: 'step',
+                  depthAxis: 'step',
+                  ignoreOutliers: true,
+                  stepsOnX: false,
+                },
+                {
+                  kind: 'histogram',
+                  metric: 'distributions/weights',
+                  viewMode: 'step',
+                  ignoreOutliers: true,
+                  stepsOnX: false,
+                },
+              ],
+            },
+            layout: { x: 6, y: 5, w: 6, h: 5 },
+          },
+          {
+            // W5: single numeric histogram distributions — drives the
+            // IQR fence and PNG export tests for the histogram path.
+            id: 'bars-w5-histogram',
+            type: 'distributions',
+            config: {
+              entries: [
+                {
+                  kind: 'histogram',
+                  metric: 'distributions/weights',
+                  viewMode: 'step',
+                  ignoreOutliers: true,
+                  stepsOnX: false,
+                },
+              ],
+            },
+            layout: { x: 0, y: 10, w: 6, h: 5 },
+          },
+          {
+            // W6: line-only chart widget — control case for outer-toolbar
+            // tests (all three buttons present).
+            id: 'bars-w6-line-only',
+            type: 'chart',
+            config: {
+              metrics: ['train/loss'],
+              xAxis: 'step',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+              aggregation: 'LAST',
+              showOriginal: false,
+            },
+            layout: { x: 6, y: 10, w: 6, h: 5 },
+          },
+        ],
+      },
+    ],
+    settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
+  };
+
+  await prisma.dashboardView.upsert({
+    where: {
+      organizationId_projectId_name: {
+        organizationId: org.id,
+        projectId: barsProject.id,
+        name: 'Bars Variants Test',
+      },
+    },
+    update: { config: barsDashboardConfig },
+    create: {
+      name: 'Bars Variants Test',
+      organizationId: org.id,
+      projectId: barsProject.id,
+      createdById: user.id,
+      isDefault: false,
+      config: barsDashboardConfig,
+    },
+  });
+  console.log('   ✓ Created Bars Variants Test dashboard view');
 
   // 11c. Create "Line Chart Variants Test" dashboard view with all metric widget combos
   console.log('\n1️⃣1️⃣c Creating Line Chart Variants Test dashboard view...');

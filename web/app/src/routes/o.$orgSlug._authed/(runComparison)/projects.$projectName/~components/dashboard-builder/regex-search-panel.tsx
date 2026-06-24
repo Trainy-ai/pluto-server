@@ -9,6 +9,10 @@ import { MetricResultsList } from "./metric-results-list";
 /** Maximum regex pattern length accepted by the server */
 export const REGEX_MAX_LENGTH = 500;
 
+/** Frontend dropdown rendering cap — same number ChartConfigForm /
+ *  FilesConfigForm use for their non-regex search lists. */
+const DROPDOWN_MAX_RESULTS = 500;
+
 /** Regex panel — server-side regex search with inline results.
  *  Shared by ChartConfigForm and FilesConfigForm. */
 export function RegexSearchPanel({
@@ -59,7 +63,12 @@ export function RegexSearchPanel({
 
       {regexPattern.trim() && !hasError && (
         <MetricResultsList
-          metrics={regexMetrics}
+          metrics={
+            regexMetrics.length > DROPDOWN_MAX_RESULTS
+              ? regexMetrics.slice(0, DROPDOWN_MAX_RESULTS)
+              : regexMetrics
+          }
+          truncated={regexMetrics.length > DROPDOWN_MAX_RESULTS}
           selectedValues={selectedValues}
           isLoading={isRegexSearching}
           emptyMessage={`No ${itemLabel}s match this pattern.`}

@@ -64,6 +64,17 @@ export interface LineChartProps extends React.HTMLAttributes<HTMLDivElement> {
   onYZoomRangeChange?: (range: [number, number] | null) => void;
   /** Map of runId → forkStep for drawing vertical fork annotations */
   forkSteps?: Map<string, number>;
+  /** Extra left padding in pixels to push the plot area inward. Useful
+   *  when this chart sits in a stacked widget with a sibling canvas
+   *  (e.g. a transposed bars panel) whose plot area uses a wider left
+   *  gutter — passing matched padding here aligns the X-axis ticks
+   *  end-to-end across panels. Defaults to uPlot's auto-padding. */
+  extraLeftPadding?: number;
+  /** Mirror of extraLeftPadding for the right side. uPlot's auto right
+   *  padding is dynamic (~15-20px for label overflow); a sibling canvas
+   *  using a fixed rightMargin can't predict that, so passing a matched
+   *  value here pins both right edges to canvasWidth − N. */
+  extraRightPadding?: number;
 }
 
 /** Ref handle exposed to parent components */

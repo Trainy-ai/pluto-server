@@ -42,6 +42,10 @@ interface LineChartWrapperProps extends React.HTMLAttributes<HTMLDivElement> {
   onYZoomRangeChange?: (range: [number, number] | null) => void;
   /** Map of runId → forkStep for drawing vertical fork annotations */
   forkSteps?: Map<string, number>;
+  /** Extra left padding to align with sibling canvas (e.g. a bars panel below). */
+  extraLeftPadding?: number;
+  /** Extra right padding mirror for the right side. */
+  extraRightPadding?: number;
 }
 
 // Loading fallback for lazy-loaded charts

@@ -10,16 +10,18 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { LineChartIcon, BarChart3Icon } from "lucide-react";
+import { LineChartIcon, BarChart3Icon, LayersIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ChartConfigForm } from "./chart-config-form";
 import { FilesConfigForm } from "./files-config-form";
+import { DistributionsConfigForm } from "./distributions-config-form";
 import type {
   WidgetType,
   Widget,
   WidgetConfig,
   ChartWidgetConfig,
   FileGroupWidgetConfig,
+  DistributionsWidgetConfig,
 } from "../../~types/dashboard-types";
 
 interface AddWidgetModalProps {
@@ -33,8 +35,18 @@ interface AddWidgetModalProps {
   selectedRunIds?: string[];
 }
 
-function toUnifiedSubTab(type: WidgetType): "metrics" | "files" {
-  return (type === "histogram" || type === "file-group") ? "files" : "metrics";
+type UnifiedTab = "metrics" | "distributions" | "files";
+
+function toUnifiedSubTab(type: WidgetType): UnifiedTab {
+  switch (type) {
+    case "distributions":
+      return "distributions";
+    case "histogram":
+    case "file-group":
+      return "files";
+    default:
+      return "metrics";
+  }
 }
 
 export function AddWidgetModal({
@@ -46,8 +58,8 @@ export function AddWidgetModal({
   editWidget,
   selectedRunIds,
 }: AddWidgetModalProps) {
-  const [unifiedTab, setUnifiedTab] = useState<"metrics" | "files" | null>(
-    editWidget ? toUnifiedSubTab(editWidget.type) : null
+  const [unifiedTab, setUnifiedTab] = useState<UnifiedTab | null>(
+    editWidget ? toUnifiedSubTab(editWidget.type) : null,
   );
   const [config, setConfig] = useState<Partial<WidgetConfig>>(() => {
     if (!editWidget) return {};
@@ -76,10 +88,17 @@ export function AddWidgetModal({
 
   const resolvedWidgetType = useMemo((): WidgetType | null => {
     if (!unifiedTab) return null;
-    return unifiedTab === "metrics" ? "chart" : "file-group";
+    switch (unifiedTab) {
+      case "metrics":
+        return "chart";
+      case "distributions":
+        return "distributions";
+      case "files":
+        return "file-group";
+    }
   }, [unifiedTab]);
 
-  const handleUnifiedTabChange = (tab: "metrics" | "files") => {
+  const handleUnifiedTabChange = (tab: UnifiedTab) => {
     if (tab === unifiedTab) return;
     setUnifiedTab(tab);
     if (tab === "metrics") {
@@ -91,6 +110,8 @@ export function AddWidgetModal({
         aggregation: "LAST",
         showOriginal: false,
       } as ChartWidgetConfig);
+    } else if (tab === "distributions") {
+      setConfig({ entries: [] } as DistributionsWidgetConfig);
     } else {
       setConfig({ files: [] } as FileGroupWidgetConfig);
     }
@@ -122,7 +143,11 @@ export function AddWidgetModal({
     switch (resolvedWidgetType) {
       case "chart": {
         const chartConfig = config as ChartWidgetConfig;
-        return chartConfig.metrics && chartConfig.metrics.length > 0;
+        return !!chartConfig.metrics && chartConfig.metrics.length > 0;
+      }
+      case "distributions": {
+        const distConfig = config as Partial<DistributionsWidgetConfig>;
+        return !!distConfig.entries && distConfig.entries.length > 0;
       }
       case "file-group": {
         const fileGroupConfig = config as Partial<FileGroupWidgetConfig>;
@@ -148,31 +173,47 @@ export function AddWidgetModal({
         </DialogHeader>
 
         <div className="space-y-6 py-4">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             <button
               className={cn(
                 "flex flex-col items-center gap-1.5 rounded-lg border p-3 text-center transition-colors hover:bg-accent",
-                unifiedTab === "metrics" && "border-primary bg-accent"
+                unifiedTab === "metrics" && "border-primary bg-accent",
               )}
+              data-testid="add-widget-tab-metrics"
               onClick={() => handleUnifiedTabChange("metrics")}
             >
               <LineChartIcon className="size-6 text-muted-foreground" />
               <div className="text-sm font-medium">Metrics</div>
               <div className="text-xs text-muted-foreground">
-                Line charts from numeric data
+                Line charts from scalar metrics
               </div>
             </button>
             <button
               className={cn(
                 "flex flex-col items-center gap-1.5 rounded-lg border p-3 text-center transition-colors hover:bg-accent",
-                unifiedTab === "files" && "border-primary bg-accent"
+                unifiedTab === "distributions" && "border-primary bg-accent",
               )}
-              onClick={() => handleUnifiedTabChange("files")}
+              data-testid="add-widget-tab-distributions"
+              onClick={() => handleUnifiedTabChange("distributions")}
             >
               <BarChart3Icon className="size-6 text-muted-foreground" />
+              <div className="text-sm font-medium">Distributions</div>
+              <div className="text-xs text-muted-foreground">
+                Categorical bar charts and numeric histograms
+              </div>
+            </button>
+            <button
+              className={cn(
+                "flex flex-col items-center gap-1.5 rounded-lg border p-3 text-center transition-colors hover:bg-accent",
+                unifiedTab === "files" && "border-primary bg-accent",
+              )}
+              data-testid="add-widget-tab-files"
+              onClick={() => handleUnifiedTabChange("files")}
+            >
+              <LayersIcon className="size-6 text-muted-foreground" />
               <div className="text-sm font-medium">Files</div>
               <div className="text-xs text-muted-foreground">
-                Logs, histograms, images, videos, audio
+                Logs, images, videos, audio
               </div>
             </button>
           </div>
@@ -199,6 +240,16 @@ export function AddWidgetModal({
                 />
               )}
 
+              {unifiedTab === "distributions" && (
+                <DistributionsConfigForm
+                  config={config as Partial<DistributionsWidgetConfig>}
+                  onChange={setConfig}
+                  organizationId={organizationId}
+                  projectName={projectName}
+                  selectedRunIds={selectedRunIds}
+                />
+              )}
+
               {unifiedTab === "files" && (
                 <FilesConfigForm
                   config={config as Partial<FileGroupWidgetConfig>}
@@ -216,7 +267,7 @@ export function AddWidgetModal({
           <Button variant="outline" onClick={handleClose}>
             Cancel
           </Button>
-          <Button onClick={handleAdd} disabled={!canAdd}>
+          <Button onClick={handleAdd} disabled={!canAdd} data-testid="add-widget-confirm">
             {isEditing ? "Save Changes" : "Add Widget"}
           </Button>
         </DialogFooter>

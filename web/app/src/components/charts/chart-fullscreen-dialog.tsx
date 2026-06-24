@@ -11,6 +11,7 @@ import { SlidersHorizontalIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ChartScalePopover } from "./chart-scale-popover";
 import { ChartExportMenu } from "./chart-export-menu";
+import { extractCaptionFromDOM } from "./chart-export-utils";
 
 const SIDEBAR_STORAGE_KEY = "fullscreen-legend-sidebar-width";
 const DEFAULT_SIDEBAR_WIDTH = 256; // 16rem
@@ -37,6 +38,15 @@ interface ChartFullscreenDialogProps {
   logXAxis?: boolean;
   logYAxis?: boolean;
   onLogScaleChange?: (axis: "x" | "y", value: boolean) => void;
+  /** Hide the legend sidebar entirely — used for the {bars} categorical view
+   *  which doesn't render a uPlot .u-legend, so the 256px sidebar would
+   *  just be empty space on the right. */
+  hideLegend?: boolean;
+  /** Extra controls rendered in the header next to (or instead of) the
+   *  default Log Scale Settings popover. Used by bars widgets to surface
+   *  their own Settings (Ignore Outliers) since Log Scale isn't
+   *  meaningful for categorical X / count Y. */
+  headerExtra?: React.ReactNode;
 }
 
 export function ChartFullscreenDialog({
@@ -47,6 +57,8 @@ export function ChartFullscreenDialog({
   logXAxis,
   logYAxis,
   onLogScaleChange,
+  hideLegend,
+  headerExtra,
 }: ChartFullscreenDialogProps) {
   const chartContentRef = useRef<HTMLDivElement>(null);
   const chartAreaRef = useRef<HTMLDivElement>(null);
@@ -58,8 +70,10 @@ export function ChartFullscreenDialog({
   // Move uPlot's .u-legend into the sidebar. The chart area hides .u-legend
   // via CSS (fullscreen-chart-area class) so the legend is invisible while
   // still at the bottom, preventing flicker. Polling moves it to the sidebar.
+  // Skipped entirely when hideLegend is true — the {bars} view has no
+  // uPlot, so polling would loop forever finding nothing.
   useEffect(() => {
-    if (!open) return;
+    if (!open || hideLegend) return;
 
     let currentLegend: Element | null = null;
     let lastFocusedSeriesId: string | null = null;
@@ -237,12 +251,17 @@ export function ChartFullscreenDialog({
       >
         <DialogHeader>
           <div className="flex items-center justify-between pr-8 min-w-0">
-            <DialogTitle className="truncate" title={title}>{title}</DialogTitle>
+            <DialogTitle className="truncate" title={title} data-testid="chart-fullscreen-title">{title}</DialogTitle>
             <div className="flex items-center gap-2">
               <ChartExportMenu
                 getContainer={() => chartContentRef.current}
                 fileName={title}
                 variant="header"
+                getCaption={() =>
+                  chartContentRef.current
+                    ? extractCaptionFromDOM(chartContentRef.current)
+                    : null
+                }
               />
               {onLogScaleChange && (
                 <ChartScalePopover
@@ -257,10 +276,11 @@ export function ChartFullscreenDialog({
                     data-testid="chart-fullscreen-bounds-btn"
                   >
                     <SlidersHorizontalIcon className="size-3.5" />
-                    Chart Settings
+                    Settings
                   </Button>
                 </ChartScalePopover>
               )}
+              {headerExtra}
             </div>
           </div>
         </DialogHeader>
@@ -268,16 +288,20 @@ export function ChartFullscreenDialog({
           <div ref={chartAreaRef} className="fullscreen-chart-area flex-1 min-w-0 overflow-hidden">
             {children}
           </div>
-          {/* Drag handle to resize sidebar */}
-          <div
-            className="fullscreen-legend-resize-handle"
-            onMouseDown={handleDragStart}
-          />
-          <div
-            ref={legendSidebarRef}
-            className="fullscreen-legend-sidebar"
-            style={{ width: sidebarWidth }}
-          />
+          {!hideLegend && (
+            <>
+              {/* Drag handle to resize sidebar */}
+              <div
+                className="fullscreen-legend-resize-handle"
+                onMouseDown={handleDragStart}
+              />
+              <div
+                ref={legendSidebarRef}
+                className="fullscreen-legend-sidebar"
+                style={{ width: sidebarWidth }}
+              />
+            </>
+          )}
         </div>
       </DialogContent>
     </Dialog>

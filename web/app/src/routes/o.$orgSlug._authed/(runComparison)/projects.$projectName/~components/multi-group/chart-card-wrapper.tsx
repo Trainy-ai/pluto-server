@@ -7,6 +7,7 @@ import { ChartFullscreenDialog } from "@/components/charts/chart-fullscreen-dial
 import { useFullscreenContext } from "@/components/charts/context/fullscreen-context";
 import { ChartScalePopover } from "@/components/charts/chart-scale-popover";
 import { ChartExportMenu } from "@/components/charts/chart-export-menu";
+import { extractCaptionFromDOM } from "@/components/charts/chart-export-utils";
 
 interface ChartSettings {
   logXAxis?: boolean;
@@ -119,6 +120,11 @@ export function ChartCardWrapper({
             getContainer={() => chartContainerRef.current}
             fileName={metricName}
             className="size-7 bg-background/80 backdrop-blur-sm hover:bg-background"
+            getCaption={() =>
+              chartContainerRef.current
+                ? extractCaptionFromDOM(chartContainerRef.current)
+                : null
+            }
           />
           <ChartScalePopover
             logXAxis={effectiveLogXAxis}

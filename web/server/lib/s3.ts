@@ -8,10 +8,26 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { env } from "./env"; // Import the validated env
 import { getCached, setCached, buildCacheKey } from "./cache";
 
-// Initialize S3 client for Cloudflare R2 bucket
+// Initialize S3 client for Cloudflare R2 / MinIO / S3.
+//
+// `forcePathStyle: true` is required for MinIO (and any non-AWS S3 with a
+// hostname-style endpoint like `http://minio:9000`). The SDK defaults to
+// virtual-host-style — `https://bucket.minio:9000/key` — which DNS can't
+// resolve inside the CI docker network because `bucket.minio` isn't a real
+// host. Path-style produces `http://minio:9000/bucket/key`, which the
+// browser CAN reach via Docker's service-name resolution. R2 accepts both
+// styles, so this is safe everywhere.
+//
+// The seeders in `tests/setup.ts` already pass `forcePathStyle: true` to
+// their own S3 clients — symptom of the runtime client missing it was that
+// objects WROTE fine during seed but the presigned URLs returned from the
+// backend at request time were signed for `bucket.minio:9000`, and chromium
+// in the playwright container couldn't load them. Images rendered as broken
+// in every CI test video.
 const s3Client = new S3Client({
   region: env.STORAGE_REGION,
   endpoint: env.STORAGE_ENDPOINT,
+  forcePathStyle: true,
   credentials: {
     accessKeyId: env.STORAGE_ACCESS_KEY_ID,
     secretAccessKey: env.STORAGE_SECRET_ACCESS_KEY,

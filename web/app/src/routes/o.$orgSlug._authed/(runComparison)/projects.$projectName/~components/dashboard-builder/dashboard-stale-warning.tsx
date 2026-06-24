@@ -11,7 +11,11 @@ export function DashboardStaleWarning({
   onOverride,
 }: DashboardStaleWarningProps) {
   return (
-    <Alert variant="warning" className="flex items-center gap-2 py-2.5">
+    <Alert
+      variant="warning"
+      className="flex items-center gap-2 py-2.5"
+      data-testid="dashboard-stale-warning"
+    >
       <AlertTriangleIcon className="size-4 shrink-0" />
       <AlertDescription className="flex flex-wrap items-center gap-x-1 text-sm">
         <span>The contents of this dashboard have been modified by another user.</span>
@@ -21,6 +25,7 @@ export function DashboardStaleWarning({
             type="button"
             onClick={onSaveAsNew}
             className="font-medium underline underline-offset-2 hover:opacity-80"
+            data-testid="dashboard-stale-save-as-new-btn"
           >
             save your changes as a new dashboard
           </button>
@@ -29,6 +34,7 @@ export function DashboardStaleWarning({
             type="button"
             onClick={onOverride}
             className="font-medium underline underline-offset-2 hover:opacity-80"
+            data-testid="dashboard-stale-override-btn"
           >
             override the changes
           </button>

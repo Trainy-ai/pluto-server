@@ -5,7 +5,7 @@ import "react-resizable/css/styles.css";
 import "./widget-grid.css";
 import { cn } from "@/lib/utils";
 import { VirtualizedChart } from "@/components/core/virtualized-chart";
-import type { Widget } from "../../~types/dashboard-types";
+import type { Widget, HistogramViewMode } from "../../~types/dashboard-types";
 import { WidgetCard } from "./widget-card";
 import type { SectionLocation } from "./use-dashboard-config";
 import { ImageStepSyncProvider, useImageStepSyncContext } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~context/image-step-sync-context";
@@ -19,6 +19,7 @@ interface WidgetGridProps {
   renderWidget: (widget: Widget) => ReactNode;
   onFullscreenWidget?: (widget: Widget) => void;
   onUpdateWidgetScale?: (widgetId: string, axis: "x" | "y", value: boolean) => void;
+  onUpdateWidgetHistogramMode?: (widgetId: string, mode: HistogramViewMode) => void;
   onMoveWidget?: (widgetId: string, target: SectionLocation) => void;
   moveTargets?: { label: string; location: SectionLocation; isFolder: boolean }[];
   isEditing?: boolean;
@@ -37,6 +38,7 @@ export function WidgetGrid({
   renderWidget,
   onFullscreenWidget,
   onUpdateWidgetScale,
+  onUpdateWidgetHistogramMode,
   onMoveWidget,
   moveTargets,
   isEditing = false,
@@ -229,7 +231,12 @@ export function WidgetGrid({
     >
       {widgets.map((widget) => {
         return (
-          <div key={widget.id} className="h-full" data-testid="dashboard-widget">
+          <div
+            key={widget.id}
+            className="h-full"
+            data-testid="dashboard-widget"
+            data-widget-id={widget.id}
+          >
             <WidgetCard
               widget={widget}
               isEditing={isEditing}
@@ -240,6 +247,7 @@ export function WidgetGrid({
               moveTargets={moveTargets}
               onFullscreen={() => onFullscreenWidget?.(widget)}
               onUpdateScale={(axis, value) => onUpdateWidgetScale?.(widget.id, axis, value)}
+              onUpdateHistogramMode={(mode) => onUpdateWidgetHistogramMode?.(widget.id, mode)}
               renderWidget={() => renderWidget(widget)}
             />
           </div>

@@ -93,6 +93,14 @@ interface MultiLineChartProps {
   xAxisOverride?: DisplayLogName;
   /** When provided, reads line settings from this runId instead of the "full" key */
   settingsRunId?: string;
+  /** Extra left padding to push the plot area inward. Used by
+   *  chart-widget when a transposed bars panel sits below — passing
+   *  the bars panel's bin-label gutter width here makes the X-axis
+   *  ticks line up end-to-end across both canvases. */
+  extraLeftPadding?: number;
+  /** Extra right padding mirror. Pins the line chart's right edge to a
+   *  known offset matching the bars chart's rightMargin. */
+  extraRightPadding?: number;
 }
 
 /** Props for the inner memo'd component (includes syncedZoomRange) */
@@ -136,6 +144,8 @@ const MultiLineChartInner = memo(
     onYZoomRangeChange,
     xAxisOverride,
     settingsRunId,
+    extraLeftPadding,
+    extraRightPadding,
   }: MultiLineChartInnerProps) => {
     useCheckDatabaseSize(bucketedMetricsCache);
     const chartColors = useChartColors();
@@ -911,6 +921,8 @@ const MultiLineChartInner = memo(
           yZoomRange={yZoomRange}
           onYZoomRangeChange={onYZoomRangeChange}
           forkSteps={showInheritedMetrics ? forkSteps : undefined}
+          extraLeftPadding={extraLeftPadding}
+          extraRightPadding={extraRightPadding}
         />
       </div>
     );

@@ -26,6 +26,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import type { PinSource } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~context/image-step-sync-context";
+import { downloadImageWithCaption } from "@/components/charts/chart-export-utils";
 
 interface ImageCardStepNavigation {
   currentStepIndex: number;
@@ -94,7 +95,40 @@ interface ImageCardProps {
   onIndexChange?: (next: number) => void;
 }
 
-async function handleDownload(url: string, fileName: string) {
+/**
+ * Download an image, stamping a small caption strip beneath it with the
+ * current step and the source run's color + name. Falls back to a raw URL
+ * download when the canvas composition fails (e.g. CORS-tainted image).
+ */
+async function handleDownload(
+  url: string,
+  fileName: string,
+  runLabel?: { name: string; color: string },
+  currentStepValue?: number,
+  // Container element used to resolve the page theme so the caption
+  // strip's background matches what the user saw on screen (dark band
+  // on dark theme, light band on light theme). Mirrors the chart-PNG
+  // export's behavior in `captureChartAsBlob`.
+  container?: HTMLElement | null,
+): Promise<void> {
+  const caption = (() => {
+    const step =
+      typeof currentStepValue === "number"
+        ? `step ${currentStepValue}`
+        : undefined;
+    const runs = runLabel ? [runLabel] : undefined;
+    if (!step && !runs) return undefined;
+    return { step, runs };
+  })();
+
+  try {
+    await downloadImageWithCaption(url, fileName, caption, container);
+    return;
+  } catch (error) {
+    console.error("Caption-stamped image download failed, falling back to raw:", error);
+  }
+
+  // Fallback: original behavior — raw image bytes, no caption.
   try {
     const response = await fetch(url);
     if (!response.ok) throw new Error("Failed to fetch image");
@@ -266,7 +300,7 @@ export function ImageCard({
                   className="absolute top-1.5 right-1.5 h-6 w-6 opacity-0 transition-opacity group-hover:opacity-100"
                   onClick={(e) => {
                     e.stopPropagation();
-                    handleDownload(url, fileName ?? "image.png");
+                    handleDownload(url, fileName ?? "image.png", runLabel, currentStepValue, containerRef.current);
                   }}
                 >
                   <Download className="h-3 w-3" />
@@ -469,7 +503,7 @@ export function ImageCard({
                   size="sm"
                   className="ml-auto gap-2"
                   disabled={!url}
-                  onClick={() => url && handleDownload(url, fileName ?? "image.png")}
+                  onClick={() => url && handleDownload(url, fileName ?? "image.png", runLabel, currentStepValue, containerRef.current)}
                 >
                   <Download className="h-4 w-4" />
                   Download

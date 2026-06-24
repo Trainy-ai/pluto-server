@@ -20,6 +20,7 @@ function detachLeaveHandler(chart: uPlot | null): void {
   document.removeEventListener("pointerup", lh.docPointerUpFn);
 }
 
+
 /**
  * Compute the X-axis range considering only visible (non-hidden) series.
  * Returns null if no visible series have data — caller should fall back to full range.
@@ -259,11 +260,30 @@ export function useChartLifecycle({
     // Expose uPlot instance on root DOM element for E2E test access
     (chart.root as any)._uplot = chart;
 
-    // Hide legend rows for "(original)" smoothing companion series
+    // Hide legend rows for "(original)" smoothing companion series, and
+    // stamp data-dash + data-metric-name on each row so the PNG export
+    // legend can mirror the series's dash pattern AND surface the per-metric
+    // identity for multi-metric charts (where every UPD-XX appears once per
+    // metric and the inline legend can't tell them apart without the metric
+    // name). Inline + fullscreen-sidebar rendering of the marker is left to
+    // uPlot — we don't touch the visible legend, only the data attributes
+    // the export reads from.
     const legendRows = chart.root.querySelectorAll(".u-series");
     processedLines.forEach((line, idx) => {
-      if (line.hideFromLegend && legendRows[idx + 1]) {
-        (legendRows[idx + 1] as HTMLElement).style.display = "none";
+      const row = legendRows[idx + 1] as HTMLElement | undefined;
+      if (!row) return;
+      if (line.hideFromLegend) {
+        row.style.display = "none";
+      }
+      if (line.dash && line.dash.length > 0) {
+        row.setAttribute("data-dash", line.dash.join(","));
+      } else {
+        row.removeAttribute("data-dash");
+      }
+      if (line.metricName) {
+        row.setAttribute("data-metric-name", line.metricName);
+      } else {
+        row.removeAttribute("data-metric-name");
       }
     });
 

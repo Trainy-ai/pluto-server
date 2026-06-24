@@ -16,6 +16,11 @@ interface UseDashboardSaveOptions {
   expectedUpdatedAtRef: React.RefObject<string | null>;
   /** Called when the server returns a CONFLICT error (stale dashboard) */
   onConflict?: () => void;
+  /** Optional post-sanitize, pre-mutate transform — used by the
+   *  save-time histogram auto-lift to rewrite legacy file-group
+   *  HISTOGRAM entries into a sibling distributions widget right before
+   *  the save fires. */
+  transformBeforeSave?: (config: DashboardViewConfig) => DashboardViewConfig;
 }
 
 export function useDashboardSave({
@@ -27,8 +32,14 @@ export function useDashboardSave({
   onSaveSuccess,
   expectedUpdatedAtRef,
   onConflict,
+  transformBeforeSave,
 }: UseDashboardSaveOptions) {
   const updateMutation = useUpdateDashboardView(organizationId, projectName);
+
+  const buildPayload = useCallback(() => {
+    const sanitized = sanitizeConfig(config);
+    return transformBeforeSave ? transformBeforeSave(sanitized) : sanitized;
+  }, [config, transformBeforeSave]);
 
   const handleSave = useCallback(() => {
     // Read the ref at call time so we always get the current value
@@ -37,7 +48,7 @@ export function useDashboardSave({
       {
         organizationId,
         viewId: view.id,
-        config: sanitizeConfig(config),
+        config: buildPayload(),
         ...(expectedUpdatedAt && { expectedUpdatedAt }),
       },
       {
@@ -58,7 +69,7 @@ export function useDashboardSave({
         },
       }
     );
-  }, [updateMutation, organizationId, view.id, config, clearDraft, onSaveSuccess, expectedUpdatedAtRef, onConflict]);
+  }, [updateMutation, organizationId, view.id, buildPayload, clearDraft, onSaveSuccess, expectedUpdatedAtRef, onConflict]);
 
   // Force save without concurrency check (override remote changes)
   const handleOverride = useCallback(() => {
@@ -66,7 +77,7 @@ export function useDashboardSave({
       {
         organizationId,
         viewId: view.id,
-        config: sanitizeConfig(config),
+        config: buildPayload(),
         // No expectedUpdatedAt → force override
       },
       {
@@ -83,7 +94,7 @@ export function useDashboardSave({
         },
       }
     );
-  }, [updateMutation, organizationId, view.id, config, clearDraft, onSaveSuccess]);
+  }, [updateMutation, organizationId, view.id, buildPayload, clearDraft, onSaveSuccess]);
 
   return {
     isSaving: updateMutation.isPending,

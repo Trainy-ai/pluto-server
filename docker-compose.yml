@@ -164,6 +164,9 @@ services:
 
   frontend:
     build:
+      # The Dockerfile (refactored in #460) expects the web/ workspace
+      # root as the build context so it can use pnpm-lock.yaml with
+      # --frozen-lockfile. Matches the backend service's pattern below.
       # Context is the web/ workspace root (matches the backend service and CI)
       # so the Dockerfile can use the monorepo pnpm-lock.yaml / workspace
       # manifests. The Dockerfile lives at web/app/Dockerfile.

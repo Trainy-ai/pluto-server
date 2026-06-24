@@ -138,6 +138,13 @@ export const MultiGroup = ({
             runName: formatRunLabel(d.runName, d.displayId),
           }));
 
+        // `pb-2.5` overrides the inner widget's default `pb-4`, shrinking
+        // the gap between the sticky step slider and the chart-card
+        // border from 16px → 10px. That gives ~6px above the slider
+        // track (the footer's `pt-1.5`) and ~12px below (`pb-0.5` +
+        // 10px outer) — a small intentional asymmetry that visually
+        // matches the slider thumb's bottom-heavy shape. Dashboard
+        // widgets stay on `p-0` (flush) via file-group-widget.
         if (metric.type === "HISTOGRAM") {
           return () => (
             <MultiHistogramView
@@ -145,6 +152,7 @@ export const MultiGroup = ({
               tenantId={organizationId}
               projectName={projectName}
               runs={formattedRuns}
+              className="h-full pb-2.5"
             />
           );
         }
@@ -156,7 +164,7 @@ export const MultiGroup = ({
               organizationId={organizationId}
               projectName={projectName}
               runs={formattedRuns}
-              className="h-full"
+              className="h-full pb-2.5"
             />
           );
         }
@@ -168,7 +176,7 @@ export const MultiGroup = ({
               organizationId={organizationId}
               projectName={projectName}
               runs={formattedRuns}
-              className="h-full"
+              className="h-full pb-2.5"
             />
           );
         }
@@ -180,7 +188,7 @@ export const MultiGroup = ({
               organizationId={organizationId}
               projectName={projectName}
               runs={formattedRuns}
-              className="h-full"
+              className="h-full pb-2.5"
             />
           );
         }

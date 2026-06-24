@@ -65,6 +65,13 @@ interface DropdownRegionProps {
    */
   components: (() => React.ReactNode)[];
   groupId: string;
+  /**
+   * Optional override for the default column count when no user preference
+   * exists in localStorage. Used by groups whose contents (e.g. histograms)
+   * are visually denser than the default 3-col line-chart layout. User
+   * adjustments persist via local-storage and override this.
+   */
+  defaultColumns?: number;
 }
 
 interface GridSelectorProps {
@@ -204,11 +211,18 @@ export function DropdownRegion({
   title,
   components,
   groupId,
+  defaultColumns,
 }: DropdownRegionProps) {
   // Initialize settings with saved values or defaults
   const [settings, setSettings] = useState<DropdownSettings>(() => {
     const saved = loadFromLocalStorage(groupId);
-    return saved ? { ...defaultSettings, ...saved } : defaultSettings;
+    if (saved) return { ...defaultSettings, ...saved };
+    // No saved prefs — honor the caller's defaultColumns override (e.g.
+    // histogram groups want 1 col instead of the 3-col line-chart default).
+    if (defaultColumns !== undefined) {
+      return { ...defaultSettings, columns: defaultColumns };
+    }
+    return defaultSettings;
   });
 
   // Separate states for dialog and resize functionality

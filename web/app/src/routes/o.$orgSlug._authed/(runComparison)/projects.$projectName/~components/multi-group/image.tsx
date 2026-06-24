@@ -265,7 +265,7 @@ export const MultiGroupImage = ({
           })}
         </div>
         {hasMultipleSteps() && (
-          <div className="sticky bottom-0 z-10 border-t bg-background pt-3 pb-1">
+          <div className="sticky bottom-0 border-t border-border bg-background pt-1.5 pb-0.5">
             <StepNavigator
               currentStepIndex={currentStepIndex}
               currentStepValue={currentStepValue}

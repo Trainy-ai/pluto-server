@@ -261,7 +261,11 @@ export function SectionContainer({
                 )}
                 <span>{section.name}</span>
                 {isDynamic && (
-                  <Badge variant="secondary" className="gap-1 text-xs font-normal">
+                  <Badge
+                    data-testid="dynamic-pattern-badge"
+                    variant="secondary"
+                    className="gap-1 text-xs font-normal"
+                  >
                     <ZapIcon className="size-3" />
                     {section.dynamicPattern}
                   </Badge>
@@ -283,6 +287,7 @@ export function SectionContainer({
                     <Button
                       variant="ghost"
                       size="sm"
+                      data-testid="section-add-widget-btn"
                       onClick={(e) => {
                         e.stopPropagation();
                         onAddWidget();
@@ -1240,6 +1245,7 @@ export function FolderContainer({
                 <Button
                   variant="ghost"
                   size="sm"
+                  data-testid="section-add-widget-btn"
                   onClick={(e) => {
                     e.stopPropagation();
                     onAddWidget();

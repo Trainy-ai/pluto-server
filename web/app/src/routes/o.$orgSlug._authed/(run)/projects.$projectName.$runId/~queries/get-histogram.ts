@@ -6,7 +6,7 @@ import type { inferOutput } from "@trpc/tanstack-react-query";
 type GetHistogramData = inferOutput<typeof trpc.runs.data.histogram>;
 
 const getHistogramCache = new LocalCache<GetHistogramData>(
-  "getHistogram",
+  "getHistogram-v2",
   "getHistogram",
   1000 * 10,
 );
@@ -16,6 +16,7 @@ export const useGetHistogram = (
   projectName: string,
   runId: string,
   logName: string,
+  stepCap?: number,
 ) =>
   useLocalQuery<GetHistogramData>({
     queryKey: trpc.runs.data.histogram.queryKey({
@@ -23,6 +24,7 @@ export const useGetHistogram = (
       projectName: projectName,
       runId: runId,
       logName: logName,
+      stepCap,
     }),
     queryFn: () =>
       trpcClient.runs.data.histogram.query({
@@ -30,6 +32,7 @@ export const useGetHistogram = (
         projectName: projectName,
         runId: runId,
         logName: logName,
+        stepCap,
       }),
     localCache: getHistogramCache,
     staleTime: 1000 * 5,
@@ -40,6 +43,7 @@ export const prefetchGetHistogram = (
   projectName: string,
   runId: string,
   logName: string,
+  stepCap?: number,
 ) =>
   prefetchLocalQuery(queryClient, {
     queryKey: trpc.runs.data.histogram.queryKey({
@@ -47,6 +51,7 @@ export const prefetchGetHistogram = (
       projectName: projectName,
       runId: runId,
       logName: logName,
+      stepCap,
     }),
     queryFn: () =>
       trpcClient.runs.data.histogram.query({
@@ -54,6 +59,7 @@ export const prefetchGetHistogram = (
         projectName: projectName,
         runId: runId,
         logName: logName,
+        stepCap,
       }),
     localCache: getHistogramCache,
     staleTime: 1000 * 5,

@@ -5,7 +5,14 @@ import type { ChartWidgetConfig } from "../../~types/dashboard-types";
 import type { GroupedMetrics } from "@/lib/grouping/types";
 import type { SelectedRunWithColor } from "../../~hooks/use-selected-runs";
 import { MultiLineChart } from "../multi-group/line-chart-multi";
-import { resolveMetrics, isGlobValue, getGlobPattern, isRegexValue, getRegexPattern, isPatternValue } from "./glob-utils";
+import {
+  resolveMetrics,
+  isGlobValue,
+  getGlobPattern,
+  isRegexValue,
+  getRegexPattern,
+  isPatternValue,
+} from "./glob-utils";
 import { useRunMetricNames } from "../../~queries/metric-summaries";
 import { formatRunLabel } from "@/lib/format-run-label";
 import { getDisplayIdForRun } from "../../~lib/metrics-utils";
@@ -30,7 +37,7 @@ interface ChartWidgetProps {
 
 export function ChartWidget({
   config,
-  groupedMetrics,
+  groupedMetrics: _groupedMetrics,
   selectedRuns,
   organizationId,
   projectName,
@@ -38,6 +45,8 @@ export function ChartWidget({
   yZoomRange,
   onYZoomRangeChange,
 }: ChartWidgetProps) {
+  void _groupedMetrics; // currently unused — kept on the interface for parity with other widgets
+
   const lines = useMemo(() => {
     return Object.entries(selectedRuns).map(([runId, { run, color }]) => ({
       runId,
@@ -46,14 +55,20 @@ export function ChartWidget({
       color,
       displayId: getDisplayIdForRun(run),
       createdAt: run.createdAt,
-      forkStep: (run as any).forkStep != null ? Number((run as any).forkStep) : null,
-      forkedFromRunId: (run as any).forkedFromRunId != null ? String((run as any).forkedFromRunId) : null,
+      forkStep:
+        (run as { forkStep?: unknown }).forkStep != null
+          ? Number((run as { forkStep?: unknown }).forkStep)
+          : null,
+      forkedFromRunId:
+        (run as { forkedFromRunId?: unknown }).forkedFromRunId != null
+          ? String((run as { forkedFromRunId?: unknown }).forkedFromRunId)
+          : null,
     }));
   }, [selectedRuns]);
 
   const allRunsCompleted = useMemo(() => {
     return Object.values(selectedRuns).every(
-      ({ run }) => run.status === "COMPLETED" || run.status === "FAILED"
+      ({ run }) => run.status === "COMPLETED" || run.status === "FAILED",
     );
   }, [selectedRuns]);
 
@@ -62,12 +77,14 @@ export function ChartWidget({
 
   const globBases = useMemo(() => {
     if (!config.metrics) return [];
-    return [...new Set(
-      config.metrics
-        .filter(isGlobValue)
-        .map((v) => getGlobPattern(v).replace(/[*?]/g, ""))
-        .filter((base) => base.length > 0)
-    )].slice(0, MAX_PATTERN_QUERIES);
+    return [
+      ...new Set(
+        config.metrics
+          .filter(isGlobValue)
+          .map((v) => getGlobPattern(v).replace(/[*?]/g, ""))
+          .filter((base) => base.length > 0),
+      ),
+    ].slice(0, MAX_PATTERN_QUERIES);
   }, [config.metrics]);
 
   const regexPatterns = useMemo(() => {
@@ -82,28 +99,41 @@ export function ChartWidget({
   // When ON, pattern resolution queries fall back to the raw mlop_metrics
   // table so metrics whose values are entirely NaN/Inf are included in the
   // match set.
-  const { settings } = useLineSettings(organizationId, projectName, settingsRunId ?? "full");
+  const { settings } = useLineSettings(
+    organizationId,
+    projectName,
+    settingsRunId ?? "full",
+  );
   const includeNonFiniteMetrics = settings.includeNonFiniteMetrics ?? false;
 
   const { data: allMetricNames } = useRunMetricNames(
-    organizationId, projectName, selectedRunIds, includeNonFiniteMetrics
+    organizationId,
+    projectName,
+    selectedRunIds,
+    includeNonFiniteMetrics,
   );
 
   const globSearchResults = useQueries({
     queries: globBases.map((base) =>
       trpc.runs.distinctMetricNames.queryOptions({
-        organizationId, projectName, search: base, runIds: selectedRunIds,
+        organizationId,
+        projectName,
+        search: base,
+        runIds: selectedRunIds,
         ...(includeNonFiniteMetrics ? { includeNonFiniteMetrics } : {}),
-      })
+      }),
     ),
   });
 
   const regexSearchResults = useQueries({
     queries: regexPatterns.map((pattern) =>
       trpc.runs.distinctMetricNames.queryOptions({
-        organizationId, projectName, regex: pattern, runIds: selectedRunIds,
+        organizationId,
+        projectName,
+        regex: pattern,
+        runIds: selectedRunIds,
         ...(includeNonFiniteMetrics ? { includeNonFiniteMetrics } : {}),
-      })
+      }),
     ),
   });
 
@@ -121,17 +151,28 @@ export function ChartWidget({
     }
 
     return resolveMetrics(config.metrics, Array.from(available));
-  }, [config.metrics, hasPatterns, allMetricNames, globSearchResults, regexSearchResults]);
+  }, [
+    config.metrics,
+    hasPatterns,
+    allMetricNames,
+    globSearchResults,
+    regexSearchResults,
+  ]);
 
   // Compute display title and tooltip subtitle before early returns
   const rawEntries = config.metrics ?? [];
-  const chipLabel = rawEntries.length >= 1 && rawEntries.length <= 3
-    ? rawEntries.map((v) => {
-        if (isGlobValue(v)) return getGlobPattern(v);
-        if (isRegexValue(v)) return getRegexPattern(v);
-        return v;
-      }).join(", ")
-    : metrics.length > 0 ? `${metrics.length} metrics` : "";
+  const chipLabel =
+    rawEntries.length >= 1 && rawEntries.length <= 3
+      ? rawEntries
+          .map((v) => {
+            if (isGlobValue(v)) return getGlobPattern(v);
+            if (isRegexValue(v)) return getRegexPattern(v);
+            return v;
+          })
+          .join(", ")
+      : metrics.length > 0
+        ? `${metrics.length} metrics`
+        : "";
   const displayTitle = config.title || chipLabel;
   // When the widget has its own title (e.g. dynamic-section combined widgets
   // titled `prefix (max, mean, min)`), avoid duplicating the suffix list as
@@ -143,7 +184,7 @@ export function ChartWidget({
       : ""
     : chipLabel;
 
-  if (!metrics || metrics.length === 0) {
+  if (metrics.length === 0) {
     return (
       <div className="flex h-full items-center justify-center text-muted-foreground">
         <div className="text-center">

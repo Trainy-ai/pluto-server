@@ -11,6 +11,12 @@ import {
   type Section,
   type Widget,
   type ChartWidgetConfig,
+  type HistogramWidgetConfig,
+  type HistogramViewMode,
+  type HistogramDepthAxis,
+  type FileGroupWidgetConfig,
+  type DistributionsWidgetConfig,
+  type DistributionsEntry,
 } from "../../~types/dashboard-types";
 
 // ─── Helpers ─────────────────────────────────────────────────────────
@@ -18,6 +24,296 @@ import {
 /** Whether a section is a folder (has children array). */
 export function isFolder(section: Section): boolean {
   return Array.isArray(section.children);
+}
+
+// ─── Migration shims ────────────────────────────────────────────────
+//
+// Applied at config load time. Three legacy shapes get rewritten into
+// the new `distributions` widget type:
+//
+//   1. Chart widget carrying `bars` field         → chart + distributions
+//   2. File-group with `categoricalPrefixes`      → file-group + distributions
+//   3. Standalone `histogram` widget              → distributions (1 entry)
+//
+// Each is idempotent — re-running on an already-migrated config is a
+// no-op. We don't touch on-disk JSON; the next save through the normal
+// flow naturally writes the migrated shape because every widget gets
+// serialized from the in-memory (post-migration) state.
+
+// Legacy shapes — TypeScript can't see these on the current schemas
+// (they were stripped), so we describe them locally for the migration.
+interface LegacyBarsEntry {
+  prefix: string;
+  viewMode?: HistogramViewMode;
+  depthAxis?: HistogramDepthAxis;
+  binRange?: { start: number; end: number };
+  ignoreOutliers?: boolean;
+  stepsOnX?: boolean;
+}
+interface LegacyChartWithBars extends ChartWidgetConfig {
+  bars?: LegacyBarsEntry | LegacyBarsEntry[];
+}
+interface LegacyFileGroupWithBars extends FileGroupWidgetConfig {
+  categoricalPrefixes?: string[];
+  viewModes?: Record<string, HistogramViewMode>;
+  depthAxes?: Record<string, HistogramDepthAxis>;
+  binRanges?: Record<string, { start: number; end: number }>;
+  ignoreOutliers?: Record<string, boolean>;
+  stepsOnX?: Record<string, boolean>;
+}
+
+function barsEntryFromLegacy(
+  raw: LegacyBarsEntry,
+  overrides?: {
+    viewMode?: HistogramViewMode;
+    depthAxis?: HistogramDepthAxis;
+    binRange?: { start: number; end: number };
+    ignoreOutliers?: boolean;
+    stepsOnX?: boolean;
+  },
+): Extract<DistributionsEntry, { kind: "bars" }> {
+  return {
+    kind: "bars",
+    prefix: raw.prefix,
+    viewMode: overrides?.viewMode ?? raw.viewMode ?? "ridgeline",
+    depthAxis: overrides?.depthAxis ?? raw.depthAxis ?? "step",
+    binRange: overrides?.binRange ?? raw.binRange,
+    ignoreOutliers: overrides?.ignoreOutliers ?? raw.ignoreOutliers ?? true,
+    stepsOnX: overrides?.stepsOnX ?? raw.stepsOnX ?? false,
+  };
+}
+
+// 1. Chart widget with `bars` field → chart (metrics-only, if any) + distributions
+function migrateChartWithBars(widget: Widget): Widget[] {
+  if (widget.type !== "chart") return [widget];
+  const cfg = widget.config as LegacyChartWithBars;
+  const barsRaw = cfg.bars;
+  if (!barsRaw) return [widget];
+  const barsArr: LegacyBarsEntry[] = Array.isArray(barsRaw)
+    ? barsRaw
+    : [barsRaw];
+  if (barsArr.length === 0) return [widget];
+
+  const out: Widget[] = [];
+  const hasLineMetrics = !!cfg.metrics && cfg.metrics.length > 0;
+  if (hasLineMetrics) {
+    // Strip the bars field; keep every other chart-config field intact.
+    const { bars: _stripped, ...rest } = cfg;
+    void _stripped;
+    const cleaned: ChartWidgetConfig = rest;
+    out.push({ ...widget, config: cleaned });
+  }
+
+  const entries: DistributionsEntry[] = barsArr.map((b) =>
+    barsEntryFromLegacy(b),
+  );
+  const distCfg: DistributionsWidgetConfig = { entries };
+  if (cfg.title) distCfg.title = cfg.title;
+  // When the cleaned chart sibling shares this slot, shift the new
+  // distributions widget DOWN by the chart's height so they don't
+  // overlap on read (react-grid-layout's vertical compact usually
+  // resolves overlaps, but the explicit y-shift is a defensive guard).
+  const distLayout = hasLineMetrics
+    ? { ...widget.layout, y: widget.layout.y + (widget.layout.h ?? 4) }
+    : widget.layout;
+  out.push({
+    id: `${widget.id}-distributions`,
+    type: "distributions",
+    config: distCfg,
+    layout: distLayout,
+  });
+  return out;
+}
+
+// 2. File-group with `categoricalPrefixes` → file-group (image/video/audio
+// only, if any) + distributions widget (one bars entry per prefix).
+function migrateFileGroupWithBars(widget: Widget): Widget[] {
+  if (widget.type !== "file-group") return [widget];
+  const cfg = widget.config as LegacyFileGroupWithBars;
+  const prefixes = cfg.categoricalPrefixes;
+  if (!prefixes || prefixes.length === 0) return [widget];
+
+  const out: Widget[] = [];
+  const fileGroupHasFiles = !!cfg.files && cfg.files.length > 0;
+  if (fileGroupHasFiles) {
+    // Clean file-group: keep files[], drop every histogram/bars map.
+    const cleaned: FileGroupWidgetConfig = { files: cfg.files };
+    if (cfg.title) cleaned.title = cfg.title;
+    out.push({ ...widget, config: cleaned });
+  }
+
+  const entries: DistributionsEntry[] = prefixes.map((prefix) =>
+    barsEntryFromLegacy(
+      { prefix },
+      {
+        viewMode: cfg.viewModes?.[prefix],
+        depthAxis: cfg.depthAxes?.[prefix],
+        binRange: cfg.binRanges?.[prefix],
+        ignoreOutliers: cfg.ignoreOutliers?.[prefix],
+        stepsOnX: cfg.stepsOnX?.[prefix],
+      },
+    ),
+  );
+  const distCfg: DistributionsWidgetConfig = { entries };
+  if (cfg.title) distCfg.title = cfg.title;
+  // Same defensive y-shift as migrateChartWithBars: when the cleaned
+  // file-group sibling is also pushed, place the new distributions
+  // widget below it instead of on top.
+  const distLayout = fileGroupHasFiles
+    ? { ...widget.layout, y: widget.layout.y + (widget.layout.h ?? 4) }
+    : widget.layout;
+  out.push({
+    id: `${widget.id}-distributions`,
+    type: "distributions",
+    config: distCfg,
+    layout: distLayout,
+  });
+  return out;
+}
+
+// 3. Standalone `histogram` widget → distributions (one histogram entry).
+// One-to-one replacement; ID reused since the widget is being re-typed.
+function migrateStandaloneHistogram(widget: Widget): Widget[] {
+  if (widget.type !== "histogram") return [widget];
+  const cfg = widget.config as HistogramWidgetConfig;
+  if (!cfg.metric) return [widget];
+  const entry: DistributionsEntry = {
+    kind: "histogram",
+    metric: cfg.metric,
+    viewMode: cfg.viewMode ?? "ridgeline",
+    ignoreOutliers: cfg.ignoreOutliers ?? true,
+    stepsOnX: cfg.stepsOnX ?? false,
+  };
+  const distCfg: DistributionsWidgetConfig = { entries: [entry] };
+  if (cfg.title) distCfg.title = cfg.title;
+  return [
+    {
+      id: widget.id,
+      type: "distributions",
+      config: distCfg,
+      layout: widget.layout,
+    },
+  ];
+}
+
+function migrateSection(section: Section): Section {
+  const widgets = (section.widgets ?? [])
+    .flatMap(migrateChartWithBars)
+    .flatMap(migrateFileGroupWithBars)
+    .flatMap(migrateStandaloneHistogram);
+  const children = section.children?.map(migrateSection);
+  return { ...section, widgets, children };
+}
+
+/**
+ * Normalize a freshly-loaded dashboard config against current widget
+ * shapes. Idempotent — running twice does nothing once every widget is
+ * already in its post-migration shape. Apply at every point where
+ * `view.config` enters component state.
+ */
+/**
+ * Save-time auto-lift for legacy file-group histograms.
+ *
+ * At read time we can't tell which file entries inside a file-group
+ * widget are HISTOGRAM-type — types come from a backend query. The
+ * FileGroupWidget renderer reports each widget's HISTOGRAM file names
+ * up to dashboard-builder once the types resolve;
+ * dashboard-builder caches them in a `widgetId → histogramFiles` map
+ * and feeds the map to this transform just before the next save
+ * mutation.
+ *
+ * For each entry:
+ *   • If a file-group widget contains both HISTOGRAM files and other
+ *     entries (images / videos / audio / console), the histogram names
+ *     get removed from its `files[]`, and a sibling distributions
+ *     widget is appended after it carrying one histogram entry per
+ *     name. The file-group keeps its original ID + layout.
+ *   • If a file-group widget contains ONLY HISTOGRAM files, the
+ *     whole widget is replaced in-place by a distributions widget at
+ *     the same id + layout — no row collision.
+ *
+ * Dynamic-section widgets are never in the map (FileGroupWidget there
+ * gets `onHistogramsDetected = undefined`), so this is a no-op for
+ * them. Idempotent: running with an empty map or no matching widgets
+ * returns the input unchanged.
+ */
+export function liftFileGroupHistograms(
+  config: DashboardViewConfig,
+  detectedHistograms: Record<string, string[]>,
+): DashboardViewConfig {
+  if (Object.keys(detectedHistograms).length === 0) return config;
+
+  let mutated = false;
+  const sections = config.sections.map((section) => {
+    let sectionMutated = false;
+    const widgets: Widget[] = [];
+    for (const w of section.widgets) {
+      if (w.type !== "file-group") {
+        widgets.push(w);
+        continue;
+      }
+      const histograms = detectedHistograms[w.id];
+      if (!histograms || histograms.length === 0) {
+        widgets.push(w);
+        continue;
+      }
+      const cfg = w.config as FileGroupWidgetConfig;
+      const remainingFiles = (cfg.files ?? []).filter(
+        (f) => !histograms.includes(f),
+      );
+      const distEntries: DistributionsEntry[] = histograms.map((metric) => ({
+        kind: "histogram",
+        metric,
+        viewMode: "ridgeline",
+        ignoreOutliers: true,
+        stepsOnX: false,
+      }));
+      sectionMutated = true;
+
+      if (remainingFiles.length === 0) {
+        // File-group held only histograms — replace in place.
+        const distCfg: DistributionsWidgetConfig = { entries: distEntries };
+        if (cfg.title) distCfg.title = cfg.title;
+        widgets.push({
+          id: w.id,
+          type: "distributions",
+          config: distCfg,
+          layout: w.layout,
+        });
+      } else {
+        // Keep the file-group with non-histogram entries; spawn a
+        // sibling distributions widget for the lifted histograms. The
+        // sibling sits one row below so the auto-pack on save lays
+        // them out without overlap.
+        widgets.push({
+          ...w,
+          config: { ...cfg, files: remainingFiles },
+        });
+        widgets.push({
+          id: `${w.id}-lifted-distributions`,
+          type: "distributions",
+          config: { entries: distEntries },
+          layout: {
+            ...w.layout,
+            y: w.layout.y + (w.layout.h ?? 4),
+          },
+        });
+      }
+    }
+    if (!sectionMutated) return section;
+    mutated = true;
+    return { ...section, widgets };
+  });
+  return mutated ? { ...config, sections } : config;
+}
+
+export function migrateDashboardConfig(
+  config: DashboardViewConfig,
+): DashboardViewConfig {
+  return {
+    ...config,
+    sections: config.sections.map(migrateSection),
+  };
 }
 
 /**
@@ -384,6 +680,155 @@ export function updateWidgetScale(
       };
     }),
   };
+}
+
+/**
+ * Set a per-metric Step/Ridgeline/Heatmap viewMode on a section's
+ * `histogramViewModes` map (applies to both numeric histogram entries
+ * AND `{bars}` prefix entries inside dynamic sections — both share this
+ * map). Dynamic widgets aren't stored in `section.widgets[]`, so user
+ * view preferences have to live on the section itself. Field name kept
+ * for on-disk backwards-compat.
+ */
+export function updateSectionHistogramViewMode(
+  config: DashboardViewConfig,
+  sectionId: string,
+  metric: string,
+  mode: HistogramViewMode,
+): DashboardViewConfig {
+  const visit = (sections: Section[]): Section[] =>
+    sections.map((s) => {
+      if (s.id === sectionId) {
+        return {
+          ...s,
+          histogramViewModes: { ...(s.histogramViewModes ?? {}), [metric]: mode },
+        };
+      }
+      if (s.children) {
+        return { ...s, children: visit(s.children) };
+      }
+      return s;
+    });
+  return { ...config, sections: visit(config.sections) };
+}
+
+/**
+ * Set the viewMode for ONE histogram file inside a file-group widget. Each
+ * file in the group tracks its own mode independently via the `viewModes`
+ * map (keyed by file name).
+ */
+// File-group / standalone-histogram per-entry mutators removed —
+// histograms and {bars} entries live in distributions widgets now. The
+// distributions-entry mutators below replace them; migration handles
+// legacy on-disk shapes.
+
+// (The distributions-widget per-entry patches live just below.)
+// entries (and mix them with line metrics).
+
+// ─── Distributions widget — per-entry patches ───────────────────────
+//
+// All five updaters target an entry by INDEX into config.entries[].
+// Index-keying lets the widget hold repeated prefixes or metrics
+// without ambiguity, and lines up with the renderer (which passes the
+// index back from each panel's change handler).
+
+function patchDistributionsEntry(
+  config: DashboardViewConfig,
+  widgetId: string,
+  index: number,
+  patch: (entry: DistributionsEntry) => DistributionsEntry,
+): DashboardViewConfig {
+  return {
+    ...config,
+    sections: mapAllWidgets(config.sections, (w) => {
+      if (w.id !== widgetId || w.type !== "distributions") return w;
+      const cfg = w.config as DistributionsWidgetConfig;
+      if (!cfg.entries || index < 0 || index >= cfg.entries.length) return w;
+      const next = cfg.entries.map((e, i) => (i === index ? patch(e) : e));
+      return { ...w, config: { ...cfg, entries: next } };
+    }),
+  };
+}
+
+export function updateWidgetDistributionsEntryViewMode(
+  config: DashboardViewConfig,
+  widgetId: string,
+  index: number,
+  viewMode: HistogramViewMode,
+): DashboardViewConfig {
+  return patchDistributionsEntry(config, widgetId, index, (e) => ({
+    ...e,
+    viewMode,
+  }));
+}
+
+export function updateWidgetDistributionsEntryDepthAxis(
+  config: DashboardViewConfig,
+  widgetId: string,
+  index: number,
+  depthAxis: HistogramDepthAxis,
+): DashboardViewConfig {
+  return patchDistributionsEntry(config, widgetId, index, (e) =>
+    // Only bars entries have a depth axis; histogram entries get the
+    // patch as a no-op so callers don't have to discriminate.
+    e.kind === "bars" ? { ...e, depthAxis } : e,
+  );
+}
+
+export function updateWidgetDistributionsEntryBinRange(
+  config: DashboardViewConfig,
+  widgetId: string,
+  index: number,
+  range: { start: number; end: number },
+): DashboardViewConfig {
+  return patchDistributionsEntry(config, widgetId, index, (e) =>
+    e.kind === "bars" ? { ...e, binRange: range } : e,
+  );
+}
+
+export function updateWidgetDistributionsEntryIgnoreOutliers(
+  config: DashboardViewConfig,
+  widgetId: string,
+  index: number,
+  next: boolean,
+): DashboardViewConfig {
+  return patchDistributionsEntry(config, widgetId, index, (e) => ({
+    ...e,
+    ignoreOutliers: next,
+  }));
+}
+
+export function updateWidgetDistributionsEntryStepsOnX(
+  config: DashboardViewConfig,
+  widgetId: string,
+  index: number,
+  next: boolean,
+): DashboardViewConfig {
+  return patchDistributionsEntry(config, widgetId, index, (e) => ({
+    ...e,
+    stepsOnX: next,
+  }));
+}
+
+/** Find a widget by id anywhere in the config (top-level sections + folder
+ *  children). Returns undefined when the id doesn't match — happens
+ *  briefly between a delete and the consumer noticing the id is gone.
+ *  Used by the fullscreen dialog to look up the LIVE widget from the
+ *  current config on every render, instead of holding a stale snapshot
+ *  captured when the dialog opened. */
+export function findWidgetById(
+  config: DashboardViewConfig,
+  widgetId: string,
+): Widget | undefined {
+  for (const s of config.sections) {
+    const hit = s.widgets.find((w) => w.id === widgetId);
+    if (hit) return hit;
+    for (const c of s.children ?? []) {
+      const childHit = c.widgets.find((w) => w.id === widgetId);
+      if (childHit) return childHit;
+    }
+  }
+  return undefined;
 }
 
 // ─── Copy/paste ───────────────────────────────────────────────────────

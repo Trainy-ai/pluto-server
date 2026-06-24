@@ -10,6 +10,8 @@ interface MediaCardWrapperProps {
   fullscreenContent?: ReactNode;
   /** Optional extra controls rendered in the hover toolbar (before the fullscreen button) */
   toolbarExtra?: ReactNode;
+  /** Extra controls rendered in the fullscreen dialog header (e.g. Export, Settings). */
+  fullscreenHeaderExtra?: ReactNode;
   className?: string;
 }
 
@@ -22,6 +24,7 @@ export function MediaCardWrapper({
   children,
   fullscreenContent,
   toolbarExtra,
+  fullscreenHeaderExtra,
   className,
 }: MediaCardWrapperProps) {
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -30,13 +33,15 @@ export function MediaCardWrapper({
     <>
       <div className={`group relative ${className ?? ""}`}>
         {children}
-        {/* Hover toolbar — matches ChartCardWrapper style */}
+        {/* Hover toolbar — matches the chart-widget toolbar in WidgetCard:
+            plain ghost buttons, no semi-opaque backdrop, no tooltips on the
+            icons themselves. */}
         <div className="absolute top-1 right-1 z-10 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
           {toolbarExtra}
           <Button
             variant="ghost"
             size="icon"
-            className="size-7 bg-background/80 backdrop-blur-sm hover:bg-background"
+            className="size-7"
             data-testid="media-fullscreen-btn"
             onClick={() => setIsFullscreen(true)}
           >
@@ -50,6 +55,7 @@ export function MediaCardWrapper({
           open={true}
           onOpenChange={(open) => { if (!open) setIsFullscreen(false); }}
           title={title}
+          headerExtra={fullscreenHeaderExtra}
         >
           {fullscreenContent ?? children}
         </MediaFullscreenDialog>

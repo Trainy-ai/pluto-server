@@ -31,12 +31,14 @@ import {
   type Section,
   type Widget,
   type ChartWidgetConfig,
+  type HistogramViewMode,
 } from "../../~types/dashboard-types";
 import * as configOps from "./use-dashboard-config";
 import type { GroupedMetrics } from "@/lib/grouping/types";
 import type { SelectedRunWithColor } from "../../~hooks/use-selected-runs";
 import { searchUtils, type SearchState } from "../../~lib/search-utils";
 import { useFullscreenContext } from "@/components/charts/context/fullscreen-context";
+import { getWidgetTitle } from "./widget-utils";
 
 /** Total horizontal padding of section containers (px-6 each side = 24px * 2). */
 const SECTION_HORIZONTAL_PADDING = 48;
@@ -66,7 +68,13 @@ export function DashboardBuilder({
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(1200);
   const [isEditing, setIsEditing] = useState(false);
-  const [config, setConfig] = useState<DashboardViewConfig>(view.config);
+  // Apply migrateDashboardConfig at every state entry point so legacy
+  // file-group-with-categoricalPrefixes widgets get rendered as the
+  // new chart-widget-with-bars shape — the underlying saved JSON is
+  // left alone until the next normal save through the regular flow.
+  const [config, setConfig] = useState<DashboardViewConfig>(() =>
+    configOps.migrateDashboardConfig(view.config),
+  );
   const [hasChanges, setHasChanges] = useState(false);
   const [addWidgetSectionId, setAddWidgetSectionId] = useState<string | null>(null);
   const [editingWidget, setEditingWidget] = useState<Widget | null>(null);
@@ -125,6 +133,32 @@ export function DashboardBuilder({
     setIsEditing(false);
   }, [clearDraft]);
 
+  // Detection map for the save-time histogram auto-lift. Populated by
+  // each static-section file-group widget once its file-types query
+  // resolves; consumed by transformBeforeSave below to rewrite legacy
+  // file-group HISTOGRAM entries into a sibling distributions widget
+  // right before the save mutation. Dynamic-section widgets don't
+  // populate this — their FileGroupWidget never receives the callback.
+  const [detectedHistograms, setDetectedHistograms] = useState<Record<string, string[]>>({});
+  const detectedHistogramsRef = useRef(detectedHistograms);
+  detectedHistogramsRef.current = detectedHistograms;
+  const handleFileGroupHistogramsDetected = useCallback(
+    (widgetId: string, fileNames: string[]) => {
+      setDetectedHistograms((prev) => {
+        const existing = prev[widgetId];
+        if (
+          existing &&
+          existing.length === fileNames.length &&
+          existing.every((f, i) => f === fileNames[i])
+        ) {
+          return prev;
+        }
+        return { ...prev, [widgetId]: fileNames };
+      });
+    },
+    [],
+  );
+
   const { isSaving, handleSave, handleOverride } = useDashboardSave({
     view,
     config,
@@ -134,6 +168,14 @@ export function DashboardBuilder({
     expectedUpdatedAtRef: editStartUpdatedAtRef,
     onSaveSuccess: resetEditState,
     onConflict: useCallback(() => setIsStale(true), []),
+    // Apply the save-time histogram auto-lift right before the
+    // mutation fires. Reads the latest detection map via ref so a
+    // useCallback identity change here doesn't churn save state.
+    transformBeforeSave: useCallback(
+      (cfg: DashboardViewConfig) =>
+        configOps.liftFileGroupHistograms(cfg, detectedHistogramsRef.current),
+      [],
+    ),
   });
 
   const { hidden: hiddenWidgetIds, resolved: resolvedPatternMetrics } = useHiddenPatternWidgets({
@@ -171,9 +213,10 @@ export function DashboardBuilder({
           collapseState.set(c.id, c.collapsed);
         }
       }
+      const migrated = configOps.migrateDashboardConfig(view.config);
       return {
-        ...view.config,
-        sections: view.config.sections.map((s) => ({
+        ...migrated,
+        sections: migrated.sections.map((s) => ({
           ...s,
           collapsed: collapseState.get(s.id) ?? false,
           ...(s.children
@@ -288,7 +331,7 @@ export function DashboardBuilder({
   }, [hasChanges]);
 
   const confirmCancel = useCallback(() => {
-    setConfig(view.config);
+    setConfig(configOps.migrateDashboardConfig(view.config));
     setHasChanges(false);
     setIsStale(false);
     editStartUpdatedAtRef.current = null;
@@ -465,6 +508,73 @@ export function DashboardBuilder({
     setHasChanges(true);
   }, []);
 
+  // Distributions-widget per-entry mutators. Each callback targets an
+  // entry by INDEX inside config.entries[]. A single distributions
+  // widget can hold many bars/histogram entries; the renderer threads
+  // the entry index back through every change handler.
+  const updateWidgetDistributionsEntryViewMode = useCallback(
+    (widgetId: string, index: number, mode: HistogramViewMode) => {
+      setConfig((prev) =>
+        configOps.updateWidgetDistributionsEntryViewMode(prev, widgetId, index, mode),
+      );
+      setHasChanges(true);
+    },
+    [],
+  );
+  const updateWidgetDistributionsEntryDepthAxis = useCallback(
+    (widgetId: string, index: number, axis: "step" | "run") => {
+      setConfig((prev) =>
+        configOps.updateWidgetDistributionsEntryDepthAxis(prev, widgetId, index, axis),
+      );
+      setHasChanges(true);
+    },
+    [],
+  );
+  const updateWidgetDistributionsEntryBinRange = useCallback(
+    (widgetId: string, index: number, range: { start: number; end: number }) => {
+      setConfig((prev) =>
+        configOps.updateWidgetDistributionsEntryBinRange(prev, widgetId, index, range),
+      );
+      setHasChanges(true);
+    },
+    [],
+  );
+  const updateWidgetDistributionsEntryIgnoreOutliers = useCallback(
+    (widgetId: string, index: number, next: boolean) => {
+      setConfig((prev) =>
+        configOps.updateWidgetDistributionsEntryIgnoreOutliers(prev, widgetId, index, next),
+      );
+      setHasChanges(true);
+    },
+    [],
+  );
+  const updateWidgetDistributionsEntryStepsOnX = useCallback(
+    (widgetId: string, index: number, next: boolean) => {
+      setConfig((prev) =>
+        configOps.updateWidgetDistributionsEntryStepsOnX(prev, widgetId, index, next),
+      );
+      setHasChanges(true);
+    },
+    [],
+  );
+
+  // Per-metric Step/Ridgeline/Heatmap viewMode for dynamic-section
+  // widgets (applies to both numeric histogram entries AND `{bars}`
+  // prefix entries — both share the same view-mode set). Dynamic widgets
+  // are regenerated from `dynamicPattern` on every render and don't live
+  // in `section.widgets[]`, so the preference is stored on the section
+  // itself via `section.histogramViewModes[metric]` (field name kept for
+  // on-disk backwards-compat).
+  const updateSectionHistogramViewMode = useCallback(
+    (sectionId: string, metric: string, mode: HistogramViewMode) => {
+      setConfig((prev) =>
+        configOps.updateSectionHistogramViewMode(prev, sectionId, metric, mode),
+      );
+      setHasChanges(true);
+    },
+    [],
+  );
+
   const allCollapsed = config.sections.length > 0 && config.sections.every((s) => s.collapsed);
 
   const toggleAllSections = useCallback(() => {
@@ -606,6 +716,8 @@ export function DashboardBuilder({
           searchState={searchState}
           onWidgetCountChange={(count) => handleDynamicWidgetCount(section.id, count)}
           settingsRunId={settingsRunId}
+          histogramViewModes={section.histogramViewModes}
+          onUpdateSectionHistogramViewMode={updateSectionHistogramViewMode}
         />
       );
     }
@@ -637,6 +749,12 @@ export function DashboardBuilder({
             settingsRunId={settingsRunId}
             yZoomRange={widgetYZoomRanges[widget.id] ?? null}
             onYZoomRangeChange={(range) => setWidgetYZoomRanges((prev) => ({ ...prev, [widget.id]: range }))}
+            onUpdateDistributionsEntryViewMode={updateWidgetDistributionsEntryViewMode}
+            onUpdateDistributionsEntryDepthAxis={updateWidgetDistributionsEntryDepthAxis}
+            onUpdateDistributionsEntryBinRange={updateWidgetDistributionsEntryBinRange}
+            onUpdateDistributionsEntryIgnoreOutliers={updateWidgetDistributionsEntryIgnoreOutliers}
+            onUpdateDistributionsEntryStepsOnX={updateWidgetDistributionsEntryStepsOnX}
+            onFileGroupHistogramsDetected={handleFileGroupHistogramsDetected}
           />
         )}
       />
@@ -891,36 +1009,45 @@ export function DashboardBuilder({
         selectedRunIds={selectedRunIds}
       />
 
-      {/* Fullscreen Chart Dialog */}
-      {fullscreenWidget && fullscreenWidget.type === "chart" && (
-        <ChartFullscreenDialog
-          open={true}
-          onOpenChange={(open) => { if (!open) setFullscreenWidget(null); }}
-          title={fullscreenWidget.config.title || (fullscreenWidget.config as ChartWidgetConfig).metrics[0] || "Chart"}
-          logXAxis={(fullscreenWidget.config as ChartWidgetConfig).xAxisScale === "log"}
-          logYAxis={(fullscreenWidget.config as ChartWidgetConfig).yAxisScale === "log"}
-          onLogScaleChange={(axis, value) => {
-            updateWidgetScale(fullscreenWidget.id, axis, value);
-            const scaleValue = value ? "log" : "linear";
-            setFullscreenWidget((prev) =>
-              prev
-                ? { ...prev, config: { ...prev.config, ...(axis === "x" ? { xAxisScale: scaleValue } : { yAxisScale: scaleValue }) } }
-                : null
-            );
-          }}
-        >
-          <WidgetRenderer
-            widget={fullscreenWidget}
-            groupedMetrics={groupedMetrics}
-            selectedRuns={selectedRuns}
-            organizationId={organizationId}
-            projectName={projectName}
-            settingsRunId={settingsRunId}
-            yZoomRange={widgetYZoomRanges[fullscreenWidget.id] ?? null}
-            onYZoomRangeChange={(range) => setWidgetYZoomRanges((prev) => ({ ...prev, [fullscreenWidget.id]: range }))}
-          />
-        </ChartFullscreenDialog>
-      )}
+      {/* Fullscreen Chart Dialog.
+       *  `fullscreenWidget` state captures only the WIDGET IDENTITY at open
+       *  time — every render below re-derives the LIVE widget from config
+       *  via `findWidgetById`. Without this, in-fullscreen edits (bin
+       *  range, view-mode toggle, ignore-outliers, etc.) flow through
+       *  setConfig → main state → dashboard rerender, but `fullscreenWidget`
+       *  itself was a stale snapshot and the dialog kept rendering the old
+       *  values. The user's change applied to the saved config but the
+       *  fullscreen view didn't reflect it, making the input feel broken.
+       */}
+      {(() => {
+        if (!fullscreenWidget || fullscreenWidget.type !== "chart") return null;
+        const liveWidget =
+          configOps.findWidgetById(config, fullscreenWidget.id) ?? fullscreenWidget;
+        const liveCfg = liveWidget.config as ChartWidgetConfig;
+        return (
+          <ChartFullscreenDialog
+            open={true}
+            onOpenChange={(open) => { if (!open) setFullscreenWidget(null); }}
+            title={liveCfg.title || getWidgetTitle(liveWidget)}
+            logXAxis={liveCfg.xAxisScale === "log"}
+            logYAxis={liveCfg.yAxisScale === "log"}
+            onLogScaleChange={(axis, value) =>
+              updateWidgetScale(liveWidget.id, axis, value)
+            }
+          >
+            <WidgetRenderer
+              widget={liveWidget}
+              groupedMetrics={groupedMetrics}
+              selectedRuns={selectedRuns}
+              organizationId={organizationId}
+              projectName={projectName}
+              settingsRunId={settingsRunId}
+              yZoomRange={widgetYZoomRanges[liveWidget.id] ?? null}
+              onYZoomRangeChange={(range) => setWidgetYZoomRanges((prev) => ({ ...prev, [liveWidget.id]: range }))}
+            />
+          </ChartFullscreenDialog>
+        );
+      })()}
 
       {/* Dialogs */}
       <CancelConfirmDialog

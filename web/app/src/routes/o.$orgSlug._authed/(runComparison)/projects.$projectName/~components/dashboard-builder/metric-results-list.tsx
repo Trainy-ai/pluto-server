@@ -1,6 +1,7 @@
 import {
   LineChartIcon,
   BarChart3Icon,
+  ChartAreaIcon,
   FileTextIcon,
   ImageIcon,
   VideoIcon,
@@ -31,6 +32,8 @@ export function MetricResultsList({
   footer,
   itemLabel = "metric",
   typeMap,
+  truncated = false,
+  showSkeleton = false,
 }: {
   metrics: string[];
   selectedValues: string[];
@@ -45,12 +48,24 @@ export function MetricResultsList({
   footer?: React.ReactNode;
   itemLabel?: string;
   typeMap?: Map<string, string>;
+  /** Caller set this to true when `metrics` was sliced down from a larger
+   *  pre-cap list. Shows a "+" suffix so the count reads e.g. "500+ metrics"
+   *  to signal "there were more — type to search for them". */
+  truncated?: boolean;
+  /** Render shimmer placeholder rows INSTEAD of `metrics`. Use when the
+   *  caller is still waiting on slow data sources whose results would
+   *  cause new rows to pop in mid-render (e.g. N+1 eligiblePrefixes
+   *  fans, or hardcoded synthetic entries that render before the real
+   *  list arrives). Keeps the dropdown visually stable. */
+  showSkeleton?: boolean;
 }) {
   return (
-    <div className="overflow-hidden rounded-lg border">
+    <div className="overflow-hidden rounded-lg border" data-testid="metric-results-list">
       <div className="flex items-center justify-between border-b px-3 py-2">
         <span className="text-xs font-medium text-muted-foreground">
-          {isLoading ? "Searching..." : `${metrics.length}${metrics.length === 500 ? "+" : ""} ${itemLabel}${metrics.length !== 1 ? "s" : ""}`}
+          {isLoading || showSkeleton
+            ? "Loading..."
+            : `${metrics.length}${truncated ? "+" : ""} ${itemLabel}${metrics.length !== 1 ? "s" : ""}`}
         </span>
         {onSelectAll && metrics.length > 0 && (
           <button
@@ -62,7 +77,21 @@ export function MetricResultsList({
         )}
       </div>
       <div className="h-[200px] overflow-y-auto overflow-x-hidden">
-        {isLoading && metrics.length === 0 ? (
+        {showSkeleton ? (
+          // Shimmer placeholders sized to the real row height so the
+          // list area doesn't jump when the data finally lands. 8 rows
+          // ≈ what fits in the 200px viewport — enough to look like a
+          // populated list while sources finish loading.
+          Array.from({ length: 8 }).map((_, i) => (
+            <div key={i} className="flex items-center gap-1.5 px-2 py-1.5">
+              <div className="size-3.5 shrink-0 animate-pulse rounded bg-muted" />
+              <div
+                className="h-3 animate-pulse rounded bg-muted"
+                style={{ width: `${40 + ((i * 13) % 40)}%` }}
+              />
+            </div>
+          ))
+        ) : isLoading && metrics.length === 0 ? (
           <div className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">
             <Loader2Icon className="size-4 animate-spin" />
             Searching...
@@ -80,6 +109,8 @@ export function MetricResultsList({
                 key={metric}
                 type="button"
                 className="flex w-full min-w-0 items-center gap-1.5 overflow-hidden px-2 py-1.5 text-sm hover:bg-accent"
+                data-testid="metric-results-row"
+                data-metric={metric}
                 onClick={() => onToggle(metric)}
               >
                 {selectedValues.includes(metric) ? (
@@ -126,7 +157,13 @@ export function MetricResultsList({
 /** Icon for file log types. */
 export function FileTypeIcon({ logType, className }: { logType: string; className?: string }) {
   switch (logType) {
-    case "HISTOGRAM": return <BarChart3Icon className={className} />;
+    // Numeric histograms get a filled-area chart glyph — visually a
+    // smooth distribution — so they read as distinct from {bars}
+    // categorical rollups, which keep the bar-chart glyph below.
+    case "HISTOGRAM":
+      return <ChartAreaIcon className={className} />;
+    case "BARS":
+      return <BarChart3Icon className={className} />;
     case "IMAGE": return <ImageIcon className={className} />;
     case "VIDEO": return <VideoIcon className={className} />;
     case "AUDIO": return <MusicIcon className={className} />;

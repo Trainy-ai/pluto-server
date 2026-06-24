@@ -117,6 +117,8 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       yZoomRange,
       onYZoomRangeChange,
       forkSteps,
+      extraLeftPadding,
+      extraRightPadding,
       className,
       ...rest
     },
@@ -418,6 +420,25 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         select: { show: true, over: true, left: 0, top: 0, width: 0, height: 0 },
         bands: bands.length > 0 ? bands : undefined,
         focus: { alpha: 1 },
+        // Optional left/right padding for end-to-end alignment with a
+        // sibling canvas panel below (e.g. a transposed bars heatmap).
+        // uPlot's `padding` is [top, right, bottom, left] — null keeps
+        // the auto-padding default on that side.
+        ...((extraLeftPadding != null && extraLeftPadding > 0) ||
+        (extraRightPadding != null && extraRightPadding > 0)
+          ? {
+              padding: [
+                null,
+                extraRightPadding != null && extraRightPadding > 0
+                  ? extraRightPadding
+                  : null,
+                null,
+                extraLeftPadding != null && extraLeftPadding > 0
+                  ? extraLeftPadding
+                  : null,
+              ] as [number | null, number | null, number | null, number | null],
+            }
+          : {}),
         plugins: [
           // Focus detection must run BEFORE tooltip so highlightedSeriesRef is set
           // when the tooltip reads it to sort/highlight the hovered series
@@ -532,6 +553,11 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       // identity on every data refresh, and buildScalesConfig reads it live
       // via yRangeRef. Including it here recreated the chart every refresh.
       tooltipInterpolation, yZoom,
+      // Recreate the uPlot chart when the caller changes the alignment-
+      // padding value (e.g. they toggled "Steps on X" on a sibling
+      // bars panel below). uPlot reads `padding` at init time, so this
+      // is the only way to apply a new value.
+      extraLeftPadding, extraRightPadding,
     ]);
 
     // Chart lifecycle management (extracted hook)

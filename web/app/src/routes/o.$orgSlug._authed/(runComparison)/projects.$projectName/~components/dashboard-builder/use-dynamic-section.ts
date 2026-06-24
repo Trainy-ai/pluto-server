@@ -8,10 +8,17 @@ import type {
   Widget,
   ChartWidgetConfig,
   FileGroupWidgetConfig,
+  DistributionsWidgetConfig,
 } from "../../~types/dashboard-types";
 import { SYNTHETIC_CONSOLE_ENTRIES } from "./console-log-constants";
 import { useLineSettings } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/use-line-settings";
 import { bucketMetricsByPrefix, splitMetricPath } from "./bucket-metrics";
+import {
+  decodeBarsEntry,
+  encodeBarsEntry,
+  isBarsEntry,
+} from "./bars-entry-encoding";
+import { useEligiblePrefixesForRuns } from "../../~queries/file-log-names";
 
 const MAX_DYNAMIC_WIDGETS = 100;
 
@@ -75,6 +82,20 @@ export function useDynamicSectionWidgets(
   // metric whose values are entirely NaN).
   const { settings } = useLineSettings(organizationId, projectName, "full");
   const includeNonFiniteMetrics = settings.includeNonFiniteMetrics ?? false;
+
+  // --- Source 1b: eligible {bars} prefixes ---
+  // Pulled unconditionally and merged into the metric list, matching the
+  // Add Widget search panel (chart-config-form.tsx) and DynamicPatternPreview.
+  // A pattern like `sys/*` will then surface `sys/{bars}` alongside
+  // `sys/cpu.percentage.N` — same discovery model the user already has when
+  // building a widget. The pattern's own regex/fuzzy filter decides which
+  // entries survive; the eligibility proc has already excluded prefixes
+  // that wouldn't make a meaningful bars chart.
+  const eligiblePrefixes = useEligiblePrefixesForRuns(
+    organizationId,
+    projectName,
+    hasPattern && hasRuns ? selectedRunIds : [],
+  );
 
   // --- Source 1 (search mode): all metrics/files for selected runs ---
   const initialMetrics = useQuery(
@@ -173,15 +194,32 @@ export function useDynamicSectionWidgets(
     let filteredFiles: { logName: string; logType: string }[];
 
     if (patternMode === "regex") {
-      // Regex: backend handles filtering, use results directly
-      filteredMetrics = regexMetrics.data?.metricNames ?? [];
+      // Regex: backend handles filtering of real metric names + file
+      // names, use results directly. Synthetic entries (console logs,
+      // encoded `${prefix}{bars}` rollups) aren't in the backend's
+      // candidate pool — they only exist client-side — so test them
+      // against the regex here.
+      filteredMetrics = [...(regexMetrics.data?.metricNames ?? [])];
       const backendRegexFiles = regexFiles.data?.files ?? [];
-      // Test synthetic entries against regex client-side
       let syntheticMatches: { logName: string; logType: string }[] = [];
       if (trimmed) {
         try {
           const re = new RegExp(trimmed);
-          syntheticMatches = SYNTHETIC_CONSOLE_ENTRIES.filter((e) => re.test(e.logName));
+          syntheticMatches = SYNTHETIC_CONSOLE_ENTRIES.filter((e) =>
+            re.test(e.logName),
+          );
+          // Same idea for eligible {bars} prefixes: surface any encoded
+          // `${prefix}{bars}` that matches the regex. Without this, a
+          // dynamic-section regex like `dataset/\{bars\}|dataset/a`
+          // matches the line metrics but never the bars rollup.
+          if (eligiblePrefixes.data.length > 0) {
+            for (const entry of eligiblePrefixes.data) {
+              const encoded = encodeBarsEntry(entry.prefix);
+              if (re.test(encoded) && !filteredMetrics.includes(encoded)) {
+                filteredMetrics.push(encoded);
+              }
+            }
+          }
         } catch { /* invalid regex — skip */ }
       }
       filteredFiles = [...syntheticMatches, ...backendRegexFiles];
@@ -199,6 +237,17 @@ export function useDynamicSectionWidgets(
       for (const f of initF) fileMap.set(f.logName, f);
       for (const f of searchF) fileMap.set(f.logName, f);
       const mergedFileNames = Array.from(fileMap.keys());
+
+      // Merge encoded bars entries (`${prefix}{bars}`) into the metric
+      // list unconditionally — same model as the Add Widget search panel.
+      // The pattern's own regex/fuzzy filter below decides which entries
+      // survive; a pattern like `sys/*` will surface `sys/{bars}` next to
+      // `sys/cpu.percentage.N` just like in widget creation.
+      if (eligiblePrefixes.data.length > 0) {
+        for (const entry of eligiblePrefixes.data) {
+          mergedMetrics.push(encodeBarsEntry(entry.prefix));
+        }
+      }
 
       if (!trimmed) {
         filteredMetrics = mergedMetrics.sort((a, b) => a.localeCompare(b));
@@ -264,6 +313,31 @@ export function useDynamicSectionWidgets(
     }
 
     for (const logName of passthrough) {
+      // {bars} entries get a single-entry distributions widget. The
+      // encoded display name is `${prefix}{bars}` — decode to recover
+      // the raw prefix and emit one bars entry under it.
+      if (isBarsEntry(logName)) {
+        const prefix = decodeBarsEntry(logName);
+        const config: DistributionsWidgetConfig = {
+          entries: [
+            {
+              kind: "bars",
+              prefix,
+              viewMode: "ridgeline",
+              depthAxis: "step",
+              ignoreOutliers: true,
+              stepsOnX: false,
+            },
+          ],
+        };
+        widgets.push({
+          id: `dyn-${sectionId}-bars-${prefix}`,
+          type: "distributions",
+          config,
+          layout: { x: 0, y: 0, w: 6, h: 4 },
+        });
+        continue;
+      }
       const config: ChartWidgetConfig = {
         metrics: [logName],
         xAxis: "step",
@@ -292,13 +366,38 @@ export function useDynamicSectionWidgets(
       });
     }
 
-    widgets.sort((a, b) => a.id.localeCompare(b.id));
+    // Categorical {bars} widgets emit whenever the pattern's regex / fuzzy
+    // filter selects an encoded `${prefix}{bars}` entry from the merged
+    // metric list. The eligible-prefix proc already excludes prefixes
+    // that wouldn't make a meaningful bars chart, so a heterogeneous
+    // prefix like `train/` never enters the candidate pool in the first
+    // place — meaning a pattern like `train/*` still doesn't emit bars,
+    // not because the section gates it, but because there's no eligible
+    // entry to match. A pattern like `sys/*` (where sys/ IS eligible)
+    // surfaces `sys/{bars}` alongside `sys/cpu.percentage.N`, mirroring
+    // the Add Widget search panel's behavior.
+
+    // Sort bars widgets to the END of the section, then alpha by id within
+    // each group. The Add-Widget panel surfaces bars alongside line metrics
+    // but a dashboard reader reaching for "the first widget in this section"
+    // usually means a per-metric line chart — surfacing the prefix-level
+    // bars rollup first would push the per-metric widgets below the fold.
+    // Also keeps the test selectors that grab the first chart-fullscreen-btn
+    // in a dynamic section pointing at a uPlot widget rather than a bars
+    // canvas (the dialog UI differs and breaks .uplot-based assertions).
+    widgets.sort((a, b) => {
+      const aIsBars = a.id.includes(`dyn-${sectionId}-bars-`);
+      const bIsBars = b.id.includes(`dyn-${sectionId}-bars-`);
+      if (aIsBars !== bIsBars) return aIsBars ? 1 : -1;
+      return a.id.localeCompare(b.id);
+    });
     return widgets.slice(0, MAX_DYNAMIC_WIDGETS);
   }, [
     hasPattern, hasRuns, trimmed, isGlob, patternMode, sectionId, groupBy, groupPrefixes, groupPrefixRegex,
     initialMetrics.data, initialFiles.data,
     searchMetrics.data, searchFiles.data,
     regexMetrics.data, regexFiles.data,
+    eligiblePrefixes.data,
   ]);
 
   const isLoading =
@@ -310,7 +409,8 @@ export function useDynamicSectionWidgets(
         searchMetrics.isLoading ||
         searchFiles.isLoading)) ||
       (patternMode === "regex" &&
-        (regexMetrics.isLoading || regexFiles.isLoading)));
+        (regexMetrics.isLoading || regexFiles.isLoading)) ||
+      eligiblePrefixes.isLoading);
 
   return { dynamicWidgets, isLoading };
 }
@@ -381,6 +481,18 @@ export function useDynamicWidgetCount(
     ),
   );
 
+  // Mirror `useDynamicSectionWidgets`: pull eligible `{bars}` prefixes so the
+  // collapsed-header widget count includes the bars rollups. Without this the
+  // count under-reported by exactly the number of bars-eligible prefixes
+  // matched by the section's pattern; expanding the section showed the right
+  // number because the grid hook merges these in.
+  const eligiblePrefixes = useEligiblePrefixesForRuns(
+    organizationId,
+    projectName,
+    selectedRunIds,
+    hasPattern && hasRuns,
+  );
+
   const isLoading =
     hasPattern &&
     hasRuns &&
@@ -399,21 +511,37 @@ export function useDynamicWidgetCount(
     let metricNames: string[];
     let fileCount: number;
 
+    // Encoded `${prefix}{bars}` entries surface alongside regular metrics
+    // for both pattern modes — merged here so the count-and-filter logic
+    // treats them identically to line metrics, matching the grid hook.
+    const barsEntries = eligiblePrefixes.data.map((e) => encodeBarsEntry(e.prefix));
+
     if (patternMode === "regex") {
-      metricNames = regexMetrics.data?.metricNames ?? [];
-      const backendFileCount = regexFiles.data?.files?.length ?? 0;
+      // Backend regex doesn't know about synthetic `${prefix}{bars}`
+      // entries — they're frontend-only. Filter the eligible bars set
+      // against the regex client-side and merge. Same idea for
+      // synthetic console entries below.
+      let filteredBars: string[] = [];
       let syntheticCount = 0;
       if (trimmed) {
         try {
           const re = new RegExp(trimmed);
-          syntheticCount = SYNTHETIC_CONSOLE_ENTRIES.filter((e) => re.test(e.logName)).length;
+          filteredBars = barsEntries.filter((b) => re.test(b));
+          syntheticCount = SYNTHETIC_CONSOLE_ENTRIES.filter((e) =>
+            re.test(e.logName),
+          ).length;
         } catch { /* invalid regex */ }
       }
+      metricNames = [
+        ...(regexMetrics.data?.metricNames ?? []),
+        ...filteredBars,
+      ];
+      const backendFileCount = regexFiles.data?.files?.length ?? 0;
       fileCount = syntheticCount + backendFileCount;
     } else {
       const initM = initialMetrics.data?.metricNames ?? [];
       const searchM = searchMetrics.data?.metricNames ?? [];
-      const mergedMetrics = new Set([...searchM, ...initM]);
+      const mergedMetrics = new Set([...searchM, ...initM, ...barsEntries]);
 
       const initF = initialFiles.data?.files ?? [];
       const searchF = searchFiles.data?.files ?? [];
@@ -464,6 +592,7 @@ export function useDynamicWidgetCount(
     initialMetrics.data, initialFiles.data,
     searchMetrics.data, searchFiles.data,
     regexMetrics.data, regexFiles.data,
+    eligiblePrefixes.data,
   ]);
 
   return { count, isLoading };

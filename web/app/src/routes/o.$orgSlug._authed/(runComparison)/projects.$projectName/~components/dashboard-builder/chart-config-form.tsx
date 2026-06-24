@@ -21,6 +21,14 @@ import { SelectedBadges } from "./selected-badges";
 import { XAxisSelector } from "./x-axis-selector";
 import { isValidRe2Regex } from "../../~lib/validate-re2-regex";
 import { useLineSettings } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/use-line-settings";
+import { toggleChartConfigChip } from "./chart-config-toggle";
+
+/** Frontend dropdown rendering cap. The backend procs return up to 500
+ *  (project-wide) or 10k (run-scoped) — the run-scoped path was added for
+ *  glob/regex pattern resolution at widget-render time and was never
+ *  intended for this dropdown. Past ~500 DOM nodes the list interaction
+ *  starts to chug; the user can search to find anything past the cap. */
+const DROPDOWN_MAX_RESULTS = 500;
 
 interface ChartConfigFormProps {
   config: Partial<ChartWidgetConfig>;
@@ -66,16 +74,19 @@ export function ChartConfigForm({
     useRegexSearchMetricNames(organizationId, projectName, debouncedRegex);
 
   const regexMetrics = regexResults?.metricNames ?? [];
+  // selectedValues is what the dropdown uses to render the checked
+  // state. Chart widgets host only line metrics now — {bars} rollups
+  // moved to the distributions widget.
   const selectedValues = config.metrics ?? [];
 
-  const handleRegexToggle = (metric: string) => {
-    const current = config.metrics ?? [];
-    if (current.includes(metric)) {
-      onChange({ ...config, metrics: current.filter((m) => m !== metric) });
-    } else {
-      onChange({ ...config, metrics: [...current, metric] });
-    }
+  // Toggle is simple set membership over config.metrics. Pure logic
+  // lives in toggleChartConfigChip so it's unit-testable.
+  const handleToggle = (value: string) => {
+    onChange(toggleChartConfigChip(config, value));
   };
+  // Legacy name kept so the existing RegexSearchPanel binding doesn't
+  // need a rename — it never sends bars entries anyway.
+  const handleRegexToggle = handleToggle;
 
   const handleRegexSelectAll = () => {
     const current = new Set(config.metrics ?? []);
@@ -113,14 +124,28 @@ export function ChartConfigForm({
           selectedValues={selectedValues}
           onToggle={handleRegexToggle}
           onSelectAll={(metrics) => {
-            const current = new Set(selectedValues);
-            for (const m of metrics) { current.add(m); }
-            onChange({ ...config, metrics: Array.from(current) });
+            // Route each new value through `toggleChartConfigChip` so bars
+            // entries land in `config.bars` and line metrics in
+            // `config.metrics`. Previously we dumped the whole
+            // `selectedValues` (which already mixed bars + metrics) into
+            // `config.metrics`, which re-classified existing bars rows
+            // as line metrics and silently broke the line panel.
+            let next = config;
+            for (const m of metrics) {
+              if (selectedValues.includes(m)) continue;
+              next = toggleChartConfigChip(next, m);
+            }
+            onChange(next);
           }}
           onApplyGlob={(pattern) => {
             const globVal = makeGlobValue(pattern);
             if (!selectedValues.includes(globVal)) {
-              onChange({ ...config, metrics: [...selectedValues, globVal] });
+              // `toggleChartConfigChip` adds glob values to
+              // `config.metrics` (they aren't bars entries) without
+              // touching `config.bars`. The old shape spread the whole
+              // mixed `selectedValues` into `config.metrics` and
+              // duplicated bars entries there.
+              onChange(toggleChartConfigChip(config, globVal));
             }
           }}
         />
@@ -140,7 +165,7 @@ export function ChartConfigForm({
 
       <SelectedBadges
         values={selectedValues}
-        onRemove={(v) => onChange({ ...config, metrics: selectedValues.filter((m) => m !== v) })}
+        onRemove={handleToggle}
       />
 
       <XAxisSelector
@@ -227,6 +252,8 @@ function SearchMetricPanel({
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const isGlob = search.includes("*") || search.includes("?");
 
+  // {bars} rollups moved to the Distributions tab — Metrics is line-
+  // metrics only now. No eligible-prefix fan-out, no encoded chips.
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedSearch(isGlob ? search.replace(/[*?]/g, "") : search);
@@ -241,12 +268,15 @@ function SearchMetricPanel({
 
   const { data: initialMetrics, isLoading: isLoadingInitial } =
     useDistinctMetricNames(organizationId, projectName);
-  const { data: runMetrics } = useRunMetricNames(
+  const { data: runMetrics, isLoading: isLoadingRun } = useRunMetricNames(
     organizationId,
     projectName,
     selectedRunIds ?? [],
     includeNonFiniteMetrics,
   );
+  // Combined "still in initial fan-out" flag: the dropdown stays in
+  // skeleton mode until ALL of the slow sources have settled.
+  const isInitialDataLoading = isLoadingInitial || isLoadingRun;
   const runMetricSet = useMemo(() => {
     if (!runMetrics?.metricNames) return null;
     return new Set(runMetrics.metricNames);
@@ -258,7 +288,7 @@ function SearchMetricPanel({
   const { data: searchResults, isFetching: isSearching } =
     useSearchMetricNames(organizationId, projectName, debouncedSearch);
 
-  const filteredMetrics = useMemo(() => {
+  const { filteredMetrics, filteredMetricsTruncated } = useMemo(() => {
     const initial = initialMetrics?.metricNames ?? [];
     const searched = searchResults?.metricNames ?? [];
     // Also merge run-scoped metrics so that when the NaN/Inf toggle is ON,
@@ -267,14 +297,27 @@ function SearchMetricPanel({
     const runScoped = runMetrics?.metricNames ?? [];
     const merged = Array.from(new Set([...searched, ...initial, ...runScoped]));
     const trimmed = search.trim();
-    if (!trimmed) return merged.sort((a, b) => a.localeCompare(b));
-    if (isGlob) {
+    let result: string[];
+    if (!trimmed) {
+      result = merged.sort((a, b) => a.localeCompare(b));
+    } else if (isGlob) {
       try {
         const regex = globToRegex(trimmed);
-        return merged.filter((m) => regex.test(m)).sort((a, b) => a.localeCompare(b));
-      } catch { return []; }
+        result = merged.filter((m) => regex.test(m)).sort((a, b) => a.localeCompare(b));
+      } catch {
+        result = [];
+      }
+    } else {
+      result = fuzzyFilter(merged, search);
     }
-    return fuzzyFilter(merged, search);
+    // Cap the rendered list. Backend procs return up to 500 (project-wide)
+    // or 10k (run-scoped); rendering all 10k as DOM nodes locks the modal
+    // on big projects. The user can search to find anything past the cap.
+    const wasTruncated = result.length > DROPDOWN_MAX_RESULTS;
+    return {
+      filteredMetrics: wasTruncated ? result.slice(0, DROPDOWN_MAX_RESULTS) : result,
+      filteredMetricsTruncated: wasTruncated,
+    };
   }, [initialMetrics, searchResults, runMetrics, search, isGlob]);
 
   const isLoading = isLoadingInitial || isSearching;
@@ -285,6 +328,7 @@ function SearchMetricPanel({
         <Label>Search Metrics</Label>
         <Input
           placeholder="Search metrics... (use * or ? for glob patterns)"
+          data-testid="add-widget-metric-search"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
@@ -294,6 +338,8 @@ function SearchMetricPanel({
       </div>
       <MetricResultsList
         metrics={filteredMetrics}
+        truncated={filteredMetricsTruncated}
+        showSkeleton={isInitialDataLoading}
         selectedValues={selectedValues}
         isLoading={isLoading}
         emptyMessage="No metrics found."
