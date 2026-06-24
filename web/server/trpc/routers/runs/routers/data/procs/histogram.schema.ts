@@ -88,6 +88,21 @@ export const barsDataInput = z.object({
   stepCap: z.number().int().positive().max(HISTOGRAM_STEP_CAP_HARD_MAX).optional(),
 });
 
+// Batched variant of barsDataInput: one query for many runs instead of one
+// per run. Additive — the single-run `barsData` proc/input is unchanged.
+export const barsDataBatchInput = z.object({
+  runIds: z.array(z.string()).min(1),
+  projectName: z.string(),
+  pathPrefix: z.string().min(1),
+  stepCap: z.number().int().positive().max(HISTOGRAM_STEP_CAP_HARD_MAX).optional(),
+});
+
+// Batched bars-data result, keyed by the ENCODED runId the caller passed in.
+// Runs with no qualifying data under the prefix (or below the suffix
+// threshold) are omitted — callers look up `result[runId]` and treat a
+// missing entry as "no data", exactly like the single-run empty result.
+export type BarsDataBatchResult = Record<string, BarsDataQueryResult>;
+
 // runId is OPTIONAL: when present the proc scopes to a single run; when
 // omitted it scopes to all runs in the project (parity with the
 // distinctFileLogNames pattern used by the Files dropdown). The project-
