@@ -1,20 +1,32 @@
 import { trpc } from "@/utils/trpc";
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
-import {
-  mergeEligiblePrefixes,
-  type EligiblePrefixEntry,
-} from "./eligible-prefixes-merge";
 
-export type { EligiblePrefixEntry };
+export interface EligiblePrefixEntry {
+  prefix: string;
+  suffixCount: number;
+}
 
 /**
  * Eligible {bars} prefixes for the Add-Widget Files dropdown.
- * Returns the union of:
- *   - one runs.data.eligiblePrefixes call per selected run (if any), AND
- *   - one project-wide call (runId omitted) so prefix entries surface
- *     even before the user selects any runs.
- * Both paths share the same prefix → max-suffix-count merge logic.
+ *
+ * Uses a SINGLE project-wide `runs.data.eligiblePrefixes` call (runId
+ * omitted). The project-wide result counts distinct children across every
+ * run in the project, so for any prefix it is a superset of — and has a
+ * suffix count >= — the per-run results: a prefix eligible in any single
+ * selected run (>= 3 children there) is necessarily eligible project-wide.
+ *
+ * We previously fired one query PER selected run in addition to this one and
+ * merged the results client-side. On a dashboard with N selected runs that
+ * was N+1 ClickHouse round-trips per dynamic section that produced an
+ * identical result. Collapsing to the project-wide query alone removes the
+ * per-run fan-out with no change in output. (`runIds` is kept on the
+ * signature for call-site stability.)
+ *
+ * The backend proc already returns its prefixes deepest-only (ancestor-
+ * suppressed) and sorted by (suffixCount desc, prefix asc), so we use the
+ * response directly — no client-side re-merge/re-sort needed.
+ *
  * Surfaces deepest prefixes with >= 3 children.
  */
 export function useEligiblePrefixesForRuns(
@@ -23,28 +35,8 @@ export function useEligiblePrefixesForRuns(
   runIds: string[],
   enabled: boolean = true,
 ) {
-  // Per-run queries (when runs are selected — narrows results to "this prefix
-  // is actually present in the user's chosen runs"). A user with hundreds
-  // of runs but only 2 selected wants `{bars}` to reflect just those 2.
-  const perRunQueries = useQueries({
-    queries: runIds.map((runId) =>
-      trpc.runs.data.eligiblePrefixes.queryOptions(
-        { organizationId: orgId, projectName, runId },
-        {
-          // Guard `.length` on possibly-undefined params. Route params can be
-          // briefly absent during navigation transitions; an unguarded
-          // `runId.length` crashes the whole dashboard with
-          // "Cannot read properties of undefined (reading 'length')".
-          enabled: enabled && (runId?.length ?? 0) > 0,
-          staleTime: 1000 * 30,
-        },
-      ),
-    ),
-  });
+  void runIds; // retained for call-site stability; see doc comment above
 
-  // Project-wide fallback (runId omitted). Always runs — its results power
-  // the dropdown when nothing is selected and also serve as a safety net
-  // when the user-selected runs don't cover all eligible prefixes.
   const projectQuery = useQuery(
     trpc.runs.data.eligiblePrefixes.queryOptions(
       { organizationId: orgId, projectName },
@@ -55,17 +47,14 @@ export function useEligiblePrefixesForRuns(
     ),
   );
 
+  // useMemo only to keep a stable [] identity while loading (avoids
+  // downstream churn); the loaded value is used as-is from the server.
   const merged = useMemo<EligiblePrefixEntry[]>(
-    () =>
-      mergeEligiblePrefixes(
-        perRunQueries.map((q) => (q.data ?? undefined) as EligiblePrefixEntry[] | undefined),
-        projectQuery.data as EligiblePrefixEntry[] | undefined,
-      ),
-    [perRunQueries, projectQuery.data],
+    () => (projectQuery.data as EligiblePrefixEntry[] | undefined) ?? [],
+    [projectQuery.data],
   );
 
-  const isLoading =
-    perRunQueries.some((q) => q.isLoading) || projectQuery.isLoading;
+  const isLoading = projectQuery.isLoading;
   return { data: merged, isLoading };
 }
 

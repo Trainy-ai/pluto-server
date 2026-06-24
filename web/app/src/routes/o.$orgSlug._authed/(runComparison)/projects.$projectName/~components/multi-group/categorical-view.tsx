@@ -3,8 +3,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useTheme } from "@/lib/hooks/use-theme";
 import { cn } from "@/lib/utils";
-import { useQueries } from "@tanstack/react-query";
-import { trpc, trpcClient } from "@/utils/trpc";
+import { useQuery } from "@tanstack/react-query";
+import { trpc } from "@/utils/trpc";
 import {
   CATEGORICAL_LAYOUT,
   categoricalBottomMargin,
@@ -564,42 +564,39 @@ export function MultiRunCategoricalView({
     onDepthAxisChange?.(v);
   };
 
-  // Parallel fetch one rollup per run.
-  const queries = useQueries({
-    queries: runs.map((r) => ({
-      queryKey: trpc.runs.data.barsData.queryKey({
-        organizationId: orgId,
-        projectName,
-        runId: r.runId,
-        pathPrefix,
-      }),
-      queryFn: () =>
-        trpcClient.runs.data.barsData.query({
-          organizationId: orgId,
-          projectName,
-          runId: r.runId,
-          pathPrefix,
-        }),
-      // Guard `.length` on possibly-undefined values — same crash class as
-      // the one fixed in useEligiblePrefixesForRuns. `pathPrefix` and
-      // `r.runId` are typed `string` but can briefly be undefined during
-      // a config edit / route transition before the parent re-renders.
-      enabled: (pathPrefix?.length ?? 0) > 0 && (r.runId?.length ?? 0) > 0,
-      staleTime: 1000 * 5,
-    })),
-  });
+  // Single batched fetch: ONE rollup query for all selected runs (replaces
+  // the previous one-query-per-run fan-out). The result is keyed by runId; we
+  // look up each run below. runIds are filtered (drop briefly-undefined ids
+  // during route transitions — same crash class as useEligiblePrefixesForRuns)
+  // and sorted so the query key is stable regardless of run order.
+  const barsRunIds = useMemo(
+    () =>
+      runs
+        .map((r) => r.runId)
+        .filter((id): id is string => (id?.length ?? 0) > 0)
+        .sort(),
+    [runs],
+  );
+  const batchQuery = useQuery(
+    trpc.runs.data.barsDataBatch.queryOptions(
+      { organizationId: orgId, projectName, runIds: barsRunIds, pathPrefix },
+      {
+        enabled: (pathPrefix?.length ?? 0) > 0 && barsRunIds.length > 0,
+        staleTime: 1000 * 5,
+      },
+    ),
+  );
 
-  const anyLoading = queries.some((q) => q.isLoading);
-  const allEmpty = !anyLoading && queries.every((q) => !q.data || q.data.rows.length === 0);
+  const anyLoading = batchQuery.isLoading;
+  const batchData = batchQuery.data;
+  const allEmpty =
+    !anyLoading &&
+    (!batchData ||
+      runs.every((r) => !batchData[r.runId] || batchData[r.runId].rows.length === 0));
 
   const perRunRaw: PerRunData[] = useMemo(() => {
-    return runs.map((ref, i) => {
-      // useQueries should return one result per input, but defending
-      // against the edge case where `runs` updates a frame before the
-      // useQueries derivation re-runs costs nothing — and a raw
-      // `q.data` access on undefined would crash the whole widget.
-      const q = queries[i];
-      const rows = q?.data?.rows ?? [];
+    return runs.map((ref) => {
+      const rows = batchData?.[ref.runId]?.rows ?? [];
       const steps: CategoricalStep[] = rows.map((row) => ({
         step: row.step,
         bars: row.bars,
@@ -611,8 +608,7 @@ export function MultiRunCategoricalView({
         steps,
       };
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runs, ...queries.map((q) => q.data)]);
+  }, [runs, batchData]);
 
   // Drop runs whose rollup came back empty for this prefix — most
   // commonly because the run never logged any scalar metric under

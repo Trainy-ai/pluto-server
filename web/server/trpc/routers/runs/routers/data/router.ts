@@ -4,6 +4,7 @@ import { fileTreeProcedure } from "./procs/file-tree";
 import { fileUrlProcedure } from "./procs/file-url";
 import { histogramProcedure } from "./procs/histogram";
 import { barsDataProcedure } from "./procs/bars-data";
+import { barsDataBatchProcedure } from "./procs/bars-data-batch";
 import { eligiblePrefixesProcedure } from "./procs/eligible-prefixes";
 import { graphProcedure } from "./procs/graph";
 import { graphBatchProcedure } from "./procs/graph-batch";
@@ -20,6 +21,7 @@ export const dataRouter = router({
   fileUrl: fileUrlProcedure,
   histogram: histogramProcedure,
   barsData: barsDataProcedure,
+  barsDataBatch: barsDataBatchProcedure,
   eligiblePrefixes: eligiblePrefixesProcedure,
   graph: graphProcedure,
   graphBatch: graphBatchProcedure,

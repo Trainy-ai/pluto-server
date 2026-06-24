@@ -5652,6 +5652,16 @@ describe('SDK API Endpoints (with API Key)', () => {
 
       expect(response.status).toBe(401);
     });
+
+    it('Test 24.6.4: barsDataBatch - Unauthorized without session', async () => {
+      const response = await makeTrpcRequest('runs.data.barsDataBatch', {
+        runIds: ['test'],
+        projectName: 'test-project',
+        pathPrefix: 'training/dataset/',
+      });
+
+      expect(response.status).toBe(401);
+    });
   });
 
   // ============================================================================
@@ -5762,6 +5772,23 @@ describe('SDK API Endpoints (with API Key)', () => {
         stepCap: 10000,
       }, { 'Cookie': sessionCookie }, 'GET');
 
+      const body = await response.json();
+      expect(body.error?.data?.code).toBe('BAD_REQUEST');
+    });
+
+    it('Test 24.7.4b: barsDataBatch schema rejects empty runIds array', async () => {
+      if (!sessionCookie || !activeOrgId) {
+        console.log('   No session/org - skipping');
+        return;
+      }
+      const response = await makeTrpcRequest('runs.data.barsDataBatch', {
+        organizationId: activeOrgId,
+        runIds: [],
+        projectName: TEST_PROJECT_NAME,
+        pathPrefix: 'training/dataset/',
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      // runIds has .min(1)
       const body = await response.json();
       expect(body.error?.data?.code).toBe('BAD_REQUEST');
     });
