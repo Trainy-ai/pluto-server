@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { trpc } from "@/utils/trpc";
-import { useQueries } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { VideoPlayer } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/group/video";
@@ -33,46 +33,28 @@ export const MultiGroupVideo = ({
   className,
 }: MultiGroupVideoProps) => {
   // Use useQueries at the top level to fetch videos for each run
-  const videoQueries = useQueries({
-    queries: runs.map((run) => ({
-      ...trpc.runs.data.files.queryOptions({
-        organizationId,
-        runId: run.runId,
-        projectName,
-        logName,
-      }),
-    })),
-  });
+  const selectedRunIds = useMemo(() => runs.map((run) => run.runId), [runs]);
 
-  // Combine the query results with run data
-  const queriesWithRuns = useMemo(
-    () =>
-      videoQueries.map((query, index) => ({
-        ...query,
-        run: runs[index],
-      })),
-    [videoQueries, runs],
-  );
-
-  const isLoading = useMemo(
-    () => queriesWithRuns.some((query) => query.isLoading),
-    [queriesWithRuns],
+  // One batched request for all runs (replaces the per-run runs.data.files
+  // fan-out → no more 414s). NOT accumulated: presigned URLs expire (~15min),
+  // so normal staleTime + refetch on selection change keeps URLs fresh.
+  const { data: byRun, isLoading } = useQuery(
+    trpc.runs.data.filesBatch.queryOptions(
+      { organizationId, projectName, logName, runIds: selectedRunIds },
+      { enabled: selectedRunIds.length > 0 && (logName?.length ?? 0) > 0 },
+    ),
   );
 
   // Flatten all videos with runId
   const allVideos = useMemo(
     () =>
-      queriesWithRuns
-        .map((query) => {
-          const videos = query.data || [];
-          return videos.map((video) => ({
-            ...video,
-            runId: query.run.runId,
-          }));
-        })
-        .flat()
-        .filter(Boolean),
-    [queriesWithRuns],
+      runs.flatMap((run) =>
+        (byRun?.[run.runId] ?? []).map((video) => ({
+          ...video,
+          runId: run.runId,
+        })),
+      ),
+    [runs, byRun],
   );
 
   const {

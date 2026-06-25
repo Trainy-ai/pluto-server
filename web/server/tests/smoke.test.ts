@@ -5373,6 +5373,36 @@ describe('SDK API Endpoints (with API Key)', () => {
 
       expect(response.status).toBe(401);
     });
+
+    it('Test 24.4: histogramBatch - Unauthorized without session', async () => {
+      const response = await makeTrpcRequest('runs.data.histogramBatch', {
+        runIds: ['test'],
+        projectName: 'test-project',
+        logName: 'train/weights',
+      });
+
+      expect(response.status).toBe(401);
+    });
+
+    it('Test 24.5: filesBatch - Unauthorized without session', async () => {
+      const response = await makeTrpcRequest('runs.data.filesBatch', {
+        runIds: ['test'],
+        projectName: 'test-project',
+        logName: 'media/images',
+      });
+
+      expect(response.status).toBe(401);
+    });
+
+    it('Test 24.6: barsDataBatch - Unauthorized without session', async () => {
+      const response = await makeTrpcRequest('runs.data.barsDataBatch', {
+        runIds: ['test'],
+        projectName: 'test-project',
+        pathPrefix: 'training/dataset',
+      });
+
+      expect(response.status).toBe(401);
+    });
   });
 
   // ============================================================================

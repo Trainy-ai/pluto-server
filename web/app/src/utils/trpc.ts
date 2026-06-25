@@ -10,7 +10,12 @@ import { env } from "@/lib/env";
 
 const isProduction = env.VITE_ENV === "production";
 const isTest = env.VITE_ENV === "test";
-const MAX_URL_LENGTH = 8192;
+// Split batched GET requests well BELOW the smallest server URI limit
+// (nginx default large_client_header_buffers = 8k) so the request line
+// ("GET <uri> HTTP/1.1") always fits. 8192 left zero headroom and caused
+// intermittent 414 (Request-URI Too Large) on big batches (e.g. histogram
+// dashboards firing runs.data.histogram per-run). 6000 keeps margin.
+const MAX_URL_LENGTH = 6000;
 
 // In test/Docker environments, use relative URLs to go through Vite proxy
 // This ensures same-origin requests for proper cookie handling

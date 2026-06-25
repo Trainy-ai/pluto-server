@@ -10,7 +10,12 @@
 
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
-import { histogramDataRow } from '../trpc/routers/runs/routers/data/procs/histogram.schema';
+import {
+  histogramDataRow,
+  histogramBatchInput,
+  barsDataBatchInput,
+  MAX_RUNS_PER_BATCH,
+} from '../trpc/routers/runs/routers/data/procs/histogram.schema';
 import { tableDataRow } from '../trpc/routers/runs/routers/data/procs/table.schema';
 
 // --- Test Data ---
@@ -738,5 +743,55 @@ describe('Dashboard WidgetSchema: chart xAxis values', () => {
     expect(widgets[2].config).toHaveProperty('xAxis', 'relative-time');
     expect(widgets[3].config).toHaveProperty('xAxis', 'learning_rate');
     expect(widgets[4].config).toHaveProperty('xAxis', 'time');
+  });
+});
+
+describe('Batch data input: runIds bounds (DoS guard)', () => {
+  const overCap = Array.from({ length: MAX_RUNS_PER_BATCH + 1 }, (_, i) => `r${i}`);
+  const atCap = Array.from({ length: MAX_RUNS_PER_BATCH }, (_, i) => `r${i}`);
+
+  it('histogramBatchInput rejects more than MAX_RUNS_PER_BATCH runs', () => {
+    const r = histogramBatchInput.safeParse({
+      runIds: overCap,
+      projectName: 'p',
+      logName: 'train/weights',
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it('histogramBatchInput accepts exactly MAX_RUNS_PER_BATCH runs', () => {
+    const r = histogramBatchInput.safeParse({
+      runIds: atCap,
+      projectName: 'p',
+      logName: 'train/weights',
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('histogramBatchInput rejects an empty runIds array', () => {
+    const r = histogramBatchInput.safeParse({
+      runIds: [],
+      projectName: 'p',
+      logName: 'train/weights',
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it('barsDataBatchInput rejects more than MAX_RUNS_PER_BATCH runs', () => {
+    const r = barsDataBatchInput.safeParse({
+      runIds: overCap,
+      projectName: 'p',
+      pathPrefix: 'training/dataset',
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it('barsDataBatchInput accepts exactly MAX_RUNS_PER_BATCH runs', () => {
+    const r = barsDataBatchInput.safeParse({
+      runIds: atCap,
+      projectName: 'p',
+      pathPrefix: 'training/dataset',
+    });
+    expect(r.success).toBe(true);
   });
 });

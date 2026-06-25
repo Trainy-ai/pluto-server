@@ -1,6 +1,7 @@
 import { useMemo } from "react";
-import { useQueries, useQuery } from "@tanstack/react-query";
-import { trpc } from "@/utils/trpc";
+import type { inferOutput } from "@trpc/tanstack-react-query";
+import { trpc, trpcClient } from "@/utils/trpc";
+import { useRunBatchAccumulator } from "@/hooks/use-run-batch-accumulator";
 import type { MetricData } from "../types";
 
 export interface NormalizedHistogramData {
@@ -14,6 +15,10 @@ export interface NormalizedHistogramData {
   normalizedData: any[];
 }
 
+// Per-run payload from the batched proc (keyed by runId): { rows, truncated, totalSteps }.
+type HistogramBatchOutput = inferOutput<typeof trpc.runs.data.histogramBatch>;
+type HistogramRunResult = HistogramBatchOutput[string];
+
 export function useNormalizedHistogramData(
   runs: MetricData[],
   {
@@ -22,20 +27,29 @@ export function useNormalizedHistogramData(
     logName,
   }: { tenantId: string; projectName: string; logName: string },
 ): { data: NormalizedHistogramData; isLoading: boolean; hasError: boolean } {
-  // Create separate queries for each run
-  const histogramQueries = useQueries({
-    queries: runs.map((run) => ({
-      ...trpc.runs.data.histogram.queryOptions({
-        organizationId: tenantId,
-        runId: run.runId,
-        projectName,
-        logName,
-      }),
-    })),
-  });
+  const selectedRunIds = useMemo(() => runs.map((run) => run.runId), [runs]);
 
-  const isLoading = histogramQueries.some((q) => q.isLoading);
-  const hasError = histogramQueries.some((q) => q.isError);
+  // Batched + incremental fetch. Replaces the previous per-run useQueries
+  // fan-out (one runs.data.histogram per run) — which bloated the batched GET
+  // URL into 414s — with ONE histogramBatch request for all runs, and only the
+  // delta (newly-added runs) on a selection change. See useRunBatchAccumulator.
+  const { data: byRun, isLoading, isError } =
+    useRunBatchAccumulator<HistogramRunResult>({
+      selectedRunIds,
+      // Switching the metric (or project/tenant) resets the accumulator.
+      wipeKey: `${tenantId}|${projectName}|${logName}`,
+      queryKeyBase: ["runs.data.histogramBatch", tenantId, projectName, logName],
+      fetchMissing: (missingRunIds) =>
+        trpcClient.runs.data.histogramBatch.query({
+          organizationId: tenantId,
+          projectName,
+          logName,
+          runIds: missingRunIds,
+        }),
+      enabled: selectedRunIds.length > 0 && (logName?.length ?? 0) > 0,
+    });
+
+  const hasError = isError;
 
   const normalizedData = useMemo(() => {
     if (isLoading || hasError) {
@@ -46,25 +60,19 @@ export function useNormalizedHistogramData(
       };
     }
 
-    // W&B-style: pass each step's histogram through UNCHANGED. We don't
-    // re-bin to a shared uniform grid — every step keeps its native
-    // bin edges (bins.min, bins.max, bins.num, freq[]) and its
-    // logged maxFreq. The canvases (drawSingleHistogram,
-    // drawRidgeline, drawHeatmap) all map per-step bin positions
-    // onto a shared X axis at draw time, so the visual stays comparable
-    // across rows / runs without rewriting the underlying data.
+    // W&B-style: pass each step's histogram through UNCHANGED. We don't re-bin
+    // to a shared uniform grid — every step keeps its native bin edges
+    // (bins.min, bins.max, bins.num, freq[]) and its logged maxFreq. The
+    // canvases map per-step bin positions onto a shared X axis at draw time, so
+    // the visual stays comparable across rows / runs without rewriting the data.
     //
-    // The only cross-run aggregates we still compute are:
-    //   xAxisRange — union of all bins.min/max plus a 10% buffer, used
-    //     as the shared X domain in Step mode and as a fallback in
-    //     Ridgeline/Heatmap when no explicit domain is supplied.
-    //   globalMaxFreq — max of any bin's freq across every run/step,
-    //     used to normalize ridge / cell heights to a comparable scale.
-    const runHistograms = runs.map((run, index) => ({
+    // The only cross-run aggregates we compute are xAxisRange (union of all
+    // bins.min/max + 10% buffer) and globalMaxFreq (max bin freq across runs).
+    const runHistograms = runs.map((run) => ({
       runId: run.runId,
       runName: run.runName,
       color: run.color,
-      data: histogramQueries[index].data?.rows ?? [],
+      data: byRun[run.runId]?.rows ?? [],
     }));
 
     let globalMin = Infinity;
@@ -98,7 +106,7 @@ export function useNormalizedHistogramData(
       },
       normalizedData: runHistograms,
     };
-  }, [runs, histogramQueries, isLoading, hasError]);
+  }, [runs, byRun, isLoading, hasError]);
 
   return { data: normalizedData, isLoading, hasError };
 }

@@ -244,12 +244,10 @@ export function drawHeatmap(
 
   ctx.clearRect(0, 0, width, height);
 
-  // In transposed mode, mirror the bars-chart's transposed xLeft (120)
-  // and xRight (width - 16) so the "0" / last-step ticks line up
-  // between stacked widgets. Non-transposed keeps the original margins.
-  const xLeft = props.stepsOnX
-    ? Math.max(leftMargin, 120)
-    : leftMargin;
+  // Slim value-tick gutter in both modes. The transposed numeric histogram's
+  // Y axis shows short value ticks that fit in leftMargin (56); the 120px pad
+  // is for categorical bars' bin-name labels and just wasted space here.
+  const xLeft = leftMargin;
   // Right padding 44px in both modes — non-transposed reads it from
   // rightMargin; transposed forces 44 to clear both the X axis-title
   // overlay ("step") at the bottom corner AND the ColorLegendOverlay
@@ -379,7 +377,18 @@ export function drawHeatmap(
       xLeft,
       xRight,
     );
-    const stepLabelBudget = Math.max(2, HEATMAP_LAYOUT.xTicks);
+    // Width-aware label budget: on a small widget a fixed tick count still
+    // overlaps. Allow ~48px per label, capped at the standard tick budget,
+    // floored at 2 (first + last). Mirrors the ridgeline transposed axis.
+    const STEP_LABEL_MIN_PX = 48;
+    const usableStepWidth = Math.max(1, xRight - xLeft);
+    const stepLabelBudget = Math.max(
+      2,
+      Math.min(
+        HEATMAP_LAYOUT.xTicks,
+        Math.floor(usableStepWidth / STEP_LABEL_MIN_PX),
+      ),
+    );
     const stepStride = Math.max(
       1,
       Math.ceil(steps.length / stepLabelBudget),
@@ -519,7 +528,7 @@ export function drawHeatmapHighlight(args: {
     // spans [xPos[s], xPos[s+1]) (or xRight for last); reuse the same
     // helper as the drawer / hit-test so the outline overlays the
     // painted cell exactly.
-    const transposedLeft = Math.max(leftMargin, 120);
+    const transposedLeft = leftMargin;
     const transposedRight = width - 44;
     const xPos = computeHeatmapTransposedXPositions(
       steps,

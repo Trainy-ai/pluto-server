@@ -1,5 +1,5 @@
 import { protectedOrgProcedure } from "../../../../../../lib/trpc";
-import { resolveRunId } from "../../../../../../lib/resolve-run-id";
+import { resolveRunIdsResilient } from "../../../../../../lib/resolve-run-id";
 import { withBatchCache } from "../../../../../../lib/cache";
 import {
   BARS_MIN_SUFFIXES,
@@ -33,17 +33,22 @@ export const barsDataBatchProcedure = protectedOrgProcedure
     const stepCap = input.stepCap ?? 500;
 
     // Resolve every encoded runId -> numeric, keeping a numeric->encoded map so
-    // results can be returned under the same sqid the caller passed in.
-    const resolved = await Promise.all(
-      encodedRunIds.map(async (enc) => ({
-        enc,
-        num: await resolveRunId(ctx.prisma, enc, organizationId, projectName),
-      })),
+    // results can be returned under the same sqid the caller passed in. Resolve
+    // resiliently: a deleted/unauthorized run is skipped, not fatal to the whole
+    // batch (one bad id must not 500 the widget for every other run).
+    const resolved = await resolveRunIdsResilient(
+      ctx.prisma,
+      encodedRunIds,
+      organizationId,
+      projectName,
     );
     const numericToEncoded = new Map<number, string>();
     for (const { enc, num } of resolved) numericToEncoded.set(num, enc);
     // Sorted for a stable cache key regardless of caller run order.
     const numericRunIds = Array.from(numericToEncoded.keys()).sort((a, b) => a - b);
+
+    // Every requested run was invalid/unauthorized — nothing to query.
+    if (numericRunIds.length === 0) return {};
 
     return withBatchCache<BarsDataBatchResult>(
       ctx,

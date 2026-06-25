@@ -9,7 +9,7 @@ import { queryRunFilesByLogName } from "../../../../../../lib/queries";
 // Cap cache TTL to ensure URLs don't expire while cached
 const S3_URL_MAX_TTL_MS = 15 * 60 * 1000; // 15 minutes
 
-type FileData = {
+export type FileData = {
   time: string;
   step: number;
   fileName: string;

@@ -63,3 +63,33 @@ export async function resolveRunId(
   }
   return decodedId;
 }
+
+/**
+ * Resolve a BATCH of run identifiers, SKIPPING any that fail to resolve
+ * (deleted / unauthorized / malformed id) instead of rejecting the whole batch.
+ *
+ * `resolveRunId` throws on a bad id — correct for a single-run proc, but in a
+ * batched proc one bad run would reject the whole `Promise.all` and 500 the
+ * entire widget. Here we resolve in parallel and keep only the successes, so a
+ * batch widget renders its valid runs and silently drops the bad ones.
+ *
+ * Returns successful `{ enc, num }` pairs only; order is not guaranteed.
+ */
+export async function resolveRunIdsResilient(
+  prisma: PrismaClient,
+  identifiers: readonly string[],
+  organizationId: string,
+  projectName?: string,
+): Promise<Array<{ enc: string; num: number }>> {
+  const settled = await Promise.allSettled(
+    identifiers.map(async (enc) => ({
+      enc,
+      num: await resolveRunId(prisma, enc, organizationId, projectName),
+    })),
+  );
+  const resolved: Array<{ enc: string; num: number }> = [];
+  for (const r of settled) {
+    if (r.status === "fulfilled") resolved.push(r.value);
+  }
+  return resolved;
+}

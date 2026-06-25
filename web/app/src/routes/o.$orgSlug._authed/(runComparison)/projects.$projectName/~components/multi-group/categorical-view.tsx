@@ -3,8 +3,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useTheme } from "@/lib/hooks/use-theme";
 import { cn } from "@/lib/utils";
-import { useQuery } from "@tanstack/react-query";
-import { trpc } from "@/utils/trpc";
+import type { inferOutput } from "@trpc/tanstack-react-query";
+import { trpc, trpcClient } from "@/utils/trpc";
+import { useRunBatchAccumulator } from "@/hooks/use-run-batch-accumulator";
 import {
   CATEGORICAL_LAYOUT,
   categoricalBottomMargin,
@@ -38,6 +39,11 @@ import { Button } from "@/components/ui/button";
 import { SlidersHorizontalIcon } from "lucide-react";
 
 const DEFAULT_BARS_COLOR = "hsl(216, 66%, 60%)";
+
+// Per-run shape returned by the batched bars rollup, keyed by runId in the
+// batch result. Inferred from the proc so it stays in sync with the backend.
+type BarsBatchOutput = inferOutput<typeof trpc.runs.data.barsDataBatch>;
+type BarsRunResult = BarsBatchOutput[string];
 
 // Default max bins shown before the W&B-style top-N + _other rollup
 // kicks in. 30 was picked because: (a) at typical widget widths
@@ -564,11 +570,15 @@ export function MultiRunCategoricalView({
     onDepthAxisChange?.(v);
   };
 
-  // Single batched fetch: ONE rollup query for all selected runs (replaces
-  // the previous one-query-per-run fan-out). The result is keyed by runId; we
-  // look up each run below. runIds are filtered (drop briefly-undefined ids
-  // during route transitions — same crash class as useEligiblePrefixesForRuns)
-  // and sorted so the query key is stable regardless of run order.
+  // Batched + incremental fetch (accumulator). ONE rollup query for all
+  // selected runs, and on a selection change only the DELTA (newly-added runs)
+  // is fetched — never the whole set again. Replaces the previous naive
+  // batched useQuery (which refetched every run whenever the selection changed)
+  // and, before that, the one-query-per-run fan-out that bloated the batched
+  // GET URL into 414s. Result is keyed by runId; we look up each run below.
+  // runIds are filtered (drop briefly-undefined ids during route transitions —
+  // same crash class as useEligiblePrefixesForRuns) and sorted so the query key
+  // is stable regardless of run order. See useRunBatchAccumulator.
   const barsRunIds = useMemo(
     () =>
       runs
@@ -577,18 +587,27 @@ export function MultiRunCategoricalView({
         .sort(),
     [runs],
   );
-  const batchQuery = useQuery(
-    trpc.runs.data.barsDataBatch.queryOptions(
-      { organizationId: orgId, projectName, runIds: barsRunIds, pathPrefix },
-      {
-        enabled: (pathPrefix?.length ?? 0) > 0 && barsRunIds.length > 0,
-        staleTime: 1000 * 5,
-      },
-    ),
-  );
-
-  const anyLoading = batchQuery.isLoading;
-  const batchData = batchQuery.data;
+  const { data: batchData, isLoading: anyLoading } =
+    useRunBatchAccumulator<BarsRunResult>({
+      selectedRunIds: barsRunIds,
+      // Switching the prefix (or project/org) resets the accumulator.
+      wipeKey: `${orgId}|${projectName}|${pathPrefix}`,
+      queryKeyBase: [
+        "runs.data.barsDataBatch",
+        orgId,
+        projectName,
+        pathPrefix,
+      ],
+      fetchMissing: (missingRunIds) =>
+        trpcClient.runs.data.barsDataBatch.query({
+          organizationId: orgId,
+          projectName,
+          pathPrefix,
+          runIds: missingRunIds,
+        }),
+      enabled: (pathPrefix?.length ?? 0) > 0 && barsRunIds.length > 0,
+      staleTime: 1000 * 5,
+    });
   const allEmpty =
     !anyLoading &&
     (!batchData ||

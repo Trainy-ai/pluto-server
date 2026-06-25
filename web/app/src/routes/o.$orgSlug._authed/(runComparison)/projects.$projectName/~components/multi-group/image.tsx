@@ -1,6 +1,6 @@
 import { useMemo, useState, useCallback, useEffect } from "react";
 import { trpc } from "@/utils/trpc";
-import { useQueries } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { StepNavigator } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/shared/step-navigator";
@@ -29,44 +29,28 @@ export const MultiGroupImage = ({
   runs,
   className,
 }: MultiGroupImageProps) => {
-  const imageQueries = useQueries({
-    queries: runs.map((run) => ({
-      ...trpc.runs.data.files.queryOptions({
-        organizationId,
-        runId: run.runId,
-        projectName,
-        logName,
-      }),
-    })),
-  });
+  const selectedRunIds = useMemo(() => runs.map((run) => run.runId), [runs]);
 
-  const queriesWithRuns = useMemo(
-    () =>
-      imageQueries.map((query, index) => ({
-        ...query,
-        run: runs[index],
-      })),
-    [imageQueries, runs],
-  );
-
-  const isLoading = useMemo(
-    () => queriesWithRuns.some((query) => query.isLoading),
-    [queriesWithRuns],
+  // One batched request for all runs (replaces the per-run runs.data.files
+  // fan-out → no more 414s on media dashboards). NOT accumulated: presigned
+  // URLs expire (~15min), so we keep a normal staleTime and refetch on
+  // selection change to keep URLs fresh.
+  const { data: byRun, isLoading } = useQuery(
+    trpc.runs.data.filesBatch.queryOptions(
+      { organizationId, projectName, logName, runIds: selectedRunIds },
+      { enabled: selectedRunIds.length > 0 && (logName?.length ?? 0) > 0 },
+    ),
   );
 
   const allImages = useMemo(
     () =>
-      queriesWithRuns
-        .map((query) => {
-          const images = query.data || [];
-          return images.map((image) => ({
-            ...image,
-            runId: query.run.runId,
-          }));
-        })
-        .flat()
-        .filter(Boolean),
-    [queriesWithRuns],
+      runs.flatMap((run) =>
+        (byRun?.[run.runId] ?? []).map((image) => ({
+          ...image,
+          runId: run.runId,
+        })),
+      ),
+    [runs, byRun],
   );
 
   const {

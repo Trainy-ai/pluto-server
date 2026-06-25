@@ -836,16 +836,13 @@ function drawRidgelineTransposed(
   const { leftMargin, topMargin, bottomMargin, rightGutter } =
     RIDGELINE_LAYOUT;
   ctx.clearRect(0, 0, width, height);
-  // xLeft / xRight here MATCH the bars-chart's transposed layout:
-  //   xLeft = max(leftMargin=56, 120) = 120 — leaves enough room for
-  //     numeric Y-tick labels ("6.00", "-4.00") AND lines up with the
-  //     bars panel's left padding above the widget.
-  //   xRight = width - 16 — same right padding the bars chart uses,
-  //     so the rightmost X tick (e.g. "299") sits in the same spot
-  //     in both stacked panels.
-  // Both constants are mirrored in the transposed hit-test and
+  // xLeft: slim value-tick gutter. A numeric histogram's transposed Y axis
+  // shows short value ticks ("6.00", "-4.00") that fit in leftMargin (56).
+  // We no longer pad to 120 — that width exists for categorical bars' long
+  // bin-name labels and just left a big dead indent on numeric histogram
+  // widgets. xLeft/xRight are mirrored in the transposed hit-test and
   // hover-highlight; change any one and the others must follow.
-  const xLeft = Math.max(leftMargin, 120);
+  const xLeft = leftMargin;
   // Right padding bumped 16 → 30 to clear the X axis-title overlay
   // ("step") at bottom-right. The rightmost step tick was centered at
   // `xRight = width - 16` and its text overhang collided with the
@@ -980,9 +977,20 @@ function drawRidgelineTransposed(
   ctx.font = "11px sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
-  // Cap label count at the same budget the non-transposed mode uses
-  // for its X axis (≈10 ticks). Dense step counts otherwise crowd.
-  const stepLabelBudget = Math.max(2, RIDGELINE_LAYOUT.xTicks);
+  // Cap label count by AVAILABLE WIDTH, not a fixed tick count: on a small
+  // widget ~10 step labels still overlap (e.g. "8000 9000"). Allow ~48px per
+  // label and never exceed the standard tick budget. Matches how the Y step
+  // axis already strides by available pixels (labelStride). Floors at 2 so the
+  // first + last step always show.
+  const STEP_LABEL_MIN_PX = 48;
+  const usableStepWidth = Math.max(1, xRight - xLeft);
+  const stepLabelBudget = Math.max(
+    2,
+    Math.min(
+      RIDGELINE_LAYOUT.xTicks,
+      Math.floor(usableStepWidth / STEP_LABEL_MIN_PX),
+    ),
+  );
   const stepStride = Math.max(
     1,
     Math.ceil(steps.length / stepLabelBudget),
@@ -1058,7 +1066,7 @@ function drawRidgelineHoverHighlightTransposed(args: {
   const { leftMargin, topMargin, bottomMargin } = RIDGELINE_LAYOUT;
   // Mirror drawRidgelineTransposed's xLeft / xRight exactly so the
   // highlight outline traces the painted polygon.
-  const xLeft = Math.max(leftMargin, 120);
+  const xLeft = leftMargin;
   const xRight = width - 44;
   const yTop = topMargin;
   const yBottom = height - bottomMargin;

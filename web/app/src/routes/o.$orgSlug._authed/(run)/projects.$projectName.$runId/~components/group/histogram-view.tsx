@@ -660,7 +660,7 @@ function RidgelineHistogramView({
           // multi-run view's 120/16 margins; non-transposed keeps the
           // original rightGutter/rightMargin layout.
           xLeft: stepsOnX
-            ? Math.max(RIDGELINE_LAYOUT.leftMargin, 120)
+            ? RIDGELINE_LAYOUT.leftMargin
             : RIDGELINE_LAYOUT.rightGutter,
           xRight: stepsOnX
             ? rect.width - 44
@@ -853,7 +853,7 @@ function HeatmapHistogramView({
           width: rect.width,
           height: rect.height,
           leftMargin: stepsOnX
-            ? Math.max(HEATMAP_LAYOUT.leftMargin, 120)
+            ? HEATMAP_LAYOUT.leftMargin
             : HEATMAP_LAYOUT.leftMargin,
           rightMargin: stepsOnX ? 44 : HEATMAP_LAYOUT.rightMargin,
           topMargin: HEATMAP_LAYOUT.topMargin,

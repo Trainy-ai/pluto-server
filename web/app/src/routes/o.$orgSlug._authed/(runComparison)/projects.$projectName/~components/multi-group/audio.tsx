@@ -1,5 +1,5 @@
 import { trpc } from "@/utils/trpc";
-import { useQueries } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -33,46 +33,28 @@ export const MultiGroupAudio = ({
   className,
 }: MultiGroupAudioProps) => {
   // Use useQueries for multiple runs
-  const audioQueries = useQueries({
-    queries: runs.map((run) => ({
-      ...trpc.runs.data.files.queryOptions({
-        organizationId,
-        runId: run.runId,
-        projectName,
-        logName,
-      }),
-    })),
-  });
+  const selectedRunIds = useMemo(() => runs.map((run) => run.runId), [runs]);
 
-  // Combine queries with run data
-  const queriesWithRuns = useMemo(
-    () =>
-      audioQueries.map((query, index) => ({
-        ...query,
-        run: runs[index],
-      })),
-    [audioQueries, runs],
-  );
-
-  const isLoading = useMemo(
-    () => queriesWithRuns.some((query) => query.isLoading),
-    [queriesWithRuns],
+  // One batched request for all runs (replaces the per-run runs.data.files
+  // fan-out → no more 414s). NOT accumulated: presigned URLs expire (~15min),
+  // so normal staleTime + refetch on selection change keeps URLs fresh.
+  const { data: byRun, isLoading } = useQuery(
+    trpc.runs.data.filesBatch.queryOptions(
+      { organizationId, projectName, logName, runIds: selectedRunIds },
+      { enabled: selectedRunIds.length > 0 && (logName?.length ?? 0) > 0 },
+    ),
   );
 
   // Flatten all audio with runId for step navigation
   const allAudio = useMemo(
     () =>
-      queriesWithRuns
-        .map((query) => {
-          const audio = query.data || [];
-          return audio.map((file) => ({
-            ...file,
-            runId: query.run.runId,
-          }));
-        })
-        .flat()
-        .filter(Boolean),
-    [queriesWithRuns],
+      runs.flatMap((run) =>
+        (byRun?.[run.runId] ?? []).map((file) => ({
+          ...file,
+          runId: run.runId,
+        })),
+      ),
+    [runs, byRun],
   );
 
   // Use synced step navigation hook

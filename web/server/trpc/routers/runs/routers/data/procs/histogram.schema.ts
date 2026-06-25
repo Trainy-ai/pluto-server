@@ -2,6 +2,13 @@ import { z } from "zod";
 
 export const HISTOGRAM_STEP_CAP_HARD_MAX = 5000;
 
+// Upper bound on how many runs a single batched data request may ask for. Well
+// above any realistic multi-run dashboard comparison, but caps the worst case
+// (a huge runIds array → an oversized ClickHouse IN(...) or, for filesBatch, a
+// large fan of parallel per-run queries) so an authenticated client can't use
+// it to exhaust DB resources.
+export const MAX_RUNS_PER_BATCH = 200;
+
 // Minimum number of suffixes a path prefix must have to qualify for the
 // `prefix/{bars}` entry in the Add-Widget Metrics dropdown.
 // blah/blog/1 + blah/blog/2 alone (2 suffixes) is not enough —
@@ -10,6 +17,15 @@ export const BARS_MIN_SUFFIXES = 3;
 
 export const histogramInput = z.object({
   runId: z.string(),
+  projectName: z.string(),
+  logName: z.string(),
+  stepCap: z.number().int().positive().max(HISTOGRAM_STEP_CAP_HARD_MAX).optional(),
+});
+
+// Batched variant: one query for many runs instead of one per run. Additive —
+// the single-run `histogram` proc/input is unchanged.
+export const histogramBatchInput = z.object({
+  runIds: z.array(z.string()).min(1).max(MAX_RUNS_PER_BATCH),
   projectName: z.string(),
   logName: z.string(),
   stepCap: z.number().int().positive().max(HISTOGRAM_STEP_CAP_HARD_MAX).optional(),
@@ -47,6 +63,11 @@ export interface HistogramQueryResult {
   truncated: boolean;
   totalSteps: number;
 }
+
+// Batched histogram result, keyed by the ENCODED runId the caller passed.
+// Runs with no histogram data under the log are omitted (callers treat a
+// missing entry as "no data").
+export type HistogramBatchResult = Record<string, HistogramQueryResult>;
 
 // Bars-data payload powering the `{bars}` widget. Server-side rollup of
 // scalar metrics under a path prefix — each bar is a named category
@@ -91,7 +112,7 @@ export const barsDataInput = z.object({
 // Batched variant of barsDataInput: one query for many runs instead of one
 // per run. Additive — the single-run `barsData` proc/input is unchanged.
 export const barsDataBatchInput = z.object({
-  runIds: z.array(z.string()).min(1),
+  runIds: z.array(z.string()).min(1).max(MAX_RUNS_PER_BATCH),
   projectName: z.string(),
   pathPrefix: z.string().min(1),
   stepCap: z.number().int().positive().max(HISTOGRAM_STEP_CAP_HARD_MAX).optional(),
