@@ -534,23 +534,26 @@ export const VideoView: React.FC<VideoViewProps> = ({
 
       {currentStepVideos.length === 1 ? (
         <div className="flex h-full min-h-0 w-full flex-1">
-          <div className="flex flex-1 flex-col overflow-hidden rounded-md shadow-lg">
-            <div className="flex flex-1 flex-col">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md shadow-lg">
+            {/* Video flexes to fill; caption keeps its natural height below
+                (shrink-0) so it is never squeezed out / clipped. */}
+            <div className="min-h-0 flex-1">
               <VideoPlayer
                 url={currentStepVideos[0].url}
                 fileName={currentStepVideos[0].fileName}
               />
-              <TruncatedLabel
-                as="p"
-                text={currentStepVideos[0].caption || currentStepVideos[0].fileName}
-                title={
-                  currentStepVideos[0].caption
-                    ? `${currentStepVideos[0].caption} (${currentStepVideos[0].fileName})`
-                    : currentStepVideos[0].fileName
-                }
-                className="border-t p-2 font-mono text-xs"
-              />
             </div>
+            <TruncatedLabel
+              as="p"
+              data-testid="video-caption"
+              text={currentStepVideos[0].caption || currentStepVideos[0].fileName}
+              title={
+                currentStepVideos[0].caption
+                  ? `${currentStepVideos[0].caption} (${currentStepVideos[0].fileName})`
+                  : currentStepVideos[0].fileName
+              }
+              className="shrink-0 border-t p-2 font-mono text-xs"
+            />
           </div>
         </div>
       ) : (
@@ -559,21 +562,25 @@ export const VideoView: React.FC<VideoViewProps> = ({
             {slice.map((video: Video) => (
               <div
                 key={video.fileName}
-                className="flex aspect-video flex-col overflow-hidden rounded-md shadow-lg"
+                className="flex flex-col overflow-hidden rounded-md shadow-lg"
               >
-                <div className="flex flex-1 flex-col">
+                {/* aspect-video constrains the VIDEO box only. The caption is
+                    a sibling below it (not nested inside the aspect box) so the
+                    card's overflow-hidden doesn't clip it — mirrors ImageCard. */}
+                <div className="aspect-video w-full">
                   <VideoPlayer url={video.url} fileName={video.fileName} />
-                  <TruncatedLabel
-                    as="p"
-                    text={video.caption || video.fileName}
-                    title={
-                      video.caption
-                        ? `${video.caption} (${video.fileName})`
-                        : video.fileName
-                    }
-                    className="border-t p-2 font-mono text-xs"
-                  />
                 </div>
+                <TruncatedLabel
+                  as="p"
+                  data-testid="video-caption"
+                  text={video.caption || video.fileName}
+                  title={
+                    video.caption
+                      ? `${video.caption} (${video.fileName})`
+                      : video.fileName
+                  }
+                  className="border-t p-2 font-mono text-xs"
+                />
               </div>
             ))}
           </div>

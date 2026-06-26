@@ -246,16 +246,21 @@ export const MultiGroupVideo = ({
               />
               <div
                 className={cn(
-                  "flex-1 overflow-hidden rounded-md shadow-lg",
-                  containerHeight,
+                  "flex flex-col overflow-hidden rounded-md shadow-lg",
                   isPinned && pinRingClass(pinSource),
                 )}
               >
                 {video ? (
-                  <div className="flex h-full flex-col">
-                    <VideoPlayer url={video.url} fileName={video.fileName} />
+                  <>
+                    {/* aspect-video constrains the VIDEO box only; the caption
+                        sits below as a sibling so the card's overflow-hidden
+                        doesn't clip it — mirrors ImageCard. */}
+                    <div className={cn("w-full", containerHeight)}>
+                      <VideoPlayer url={video.url} fileName={video.fileName} />
+                    </div>
                     <TruncatedLabel
                       as="p"
+                      data-testid="video-caption"
                       text={video.caption || video.fileName}
                       title={
                         video.caption
@@ -264,9 +269,14 @@ export const MultiGroupVideo = ({
                       }
                       className="border-t p-2 font-mono text-xs"
                     />
-                  </div>
+                  </>
                 ) : (
-                  <div className="flex h-full w-full items-center justify-center border border-dashed bg-background/50 px-2 text-center text-sm text-muted-foreground">
+                  <div
+                    className={cn(
+                      "flex w-full items-center justify-center border border-dashed bg-background/50 px-2 text-center text-sm text-muted-foreground",
+                      containerHeight,
+                    )}
+                  >
                     No video at step {effectiveStep}
                   </div>
                 )}

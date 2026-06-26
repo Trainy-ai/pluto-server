@@ -15,6 +15,8 @@ interface TruncatedLabelProps {
   style?: CSSProperties;
   /** Element to render — "span" (default, inline) or "p" (block). */
   as?: "span" | "p";
+  /** Optional test id forwarded to the rendered element. */
+  "data-testid"?: string;
 }
 
 /**
@@ -30,6 +32,7 @@ export function TruncatedLabel({
   className,
   style,
   as: Tag = "span",
+  "data-testid": dataTestId,
 }: TruncatedLabelProps) {
   const elRef = useRef<HTMLElement | null>(null);
   const [isTruncated, setIsTruncated] = useState(false);
@@ -59,6 +62,7 @@ export function TruncatedLabel({
           }}
           className={cn("block min-w-0 truncate", className)}
           style={style}
+          data-testid={dataTestId}
         >
           {text}
         </Tag>

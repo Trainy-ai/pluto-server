@@ -4676,9 +4676,13 @@ async function setupTestData(): Promise<TestData> {
         // Video
         { runId: run.id, logName: 'video/animation', logGroup: 'video', logType: 'VIDEO' as const },
         { runId: run.id, logName: 'video/reconstruction', logGroup: 'video', logType: 'VIDEO' as const },
+        // Captioned, multi-sample video (two samples per step, each with a
+        // user-supplied caption). Exercises the single-run 2-up grid + the
+        // caption label, which regressed (caption clipped by overflow-hidden).
+        { runId: run.id, logName: 'video/captioned_pair', logGroup: 'video', logType: 'VIDEO' as const },
       ]);
       await prisma.runLogs.createMany({ data: mediaRunLogData, skipDuplicates: true });
-      console.log(`   ✓ Registered 8 media log names for ${mediaRuns.length} runs`);
+      console.log(`   ✓ Registered 9 media log names for ${mediaRuns.length} runs`);
 
       // --- Histogram data (mlop_data) ---
       // Steps: every 3rd epoch from 0-27 = [0, 3, 6, 9, 12, 15, 18, 21, 24, 27]
@@ -4863,50 +4867,71 @@ async function setupTestData(): Promise<TestData> {
       const videoSteps = [0, 10, 20];
       const videoFileRows: Record<string, unknown>[] = [];
 
-      for (const run of mediaRuns) {
+      // Build a minimal valid MP4 stub (ftyp + mdat boxes). Browsers can't
+      // play it but the file viewer renders the entry + caption.
+      const makeMp4Stub = () => {
+        const ftyp = Buffer.from([
+          0x00, 0x00, 0x00, 0x14, // box size: 20
+          0x66, 0x74, 0x79, 0x70, // 'ftyp'
+          0x69, 0x73, 0x6f, 0x6d, // 'isom'
+          0x00, 0x00, 0x02, 0x00, // minor version
+          0x69, 0x73, 0x6f, 0x6d, // compatible brand
+        ]);
+        const mdatContent = Buffer.alloc(8);
+        mdatContent.write('mdat', 4);
+        mdatContent.writeUInt32BE(8, 0);
+        return Buffer.concat([ftyp, mdatContent]);
+      };
+
+      const pushVideoFile = (
+        run: (typeof mediaRuns)[number],
+        logName: string,
+        step: number,
+        fileName: string,
+        caption: string | null,
+      ) => {
         const baseTime = run.createdAt.getTime();
-        const runIdx = parseInt(run.name.replace(/.*bulk-run-/, ''), 10);
+        const mp4 = makeMp4Stub();
+        const s3Key = `${org.id}/${project.name}/${run.id}/${logName}/${fileName}`;
+        videoFileRows.push({
+          tenantId: org.id,
+          projectName: project.name,
+          runId: Number(run.id),
+          logGroup: 'video',
+          logName,
+          time: new Date(baseTime + step * 1000).toISOString().replace('T', ' ').replace('Z', ''),
+          step,
+          fileName,
+          fileType: 'video/mp4',
+          fileSize: mp4.length,
+          ...(caption !== null ? { caption } : {}),
+        });
+        mediaS3Uploads.push(
+          mediaS3.send(new PutObjectCommand({
+            Bucket: mediaStorageBucket,
+            Key: s3Key,
+            Body: mp4,
+            ContentType: 'video/mp4',
+          })),
+        );
+      };
 
+      for (const run of mediaRuns) {
         for (const logName of ['video/animation', 'video/reconstruction']) {
-          const logGroup = 'video';
           for (const step of videoSteps) {
-            const fileName = `step_${String(step).padStart(3, '0')}.mp4`;
-            // Create minimal valid MP4 file (ftyp + mdat boxes)
-            // This is a stub — browsers won't play it but the file viewer will display the entry
-            const ftyp = Buffer.from([
-              0x00, 0x00, 0x00, 0x14, // box size: 20
-              0x66, 0x74, 0x79, 0x70, // 'ftyp'
-              0x69, 0x73, 0x6f, 0x6d, // 'isom'
-              0x00, 0x00, 0x02, 0x00, // minor version
-              0x69, 0x73, 0x6f, 0x6d, // compatible brand
-            ]);
-            const mdatContent = Buffer.alloc(8);
-            mdatContent.write('mdat', 4);
-            mdatContent.writeUInt32BE(8, 0);
-            const mp4 = Buffer.concat([ftyp, mdatContent]);
-            const s3Key = `${org.id}/${project.name}/${run.id}/${logName}/${fileName}`;
+            pushVideoFile(run, logName, step, `step_${String(step).padStart(3, '0')}.mp4`, null);
+          }
+        }
 
-            videoFileRows.push({
-              tenantId: org.id,
-              projectName: project.name,
-              runId: Number(run.id),
-              logGroup,
-              logName,
-              time: new Date(baseTime + step * 1000).toISOString().replace('T', ' ').replace('Z', ''),
-              step,
-              fileName,
-              fileType: 'video/mp4',
-              fileSize: mp4.length,
-            });
-
-            mediaS3Uploads.push(
-              mediaS3.send(new PutObjectCommand({
-                Bucket: mediaStorageBucket,
-                Key: s3Key,
-                Body: mp4,
-                ContentType: 'video/mp4',
-              })),
-            );
+        // Captioned, multi-sample video: two samples per step, each with a
+        // distinct user-supplied caption. The 2 samples/step force the
+        // single-run 2-up grid layout (where the caption clipping regressed),
+        // and the captions verify caption-over-filename rendering.
+        for (const step of videoSteps) {
+          for (const sample of [0, 1]) {
+            const fileName = `pair_${sample}_step_${String(step).padStart(3, '0')}.mp4`;
+            const caption = `prompt: captioned_pair sample ${sample} | step ${step}`;
+            pushVideoFile(run, 'video/captioned_pair', step, fileName, caption);
           }
         }
       }
