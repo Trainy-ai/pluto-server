@@ -30,6 +30,7 @@ import {
   queryDistinctMetrics,
   queryMetricSortedRunIds,
   queryHeartbeatSortedRunIds,
+  queryHeartbeatFilteredRunIds,
   type MetricAggregation,
 } from "../lib/queries/metric-summaries";
 import type { prisma } from "../lib/prisma";
@@ -40,6 +41,7 @@ import { deepMerge } from "../lib/deep-merge";
 import { generateRunPrefix } from "../lib/run-prefix";
 import { transitionRunStatus, recordRunCreatedEvent } from "../lib/run-status";
 import { attachFieldValues, queryFieldFilteredRunIds, queryFieldSortedRunIds, MAX_JSON_SORT_OFFSET, fieldFilterSchema, type FieldFilter } from "../trpc/routers/runs/procs/list-runs";
+import { compileRunFilter, FilterError } from "../lib/queries/run-filter";
 
 // Type for API key with relations
 type ApiKeyWithRelations = ApiKey & {
@@ -1089,7 +1091,7 @@ const listRunsRoute = createRoute({
       // are applied via the SAME indexed run_field_values builder the frontend
       // uses — no Mongo-style query language. Filters AND together.
       fieldFilters: z.string().optional().openapi({
-        description: "JSON-encoded array of field-filter terms {source, key, dataType, operator, values}. Filters config.*/systemMetadata.* fields via the indexed run_field_values table; terms AND together. Operators: contains, does not contain, is, is not, starts with, ends with, regex, >, <, >=, <=, is between, is any of, is none of.",
+        description: "JSON-encoded array of field-filter terms (see the FieldFilterTerm component for the structured shape and the full source/dataType/operator enums). Filters config.*/systemMetadata.* fields via the indexed run_field_values table; terms AND together. Operators (dataType-dependent): contains, does not contain, equals, is, is not, starts with, ends with, regex, is greater than/>, is less than/<, is greater than or equal to/>=, is less than or equal to/<=, is between, is not between, is before, is on or before, is after, is on or after, is any of, is none of, exists, not exists.",
         example: '[{"source":"config","key":"checkpoint.r2_prefix","dataType":"text","operator":"contains","values":["37a"]}]',
       }),
       // Ordering. A leading `-` means descending (a leading `+` or none means
@@ -1116,6 +1118,33 @@ const listRunsRoute = createRoute({
       offset: z.coerce.number().min(0).max(100000).optional().openapi({
         description: "Number of runs to skip before returning results (offset pagination). Combine with `limit` to page through results; `total` reports the full match count.",
         example: 0,
+      }),
+      status: z.string().optional().openapi({
+        description: "Comma-separated run statuses to filter by (OR within the list). One or more of: RUNNING, COMPLETED, FAILED, TERMINATED, CANCELLED. Invalid values → 400.",
+        example: "RUNNING,FAILED",
+      }),
+      // Heartbeat = the last time a run reported data (ClickHouse MAX(time) over
+      // mlop_metrics; wandb's heartbeatAt). Filter runs whose heartbeat falls in
+      // [heartbeatAfter, heartbeatBefore] — e.g. heartbeatBefore=<1h ago> finds
+      // stale/zombie runs (interrupted spot jobs). Requires projectName (CH scope).
+      // Runs that never logged data have no heartbeat and never match.
+      heartbeatAfter: z.string().datetime().optional().openapi({
+        description: "ISO-8601 timestamp; keep only runs whose last logged-data time (heartbeat) is at or after this. Requires projectName.",
+        example: "2026-06-22T00:00:00Z",
+      }),
+      heartbeatBefore: z.string().datetime().optional().openapi({
+        description: "ISO-8601 timestamp; keep only runs whose last logged-data time (heartbeat) is at or before this (i.e. stale). Requires projectName.",
+        example: "2026-06-22T00:00:00Z",
+      }),
+      // wandb-compatible MongoDB-style query (JSON-encoded). Boolean $and/$or/$not
+      // + leaf ops (eq, $ne, $gt/$gte/$lt/$lte, $in/$nin, $regex) over fields:
+      // state/status, heartbeat_at, created_at/updated_at, name, tags,
+      // config.<key>, summaryMetrics.<key>. The single OR-capable filter surface
+      // the Pluto client uses; AND-ed with the other params. $or/$not and
+      // heartbeat/metric leaves require projectName. Unknown field/op → 400.
+      filter: z.string().optional().openapi({
+        description: "JSON-encoded wandb-style filter query. Supports $and/$or/$not and leaf operators (eq, $ne, $gt/$gte/$lt/$lte, $in/$nin, $regex) over: state/status, heartbeat_at, created_at/updated_at, name, tags, config.<key>, summaryMetrics.<key>.",
+        example: '{"$or":[{"state":"running"},{"heartbeat_at":{"$gte":"2026-06-22T00:00:00Z"}}]}',
       }),
     }),
   },
@@ -1156,7 +1185,7 @@ const listRunsRoute = createRoute({
 router.use(listRunsRoute.path, withApiKey);
 router.openapi(listRunsRoute, async (c) => {
   const apiKey = c.get("apiKey");
-  const { projectName, search, tags: tagsParam, limit, includeFieldValues, visibleColumns: visibleColumnsRaw, konduktorJobPrefix, fieldFilters: fieldFiltersRaw, sort: sortRaw, offset } = c.req.valid("query");
+  const { projectName, search, tags: tagsParam, limit, includeFieldValues, visibleColumns: visibleColumnsRaw, konduktorJobPrefix, fieldFilters: fieldFiltersRaw, sort: sortRaw, offset, status: statusRaw, heartbeatAfter, heartbeatBefore, filter: filterRaw } = c.req.valid("query");
   const prisma = c.get("prisma");
 
   // Resolve ordering from the `sort` param. A leading `-` is descending, a
@@ -1329,19 +1358,87 @@ router.openapi(listRunsRoute, async (c) => {
     fieldFilterMatchIds = ffIds;
   }
 
-  // Intersect search and field-filter id sets when both are present so the
-  // single `id: { in: ... }` Prisma clause respects both constraints (AND).
-  let combinedIdFilter: bigint[] | undefined;
-  if (searchMatchIds && fieldFilterMatchIds) {
-    // Both id arrays are bigint[]; bigint is a primitive that works directly
-    // with Set/=== so no string conversion is needed.
-    const ffSet = new Set(fieldFilterMatchIds);
-    combinedIdFilter = searchMatchIds.filter((id) => ffSet.has(id));
-    if (combinedIdFilter.length === 0) {
+  // Parse + validate status (comma-separated RunStatus values). Applied as a
+  // Prisma `status: { in }` clause below (the query layer already supports it).
+  let statuses: RunStatus[] | undefined;
+  if (statusRaw) {
+    const parsed = statusRaw.split(",").map((s) => s.trim()).filter(Boolean);
+    const invalid = parsed.filter((s) => !(s in RunStatus));
+    if (invalid.length > 0) {
+      return c.json({ error: `invalid status value(s): ${invalid.join(", ")}; allowed: ${Object.values(RunStatus).join(", ")}` }, 400);
+    }
+    if (parsed.length > 0) statuses = parsed as RunStatus[];
+  }
+
+  // AND every id-producing filter together into one `id: { in: ... }` clause.
+  // bigint is a primitive, so Set membership works without string conversion.
+  const intersect = (sets: bigint[][]): bigint[] =>
+    sets.reduce((acc, s) => {
+      const set = new Set(s);
+      return acc.filter((id) => set.has(id));
+    });
+
+  const idSets: bigint[][] = [];
+  if (searchMatchIds) idSets.push(searchMatchIds);
+  if (fieldFilterMatchIds) idSets.push(fieldFilterMatchIds);
+
+  // The search ∩ fieldFilter set (if any) bounds the heartbeat ClickHouse scan.
+  const preHeartbeat = idSets.length > 0 ? intersect(idSets) : undefined;
+  if (preHeartbeat && preHeartbeat.length === 0) {
+    return c.json({ runs: [], total: 0 }, 200);
+  }
+
+  // Heartbeat filter: keep runs whose last logged-data time (ClickHouse
+  // MAX(time)) is within [heartbeatAfter, heartbeatBefore]. Requires projectName
+  // for scope (like the metric sort). Produces an id set AND-ed with the rest.
+  if (heartbeatAfter || heartbeatBefore) {
+    if (!projectName) {
+      return c.json({ error: "heartbeatAfter/heartbeatBefore require projectName" }, 400);
+    }
+    const hbIds = await queryHeartbeatFilteredRunIds(clickhouse, {
+      organizationId: apiKey.organization.id,
+      projectName,
+      ...(heartbeatAfter ? { after: heartbeatAfter } : {}),
+      ...(heartbeatBefore ? { before: heartbeatBefore } : {}),
+      ...(preHeartbeat ? { candidateRunIds: preHeartbeat.map((id) => Number(id)) } : {}),
+    });
+    if (hbIds.length === 0) {
       return c.json({ runs: [], total: 0 }, 200);
     }
-  } else {
-    combinedIdFilter = searchMatchIds ?? fieldFilterMatchIds;
+    idSets.push(hbIds.map((id) => BigInt(id)));
+  }
+
+  // wandb-style `filter` AST: compile to a matching run-id set (set algebra over
+  // per-leaf id sets across PG/ClickHouse), AND-ed with the other id filters.
+  if (filterRaw) {
+    let parsedFilter: unknown;
+    try {
+      parsedFilter = JSON.parse(filterRaw);
+    } catch {
+      return c.json({ error: "filter must be valid JSON" }, 400);
+    }
+    let filterIds: bigint[];
+    try {
+      filterIds = await compileRunFilter(parsedFilter, {
+        prisma,
+        organizationId: apiKey.organization.id,
+        ...(projectId != null ? { projectId } : {}),
+        ...(projectName ? { projectName } : {}),
+      });
+    } catch (e) {
+      if (e instanceof FilterError) return c.json({ error: e.message }, 400);
+      throw e;
+    }
+    if (filterIds.length === 0) {
+      return c.json({ runs: [], total: 0 }, 200);
+    }
+    idSets.push(filterIds);
+  }
+
+  const combinedIdFilter: bigint[] | undefined =
+    idSets.length > 0 ? intersect(idSets) : undefined;
+  if (combinedIdFilter && combinedIdFilter.length === 0) {
+    return c.json({ runs: [], total: 0 }, 200);
   }
 
   // Build where clause with optional tag filtering. konduktorJobPrefix
@@ -1352,6 +1449,7 @@ router.openapi(listRunsRoute, async (c) => {
     organizationId: apiKey.organization.id,
     ...(projectId ? { projectId } : {}),
     ...(combinedIdFilter ? { id: { in: combinedIdFilter } } : {}),
+    ...(statuses?.length ? { status: { in: statuses } } : {}),
     ...(tags.length > 0 ? { tags: { hasSome: tags } } : {}),
     ...(konduktorJobPrefix
       ? {

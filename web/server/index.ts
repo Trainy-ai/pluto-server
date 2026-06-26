@@ -1,6 +1,6 @@
 import { trpcServer } from "@hono/trpc-server";
 import { swaggerUI } from "@hono/swagger-ui";
-import { OpenAPIHono } from "@hono/zod-openapi";
+import { OpenAPIHono, z } from "@hono/zod-openapi";
 import { cors } from "hono/cors";
 import { compress } from "hono/compress";
 import { HTTPException } from "hono/http-exception";
@@ -14,6 +14,13 @@ import { allowedOrigins } from "./lib/origins";
 import healthRoutes from "./routes/health";
 import versionRoutes from "./routes/version";
 import runRoutes from "./routes/runs-openapi";
+import { FIELD_FILTER_OPERATORS } from "./trpc/routers/runs/procs/list-runs";
+import {
+  RUN_FILTER_BOOLEAN_OPERATORS,
+  RUN_FILTER_LEAF_OPERATORS,
+  RUN_FILTER_FIELDS,
+  RUN_FILTER_FIELD_PREFIXES,
+} from "./lib/queries/run-filter-grammar";
 import authRoutes from "./routes/auth";
 import chartDataRoutes from "./routes/chart-data";
 import stripeWebhookRoutes from "./routes/stripe-webhook";
@@ -128,6 +135,33 @@ app.openAPIRegistry.registerComponent("securitySchemes", "bearerAuth", {
   bearerFormat: "API Key",
   description: "API key obtained from the mlop dashboard",
 });
+
+// Publish the field-filter term shape as a named OpenAPI component so REST
+// clients can read the supported source/dataType/operator enums. This is a
+// doc-only schema: the runtime `fieldFilterSchema` keeps `operator: z.string()`
+// (it's shared with the tRPC/web-app inputs that type operators as plain
+// strings), while the published component carries the full operator enum.
+const FieldFilterTermDoc = z.object({
+  source: z.enum(["config", "systemMetadata"]),
+  key: z.string(),
+  dataType: z.enum(["text", "number", "date", "option"]),
+  operator: z.enum(FIELD_FILTER_OPERATORS),
+  values: z.array(z.any()),
+});
+app.openAPIRegistry.register("FieldFilterTerm", FieldFilterTermDoc);
+
+// Publish the wandb-style `filter` query grammar (the canonical vocabulary from
+// lib/queries/run-filter-grammar.ts) as a machine-readable OpenAPI component, so
+// the Pluto client and docs can contract-test their own copies against it and
+// drift fails CI. Doc-only: the runtime compiler validates against the same
+// consts directly.
+const RunFilterGrammarDoc = z.object({
+  booleanOperators: z.array(z.enum(RUN_FILTER_BOOLEAN_OPERATORS)),
+  leafOperators: z.array(z.enum(RUN_FILTER_LEAF_OPERATORS)),
+  fields: z.array(z.enum(RUN_FILTER_FIELDS)),
+  fieldPrefixes: z.array(z.enum(RUN_FILTER_FIELD_PREFIXES)),
+});
+app.openAPIRegistry.register("RunFilterGrammar", RunFilterGrammarDoc);
 
 // Swagger UI
 app.get("/api/docs", swaggerUI({ url: "/api/openapi.json" }));

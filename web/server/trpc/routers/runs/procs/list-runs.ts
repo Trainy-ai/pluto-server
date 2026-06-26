@@ -16,6 +16,45 @@ const dateFilterSchema = z.object({
   value2: z.string().datetime().optional(),
 });
 
+// The complete operator vocabulary the field-filter builder (buildValueCondition
+// below) accepts, across all dataTypes — symbolic + phrase synonyms, exists/not
+// exists, and negated forms. Used to document the `FieldFilterTerm` OpenAPI
+// component (web/server/index.ts) and by the run-filter compiler. NOTE: kept as
+// the operator vocabulary, but `fieldFilterSchema.operator` stays `z.string()`
+// at runtime — the schema is shared with the tRPC table-UI input and the web/app
+// frontend (which type operators as plain strings), so a strict enum here would
+// break their type-checks. The OpenAPI enum is published doc-only.
+export const FIELD_FILTER_OPERATORS = [
+  "contains",
+  "does not contain",
+  "equals",
+  "is",
+  "is not",
+  "starts with",
+  "ends with",
+  "regex",
+  "is greater than",
+  ">",
+  "is less than",
+  "<",
+  "is greater than or equal to",
+  ">=",
+  "is less than or equal to",
+  "<=",
+  "is between",
+  "is not between",
+  "is before",
+  "is on or before",
+  "is after",
+  "is on or after",
+  "is any of",
+  "is none of",
+  "exists",
+  "not exists",
+] as const;
+
+export type FieldFilterOperator = (typeof FIELD_FILTER_OPERATORS)[number];
+
 export const fieldFilterSchema = z.object({
   source: z.enum(["config", "systemMetadata"]),
   key: z.string(),
@@ -25,6 +64,12 @@ export const fieldFilterSchema = z.object({
 });
 
 export type FieldFilter = z.infer<typeof fieldFilterSchema>;
+
+// The SQL builders below dispatch on the operator string and ignore unknowns, so
+// they accept a structurally-typed term with `operator` widened to string. This
+// lets callers that keep their own looser filter schema (e.g. runs-count) reuse
+// the builders without coupling to the operator enum.
+type FieldFilterCondition = Omit<FieldFilter, "operator"> & { operator: string };
 
 const metricFilterSchema = z.object({
   logName: z.string(),
@@ -1131,7 +1176,7 @@ function getSqlCastType(field: string): string {
 /** Map negated operators to their positive equivalents.
  *  Negated field filters use NOT EXISTS with the positive condition
  *  so that runs without the field at all are correctly included. */
-const NEGATED_TO_POSITIVE: Record<string, string> = {
+const NEGATED_TO_POSITIVE: Record<string, FieldFilterOperator> = {
   "does not contain": "contains",
   "is not": "is",
   "is not between": "is between",
@@ -1298,7 +1343,7 @@ export async function queryFieldSortedRunIds(
 export function buildFieldFilterConditions(
   conditions: string[],
   queryParams: (string | bigint | string[] | number)[],
-  fieldFilters?: z.infer<typeof fieldFilterSchema>[],
+  fieldFilters?: FieldFilterCondition[],
 ) {
   if (!fieldFilters?.length) return;
 
@@ -1351,7 +1396,7 @@ export function buildFieldFilterConditions(
  */
 export function buildValueCondition(
   alias: string,
-  ff: z.infer<typeof fieldFilterSchema>,
+  ff: FieldFilterCondition,
   queryParams: (string | bigint | string[] | number)[],
 ): string | null {
   const { dataType, operator, values } = ff;

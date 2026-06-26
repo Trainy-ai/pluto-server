@@ -9425,5 +9425,115 @@ describe('SDK API Endpoints (with API Key)', () => {
         expect.arrayContaining(['runName', 'projectName']),
       );
     });
+
+    it('Test 39.5: FieldFilterTerm exposes source/dataType/operator enums for the SDK', () => {
+      // The /api/runs/list `fieldFilters` param is a JSON-encoded string, so the
+      // structured term schema is registered as a standalone component. The Pluto
+      // client mirrors these enums and contract-tests them against this doc.
+      const term = spec.components.schemas.FieldFilterTerm;
+      expect(term, 'missing component schema: FieldFilterTerm').toBeDefined();
+      expect(term.type).toBe('object');
+
+      const sortedEnum = (p: string) => [...(term.properties?.[p]?.enum ?? [])].sort();
+      expect(sortedEnum('source')).toEqual(['config', 'systemMetadata'].sort());
+      expect(sortedEnum('dataType')).toEqual(
+        ['text', 'number', 'date', 'option'].sort(),
+      );
+      expect(sortedEnum('operator')).toEqual(
+        [
+          'contains', 'does not contain', 'equals', 'is', 'is not',
+          'starts with', 'ends with', 'regex',
+          'is greater than', '>', 'is less than', '<',
+          'is greater than or equal to', '>=', 'is less than or equal to', '<=',
+          'is between', 'is not between',
+          'is before', 'is on or before', 'is after', 'is on or after',
+          'is any of', 'is none of', 'exists', 'not exists',
+        ].sort(),
+      );
+    });
+
+    it('Test 39.6: /api/runs/list documents the status + heartbeat filter params', () => {
+      const params = (spec.paths?.['/api/runs/list']?.get?.parameters ?? []) as {
+        name: string;
+      }[];
+      const names = new Set(params.map((p) => p.name));
+      for (const p of ['status', 'heartbeatAfter', 'heartbeatBefore']) {
+        expect(names.has(p), `missing /api/runs/list query param: ${p}`).toBe(true);
+      }
+    });
+
+    it('Test 39.7: status filter narrows results; invalid status → 400', async () => {
+      // Invalid status is rejected up front.
+      const bad = await makeRequest(
+        `/api/runs/list?projectName=${TEST_PROJECT_NAME}&status=NOPE`,
+        { headers: { Authorization: `Bearer ${TEST_API_KEY}` } },
+      );
+      expect(bad.status).toBe(400);
+
+      // Valid status filter returns 200 and every run matches the requested set.
+      const ok = await makeRequest(
+        `/api/runs/list?projectName=${TEST_PROJECT_NAME}&status=RUNNING,COMPLETED&limit=200`,
+        { headers: { Authorization: `Bearer ${TEST_API_KEY}` } },
+      );
+      expect(ok.status).toBe(200);
+      const data = await ok.json();
+      for (const run of data.runs as { status: string }[]) {
+        expect(['RUNNING', 'COMPLETED']).toContain(run.status);
+      }
+    });
+
+    it('Test 39.8: /api/runs/list documents the wandb-style filter param', () => {
+      const params = (spec.paths?.['/api/runs/list']?.get?.parameters ?? []) as {
+        name: string;
+      }[];
+      expect(params.map((p) => p.name)).toContain('filter');
+    });
+
+    it('Test 39.9: filter AST $or works; unknown field → 400', async () => {
+      // $or across two statuses → every returned run is in the union.
+      const orFilter = encodeURIComponent(
+        JSON.stringify({ $or: [{ status: 'RUNNING' }, { status: 'COMPLETED' }] }),
+      );
+      const ok = await makeRequest(
+        `/api/runs/list?projectName=${TEST_PROJECT_NAME}&filter=${orFilter}&limit=200`,
+        { headers: { Authorization: `Bearer ${TEST_API_KEY}` } },
+      );
+      expect(ok.status).toBe(200);
+      const data = await ok.json();
+      for (const run of data.runs as { status: string }[]) {
+        expect(['RUNNING', 'COMPLETED']).toContain(run.status);
+      }
+
+      // Unknown filter field is rejected up front.
+      const badFilter = encodeURIComponent(JSON.stringify({ nope: 1 }));
+      const bad = await makeRequest(
+        `/api/runs/list?projectName=${TEST_PROJECT_NAME}&filter=${badFilter}`,
+        { headers: { Authorization: `Bearer ${TEST_API_KEY}` } },
+      );
+      expect(bad.status).toBe(400);
+    });
+
+    it('Test 39.10: RunFilterGrammar publishes the canonical filter vocabulary', () => {
+      // The grammar is defined once (lib/queries/run-filter-grammar.ts) and
+      // published here so the Pluto client/docs can contract-test against it.
+      const grammar = spec.components.schemas.RunFilterGrammar;
+      expect(grammar, 'missing component schema: RunFilterGrammar').toBeDefined();
+      const itemsEnum = (p: string) =>
+        [...(grammar.properties?.[p]?.items?.enum ?? [])].sort();
+      expect(itemsEnum('booleanOperators')).toEqual(['$and', '$or', '$not'].sort());
+      expect(itemsEnum('leafOperators')).toEqual(
+        ['$eq', '$ne', '$gt', '$gte', '$lt', '$lte', '$in', '$nin', '$regex'].sort(),
+      );
+      expect(itemsEnum('fields')).toEqual(
+        [
+          'state', 'status', 'heartbeat_at', 'heartbeatAt',
+          'created_at', 'createdAt', 'updated_at', 'updatedAt',
+          'name', 'displayName', 'display_name', 'tags',
+        ].sort(),
+      );
+      expect(itemsEnum('fieldPrefixes')).toEqual(
+        ['config.', 'systemMetadata.', 'summaryMetrics.', 'summary_metrics.'].sort(),
+      );
+    });
   });
 });

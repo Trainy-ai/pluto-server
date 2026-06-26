@@ -1021,6 +1021,69 @@ export async function queryHeartbeatSortedRunIds(
 }
 
 /**
+ * Filter run IDs by their ClickHouse "heartbeat" — the most recent metric
+ * timestamp (`MAX(time)` over `mlop_metrics`) per run, i.e. the last time a run
+ * reported data (wandb's `heartbeatAt`). Returns the run IDs whose heartbeat
+ * falls within [`after`, `before`]. At least one bound must be supplied.
+ *
+ * Runs with no metrics in ClickHouse have no heartbeat and never match (same
+ * behavior as the heartbeat sort). `after`/`before` are ISO-8601 strings parsed
+ * with `parseDateTimeBestEffort`. Scope is bounded by tenant (+ optional project
+ * and candidate set) so this never scans the whole table unbounded.
+ */
+export async function queryHeartbeatFilteredRunIds(
+  ch: typeof clickhouse,
+  params: {
+    organizationId: string;
+    projectName?: string;
+    after?: string;
+    before?: string;
+    candidateRunIds?: number[];
+  },
+): Promise<number[]> {
+  const { organizationId, projectName, after, before, candidateRunIds } = params;
+
+  // No bound ⇒ no constraint; let the caller treat that as "filter not applied".
+  if (after == null && before == null) return [];
+  // An explicit empty candidate set means nothing matches.
+  if (candidateRunIds && candidateRunIds.length === 0) return [];
+
+  const queryParams: Record<string, unknown> = { tenantId: organizationId };
+
+  let scope = "tenantId = {tenantId: String}";
+  if (projectName) {
+    scope += " AND projectName = {projectName: String}";
+    queryParams.projectName = projectName;
+  }
+  if (candidateRunIds && candidateRunIds.length > 0) {
+    scope += " AND runId IN ({candidateRunIds: Array(UInt64)})";
+    queryParams.candidateRunIds = candidateRunIds;
+  }
+
+  const having: string[] = [];
+  if (after != null) {
+    having.push("MAX(time) >= parseDateTimeBestEffort({after: String})");
+    queryParams.after = after;
+  }
+  if (before != null) {
+    having.push("MAX(time) <= parseDateTimeBestEffort({before: String})");
+    queryParams.before = before;
+  }
+
+  const query = `
+    SELECT runId
+    FROM mlop_metrics
+    WHERE ${scope}
+    GROUP BY runId
+    HAVING ${having.join(" AND ")}
+  `;
+
+  const result = await ch.query(query, queryParams);
+  const rows = (await result.json()) as { runId: number }[];
+  return rows.map((r) => Number(r.runId));
+}
+
+/**
  * Query ClickHouse for run IDs matching metric filters (no sort — just filtering).
  * Used when sort is by a non-metric column but metric filters are active.
  */
