@@ -20,6 +20,7 @@ import {
   buildPinBadgeLines,
 } from "./pin-styles";
 import { MultiIndexNav } from "@/components/core/multi-index-nav";
+import { TruncatedLabel } from "@/components/shared/truncated-label";
 import {
   Tooltip,
   TooltipContent,
@@ -220,9 +221,11 @@ export function ImageCard({
             className="h-2 w-2 shrink-0 rounded-full"
             style={{ backgroundColor: runLabel.color }}
           />
-          <span className="truncate text-xs font-medium" style={{ color: runLabel.color }} title={runLabel.name}>
-            {runLabel.name}
-          </span>
+          <TruncatedLabel
+            text={runLabel.name}
+            className="text-xs font-medium"
+            style={{ color: runLabel.color }}
+          />
           {isPinned && pinnedStep != null && (
             <span
               data-testid="pin-step-badge"
@@ -354,13 +357,11 @@ export function ImageCard({
                     className="h-2.5 w-2.5 shrink-0 rounded-full"
                     style={{ backgroundColor: runLabel.color }}
                   />
-                  <span
-                    className="truncate text-sm font-medium"
+                  <TruncatedLabel
+                    text={runLabel.name}
+                    className="text-sm font-medium"
                     style={{ color: runLabel.color }}
-                    title={runLabel.name}
-                  >
-                    {runLabel.name}
-                  </span>
+                  />
                 </div>
               )}
               {isPinned && pinnedStep != null ? (
@@ -449,12 +450,12 @@ export function ImageCard({
                 )
               )}
               <div className="relative flex items-center gap-3">
-                <p
-                  className="font-mono text-sm text-muted-foreground"
+                <TruncatedLabel
+                  as="p"
+                  text={displayLabel ?? "No image"}
                   title={caption ? `${caption} (${fileName})` : fileName}
-                >
-                  {displayLabel ?? "No image"}
-                </p>
+                  className="font-mono text-sm text-muted-foreground"
+                />
                 {totalIndices != null && totalIndices > 1 && onIndexChange && (
                   <MultiIndexNav
                     currentIndex={currentImageIndex ?? 0}
@@ -522,12 +523,12 @@ export function ImageCard({
       )}
       {displayLabel && (
         <div className="flex justify-center">
-          <p
-            className="truncate text-center text-xs text-muted-foreground"
+          <TruncatedLabel
+            as="p"
+            text={displayLabel}
             title={caption ? `${caption} (${fileName})` : fileName}
-          >
-            {displayLabel}
-          </p>
+            className="text-center text-xs text-muted-foreground"
+          />
         </div>
       )}
     </div>

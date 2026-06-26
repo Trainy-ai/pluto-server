@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useMemo } from "react";
 import { trpc } from "@/utils/trpc";
 import { useQuery } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -8,10 +8,23 @@ import { StepNavigator } from "@/routes/o.$orgSlug._authed/(run)/projects.$proje
 import { useSyncedStepNavigation } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~hooks/use-synced-step-navigation";
 import { MediaCardWrapper } from "@/components/core/media-card-wrapper";
 import { MultiIndexNav } from "@/components/core/multi-index-nav";
+import { MediaSettingsPopover } from "@/components/core/media-settings-popover";
+import { TruncatedLabel } from "@/components/shared/truncated-label";
+import { useSampleIndexSync } from "./use-sample-index-sync";
 import { MediaPinLabel } from "@/components/core/media-pin-label";
 import { ClearAllPinsButton } from "@/components/core/clear-all-pins-button";
 import { pinRingClass } from "@/components/core/image-viewer/pin-styles";
 import { useMediaPins } from "./use-media-pins";
+
+interface Video {
+  url: string;
+  time: string;
+  step: number;
+  fileName: string;
+  fileType: string;
+  caption?: string | null;
+  runId?: string;
+}
 
 interface MultiGroupVideoProps {
   logName: string;
@@ -121,14 +134,9 @@ export const MultiGroupVideo = ({
       });
   }, [allVideos, currentStepValue, runs, getPinInfo, logName]);
 
-  // Per-run sample index for multi-sample-per-step. Resets on step change.
-  const [indexByRun, setIndexByRun] = useState<Map<string, number>>(new Map());
-  useEffect(() => {
-    setIndexByRun(new Map());
-  }, [currentStepValue]);
-  const handleIndexChange = useCallback((runId: string, next: number) => {
-    setIndexByRun((prev) => new Map(prev).set(runId, next));
-  }, []);
+  // Per-sample < N/M > stepper sync (off / across runs / across widgets).
+  const { mode, setMode, handleIndexChange, resolveIndex } =
+    useSampleIndexSync();
 
   // Calculate a consistent aspect ratio container height
   const containerHeight = "aspect-video";
@@ -174,10 +182,13 @@ export const MultiGroupVideo = ({
       title={logName}
       className="h-full w-full"
       toolbarExtra={
-        <ClearAllPinsButton
-          pinnedRunCount={pinnedRunCount}
-          onClearAllPins={clearAllPins}
-        />
+        <>
+          <MediaSettingsPopover syncMode={mode} onSyncModeChange={setMode} />
+          <ClearAllPinsButton
+            pinnedRunCount={pinnedRunCount}
+            onClearAllPins={clearAllPins}
+          />
+        </>
       }
     >
     <div
@@ -202,12 +213,13 @@ export const MultiGroupVideo = ({
             pinnedIndexForThisWidget,
             effectiveStep,
           } = entry;
-          // User's local arrow navigation wins; otherwise fall back to the
-          // pinned sample index for this widget, then 0.
-          const rawIndex =
-            indexByRun.get(run.runId) ?? pinnedIndexForThisWidget ?? 0;
-          const safeIndex =
-            videos.length > 0 ? Math.min(rawIndex, videos.length - 1) : 0;
+          // Resolve which sample this cell shows: sample-index sync across
+          // runs/widgets, pinned-index fallback, clamped to what's available.
+          const safeIndex = resolveIndex(
+            run.runId,
+            pinnedIndexForThisWidget,
+            videos.length,
+          );
           const video = videos[safeIndex];
 
           return (
@@ -242,16 +254,16 @@ export const MultiGroupVideo = ({
                 {video ? (
                   <div className="flex h-full flex-col">
                     <VideoPlayer url={video.url} fileName={video.fileName} />
-                    <p
-                      className="truncate border-t p-2 font-mono text-xs"
+                    <TruncatedLabel
+                      as="p"
+                      text={video.caption || video.fileName}
                       title={
                         video.caption
                           ? `${video.caption} (${video.fileName})`
                           : video.fileName
                       }
-                    >
-                      {video.caption || video.fileName}
-                    </p>
+                      className="border-t p-2 font-mono text-xs"
+                    />
                   </div>
                 ) : (
                   <div className="flex h-full w-full items-center justify-center border border-dashed bg-background/50 px-2 text-center text-sm text-muted-foreground">

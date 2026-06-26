@@ -31,6 +31,7 @@ import {
 import { useSyncedStepNavigation } from "../../~hooks/use-synced-step-navigation";
 import { StepNavigator } from "../shared/step-navigator";
 import { MediaCardWrapper } from "@/components/core/media-card-wrapper";
+import { TruncatedLabel } from "@/components/shared/truncated-label";
 
 const VIDEOS_PER_PAGE = 2;
 
@@ -539,16 +540,16 @@ export const VideoView: React.FC<VideoViewProps> = ({
                 url={currentStepVideos[0].url}
                 fileName={currentStepVideos[0].fileName}
               />
-              <p
-                className="truncate border-t p-2 font-mono text-xs"
+              <TruncatedLabel
+                as="p"
+                text={currentStepVideos[0].caption || currentStepVideos[0].fileName}
                 title={
                   currentStepVideos[0].caption
                     ? `${currentStepVideos[0].caption} (${currentStepVideos[0].fileName})`
                     : currentStepVideos[0].fileName
                 }
-              >
-                {currentStepVideos[0].caption || currentStepVideos[0].fileName}
-              </p>
+                className="border-t p-2 font-mono text-xs"
+              />
             </div>
           </div>
         </div>
@@ -562,16 +563,16 @@ export const VideoView: React.FC<VideoViewProps> = ({
               >
                 <div className="flex flex-1 flex-col">
                   <VideoPlayer url={video.url} fileName={video.fileName} />
-                  <p
-                    className="truncate border-t p-2 font-mono text-xs"
+                  <TruncatedLabel
+                    as="p"
+                    text={video.caption || video.fileName}
                     title={
                       video.caption
                         ? `${video.caption} (${video.fileName})`
                         : video.fileName
                     }
-                  >
-                    {video.caption || video.fileName}
-                  </p>
+                    className="border-t p-2 font-mono text-xs"
+                  />
                 </div>
               </div>
             ))}

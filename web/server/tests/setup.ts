@@ -3734,79 +3734,93 @@ async function setupTestData(): Promise<TestData> {
   // video widgets co-located in the same section, which is satisfied here.
   // Dynamic section: regex matching all five samples/* logNames so the
   // same tests work in AR-DD / IR-DD locations.
-  console.log('\n1️⃣1️⃣b-ter Creating Multi-Index Media Test dashboard view...');
+  console.log('\n1️⃣1️⃣b-ter Creating Multi-Index Media Test dashboard views...');
 
-  const multiIndexDashboardConfig = {
-    version: 1,
-    sections: [
+  // IMPORTANT: the static and dynamic sections live in SEPARATE dashboards, not
+  // one combined dashboard. A single dashboard with both sections renders every
+  // samples/* widget TWICE (once per section), which (a) makes a logName lookup
+  // ambiguous — a lazy `.first()` flips between the two copies as the page
+  // scrolls, so a test sets a widget's sync mode on one copy but navigates the
+  // other — and (b) doubles the page height past the VirtualizedChart unload
+  // margin so widgets unmount/reset mid-test. One section per dashboard keeps
+  // each logName unique and the page short enough that nothing unmounts.
+  // DS locations use the static dashboard; DD locations use the dynamic one.
+  const multiIndexStaticSection = {
+    id: 'multi-index-static-section',
+    name: 'Multi-Index Media (Static)',
+    collapsed: false,
+    widgets: [
       {
-        id: 'multi-index-dynamic-section',
-        name: 'Multi-Index Media (Dynamic)',
-        collapsed: false,
-        widgets: [],
-        dynamicPattern: '^samples/(img_grid|img_grid2|img_grid3|audio_grid|video_grid)$',
-        dynamicPatternMode: 'regex',
+        id: 'multi-index-static-img-grid',
+        type: 'file-group',
+        config: { files: ['samples/img_grid'] },
+        layout: { x: 0, y: 0, w: 6, h: 5 },
       },
       {
-        id: 'multi-index-static-section',
-        name: 'Multi-Index Media (Static)',
-        collapsed: false,
-        widgets: [
-          {
-            id: 'multi-index-static-img-grid',
-            type: 'file-group',
-            config: { files: ['samples/img_grid'] },
-            layout: { x: 0, y: 0, w: 6, h: 5 },
-          },
-          {
-            id: 'multi-index-static-audio-grid',
-            type: 'file-group',
-            config: { files: ['samples/audio_grid'] },
-            layout: { x: 6, y: 0, w: 6, h: 5 },
-          },
-          {
-            id: 'multi-index-static-video-grid',
-            type: 'file-group',
-            config: { files: ['samples/video_grid'] },
-            layout: { x: 0, y: 5, w: 6, h: 5 },
-          },
-          {
-            id: 'multi-index-static-img-grid2',
-            type: 'file-group',
-            config: { files: ['samples/img_grid2'] },
-            layout: { x: 6, y: 5, w: 6, h: 5 },
-          },
-          {
-            id: 'multi-index-static-img-grid3',
-            type: 'file-group',
-            config: { files: ['samples/img_grid3'] },
-            layout: { x: 0, y: 10, w: 6, h: 5 },
-          },
-        ],
+        id: 'multi-index-static-audio-grid',
+        type: 'file-group',
+        config: { files: ['samples/audio_grid'] },
+        layout: { x: 6, y: 0, w: 6, h: 5 },
+      },
+      {
+        id: 'multi-index-static-video-grid',
+        type: 'file-group',
+        config: { files: ['samples/video_grid'] },
+        layout: { x: 0, y: 5, w: 6, h: 5 },
+      },
+      {
+        id: 'multi-index-static-img-grid2',
+        type: 'file-group',
+        config: { files: ['samples/img_grid2'] },
+        layout: { x: 6, y: 5, w: 6, h: 5 },
+      },
+      {
+        id: 'multi-index-static-img-grid3',
+        type: 'file-group',
+        config: { files: ['samples/img_grid3'] },
+        layout: { x: 0, y: 10, w: 6, h: 5 },
       },
     ],
-    settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
   };
 
-  await prisma.dashboardView.upsert({
-    where: {
-      organizationId_projectId_name: {
+  const multiIndexDynamicSection = {
+    id: 'multi-index-dynamic-section',
+    name: 'Multi-Index Media (Dynamic)',
+    collapsed: false,
+    widgets: [],
+    dynamicPattern: '^samples/(img_grid|img_grid2|img_grid3|audio_grid|video_grid)$',
+    dynamicPatternMode: 'regex',
+  };
+
+  const gridSettings = { gridCols: 12, rowHeight: 80, compactType: 'vertical' };
+
+  const multiIndexDashboards = [
+    { name: 'Multi-Index Media Test', sections: [multiIndexStaticSection] },
+    { name: 'Multi-Index Media Test (Dynamic)', sections: [multiIndexDynamicSection] },
+  ];
+
+  for (const { name, sections } of multiIndexDashboards) {
+    const config = { version: 1, sections, settings: gridSettings };
+    await prisma.dashboardView.upsert({
+      where: {
+        organizationId_projectId_name: {
+          organizationId: org.id,
+          projectId: project.id,
+          name,
+        },
+      },
+      update: { config },
+      create: {
+        name,
         organizationId: org.id,
         projectId: project.id,
-        name: 'Multi-Index Media Test',
+        createdById: user.id,
+        isDefault: false,
+        config,
       },
-    },
-    update: { config: multiIndexDashboardConfig },
-    create: {
-      name: 'Multi-Index Media Test',
-      organizationId: org.id,
-      projectId: project.id,
-      createdById: user.id,
-      isDefault: false,
-      config: multiIndexDashboardConfig,
-    },
-  });
-  console.log('   ✓ Created Multi-Index Media Test dashboard view');
+    });
+    console.log(`   ✓ Created ${name} dashboard view`);
+  }
 
   // 11d. Seed bars-test-project for {bars} categorical-histogram E2E tests
   // Lives in its own project so the existing smoke-test-project isn't polluted

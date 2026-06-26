@@ -7,7 +7,8 @@ import { StepNavigator } from "@/routes/o.$orgSlug._authed/(run)/projects.$proje
 import { useSyncedStepNavigation } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~hooks/use-synced-step-navigation";
 import { ImageCard } from "@/components/core/image-viewer";
 import { MediaCardWrapper } from "@/components/core/media-card-wrapper";
-import { ImageSettingsPopover } from "@/components/core/image-viewer/image-settings-popover";
+import { MediaSettingsPopover } from "@/components/core/media-settings-popover";
+import { useSampleIndexSync } from "./use-sample-index-sync";
 import { useMediaPins } from "./use-media-pins";
 
 interface MultiGroupImageProps {
@@ -117,15 +118,10 @@ export const MultiGroupImage = ({
       });
   }, [allImages, currentStepValue, runs, getPinInfo, logName]);
 
-  // Per-run sample index for multi-sample-per-step logging. Resets to 0 when
-  // the step changes — we don't try to persist across step navigation.
-  const [indexByRun, setIndexByRun] = useState<Map<string, number>>(new Map());
-  useEffect(() => {
-    setIndexByRun(new Map());
-  }, [currentStepValue]);
-  const handleIndexChange = useCallback((runId: string, next: number) => {
-    setIndexByRun((prev) => new Map(prev).set(runId, next));
-  }, []);
+  // Per-sample < N/M > stepper sync (across runs + optionally across widgets).
+  // See useSampleIndexSync for the two toggles and precedence.
+  const { mode, setMode, handleIndexChange, resolveIndex } =
+    useSampleIndexSync();
 
   const runsWithImages = imagesByRun.length;
 
@@ -171,11 +167,13 @@ export const MultiGroupImage = ({
       title={logName}
       className="h-full w-full"
       toolbarExtra={
-        <ImageSettingsPopover
+        <MediaSettingsPopover
           syncZoom={syncZoom}
           onSyncZoomChange={setSyncZoom}
           pinnedRunCount={pinnedRunCount}
           onClearAllPins={clearAllPins}
+          syncMode={mode}
+          onSyncModeChange={setMode}
         />
       }
     >
@@ -200,13 +198,13 @@ export const MultiGroupImage = ({
               pinnedIndexForThisWidget,
               effectiveStep,
             } = entry;
-            // User's local arrow navigation wins. When there's no local
-            // override (initial render or post-step-change reset), fall back
-            // to the pinned index for this widget, then 0.
-            const rawIndex =
-              indexByRun.get(run.runId) ?? pinnedIndexForThisWidget ?? 0;
-            const safeIndex =
-              images.length > 0 ? Math.min(rawIndex, images.length - 1) : 0;
+            // Resolve which sample this cell shows (linked/unlinked across runs
+            // and widgets, sticky across steps, pinned-index fallback, clamped).
+            const safeIndex = resolveIndex(
+              run.runId,
+              pinnedIndexForThisWidget,
+              images.length,
+            );
             const image = images[safeIndex];
 
             return (

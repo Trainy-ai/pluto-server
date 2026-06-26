@@ -117,6 +117,7 @@ export function MediaPinLabel({
         onUnpin={onUnpin}
         hasSyncContext={hasSyncContext}
         pinSource={pinSource}
+        noun={noun.toLowerCase()}
       />
     </div>
   );

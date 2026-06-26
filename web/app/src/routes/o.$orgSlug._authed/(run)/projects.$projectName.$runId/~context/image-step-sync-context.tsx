@@ -103,6 +103,15 @@ interface ImageStepSyncContextValue {
   unpinRunForWidget: (runId: string, logName: string) => void;
   /** Clear all cross-panel pins at once */
   unpinAllRuns: () => void;
+  /**
+   * Shared per-sample index for multi-sample-per-step media (the < N/M >
+   * stepper). Shared across ALL media widgets under this provider, so when a
+   * widget's "Sync Sample Indices" toggle is on, navigating its arrows moves
+   * every other linked widget/run to the same index — images and videos in
+   * tandem. `null` = untouched. Sticky across step changes.
+   */
+  sampleIndex: number | null;
+  setSampleIndex: (index: number | null) => void;
 }
 
 // ============================
@@ -134,6 +143,7 @@ export function ImageStepSyncProvider({ children }: ImageStepSyncProviderProps) 
   const [pinnedRunsByWidget, setPinnedRunsByWidget] = useState<Map<string, PinInfo>>(
     new Map(),
   );
+  const [sampleIndex, setSampleIndex] = useState<number | null>(null);
   const listenersRef = useRef(new Map<string, (stepValue: number) => void>());
 
   const registerListener = useCallback(
@@ -313,6 +323,8 @@ export function ImageStepSyncProvider({ children }: ImageStepSyncProviderProps) 
       unpinRun,
       unpinRunForWidget,
       unpinAllRuns,
+      sampleIndex,
+      setSampleIndex,
     }),
     [
       syncedStepValue,
@@ -326,6 +338,7 @@ export function ImageStepSyncProvider({ children }: ImageStepSyncProviderProps) 
       unpinRun,
       unpinRunForWidget,
       unpinAllRuns,
+      sampleIndex,
     ],
   );
 

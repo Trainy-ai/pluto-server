@@ -9,7 +9,7 @@ import { StepNavigator } from "../shared/step-navigator";
 import { ImageCard } from "@/components/core/image-viewer";
 import { cn } from "@/lib/utils";
 import { MediaCardWrapper } from "@/components/core/media-card-wrapper";
-import { ImageSettingsPopover } from "@/components/core/image-viewer/image-settings-popover";
+import { MediaSettingsPopover } from "@/components/core/media-settings-popover";
 
 interface ImagesViewProps {
   log: LogGroup["logs"][number];
@@ -135,7 +135,7 @@ export const ImagesView = ({
       title={log.logName}
       className="h-full w-full"
       toolbarExtra={
-        <ImageSettingsPopover
+        <MediaSettingsPopover
           syncZoom={syncZoom}
           onSyncZoomChange={setSyncZoom}
         />

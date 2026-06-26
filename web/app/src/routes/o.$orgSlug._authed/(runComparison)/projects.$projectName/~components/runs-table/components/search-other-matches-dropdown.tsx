@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from "react";
 import type { Run } from "../../../~queries/list-runs";
 import { getDisplayIdForRun } from "../../../~lib/metrics-utils";
 import { cn } from "@/lib/utils";
+import { TruncatedLabel } from "@/components/shared/truncated-label";
 
 interface SearchOtherMatchesDropdownProps {
   outOfView: Run[];
@@ -108,7 +109,7 @@ export function SearchOtherMatchesDropdown({
               onSelectRun(run);
             }}
             className={cn(
-              "flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm",
+              "flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs",
               isInView
                 ? "cursor-default text-muted-foreground/60"
                 : "hover:bg-accent",
@@ -123,12 +124,10 @@ export function SearchOtherMatchesDropdown({
             ) : (
               <span className="inline-block h-2 w-2 shrink-0" />
             )}
-            <span
-              className="min-w-0 flex-1 truncate font-medium"
-              title={run.name}
-            >
-              {run.name}
-            </span>
+            <TruncatedLabel
+              text={run.name}
+              className="flex-1 font-medium"
+            />
             <span className="shrink-0 font-mono text-xs text-muted-foreground">
               {getDisplayIdForRun(run) ?? run.id}
             </span>

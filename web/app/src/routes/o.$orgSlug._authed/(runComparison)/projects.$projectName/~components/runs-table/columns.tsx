@@ -1,4 +1,5 @@
 import { Link } from "@tanstack/react-router";
+import { TruncatedLabel } from "@/components/shared/truncated-label";
 import type { ColumnDef, Row, SortingState } from "@tanstack/react-table";
 import { Eye, EyeOff, X } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -353,27 +354,18 @@ export const columns = ({
               onChange={(newColor) => onColorChange(runId, newColor)}
               className="h-5 w-5 flex-shrink-0"
             />
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Link
-                  to="/o/$orgSlug/projects/$projectName/$runId"
-                  preload="intent"
-                  className="group flex min-w-0 flex-1 items-center rounded-md transition-colors hover:bg-accent/50"
-                  params={{ orgSlug, projectName, runId: displayId ?? runId }}
-                  search={activeChartViewId ? { chart: activeChartViewId } : {}}
-                >
-                  <span
-                    className="truncate text-xs font-medium group-hover:underline"
-                    title={name}
-                  >
-                    {name}
-                  </span>
-                </Link>
-              </TooltipTrigger>
-              <TooltipContent side="top" sideOffset={4}>
-                <p className="max-w-xs">{name}</p>
-              </TooltipContent>
-            </Tooltip>
+            <Link
+              to="/o/$orgSlug/projects/$projectName/$runId"
+              preload="intent"
+              className="group flex min-w-0 flex-1 items-center rounded-md transition-colors hover:bg-accent/50"
+              params={{ orgSlug, projectName, runId: displayId ?? runId }}
+              search={activeChartViewId ? { chart: activeChartViewId } : {}}
+            >
+              <TruncatedLabel
+                text={name}
+                className="text-xs font-medium group-hover:underline"
+              />
+            </Link>
           </div>
         );
       },

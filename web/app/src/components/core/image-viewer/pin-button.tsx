@@ -21,6 +21,8 @@ interface PinButtonProps {
   hasSyncContext: boolean;
   /** Source of the current pin (affects unpin menu behavior) */
   pinSource?: PinSource | null;
+  /** Media noun for the unpin wording ("image" / "video" / "audio"). */
+  noun?: string;
 }
 
 export function PinButton({
@@ -30,6 +32,7 @@ export function PinButton({
   onUnpin,
   hasSyncContext,
   pinSource,
+  noun = "image",
 }: PinButtonProps) {
   if (isPinned) {
     // Local pins only affect one widget — single unpin action
@@ -50,7 +53,7 @@ export function PinButton({
               <PinOff className="h-3.5 w-3.5" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent>Unpin this image</TooltipContent>
+          <TooltipContent>Unpin this {noun}</TooltipContent>
         </Tooltip>
       );
     }
@@ -79,7 +82,7 @@ export function PinButton({
             data-testid="unpin-menu-item-this-widget"
             onClick={() => onUnpin("this-widget")}
           >
-            Unpin this image
+            Unpin this {noun}
           </DropdownMenuItem>
           <DropdownMenuItem
             data-testid="unpin-menu-item-all-panels"

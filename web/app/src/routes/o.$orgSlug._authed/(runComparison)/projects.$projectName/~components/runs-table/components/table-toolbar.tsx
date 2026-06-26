@@ -250,7 +250,9 @@ export function TableToolbar({
             // `focus`. `mousedown` fires on every click regardless of
             // prior focus state — idempotent with onFocus.
             onMouseDown={onSearchFocus}
-            className="pl-8"
+            // text-xs (both breakpoints) to match the table rows; Input's base
+            // is text-base md:text-sm, so md:text-xs is needed to override.
+            className="pl-8 text-xs md:text-xs"
           />
           {searchOtherMatchesDropdown}
         </div>

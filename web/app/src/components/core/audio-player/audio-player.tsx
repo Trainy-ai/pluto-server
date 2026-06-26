@@ -1,6 +1,7 @@
 import { useRef, useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
+import { TruncatedLabel } from "@/components/shared/truncated-label";
 import {
   Download,
   Play,
@@ -146,19 +147,21 @@ export function AudioPlayer({ url, fileName, caption, runLabel }: AudioPlayerPro
             className="h-2 w-2 rounded-full"
             style={{ backgroundColor: runLabel.color }}
           />
-          <span className="truncate text-xs font-medium" style={{ color: runLabel.color }} title={runLabel.name}>
-            {runLabel.name}
-          </span>
+          <TruncatedLabel
+            text={runLabel.name}
+            className="text-xs font-medium"
+            style={{ color: runLabel.color }}
+          />
         </div>
       )}
       <div className="flex flex-col gap-3 rounded-lg bg-muted/15 p-3">
         <div className="flex items-center justify-between gap-2">
-          <p
-            className="truncate font-mono text-xs text-muted-foreground"
+          <TruncatedLabel
+            as="p"
+            text={caption || fileName}
             title={caption ? `${caption} (${fileName})` : fileName}
-          >
-            {caption || fileName}
-          </p>
+            className="font-mono text-xs text-muted-foreground"
+          />
           <div className="flex gap-1.5">
             <Button
               variant="outline"
