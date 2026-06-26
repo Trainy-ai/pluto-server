@@ -6,6 +6,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { PinButton } from "@/components/core/image-viewer/pin-button";
+import { TruncatedLabel } from "@/components/shared/truncated-label";
 import {
   pinBadgeClass,
   pinBadgeSymbol,
@@ -70,13 +71,11 @@ export function MediaPinLabel({
         className="h-2 w-2 shrink-0 rounded-full"
         style={{ backgroundColor: runLabel.color }}
       />
-      <span
-        className="truncate text-xs font-medium"
+      <TruncatedLabel
+        text={runLabel.name}
+        className="text-xs font-medium"
         style={{ color: runLabel.color }}
-        title={runLabel.name}
-      >
-        {runLabel.name}
-      </span>
+      />
       {isPinned && pinnedStep != null && (
         <span
           data-testid="pin-step-badge"

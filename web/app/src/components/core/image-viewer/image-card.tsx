@@ -449,21 +449,35 @@ export function ImageCard({
                   </div>
                 )
               )}
-              <div className="relative flex items-center gap-3">
-                <TruncatedLabel
-                  as="p"
-                  text={displayLabel ?? "No image"}
-                  title={caption ? `${caption} (${fileName})` : fileName}
-                  className="font-mono text-sm text-muted-foreground"
-                />
-                {totalIndices != null && totalIndices > 1 && onIndexChange && (
-                  <MultiIndexNav
-                    currentIndex={currentImageIndex ?? 0}
-                    totalCount={totalIndices}
-                    onIndexChange={onIndexChange}
+              {/* 3-column grid (caption | zoom controls | download) keeps the
+                  zoom controls centered WITHOUT overlapping the caption. The
+                  caption lives in its own min-w-0 track so a long filename
+                  truncates within its column instead of running under the
+                  controls (previously the zoom group was absolutely centered). */}
+              <div
+                data-testid="image-fullscreen-toolbar"
+                className="grid grid-cols-[1fr_auto_1fr] items-center gap-3"
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <TruncatedLabel
+                    as="p"
+                    text={displayLabel ?? "No image"}
+                    title={caption ? `${caption} (${fileName})` : fileName}
+                    className="min-w-0 font-mono text-sm text-muted-foreground"
                   />
-                )}
-                <div className="absolute left-1/2 flex -translate-x-1/2 items-center gap-2">
+                  {totalIndices != null && totalIndices > 1 && onIndexChange && (
+                    <MultiIndexNav
+                      className="shrink-0"
+                      currentIndex={currentImageIndex ?? 0}
+                      totalCount={totalIndices}
+                      onIndexChange={onIndexChange}
+                    />
+                  )}
+                </div>
+                <div
+                  data-testid="image-zoom-controls"
+                  className="flex items-center gap-2"
+                >
                   <Button
                     variant="outline"
                     size="icon"

@@ -39,7 +39,7 @@ export function MultiIndexNav({
         <ChevronLeft className="h-4 w-4" />
       </Button>
       <span
-        className="min-w-[3ch] text-center font-mono text-xs tabular-nums text-muted-foreground"
+        className="min-w-[3ch] whitespace-nowrap text-center font-mono text-xs tabular-nums text-muted-foreground"
         data-testid="multi-index-label"
       >
         {currentIndex + 1} / {totalCount}
