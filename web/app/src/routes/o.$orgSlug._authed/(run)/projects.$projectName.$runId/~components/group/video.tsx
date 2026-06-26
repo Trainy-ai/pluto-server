@@ -61,6 +61,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const hideTimeout = useRef<number | null>(null);
   const isDraggingRef = useRef(false);
+  // Tracks a pending document `pointerup` listener registered when the pointer
+  // leaves the container mid-scrub, so it can be cleaned up on unmount.
+  const dragLeavePointerUp = useRef<(() => void) | null>(null);
   const isGifFile = useMemo(() => isGif(fileName), [fileName]);
 
   const [isPlaying, setIsPlaying] = useState(false);
@@ -155,24 +158,61 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
     setShowControls(true);
     if (hideTimeout.current) window.clearTimeout(hideTimeout.current);
-    hideTimeout.current = window.setTimeout(
-      () => setShowControls(false),
-      autoHideDelay,
-    );
+    hideTimeout.current = window.setTimeout(() => {
+      // Never hide mid-scrub: once the pointer leaves the container during a
+      // drag, the page-wide mousemove no longer re-arms this timer, so without
+      // this guard the controls could vanish before the seek is committed.
+      if (isDraggingRef.current) return;
+      setShowControls(false);
+    }, autoHideDelay);
   }, [autoHideDelay, isGifFile]);
 
-  useEffect(() => {
+  // Hide controls as soon as the pointer leaves the video container. While
+  // scrubbing (the drag can momentarily exit the container) don't hide
+  // immediately; instead wait for the drag to release and hide then if the
+  // pointer hasn't returned to the container.
+  const handleMouseLeave = useCallback(() => {
     if (isGifFile) return;
 
-    document.addEventListener("mousemove", resetHide);
-    document.addEventListener("keydown", resetHide);
+    if (isDraggingRef.current) {
+      // Already waiting on a release — don't stack listeners.
+      if (dragLeavePointerUp.current) return;
+
+      const onPointerUp = () => {
+        document.removeEventListener("pointerup", onPointerUp);
+        dragLeavePointerUp.current = null;
+        // If the pointer returned to the container, keep controls visible.
+        if (containerRef.current?.matches(":hover")) return;
+        if (hideTimeout.current) window.clearTimeout(hideTimeout.current);
+        setShowControls(false);
+      };
+
+      dragLeavePointerUp.current = onPointerUp;
+      document.addEventListener("pointerup", onPointerUp);
+      return;
+    }
+
+    if (hideTimeout.current) window.clearTimeout(hideTimeout.current);
+    setShowControls(false);
+  }, [isGifFile]);
+
+  // Schedule an initial auto-hide on mount for non-GIF videos so an untouched
+  // player doesn't keep its scrub overlay up indefinitely.
+  useEffect(() => {
+    if (isGifFile) return;
     resetHide();
+  }, [isGifFile, resetHide]);
+
+  // Clear any pending hide timer and document listener on unmount.
+  useEffect(() => {
     return () => {
-      document.removeEventListener("mousemove", resetHide);
-      document.removeEventListener("keydown", resetHide);
       if (hideTimeout.current) window.clearTimeout(hideTimeout.current);
+      if (dragLeavePointerUp.current) {
+        document.removeEventListener("pointerup", dragLeavePointerUp.current);
+        dragLeavePointerUp.current = null;
+      }
     };
-  }, [resetHide, isGifFile]);
+  }, []);
 
   // Keyboard shortcuts (only for non-GIF files, only when video container is hovered/focused)
   const onKey = useCallback(
@@ -181,6 +221,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (!videoRef.current) return;
       // Only handle shortcuts when the video container is hovered or focused
       if (!containerRef.current?.matches(":hover") && !containerRef.current?.contains(document.activeElement)) return;
+
+      // Keyboard use should reveal controls (and re-arm the hide timer).
+      resetHide();
 
       switch (e.code) {
         case "Space":
@@ -214,7 +257,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           break;
       }
     },
-    [isPlaying, duration, isMuted, isGifFile],
+    [isPlaying, duration, isMuted, isGifFile, resetHide],
   );
 
   useEffect(() => {
@@ -249,6 +292,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       ref={containerRef}
       className="relative flex h-full w-full flex-1 flex-col bg-black"
       data-testid="video-player"
+      onMouseEnter={resetHide}
+      onMouseMove={resetHide}
+      onMouseLeave={handleMouseLeave}
     >
       <div
         className="relative aspect-video w-full flex-1"
