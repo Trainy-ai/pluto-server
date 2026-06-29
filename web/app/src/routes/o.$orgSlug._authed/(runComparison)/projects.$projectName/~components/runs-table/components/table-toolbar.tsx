@@ -1,8 +1,14 @@
 import React from "react";
 import { Button } from "@/components/ui/button";
-import { Columns, PanelLeft, PanelRight, Search, GitFork } from "lucide-react";
+import { Columns, PanelLeft, PanelRight, Search, GitFork, InfoIcon } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+  UnstyledTooltipContent,
+  DocsTooltip,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { Run } from "../../../~queries/list-runs";
 import type { ColumnConfig } from "../../../~hooks/use-column-config";
@@ -222,18 +228,35 @@ export function TableToolbar({
               </TooltipContent>
             </Tooltip>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            className={cn(
-              "h-9 gap-1",
-              viewMode === "side-by-side" && "border-primary"
-            )}
-            onClick={() => onViewModeChange(viewMode === "charts" ? "side-by-side" : "charts")}
-          >
-            <Columns className="h-4 w-4" />
-            <span className="hidden sm:inline">Side-by-side</span>
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className={cn(
+                  "h-9 gap-1",
+                  viewMode === "side-by-side" && "border-primary"
+                )}
+                onClick={() => onViewModeChange(viewMode === "charts" ? "side-by-side" : "charts")}
+              >
+                <Columns className="h-4 w-4" />
+                <span className="hidden sm:inline">Side-by-side</span>
+              </Button>
+            </TooltipTrigger>
+            <UnstyledTooltipContent
+              sideOffset={8}
+              side="bottom"
+              align="end"
+              showArrow={false}
+            >
+              <DocsTooltip
+                title="Side-by-side view"
+                iconComponent={<InfoIcon className="size-4" />}
+                description="Compare selected runs column by column to spot differences in their config and system metadata."
+                link="https://docs.trainy.ai/pluto/comparing#side-by-side-view"
+              />
+            </UnstyledTooltipContent>
+          </Tooltip>
         </div>
       </div>
       <div className="flex items-center gap-2">
