@@ -589,9 +589,13 @@ export const VideoView: React.FC<VideoViewProps> = ({
                 fileName={currentStepVideos[0].fileName}
               />
             </div>
+            {/* Full-width single video: there is vertical room below the
+                player, so let the caption wrap onto a few lines (filling that
+                space) instead of truncating to one line. */}
             <TruncatedLabel
               as="p"
               data-testid="video-caption"
+              clampLines={3}
               text={currentStepVideos[0].caption || currentStepVideos[0].fileName}
               title={
                 currentStepVideos[0].caption
