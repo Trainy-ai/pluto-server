@@ -328,8 +328,8 @@ export default function TerminalLogs({
   }, [searchMode, navigateSearch, scrollToMatch]);
 
   return (
-    <div className="h-full w-full overflow-hidden rounded-lg border border-border bg-background">
-      <div className="flex items-center gap-4 border-b border-border bg-muted p-4">
+    <div className="flex min-h-0 w-full flex-1 flex-col overflow-hidden rounded-lg border border-border bg-background">
+      <div className="flex shrink-0 items-center gap-4 border-b border-border bg-muted p-4">
         <div className="flex items-center gap-2">
           <div className="flex bg-muted/30 p-1">
             <Button
@@ -425,8 +425,9 @@ export default function TerminalLogs({
       </div>
       <div
         ref={containerRef}
+        data-testid="terminal-logs-scroll"
         className={`font-mono text-sm leading-4 ${
-          noScroll ? "" : "max-h-[calc(100vh-10rem)] overflow-auto overscroll-y-contain"
+          noScroll ? "" : "min-h-0 flex-1 overflow-auto overscroll-y-contain"
         } [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-border hover:[&::-webkit-scrollbar-thumb]:bg-muted-foreground/50 [&::-webkit-scrollbar-track]:bg-transparent`}
       >
         {filteredLogs.length === 0 ? (
