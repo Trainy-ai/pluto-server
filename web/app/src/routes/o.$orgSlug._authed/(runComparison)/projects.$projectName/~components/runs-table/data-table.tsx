@@ -97,6 +97,15 @@ interface DataTableProps {
   onReorderColumns?: (fromIndex: number, toIndex: number) => void;
   sorting: SortingState;
   onSortingChange: (sorting: SortingState) => void;
+  statusFilterValues?: string[];
+  onStatusFilterChange?: (values: string[]) => void;
+  /** Bulk-actions checkbox selection (decoupled from the eye/chart selection) */
+  checkedRunIds?: Set<string>;
+  onSetChecked?: (runIds: string[], checked: boolean) => void;
+  /** Run records for the checked set — what bulk delete operates on. */
+  checkedRunsWithColors?: Record<string, { run: Run; color: string }>;
+  /** Called after the checked runs are deleted, with the deleted run IDs. */
+  onCheckedDeleted?: (deletedRunIds: string[]) => void;
   pageSize: number;
   onPageSizeChange: (pageSize: number) => void;
   pageBase?: number;
@@ -179,6 +188,12 @@ export function DataTable({
   onReorderColumns,
   sorting,
   onSortingChange,
+  statusFilterValues,
+  onStatusFilterChange,
+  checkedRunIds,
+  onSetChecked,
+  checkedRunsWithColors,
+  onCheckedDeleted,
   pageSize,
   onPageSizeChange,
   pageBase = 0,
@@ -310,6 +325,10 @@ export function DataTable({
         onPinImagesToBestStep,
         bestStepToleranceSteps,
         onChangeBestStepTolerance,
+        statusFilterValues,
+        onStatusFilterChange,
+        checkedRunIds,
+        onSetChecked,
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
@@ -321,6 +340,8 @@ export function DataTable({
       sorting, onSortingChange, activeChartViewId,
       pinnedColumnIds, onToggleColumnPin, onPinImagesToBestStep,
       bestStepToleranceSteps, onChangeBestStepTolerance,
+      statusFilterValues, onStatusFilterChange,
+      checkedRunIds, onSetChecked,
       colorVersion, // trigger cell re-render when colors first populate
     ],
   );
@@ -500,8 +521,9 @@ export function DataTable({
       <TableToolbar
         organizationId={organizationId}
         projectName={projectName}
-        onRunsDeleted={onDeselectAll}
+        onRunsDeleted={onCheckedDeleted ?? onDeselectAll}
         selectedRunsWithColors={selectedRunsWithColors}
+        checkedRunsWithColors={checkedRunsWithColors}
         runCount={listMode === "experiments" ? displayedRunCount : runCount}
         totalRunCount={listMode === "experiments" ? totalExperimentCount : totalRunCount}
         searchQuery={searchQuery}

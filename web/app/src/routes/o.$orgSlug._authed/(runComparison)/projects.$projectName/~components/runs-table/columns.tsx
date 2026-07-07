@@ -1,9 +1,10 @@
 import { Link } from "@tanstack/react-router";
 import { TruncatedLabel } from "@/components/shared/truncated-label";
 import type { ColumnDef, Row, SortingState } from "@tanstack/react-table";
-import { Eye, EyeOff, X } from "lucide-react";
+import { Eye, EyeOff } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ColorPicker } from "@/components/ui/color-picker";
+import { Checkbox } from "@/components/ui/checkbox";
 import { SELECTED_RUNS_LIMIT } from "./config";
 import { RunStatusBadge } from "@/components/core/runs/run-status-badge";
 import type { Run } from "../../~queries/list-runs";
@@ -16,45 +17,37 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from "@/components/ui/tooltip";
-import { useState, useEffect, useCallback, memo, type MutableRefObject } from "react";
-import { flushSync } from "react-dom";
+import { memo } from "react";
 import { useHiddenRunIds } from "@/hooks/use-hidden-run-ids";
 import { ColumnHeaderMenu } from "./column-header-menu";
+import { StatusColumnHeader } from "./status-column-header";
 import { getRowRange, getCustomColumnValue, formatCellValue } from "./columns-utils";
 
 type RunId = string;
 type RunColor = string;
 
 /**
- * Selection cell component with optimistic UI updates
- * Uses local state for immediate visual feedback while global state updates
+ * Eye cell — a pure chart-VISIBILITY toggle for runs that are already selected.
  *
- * Behavior:
- * - Unselected: EyeOff (gray). Click → select (visible by default)
- * - Selected + visible: Eye. Click → hide from charts (stays selected). Hover shows X to deselect.
- * - Selected + hidden: EyeOff with colored dot. Click → show on charts. Hover shows X to deselect.
+ * Selection (adding/removing a run from the charts) is owned by the checkbox
+ * column; the eye no longer selects or deselects. It renders only for selected
+ * runs:
+ * - Selected + visible: Eye. Click → hide from charts (stays selected).
+ * - Selected + hidden: EyeOff with colored dot. Click → show on charts.
+ * - Unselected: nothing to show/hide → renders null.
  */
 interface SelectionCellProps {
   row: Row<Run>;
-  table: any;
-  totalSelected: number;
-  onSelectionChange: (runId: RunId, isSelected: boolean) => void;
   onToggleVisibility: (runId: RunId) => void;
   runColor?: string;
-  lastSelectedIdRef: MutableRefObject<string>;
 }
 
 const SelectionCell = memo(function SelectionCell({
   row,
-  table,
-  totalSelected,
-  onSelectionChange,
   onToggleVisibility,
   runColor,
-  lastSelectedIdRef,
 }: SelectionCellProps) {
   const isSelected = row.getIsSelected();
-  const isDisabled = totalSelected >= SELECTED_RUNS_LIMIT && !isSelected;
   const runId = row.original.id;
 
   // Read hidden state directly via hook so the icon stays in sync
@@ -62,89 +55,36 @@ const SelectionCell = memo(function SelectionCell({
   const hiddenRunIds = useHiddenRunIds();
   const isHidden = hiddenRunIds.has(runId);
 
-  // Local optimistic state for immediate visual feedback
-  const [optimisticSelected, setOptimisticSelected] = useState(isSelected);
+  // The eye is a pure visibility toggle for SELECTED runs. Selection is owned
+  // by the checkbox column now, so an unselected run has nothing to show/hide.
+  if (!isSelected) return null;
 
-  // Sync with actual state when it catches up
-  useEffect(() => {
-    setOptimisticSelected(isSelected);
-  }, [isSelected]);
-
-  const handleClick = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    if (isDisabled) return;
-
-    if (!e.shiftKey) {
-      if (optimisticSelected) {
-        // Already selected → toggle chart visibility
-        onToggleVisibility(runId);
-      } else {
-        // Not selected → select (visible by default)
-        flushSync(() => {
-          setOptimisticSelected(true);
-        });
-        row.toggleSelected(true);
-        onSelectionChange(runId, true);
-      }
-    } else {
-      // Shift-click: range selection (unchanged behavior)
-      try {
-        const { rows, rowsById } = table.getRowModel();
-        const rowsToToggle = getRowRange<Run>(rows, row.id, lastSelectedIdRef.current);
-        const isLastSelected = rowsById[lastSelectedIdRef.current].getIsSelected();
-        rowsToToggle.forEach((r) => {
-          r.toggleSelected(isLastSelected);
-          onSelectionChange(r.original.id, isLastSelected);
-        });
-      } catch (e) {
-        const newValue = !row.getIsSelected();
-        row.toggleSelected(newValue);
-        onSelectionChange(runId, newValue);
-      }
-    }
-    lastSelectedIdRef.current = row.id;
-  }, [optimisticSelected, isDisabled, runId, row, table, onSelectionChange, onToggleVisibility, lastSelectedIdRef]);
-
-  const handleDeselect = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation();
-    flushSync(() => {
-      setOptimisticSelected(false);
-    });
-    row.toggleSelected(false);
-    onSelectionChange(runId, false);
-  }, [runId, row, onSelectionChange]);
-
-  const eyeTooltip = !optimisticSelected
-    ? "Select run"
-    : isHidden
-      ? "Show on charts"
-      : "Hide from charts";
+  const eyeTooltip = isHidden ? "Show on charts" : "Hide from charts";
 
   return (
     <div className="relative flex items-center justify-center">
       <Tooltip>
         <TooltipTrigger asChild>
           <button
-            onClick={handleClick}
-            disabled={isDisabled}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleVisibility(runId);
+            }}
             aria-label={eyeTooltip}
             className="relative p-1"
           >
-            {optimisticSelected ? (
-              isHidden ? (
-                <span className="relative inline-flex">
-                  <EyeOff className="h-4 w-4 text-muted-foreground" />
-                  {runColor && (
-                    <span
-                      className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full border border-background"
-                      style={{ backgroundColor: runColor }}
-                    />
-                  )}
-                </span>
-              ) : (
-                <Eye className="h-4 w-4" />
-              )
+            {isHidden ? (
+              <span className="relative inline-flex">
+                <EyeOff className="h-4 w-4 text-muted-foreground" />
+                {runColor && (
+                  <span
+                    className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full border border-background"
+                    style={{ backgroundColor: runColor }}
+                  />
+                )}
+              </span>
             ) : (
-              <EyeOff className="h-4 w-4 text-muted-foreground transition-colors hover:text-primary/80" />
+              <Eye className="h-4 w-4" />
             )}
           </button>
         </TooltipTrigger>
@@ -152,22 +92,6 @@ const SelectionCell = memo(function SelectionCell({
           {eyeTooltip}
         </TooltipContent>
       </Tooltip>
-      {optimisticSelected && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              onClick={handleDeselect}
-              aria-label="Deselect run"
-              className="absolute -right-3 -top-1 z-20 flex h-4 w-4 items-center justify-center rounded-full border border-border bg-background opacity-0 shadow-sm transition-opacity group-hover/row:opacity-100 hover:border-destructive/50 hover:bg-destructive/10"
-            >
-              <X className="h-2.5 w-2.5 text-muted-foreground group-hover/row:text-foreground hover:!text-destructive" />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="top" className="text-xs">
-            Deselect run
-          </TooltipContent>
-        </Tooltip>
-      )}
     </div>
   );
 });
@@ -201,6 +125,12 @@ interface ColumnsProps {
   /** Sorting state — managed externally */
   sorting?: SortingState;
   onSortingChange?: (sorting: SortingState) => void;
+  /** Status column header filter — selected RunStatus values + setter */
+  statusFilterValues?: string[];
+  onStatusFilterChange?: (values: string[]) => void;
+  /** Bulk-actions checkbox selection (decoupled from the eye/chart selection) */
+  checkedRunIds?: Set<string>;
+  onSetChecked?: (runIds: string[], checked: boolean) => void;
   /** Active chart view ID — passed as search param when navigating to a run */
   activeChartViewId?: string | null;
   /** Set of pinned column table IDs (includes base + user-pinned custom columns) */
@@ -219,14 +149,90 @@ interface ColumnsProps {
   onChangeBestStepTolerance?: (next: number) => void;
 }
 
-// Shared ref for tracking last selected row ID (for shift-click range selection)
-const lastSelectedIdRef = { current: "" };
+// Shift-click range anchor for the selection checkbox column.
+const lastCheckedIdRef = { current: "" };
+
+// Stable empty default so an unset checkedRunIds prop doesn't allocate a new
+// Set on every columns() call.
+const EMPTY_CHECKED_SET: Set<string> = new Set();
+
+/**
+ * Selection checkbox cell — the sole control for selecting a run: checking it
+ * adds the run to the charts (?runs=) AND marks it as the target of bulk actions
+ * (delete); unchecking removes it. Disabled once SELECTED_RUNS_LIMIT runs are
+ * selected (matching the cap the eye used to enforce). Shift-click selects a
+ * contiguous range mirroring the anchor row's state. A hover tooltip mirrors the
+ * aria-label ("Select run" / "Deselect run") — the latter also keeps the shared
+ * E2E helper `selectSpecificRuns` targeting the right control.
+ */
+function CheckboxCell({
+  row,
+  table,
+  checkedRunIds,
+  onSetChecked,
+}: {
+  row: Row<Run>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  table: any;
+  checkedRunIds: Set<string>;
+  onSetChecked?: (runIds: string[], checked: boolean) => void;
+}) {
+  const runId = row.original.id;
+  const checked = checkedRunIds.has(runId);
+  // Cap selection like the old eye did: can't add more once at the limit.
+  const atLimit = !checked && checkedRunIds.size >= SELECTED_RUNS_LIMIT;
+
+  const handleClick = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation();
+    if (atLimit) return;
+    if (
+      e.shiftKey &&
+      lastCheckedIdRef.current &&
+      lastCheckedIdRef.current !== row.id
+    ) {
+      try {
+        const { rows } = table.getRowModel();
+        const range = getRowRange<Run>(rows, row.id, lastCheckedIdRef.current);
+        const anchorChecked = checkedRunIds.has(lastCheckedIdRef.current);
+        onSetChecked?.(
+          range.map((r) => r.original.id),
+          anchorChecked,
+        );
+      } catch {
+        onSetChecked?.([runId], !checked);
+      }
+    } else {
+      onSetChecked?.([runId], !checked);
+    }
+    lastCheckedIdRef.current = row.id;
+  };
+
+  const label = checked ? "Deselect run" : "Select run";
+
+  return (
+    <div className="flex items-center justify-center">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Checkbox
+            checked={checked}
+            onClick={handleClick}
+            disabled={atLimit}
+            aria-label={label}
+            data-testid="run-checkbox"
+          />
+        </TooltipTrigger>
+        <TooltipContent side="top" className="text-xs">
+          {label}
+        </TooltipContent>
+      </Tooltip>
+    </div>
+  );
+}
 
 export const columns = ({
   orgSlug,
   projectName,
   organizationId,
-  onSelectionChange,
   onToggleVisibility,
   onColorChange,
   onTagsUpdate,
@@ -243,6 +249,10 @@ export const columns = ({
   onNameSetColor,
   sorting = [],
   onSortingChange,
+  statusFilterValues = [],
+  onStatusFilterChange,
+  checkedRunIds = EMPTY_CHECKED_SET,
+  onSetChecked,
   activeChartViewId,
   pinnedColumnIds,
   onToggleColumnPin,
@@ -269,6 +279,40 @@ export const columns = ({
   // Base columns (always shown)
   const baseColumns: ColumnDef<Run>[] = [
     {
+      id: "check",
+      size: 36,
+      minSize: 36,
+      maxSize: 36,
+      enableResizing: false,
+      enableSorting: false,
+      enableHiding: false,
+      header: ({ table }) => {
+        const rows = table.getRowModel().rows as Row<Run>[];
+        const ids = rows.map((r) => r.original.id);
+        const checkedCount = ids.filter((id) => checkedRunIds.has(id)).length;
+        const allChecked = ids.length > 0 && checkedCount === ids.length;
+        const someChecked = checkedCount > 0 && !allChecked;
+        return (
+          <div className="flex items-center justify-center">
+            <Checkbox
+              checked={allChecked ? true : someChecked ? "indeterminate" : false}
+              onCheckedChange={(v) => onSetChecked?.(ids, v === true)}
+              aria-label="Select all runs on this page"
+              data-testid="select-all-checkbox"
+            />
+          </div>
+        );
+      },
+      cell: ({ row, table }) => (
+        <CheckboxCell
+          row={row}
+          table={table}
+          checkedRunIds={checkedRunIds}
+          onSetChecked={onSetChecked}
+        />
+      ),
+    },
+    {
       id: "select",
       size: 40,
       minSize: 40,
@@ -276,18 +320,13 @@ export const columns = ({
       enableResizing: false,
       // Empty header - VisibilityOptions is now rendered in the toolbar for better performance
       header: () => null,
-      cell: ({ row, table }) => {
-        const totalSelected = table.getSelectedRowModel().rows.length;
+      cell: ({ row }) => {
         const runId = row.original.id;
         return (
           <SelectionCell
             row={row}
-            table={table}
-            totalSelected={totalSelected}
-            onSelectionChange={onSelectionChange}
             onToggleVisibility={onToggleVisibility}
             runColor={getRunColor(runId)}
-            lastSelectedIdRef={lastSelectedIdRef}
           />
         );
       },
@@ -296,12 +335,20 @@ export const columns = ({
     },
     {
       id: "status",
-      header: "Status",
+      header: () => (
+        <StatusColumnHeader
+          label="Status"
+          sortDirection={getSortDirection("status")}
+          onSort={(dir) => handleSort("status", dir)}
+          statusValues={statusFilterValues}
+          onStatusChange={(values) => onStatusFilterChange?.(values)}
+        />
+      ),
       size: 116,
       minSize: 116,
       maxSize: 116,
       enableResizing: false,
-      enableSorting: false,
+      enableSorting: true,
       cell: ({ row }) => {
         return (
           <div className="flex items-center">

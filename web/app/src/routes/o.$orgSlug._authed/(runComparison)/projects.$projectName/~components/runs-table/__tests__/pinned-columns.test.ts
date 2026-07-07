@@ -23,7 +23,7 @@ function makeCol(
 describe("computePinnedColumnIds", () => {
   it("always includes base pinned IDs", () => {
     const result = computePinnedColumnIds([]);
-    expect(result).toEqual(new Set(["select", "status", "name"]));
+    expect(result).toEqual(new Set(["check", "select", "status", "name"]));
   });
 
   it("adds user-pinned custom columns", () => {
@@ -55,7 +55,7 @@ describe("computePinnedColumnIds", () => {
 
 describe("computeColumnOrder", () => {
   it("returns only base columns when no custom columns", () => {
-    expect(computeColumnOrder([])).toEqual(["select", "status", "name"]);
+    expect(computeColumnOrder([])).toEqual(["check", "select", "status", "name"]);
   });
 
   it("puts unpinned custom columns after base columns", () => {
@@ -64,7 +64,7 @@ describe("computeColumnOrder", () => {
       makeCol("config", "batch_size"),
     ];
     expect(computeColumnOrder(cols)).toEqual([
-      "select", "status", "name",
+      "check", "select", "status", "name",
       "custom-config-lr",
       "custom-config-batch_size",
     ]);
@@ -77,7 +77,7 @@ describe("computeColumnOrder", () => {
       makeCol("systemMetadata", "createdAt"),
     ];
     expect(computeColumnOrder(cols)).toEqual([
-      "select", "status", "name",
+      "check", "select", "status", "name",
       "custom-config-batch_size", // pinned
       "custom-config-lr",         // unpinned, preserves config order
       "custom-systemMetadata-createdAt",
@@ -92,7 +92,7 @@ describe("computeColumnOrder", () => {
       makeCol("config", "d"),
     ];
     expect(computeColumnOrder(cols)).toEqual([
-      "select", "status", "name",
+      "check", "select", "status", "name",
       "custom-config-a",  // pinned, original order
       "custom-config-c",  // pinned, original order
       "custom-config-b",  // unpinned, original order
@@ -105,7 +105,7 @@ describe("computeColumnOrder", () => {
       makeCol("metric", "loss", { aggregation: "LAST" }),
     ];
     expect(computeColumnOrder(cols)).toEqual([
-      "select", "status", "name",
+      "check", "select", "status", "name",
       "custom-metric-loss-LAST",
     ]);
   });

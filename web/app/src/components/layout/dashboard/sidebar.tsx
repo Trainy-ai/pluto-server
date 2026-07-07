@@ -33,6 +33,7 @@ import {
 } from "@remixicon/react";
 import { useLatestRuns } from "./queries";
 import { Separator } from "@/components/ui/separator";
+import { RunningIndicator } from "@/components/core/runs/running-indicator";
 
 type Run = inferOutput<typeof trpc.runs.latest>[0];
 type RunStatus = Run["status"];
@@ -49,50 +50,20 @@ export function StatusIndicator({
   status: RunStatus;
   className?: string;
 }) {
-  const statusConfig = {
-    COMPLETED: {
-      description: "The run completed successfully.",
-    },
-    FAILED: {
-      description: "The run failed for unknown reasons.",
-    },
-    TERMINATED: {
-      description: "The run was terminated by the user.",
-    },
-    RUNNING: {
-      description: "The run is currently running.",
-    },
-    CANCELLED: {
-      description: "The run was cancelled by the user.",
-    },
-  } as const;
+  // Only actively-running runs get a glyph: a single pulsing live indicator.
+  // Final states (completed/failed/terminated/cancelled) intentionally render
+  // no colored dot here — a wall of per-run dots is noise, and the run's final
+  // state is already legible from its text status badge. We keep an empty slot
+  // so run names stay vertically aligned whether or not a run is live.
+  if (status !== "RUNNING") {
+    return <span className={cn("size-2 shrink-0", className)} aria-hidden />;
+  }
 
   return (
     <TooltipProvider>
       <Tooltip>
         <TooltipTrigger asChild>
-          <div className="relative">
-            <div
-              className={cn(
-                "relative z-30 size-2 shrink-0 rounded-full",
-                {
-                  "bg-green-500": status === "COMPLETED",
-                  "bg-blue-500": status === "RUNNING",
-                  "bg-red-500":
-                    status === "FAILED" ||
-                    status === "TERMINATED" ||
-                    status === "CANCELLED",
-                },
-                "duration-100 hover:scale-130 hover:transition-transform",
-                className,
-              )}
-            />
-            {status === "RUNNING" && (
-              <div className="absolute inset-0">
-                <div className="size-2 animate-[ping_1s_cubic-bezier(0,0,0.2,1)_infinite] rounded-full bg-blue-500/50" />
-              </div>
-            )}
-          </div>
+          <RunningIndicator className={className} />
         </TooltipTrigger>
         <UnstyledTooltipContent
           sideOffset={8}
@@ -101,11 +72,9 @@ export function StatusIndicator({
           showArrow={false}
         >
           <DocsTooltip
-            title={
-              status.charAt(0).toUpperCase() + status.slice(1).toLowerCase()
-            }
+            title="Running"
             iconComponent={<InfoIcon className="size-4" />}
-            description={statusConfig[status].description}
+            description="The run is currently running."
             link={`https://docs.trainy.ai/pluto`}
           />
         </UnstyledTooltipContent>

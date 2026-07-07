@@ -1021,6 +1021,45 @@ export async function queryHeartbeatSortedRunIds(
 }
 
 /**
+ * Fetch each run's ClickHouse "heartbeat" — `MAX(time)` over `mlop_metrics`, the
+ * last time the run reported data (wandb's `heartbeat_at`) — for a specific set
+ * of runs. Returns epoch milliseconds (via `toUnixTimestamp64Milli`) so the
+ * caller avoids ClickHouse's timezone-less DateTime string format. Runs with no
+ * metrics are absent from the result. Bounded by the supplied `runIds`.
+ *
+ * Unlike `queryHeartbeatSortedRunIds` this does not sort or paginate — it's the
+ * value-lookup used to (a) enrich RUNNING runs' Duration for display and (b)
+ * compute the effective end for the duration sort. See list-runs.ts.
+ */
+export async function queryRunHeartbeats(
+  ch: typeof clickhouse,
+  params: { organizationId: string; projectName?: string; runIds: number[] },
+): Promise<{ runId: number; heartbeatMs: number }[]> {
+  const { organizationId, projectName, runIds } = params;
+  if (runIds.length === 0) return [];
+
+  const queryParams: Record<string, unknown> = { tenantId: organizationId, runIds };
+  let scope = "tenantId = {tenantId: String}";
+  if (projectName) {
+    scope += " AND projectName = {projectName: String}";
+    queryParams.projectName = projectName;
+  }
+
+  const query = `
+    SELECT runId, toUnixTimestamp64Milli(MAX(time)) AS heartbeatMs
+    FROM mlop_metrics
+    WHERE ${scope}
+      AND runId IN ({runIds: Array(UInt64)})
+    GROUP BY runId
+  `;
+
+  const result = await ch.query(query, queryParams);
+  const rows = (await result.json()) as { runId: number; heartbeatMs: string | number }[];
+  // ClickHouse serialises Int64 as a string in JSON; coerce to number.
+  return rows.map((r) => ({ runId: Number(r.runId), heartbeatMs: Number(r.heartbeatMs) }));
+}
+
+/**
  * Filter run IDs by their ClickHouse "heartbeat" — the most recent metric
  * timestamp (`MAX(time)` over `mlop_metrics`) per run, i.e. the last time a run
  * reported data (wandb's `heartbeatAt`). Returns the run IDs whose heartbeat

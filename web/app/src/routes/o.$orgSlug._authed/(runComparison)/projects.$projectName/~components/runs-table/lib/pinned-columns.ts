@@ -1,7 +1,7 @@
 import type { ColumnConfig } from "../../../~hooks/use-column-config";
 
-// Base columns always pinned to the left (select, status, name)
-export const BASE_PINNED_IDS = ["select", "status", "name"] as const;
+// Base columns always pinned to the left (check, select, status, name)
+export const BASE_PINNED_IDS = ["check", "select", "status", "name"] as const;
 
 /** Build the TanStack Table column ID for a custom column config entry. */
 export function getColumnTableId(col: ColumnConfig): string {

@@ -2,6 +2,7 @@ import type { Row } from "@tanstack/react-table";
 import type { ColumnConfig } from "../../~hooks/use-column-config";
 import type { Run } from "../../~queries/list-runs";
 import { formatValue } from "@/lib/flatten-object";
+import { formatDuration } from "@/lib/format-duration";
 
 /** Returns the contiguous slice of rows between idA and idB (inclusive, in array order). */
 export function getRowRange<T>(rows: Array<Row<T>>, idA: string, idB: string) {
@@ -47,6 +48,26 @@ export function getCustomColumnValue(run: Run, col: ColumnConfig): unknown {
         return run.updatedAt;
       case "statusUpdated":
         return run.statusUpdated;
+      case "duration": {
+        // Elapsed wall-clock as a number of ms, so the value sorts/compares
+        // numerically. Deterministic (no Date.now()) so it matches the
+        // server-side sort byte-for-byte and is immune to client clock skew.
+        //   end = heartbeatAt (last metric time, ClickHouse) for a live run —
+        //         updatedAt is NOT a reliable liveness signal (steady-state
+        //         metric logging never writes the PG row); falls back to
+        //         updatedAt when heartbeatAt is absent (run started before the
+        //         first stale-monitor/enrichment cycle populated it).
+        //   else = the terminal status change (statusUpdated, falling back to
+        //         updatedAt).
+        // Must stay in sync with the server duration sort in list-runs.ts.
+        const start = new Date(run.createdAt).getTime();
+        const end =
+          run.status === "RUNNING"
+            ? new Date(run.heartbeatAt ?? run.updatedAt).getTime()
+            : new Date(run.statusUpdated ?? run.updatedAt).getTime();
+        if (Number.isNaN(start) || Number.isNaN(end)) return null;
+        return Math.max(0, end - start);
+      }
       case "creator.name":
         return run.creator?.name ?? run.creator?.email ?? "-";
       case "notes":
@@ -74,6 +95,9 @@ export function getCustomColumnValue(run: Run, col: ColumnConfig): unknown {
 /** Formats a custom column value for display as a string */
 export function formatCellValue(value: unknown, col: ColumnConfig): string {
   if (value === null || value === undefined) return "-";
+  if (col.source === "system" && col.id === "duration") {
+    return typeof value === "number" ? formatDuration(value) : "-";
+  }
   if (col.source === "system" && (col.id === "createdAt" || col.id === "updatedAt" || col.id === "statusUpdated")) {
     try {
       return new Date(value as string).toLocaleString(undefined, {

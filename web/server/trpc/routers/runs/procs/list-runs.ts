@@ -5,6 +5,7 @@ import { searchRunIds, buildRunSearchQuery, type RunSearchParams } from "../../.
 import {
   queryMetricSortedRunIds,
   queryMetricFilteredRunIds,
+  queryRunHeartbeats,
   type MetricAggregation,
   type MetricFilterSpec,
 } from "../../../../lib/queries/metric-summaries";
@@ -93,6 +94,37 @@ const SYSTEM_SORT_FIELDS: Record<string, string> = {
   statusUpdated: '"statusUpdated"',
   notes: '"notes"',
 };
+
+/**
+ * The SQL ORDER BY expression for an allow-listed system sort field, or null
+ * when the field isn't sortable. Centralised so the cursor lookup, the keyset
+ * WHERE clause, and the main query all order by the EXACT same expression — a
+ * mismatch silently corrupts keyset pagination.
+ *
+ * Two fields aren't plain columns:
+ *  - `status` is an enum; we cast to text so ORDER BY and the keyset cursor
+ *    compare by the same (alphabetical) order rather than enum declaration order.
+ *  - `duration` isn't stored at all; we derive elapsed seconds from the
+ *    timestamps. End = terminal status change (falls back to updatedAt), which
+ *    is deterministic (no now()) so keyset cursors stay stable page to page; a
+ *    live run therefore sorts by its elapsed-so-far rather than wall-clock-now.
+ */
+function getSystemSortExpr(field: string): string | null {
+  if (SYSTEM_SORT_FIELDS[field]) return `r.${SYSTEM_SORT_FIELDS[field]}`;
+  if (field === "status") return `r."status"::text`;
+  if (field === "duration") {
+    // Terminal/fast-path duration expression. A RUNNING run's true end is its
+    // ClickHouse heartbeat, which can't be an ORDER BY term here — that case is
+    // handled by durationSortQuery, which only delegates to this pure-PG sort
+    // when the filtered set has NO running runs (so the RUNNING branch below is
+    // effectively dead on that path). Kept mirroring the client formula for
+    // terminal runs: end = statusUpdated (falling back to updatedAt).
+    // GREATEST(0, …) clamps clock-skew / backfill anomalies, matching the
+    // client's Math.max(0, …).
+    return `GREATEST(0, EXTRACT(EPOCH FROM (CASE WHEN r."status" = 'RUNNING' THEN r."updatedAt" ELSE COALESCE(r."statusUpdated", r."updatedAt") END - r."createdAt")))`;
+  }
+  return null;
+}
 
 /** Maximum offset for JSON sort queries to prevent catastrophic deep-pagination.
  *  At 100k rows, OFFSET > 10k + full JSON extract is too slow.
@@ -184,6 +216,58 @@ export async function attachFieldValues(
   });
 }
 
+/**
+ * Attach `heartbeatAt` — the run's ClickHouse `MAX(time)`, i.e. the last time it
+ * reported data — to every RUNNING run on the page. The Duration column ends a
+ * live run at this heartbeat rather than PG `updatedAt`, which steady-state
+ * metric logging never advances (metrics go to ClickHouse; the SDK's per-minute
+ * trigger poll is read-only), so `updatedAt` under-reports a live run's elapsed
+ * time. Terminal runs get `heartbeatAt: null` (they end at `statusUpdated`).
+ *
+ * One bounded ClickHouse query over just the running runs on this page; skipped
+ * entirely when the page has none.
+ */
+async function attachHeartbeat(
+  ctx: any,
+  runs: { id: bigint; [k: string]: any }[],
+  input: { organizationId: string; projectName: string },
+): Promise<typeof runs> {
+  const running = runs.filter((r) => r.status === "RUNNING");
+  if (running.length === 0) {
+    return runs.map((r) => ({ ...r, heartbeatAt: null }));
+  }
+  const hbRows = await queryRunHeartbeats(ctx.clickhouse, {
+    organizationId: input.organizationId,
+    projectName: input.projectName,
+    runIds: running.map((r) => Number(r.id)),
+  });
+  const byId = new Map(hbRows.map((h) => [h.runId, h.heartbeatMs]));
+  return runs.map((r) => {
+    if (r.status !== "RUNNING") return { ...r, heartbeatAt: null };
+    const ms = byId.get(Number(r.id));
+    return { ...r, heartbeatAt: ms != null ? new Date(ms) : null };
+  });
+}
+
+/**
+ * Shared final step for every runs.list return path: enrich RUNNING runs with
+ * their ClickHouse heartbeat (Duration column) and SQID-encode ids. Every path
+ * funnels through here so `heartbeatAt` is present (Date | null) on every run,
+ * keeping the response shape — and the inferred client type — uniform.
+ */
+async function finalizeRuns(
+  ctx: any,
+  enriched: { id: bigint; [k: string]: any }[],
+  input: { organizationId: string; projectName: string },
+) {
+  const withHb = await attachHeartbeat(ctx, enriched, input);
+  return withHb.map((r: any) => ({
+    ...r,
+    id: sqidEncode(r.id),
+    forkedFromRunId: r.forkedFromRunId ? sqidEncode(r.forkedFromRunId) : null,
+  }));
+}
+
 export const listRunsProcedure = protectedOrgProcedure
   .input(
     z.object({
@@ -230,6 +314,15 @@ export const listRunsProcedure = protectedOrgProcedure
     // Two-phase cross-database query: PG filters → CH sort → PG full records.
     if (input.sortSource === "metric") {
       return metricSortQuery(ctx, input);
+    }
+
+    // ─── Duration sort (heartbeat-aware) ─────────────────────────────
+    // Duration is a system sort, but a RUNNING run's end is its ClickHouse
+    // heartbeat (MAX(time)), not a PG column — so it can't ride the pure-PG
+    // keyset path when live runs are present. durationSortQuery handles the
+    // hybrid, with a fast path back to systemColumnSortQuery when there are none.
+    if (input.sortSource === "system" && input.sortField === "duration") {
+      return durationSortQuery(ctx, input);
     }
 
     // ─── System column sort (name, createdAt, etc.) ──────────────────
@@ -340,7 +433,7 @@ async function defaultCursorQuery(
     const enriched = await attachFieldValues(ctx.prisma, runs, input.visibleColumns);
     const nextOffset = runs.length === input.limit ? input.offset! + runs.length : null;
     return {
-      runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id), forkedFromRunId: r.forkedFromRunId ? sqidEncode(r.forkedFromRunId) : null })),
+      runs: await finalizeRuns(ctx, enriched, input),
       nextCursor: null,
       nextOffset,
     };
@@ -358,7 +451,7 @@ async function defaultCursorQuery(
   const enriched = await attachFieldValues(ctx.prisma, runs, input.visibleColumns);
   const nextCursor = runs.length === input.limit ? runs[runs.length - 1].id : null;
   return {
-    runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id), forkedFromRunId: r.forkedFromRunId ? sqidEncode(r.forkedFromRunId) : null })),
+    runs: await finalizeRuns(ctx, enriched, input),
     nextCursor,
     nextOffset: null,
   };
@@ -553,7 +646,7 @@ async function defaultCursorQueryWithFieldFilters(
   if (useOffset) {
     const nextOffset = runs.length === input.limit ? input.offset! + runs.length : null;
     return {
-      runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id), forkedFromRunId: r.forkedFromRunId ? sqidEncode(r.forkedFromRunId) : null })),
+      runs: await finalizeRuns(ctx, enriched, input),
       nextCursor: null,
       nextOffset,
     };
@@ -561,9 +654,192 @@ async function defaultCursorQueryWithFieldFilters(
 
   const nextCursor = runs.length === input.limit ? runs[runs.length - 1].id : null;
   return {
-    runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id), forkedFromRunId: r.forkedFromRunId ? sqidEncode(r.forkedFromRunId) : null })),
+    runs: await finalizeRuns(ctx, enriched, input),
     nextCursor,
     nextOffset: null,
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Duration sort (heartbeat-aware candidate-set sort)
+// ═══════════════════════════════════════════════════════════════════════
+//
+// ADR — why the duration sort is special (keep this in mind before "simplifying"
+// it back into systemColumnSortQuery):
+//
+//   A RUNNING run's duration ends at its *heartbeat* — MAX(time) over
+//   mlop_metrics in ClickHouse, the last time it reported data — NOT at PG
+//   `updatedAt`. `updatedAt` only moves on a write to the PG Runs row (status
+//   change, config/tags edit, resume, stale-monitor); steady-state metric
+//   logging goes to ClickHouse and never touches PG, and the SDK's per-minute
+//   trigger poll is read-only. So `updatedAt` under-reports a live run's elapsed
+//   time, and the duration column must use heartbeat for running runs to be
+//   correct (and to keep display == sort — the client uses the same rule).
+//
+//   Heartbeat lives in ClickHouse, so it can't be an ORDER BY term in the
+//   pure-PG keyset sort. We therefore fall back to a candidate-set sort (the
+//   same shape as the metric sort): PG candidates → compute effective end in
+//   Node (heartbeat for running, statusUpdated/updatedAt for terminal) → sort →
+//   offset-paginate (capped at MAX_JSON_SORT_OFFSET) → hydrate the page.
+//
+//   We deliberately do NOT materialize a `Runs.heartbeatAt` column: heartbeat is
+//   kept derived-on-demand (see runs-openapi.ts ~"there's no materialized column
+//   for this") to avoid a second source of truth that drifts, a write in the
+//   stale-monitor hot loop, a migration on every self-hosted deploy, and a name
+//   clash with the wandb-compat `heartbeatAt`→`updatedAt` mapping.
+//
+//   Cost is bounded and only paid when the user actually sorts by Duration:
+//   the ClickHouse hop covers only RUNNING candidates (terminal durations come
+//   from PG columns already fetched). Fast path: when the filtered set has zero
+//   running runs, duration == the PG formula for every row, so we short-circuit
+//   straight back to the pure-PG keyset systemColumnSortQuery — zero overhead
+//   for finished / older projects.
+async function durationSortQuery(
+  ctx: any,
+  input: {
+    organizationId: string;
+    projectName: string;
+    search?: string;
+    tags?: string[];
+    status?: string[];
+    dateFilters?: z.infer<typeof dateFilterSchema>[];
+    fieldFilters?: z.infer<typeof fieldFilterSchema>[];
+    metricFilters?: z.infer<typeof metricFilterSchema>[];
+    systemFilters?: z.infer<typeof systemFilterSchema>[];
+    visibleColumns?: VisibleColumn[];
+    limit: number;
+    offset?: number;
+    sortField?: string;
+    sortDirection?: "asc" | "desc";
+    sortCursor?: string;
+  },
+) {
+  // Resolve the filtered candidate set (search/tags/status/date/field/system in
+  // PG; metric filters intersected from ClickHouse). null = "all runs in the
+  // project" (no filters at all).
+  let candidateIds = await getCandidateRunIds(ctx, input); // number[] | null
+  if (input.metricFilters?.length) {
+    const mfRunIds = await queryMetricFilteredRunIds(ctx.clickhouse, {
+      organizationId: input.organizationId,
+      projectName: input.projectName,
+      metricFilters: input.metricFilters.map((mf) => ({
+        logName: mf.logName,
+        aggregation: mf.aggregation as MetricAggregation,
+        operator: mf.operator,
+        values: mf.values,
+      })),
+    });
+    const mfSet = new Set(mfRunIds.map((id) => Number(id)));
+    candidateIds =
+      candidateIds === null
+        ? [...mfSet]
+        : candidateIds.filter((id) => mfSet.has(id));
+    if (candidateIds.length === 0) {
+      return { runs: [], nextCursor: null, nextOffset: null };
+    }
+  }
+
+  // Fast path: no RUNNING run in the filtered set → duration is the pure PG
+  // formula for every row, so use the cheap keyset systemColumnSortQuery.
+  const anyRunning = await ctx.prisma.runs.findFirst({
+    where:
+      candidateIds === null
+        ? {
+            organizationId: input.organizationId,
+            project: { name: input.projectName },
+            status: "RUNNING",
+          }
+        : { id: { in: candidateIds.map((id) => BigInt(id)) }, status: "RUNNING" },
+    select: { id: true },
+  });
+  if (!anyRunning) {
+    return systemColumnSortQuery(ctx, input);
+  }
+
+  // Candidate-set path: fetch the timestamp columns needed to compute duration
+  // for every candidate (small columns; bounded to the filtered set).
+  const candRows: {
+    id: bigint;
+    status: string;
+    createdAt: Date;
+    updatedAt: Date;
+    statusUpdated: Date | null;
+  }[] = await ctx.prisma.runs.findMany({
+    where:
+      candidateIds === null
+        ? { organizationId: input.organizationId, project: { name: input.projectName } }
+        : { id: { in: candidateIds.map((id) => BigInt(id)) } },
+    select: { id: true, status: true, createdAt: true, updatedAt: true, statusUpdated: true },
+  });
+  if (candRows.length === 0) {
+    return { runs: [], nextCursor: null, nextOffset: null };
+  }
+
+  // Heartbeat (MAX(time)) for the RUNNING candidates only.
+  const runningIds = candRows.filter((r) => r.status === "RUNNING").map((r) => Number(r.id));
+  const hbRows = await queryRunHeartbeats(ctx.clickhouse, {
+    organizationId: input.organizationId,
+    projectName: input.projectName,
+    runIds: runningIds,
+  });
+  const hbById = new Map(hbRows.map((h) => [h.runId, h.heartbeatMs]));
+
+  // Effective duration in ms — MUST mirror the client formula
+  // (columns-utils.ts) and the PG getSystemSortExpr("duration") ordering:
+  //   end = RUNNING ? (heartbeat ?? updatedAt) : (statusUpdated ?? updatedAt)
+  //   duration = max(0, end - createdAt)
+  const durationMs = (r: (typeof candRows)[number]): number => {
+    const start = r.createdAt.getTime();
+    let end: number;
+    if (r.status === "RUNNING") {
+      const hb = hbById.get(Number(r.id));
+      end = hb != null ? hb : r.updatedAt.getTime();
+    } else {
+      end = (r.statusUpdated ?? r.updatedAt).getTime();
+    }
+    return Math.max(0, end - start);
+  };
+
+  const dir = input.sortDirection === "asc" ? 1 : -1;
+  const sorted = candRows
+    .map((r) => ({ id: r.id, dur: durationMs(r) }))
+    .sort((a, b) => {
+      if (a.dur !== b.dur) return (a.dur - b.dur) * dir;
+      // Tiebreak by id in the same direction, mirroring "ORDER BY … , r.id dir".
+      const idCmp = a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+      return idCmp * dir;
+    });
+
+  const offset = Math.min(input.offset ?? 0, MAX_JSON_SORT_OFFSET);
+  const pageIds = sorted.slice(offset, offset + input.limit).map((s) => s.id);
+  if (pageIds.length === 0) {
+    return { runs: [], nextCursor: null, nextOffset: null };
+  }
+
+  const runs = await ctx.prisma.runs.findMany({
+    where: { id: { in: pageIds } },
+    select: {
+      id: true, name: true, number: true, status: true, statusUpdated: true,
+      createdAt: true, updatedAt: true, tags: true, notes: true, externalId: true,
+      forkedFromRunId: true, forkStep: true,
+      creator: { select: { name: true, email: true } },
+      project: { select: { runPrefix: true } },
+    },
+  });
+  // Re-sort hydrated rows into page order.
+  const idOrder = new Map(pageIds.map((id, i) => [id, i]));
+  runs.sort((a: any, b: any) => (idOrder.get(a.id) ?? 0) - (idOrder.get(b.id) ?? 0));
+
+  const enriched = await attachFieldValues(ctx.prisma, runs, input.visibleColumns);
+  const nextOffset =
+    offset + input.limit < sorted.length && offset + input.limit <= MAX_JSON_SORT_OFFSET
+      ? offset + input.limit
+      : null;
+
+  return {
+    runs: await finalizeRuns(ctx, enriched, input),
+    nextCursor: null,
+    nextOffset,
   };
 }
 
@@ -590,8 +866,8 @@ async function systemColumnSortQuery(
     sortCursor?: string;
   },
 ) {
-  const field = SYSTEM_SORT_FIELDS[input.sortField!] ? input.sortField! : "createdAt";
-  const sqlCol = SYSTEM_SORT_FIELDS[field];
+  const field = getSystemSortExpr(input.sortField!) ? input.sortField! : "createdAt";
+  const sortExpr = getSystemSortExpr(field)!;
   const dir = input.sortDirection === "asc" ? "ASC" : "DESC";
   const gtLt = input.sortDirection === "asc" ? ">" : "<";
 
@@ -672,12 +948,12 @@ async function systemColumnSortQuery(
   if (useOffset) {
     // Step 1: Lightweight cursor lookup — find the sort value + id at target offset
     const cursorQuery = `
-      SELECT r.id, r.${sqlCol} as sort_val
+      SELECT r.id, ${sortExpr} as sort_val
       FROM "runs" r
       JOIN "projects" p ON r."projectId" = p.id
       ${sysCreatorJoin}
       WHERE ${conditions.join(" AND ")}
-      ORDER BY r.${sqlCol} ${dir} NULLS LAST, r.id ${dir}
+      ORDER BY ${sortExpr} ${dir} NULLS LAST, r.id ${dir}
       OFFSET ${input.offset} LIMIT 1
     `;
     const cursorRows: { id: bigint; sort_val: any }[] = await ctx.prisma.$queryRawUnsafe(cursorQuery, ...queryParams);
@@ -692,7 +968,7 @@ async function systemColumnSortQuery(
     const idIdx = queryParams.length;
     // Use >= / <= (inclusive) since the cursor row itself is the first result
     const geLe = input.sortDirection === "asc" ? ">=" : "<=";
-    conditions.push(`(r.${sqlCol}, r.id) ${geLe} ($${valIdx}::${getSqlCastType(field)}, $${idIdx}::bigint)`);
+    conditions.push(`(${sortExpr}, r.id) ${geLe} ($${valIdx}::${getSqlCastType(field)}, $${idIdx}::bigint)`);
   } else if (input.sortCursor) {
     // Keyset pagination: WHERE (sortCol, id) > ($cursorVal, $cursorId)
     const parts = input.sortCursor.split("::");
@@ -703,17 +979,17 @@ async function systemColumnSortQuery(
       const valIdx = queryParams.length;
       queryParams.push(BigInt(cursorId) as any);
       const idIdx = queryParams.length;
-      conditions.push(`(r.${sqlCol}, r.id) ${gtLt} ($${valIdx}::${getSqlCastType(field)}, $${idIdx}::bigint)`);
+      conditions.push(`(${sortExpr}, r.id) ${gtLt} ($${valIdx}::${getSqlCastType(field)}, $${idIdx}::bigint)`);
     }
   }
 
   const query = `
-    SELECT r.id, r.${sqlCol} as sort_val
+    SELECT r.id, ${sortExpr} as sort_val
     FROM "runs" r
     JOIN "projects" p ON r."projectId" = p.id
     ${sysCreatorJoin}
     WHERE ${conditions.join(" AND ")}
-    ORDER BY r.${sqlCol} ${dir} NULLS LAST, r.id ${dir}
+    ORDER BY ${sortExpr} ${dir} NULLS LAST, r.id ${dir}
     LIMIT ${input.limit}
   `;
 
@@ -744,7 +1020,7 @@ async function systemColumnSortQuery(
   if (useOffset) {
     const nextOffset = runs.length === input.limit ? input.offset! + runs.length : null;
     return {
-      runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id), forkedFromRunId: r.forkedFromRunId ? sqidEncode(r.forkedFromRunId) : null })),
+      runs: await finalizeRuns(ctx, enriched, input),
       nextCursor: null,
       nextOffset,
       sortCursor: null,
@@ -758,7 +1034,7 @@ async function systemColumnSortQuery(
     : null;
 
   return {
-    runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id), forkedFromRunId: r.forkedFromRunId ? sqidEncode(r.forkedFromRunId) : null })),
+    runs: await finalizeRuns(ctx, enriched, input),
     nextCursor: null,
     nextOffset: null,
     sortCursor: nextSortCursor,
@@ -917,7 +1193,7 @@ async function jsonFieldSortQuery(
 
   const enriched = await attachFieldValues(ctx.prisma, runs, input.visibleColumns);
   return {
-    runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id), forkedFromRunId: r.forkedFromRunId ? sqidEncode(r.forkedFromRunId) : null })),
+    runs: await finalizeRuns(ctx, enriched, input),
     nextCursor: null,
     nextOffset,
   };
@@ -1010,7 +1286,7 @@ async function metricSortQuery(
   console.log(`[metricSortQuery] ${input.projectName} sort=${sortLogName} — PG candidates: ${(t1-t0).toFixed(0)}ms, CH sort: ${(t2-t1).toFixed(0)}ms, PG hydrate: ${(t3-t2).toFixed(0)}ms, fieldValues: ${(t4-t3).toFixed(0)}ms, total: ${(t4-t0).toFixed(0)}ms (${sortedRows.length} sorted, ${runs.length} hydrated)`);
 
   return {
-    runs: enriched.map((r: any) => ({ ...r, id: sqidEncode(r.id), forkedFromRunId: r.forkedFromRunId ? sqidEncode(r.forkedFromRunId) : null })),
+    runs: await finalizeRuns(ctx, enriched, input),
     nextCursor: null,
     nextOffset,
   };
@@ -1167,8 +1443,9 @@ function appendDateFiltersRaw(
 
 /** Get SQL cast type for keyset cursor comparison */
 function getSqlCastType(field: string): string {
-  if (field === "name" || field === "notes") return "text";
+  if (field === "name" || field === "notes" || field === "status") return "text";
   if (field === "runId") return "bigint";
+  if (field === "duration") return "double precision";
   // createdAt, updatedAt, statusUpdated are all timestamps
   return "timestamptz";
 }

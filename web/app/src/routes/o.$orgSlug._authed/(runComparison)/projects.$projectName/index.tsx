@@ -28,6 +28,7 @@ import { useRefresh } from "./~hooks/use-refresh";
 import { useRunCount } from "./~queries/run-count";
 import { useRunFilters } from "./~hooks/use-run-filters";
 import { SYSTEM_FILTERABLE_FIELDS, type FilterableField, type FieldFilterParam, type MetricFilterParam, type SystemFilterParam, type SortParam } from "@/lib/run-filters";
+import { generateUuid } from "@/lib/uuid";
 import { buildRefreshQueryFilters } from "./~lib/build-refresh-queries";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -38,7 +39,7 @@ import {
 import type { PanelImperativeHandle } from "react-resizable-panels";
 import { useDebouncedCallback } from "@/lib/hooks/use-debounced-callback";
 import { RunTableViewSelector } from "./~components/runs-table/run-table-view-selector";
-import { DEFAULT_PAGE_SIZE } from "./~components/runs-table/config";
+import { DEFAULT_PAGE_SIZE, SELECTED_RUNS_LIMIT } from "./~components/runs-table/config";
 import { ImageStepSyncProvider } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~context/image-step-sync-context";
 import { RunSyncProvider } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~context/run-sync-context";
 
@@ -459,6 +460,11 @@ function RouteComponent() {
       return { field: "name", source: "system", direction };
     }
 
+    // Base "status" column — sorted server-side (enum compared as text)
+    if (id === "status") {
+      return { field: "status", source: "system", direction };
+    }
+
     // Custom columns: "custom-config-lr", "custom-system-createdAt", "custom-metric-train/loss-LAST"
     if (id.startsWith("custom-")) {
       const rest = id.slice(7); // remove "custom-"
@@ -498,6 +504,38 @@ function RouteComponent() {
     setAll: setAllFilters,
     serverFilters,
   } = useRunFilters(organizationSlug, projectName);
+
+  // Status column-header filter ↔ unified RunFilter state. The header edits the
+  // same "status" filter the toolbar builder uses, so the two stay in sync.
+  const statusFilter = useMemo(
+    () => filters.find((f) => f.field === "status" && f.source === "system"),
+    [filters],
+  );
+  const statusFilterValues = useMemo(
+    () => (statusFilter?.values as string[] | undefined) ?? [],
+    [statusFilter],
+  );
+  const handleStatusFilterChange = useCallback(
+    (values: string[]) => {
+      if (values.length === 0) {
+        if (statusFilter) removeFilter(statusFilter.id);
+        return;
+      }
+      if (statusFilter) {
+        updateFilter(statusFilter.id, { values });
+      } else {
+        addFilter({
+          id: generateUuid(),
+          field: "status",
+          source: "system",
+          dataType: "option",
+          operator: "is any of",
+          values,
+        });
+      }
+    },
+    [statusFilter, addFilter, removeFilter, updateFilter],
+  );
 
   const filterActive = useMemo(() => {
     return (
@@ -1087,6 +1125,39 @@ function RouteComponent() {
     });
   }, [runs, prefetchedSelectedRuns, selectedRunsWithColors, allLoadedRuns]);
 
+  // Unified selection: the checkbox column is the single selection control — a
+  // checked run is plotted on the charts (?runs=) AND the target of bulk actions
+  // (delete). It reads/writes the same chart-selection set the eye's visibility
+  // toggle acts on, so there's no separate "checked" state to keep in sync.
+  const selectedIdSet = useMemo(
+    () => new Set(Object.keys(selectedRunsWithColors)),
+    [selectedRunsWithColors],
+  );
+
+  const handleSetSelected = useCallback(
+    (ids: string[], selected: boolean) => {
+      if (!selected) {
+        ids.forEach((id) => handleRunSelection(id, false));
+        return;
+      }
+      // Selecting: respect SELECTED_RUNS_LIMIT — add only up to the cap, so a
+      // shift-range / select-all can't blow past the plotted-runs limit.
+      const available = SELECTED_RUNS_LIMIT - Object.keys(selectedRunsWithColors).length;
+      if (available <= 0) return;
+      const toAdd = ids.filter((id) => !selectedRunsWithColors[id]).slice(0, available);
+      if (toAdd.length > 0) selectAllByIds(toAdd);
+    },
+    [handleRunSelection, selectAllByIds, selectedRunsWithColors],
+  );
+
+  const handleSelectedDeleted = useCallback(
+    (deletedIds: string[]) => {
+      // Deleted runs are removed from the chart selection so they don't linger.
+      deletedIds.forEach((id) => handleRunSelection(id, false));
+    },
+    [handleRunSelection],
+  );
+
   // Which run IDs are actually rendered in the table right now. The set
   // depends on whether "Display only selected" is on:
   // - on  → table renders only selected runs (mergeSelectedRuns)
@@ -1437,6 +1508,12 @@ function RouteComponent() {
                 onChangeBestStepTolerance={handleChangeBestStepTolerance}
                 sorting={sorting}
                 onSortingChange={setSorting}
+                statusFilterValues={statusFilterValues}
+                onStatusFilterChange={handleStatusFilterChange}
+                checkedRunIds={selectedIdSet}
+                onSetChecked={handleSetSelected}
+                checkedRunsWithColors={enrichedSelectedRunsWithColors}
+                onCheckedDeleted={handleSelectedDeleted}
                 pageSize={pageSize}
                 onPageSizeChange={handlePageSizeChange}
                 pageBase={pageBase}

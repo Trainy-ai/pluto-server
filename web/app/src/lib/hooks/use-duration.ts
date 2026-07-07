@@ -1,6 +1,7 @@
 import type { trpc } from "@/utils/trpc";
 import { useState, useEffect } from "react";
 import type { inferOutput } from "@trpc/tanstack-react-query";
+import { formatDuration } from "@/lib/format-duration";
 
 type Run = inferOutput<typeof trpc.runs.latest>[0];
 type RunStatus = Run["status"];
@@ -43,19 +44,6 @@ export function useDuration({
       clearInterval(interval);
     };
   }, [startTime, endTime, isCompleted]);
-
-  const formatDuration = (ms: number) => {
-    const hours = Math.floor(ms / (1000 * 60 * 60));
-    const minutes = Math.floor((ms % (1000 * 60 * 60)) / (1000 * 60));
-    const seconds = Math.floor((ms % (1000 * 60)) / 1000);
-
-    const parts = [];
-    if (hours > 0) parts.push(`${hours}h`);
-    if (minutes > 0) parts.push(`${minutes}m`);
-    parts.push(`${seconds}s`);
-
-    return parts.join(" ");
-  };
 
   return {
     duration,

@@ -3744,6 +3744,105 @@ describe('SDK API Endpoints (with API Key)', () => {
       expect(ascNames[2]).toBe('sort-high');
       expect(ascNames[3]).toBe('sort-none'); // NULL must be last in ASC too
     });
+
+    it('Test 20.10: Duration sort matches the client Duration column formula (parity)', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+
+      // Client-side Duration column formula — kept byte-for-byte in sync with
+      // getCustomColumnValue("duration") in columns-utils.ts and the server
+      // duration sort (durationSortQuery / getSystemSortExpr) in list-runs.ts:
+      //   end   = RUNNING ? (heartbeatAt ?? updatedAt) : (statusUpdated ?? updatedAt)
+      //   value = Math.max(0, end - createdAt)
+      // A live run ends at its ClickHouse heartbeat (MAX(time)); the server now
+      // enriches running runs with `heartbeatAt` and sorts by the same rule, so
+      // this JS replication reads heartbeatAt too. Locks display ⇄ sort parity
+      // for live, finished, and clock-skewed runs.
+      const clientDurationMs = (run: any): number => {
+        const start = new Date(run.createdAt).getTime();
+        const end =
+          run.status === 'RUNNING'
+            ? new Date(run.heartbeatAt ?? run.updatedAt).getTime()
+            : new Date(run.statusUpdated ?? run.updatedAt).getTime();
+        if (Number.isNaN(start) || Number.isNaN(end)) return 0;
+        return Math.max(0, end - start);
+      };
+
+      for (const direction of ['desc', 'asc'] as const) {
+        const response = await makeTrpcRequest('runs.list', {
+          projectName: TEST_PROJECT_NAME,
+          limit: 25,
+          sortField: 'duration',
+          sortSource: 'system',
+          sortDirection: direction,
+        }, { 'Cookie': sessionCookie }, 'GET');
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        const runs = data.result?.data?.runs;
+        expect(runs).toBeDefined();
+        if (!runs || runs.length < 2) {
+          console.log(`   <2 runs for duration ${direction} parity check - skipping order assertion`);
+          continue;
+        }
+
+        // Every returned value must be clamped to >= 0 (GREATEST(0, …)).
+        for (const run of runs) {
+          expect(clientDurationMs(run)).toBeGreaterThanOrEqual(0);
+        }
+
+        // Server SQL order must be monotonic per the client formula.
+        for (let i = 1; i < runs.length; i++) {
+          const prev = clientDurationMs(runs[i - 1]);
+          const curr = clientDurationMs(runs[i]);
+          if (direction === 'desc') {
+            expect(prev).toBeGreaterThanOrEqual(curr);
+          } else {
+            expect(prev).toBeLessThanOrEqual(curr);
+          }
+        }
+      }
+    });
+
+    it('Test 20.11: runs.list enriches every run with heartbeatAt (null for terminal, MAX(time) for live)', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+
+      const response = await makeTrpcRequest('runs.list', {
+        projectName: TEST_PROJECT_NAME,
+        limit: 200,
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      const runs = data.result?.data?.runs;
+      expect(runs).toBeDefined();
+      expect(Array.isArray(runs)).toBe(true);
+
+      // Every run carries the field (uniform response shape → stable client
+      // type). Terminal runs are always null (they end at statusUpdated);
+      // running runs are null only until their first metric lands in ClickHouse.
+      for (const run of runs) {
+        expect('heartbeatAt' in run).toBe(true);
+        if (run.status !== 'RUNNING') {
+          expect(run.heartbeatAt).toBeNull();
+        } else if (run.heartbeatAt !== null) {
+          // When present, it must parse and not precede the run's creation.
+          const hb = new Date(run.heartbeatAt).getTime();
+          expect(Number.isNaN(hb)).toBe(false);
+          expect(hb).toBeGreaterThanOrEqual(new Date(run.createdAt).getTime());
+        }
+      }
+
+      const running = runs.filter((r: any) => r.status === 'RUNNING');
+      console.log(
+        `   ${running.length} running run(s); heartbeatAt: ${running.map((r: any) => r.heartbeatAt ?? 'null').join(', ') || '—'}`,
+      );
+    });
   });
 
   describe('Test Suite 21: Server-Side Field Filtering (Authenticated)', () => {

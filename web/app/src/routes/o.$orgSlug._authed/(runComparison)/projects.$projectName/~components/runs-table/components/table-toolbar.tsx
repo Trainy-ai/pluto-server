@@ -27,6 +27,8 @@ interface TableToolbarProps {
   /** Called after selected runs are deleted, with the deleted run IDs. */
   onRunsDeleted: (deletedRunIds: string[]) => void;
   selectedRunsWithColors: Record<string, { run: Run; color: string }>;
+  /** Run records for the checked set — what the delete button operates on. */
+  checkedRunsWithColors?: Record<string, { run: Run; color: string }>;
   runCount: number;
   totalRunCount: number;
   searchQuery: string;
@@ -88,6 +90,7 @@ export function TableToolbar({
   projectName,
   onRunsDeleted,
   selectedRunsWithColors,
+  checkedRunsWithColors,
   runCount,
   totalRunCount,
   searchQuery,
@@ -283,7 +286,7 @@ export function TableToolbar({
           <DeleteRunsButton
             organizationId={organizationId}
             projectName={projectName}
-            selectedRunsWithColors={selectedRunsWithColors}
+            selectedRunsWithColors={checkedRunsWithColors ?? {}}
             onDeleted={onRunsDeleted}
           />
         )}

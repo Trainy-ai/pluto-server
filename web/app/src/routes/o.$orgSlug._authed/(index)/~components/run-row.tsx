@@ -5,7 +5,7 @@ import { useDuration } from "@/lib/hooks/use-duration";
 import { formatRelativeTime } from "@/lib/format-relative-time";
 import type { inferOutput } from "@trpc/tanstack-react-query";
 import { trpc } from "@/utils/trpc";
-import { cn } from "@/lib/utils";
+import { RunningIndicator } from "@/components/core/runs/running-indicator";
 
 type Run = inferOutput<typeof trpc.runs.latest>[0];
 
@@ -14,19 +14,13 @@ interface RunRowProps {
   orgSlug: string;
 }
 
-const statusDotClass: Record<Run["status"], string> = {
-  COMPLETED: "bg-emerald-500",
-  FAILED: "bg-red-500",
-  TERMINATED: "bg-red-500",
-  CANCELLED: "bg-red-500",
-  RUNNING: "bg-blue-500 animate-pulse",
-};
-
 export function RunRow({ run, orgSlug }: RunRowProps) {
   const navigate = useNavigate();
   const { formattedDuration } = useDuration({
     startTime: run.createdAt,
-    endTime: run.updatedAt,
+    // Match the experiments-table Duration column: a finished run ends at its
+    // terminal status change (statusUpdated), not a later metadata edit.
+    endTime: run.statusUpdated ?? run.updatedAt,
     runStatus: run.status,
   });
 
@@ -55,11 +49,9 @@ export function RunRow({ run, orgSlug }: RunRowProps) {
         });
       }}
     >
-      {/* Status dot */}
+      {/* Live indicator — only for actively-running runs */}
       <TableCell className="w-10 pr-0">
-        <div
-          className={cn("h-2.5 w-2.5 rounded-full", statusDotClass[run.status])}
-        />
+        {run.status === "RUNNING" && <RunningIndicator />}
       </TableCell>
 
       {/* Project / Run name */}

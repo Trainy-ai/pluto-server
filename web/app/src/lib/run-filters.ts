@@ -91,7 +91,7 @@ export interface ServerFilters {
 // System fields
 // ---------------------------------------------------------------------------
 
-const STATUS_OPTIONS = [
+export const STATUS_OPTIONS = [
   { label: "Running", value: "RUNNING" },
   { label: "Completed", value: "COMPLETED" },
   { label: "Failed", value: "FAILED" },

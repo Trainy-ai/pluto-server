@@ -167,3 +167,97 @@ describe("formatCellValue", () => {
     expect(typeof result).toBe("string");
   });
 });
+
+// ── duration (computed system column) ─────────────────────────────────────
+
+describe("getCustomColumnValue — duration", () => {
+  const durationCol: ColumnConfig = { id: "duration", source: "system", label: "Duration" };
+
+  it("computes a finished run's duration as (end − createdAt) in ms", () => {
+    // fixture: COMPLETED, created 03-01 12:00, updated 03-02 14:30 → 26h30m
+    const run = makeRun("1");
+    expect(getCustomColumnValue(run, durationCol)).toBe(95_400_000);
+  });
+
+  it("prefers statusUpdated over updatedAt as the end time", () => {
+    // The OOM that died 90s in: terminal status change at +90s, even though
+    // the row was touched again much later.
+    const run = makeRun("1", {
+      status: "FAILED",
+      statusUpdated: "2025-03-01T12:01:30.000Z",
+      updatedAt: "2025-03-05T00:00:00.000Z",
+    });
+    expect(getCustomColumnValue(run, durationCol)).toBe(90_000);
+  });
+
+  it("uses heartbeatAt (last metric time, not now()) as the end for a running run", () => {
+    // A live run's true end is its ClickHouse heartbeat, NOT updatedAt (which
+    // steady-state metric logging never advances). Here heartbeat is 03-02 14:30
+    // (26h30m in) while updatedAt is stale at +1m — we must use the heartbeat.
+    const run = makeRun("1", {
+      status: "RUNNING",
+      updatedAt: "2025-03-01T12:01:00.000Z",
+      heartbeatAt: "2025-03-02T14:30:00.000Z",
+    });
+    expect(getCustomColumnValue(run, durationCol)).toBe(95_400_000);
+  });
+
+  it("falls back to updatedAt for a running run with no heartbeatAt yet", () => {
+    // Run started before the first stale-monitor/enrichment cycle populated a
+    // heartbeat → fall back to updatedAt (03-02 14:30 = 26h30m).
+    const run = makeRun("1", { status: "RUNNING", heartbeatAt: null });
+    expect(getCustomColumnValue(run, durationCol)).toBe(95_400_000);
+  });
+
+  it("ignores heartbeatAt for a terminal run (ends at statusUpdated)", () => {
+    // heartbeatAt only governs RUNNING runs; a finished run still ends at its
+    // terminal status change even if a later stray heartbeat exists.
+    const run = makeRun("1", {
+      status: "FAILED",
+      statusUpdated: "2025-03-01T12:01:30.000Z",
+      updatedAt: "2025-03-05T00:00:00.000Z",
+      heartbeatAt: "2025-03-06T00:00:00.000Z",
+    });
+    expect(getCustomColumnValue(run, durationCol)).toBe(90_000);
+  });
+
+  it("is deterministic across calls (no wall-clock dependency)", () => {
+    const run = makeRun("1", { status: "RUNNING", heartbeatAt: "2025-03-02T14:30:00.000Z" });
+    expect(getCustomColumnValue(run, durationCol)).toBe(
+      getCustomColumnValue(run, durationCol),
+    );
+  });
+
+  it("returns null when timestamps are unparseable", () => {
+    const run = makeRun("1", { createdAt: "nope", updatedAt: "nope" });
+    expect(getCustomColumnValue(run, durationCol)).toBeNull();
+  });
+
+  it("clamps a negative interval to 0 (end before start), matching server GREATEST(0, …)", () => {
+    // Clock skew / out-of-order backfill: the terminal status change is
+    // recorded BEFORE createdAt. The client uses Math.max(0, end - start) and
+    // the server wraps the same expression in GREATEST(0, …); both must yield 0
+    // so a skewed run never sorts as if it had a "negative" duration.
+    const run = makeRun("1", {
+      status: "FAILED",
+      createdAt: "2025-03-01T12:00:00.000Z",
+      statusUpdated: "2025-03-01T11:59:00.000Z", // 60s before createdAt
+      updatedAt: "2025-03-01T11:59:00.000Z",
+    });
+    expect(getCustomColumnValue(run, durationCol)).toBe(0);
+  });
+});
+
+describe("formatCellValue — duration", () => {
+  const durationCol: ColumnConfig = { id: "duration", source: "system", label: "Duration" };
+
+  it("formats a numeric ms value as a compact h/m/s string", () => {
+    expect(formatCellValue(95_400_000, durationCol)).toBe("26h 30m 0s");
+    expect(formatCellValue(90_000, durationCol)).toBe("1m 30s");
+    expect(formatCellValue(5_000, durationCol)).toBe("5s");
+  });
+
+  it('returns "-" for a non-numeric duration value', () => {
+    expect(formatCellValue("oops", durationCol)).toBe("-");
+  });
+});

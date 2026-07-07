@@ -16,6 +16,7 @@ export interface ColumnConfig {
 export const DEFAULT_COLUMNS: ColumnConfig[] = [
   { id: "runId", source: "system", label: "Id" },
   { id: "createdAt", source: "system", label: "Created" },
+  { id: "duration", source: "system", label: "Duration" },
   { id: "creator.name", source: "system", label: "Owner" },
   { id: "tags", source: "system", label: "Tags" },
   { id: "notes", source: "system", label: "Notes" },
@@ -34,7 +35,7 @@ export const ALL_SYSTEM_COLUMNS: ColumnConfig[] = [
 ];
 
 /** Storage version — bump to reset saved columns when schema changes */
-const STORAGE_VERSION = 5;
+const STORAGE_VERSION = 6;
 
 function getStorageKey(orgSlug: string, projectName: string): string {
   return `mlop:columns:v${STORAGE_VERSION}:${orgSlug}:${projectName}`;
