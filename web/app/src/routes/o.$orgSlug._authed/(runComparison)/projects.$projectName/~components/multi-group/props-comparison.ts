@@ -14,6 +14,10 @@ export interface MultiGroupPropsForComparison {
   boundsResetKey?: number;
   globalLogXAxis?: boolean;
   globalLogYAxis?: boolean;
+  /** Encoded grouping chain. Must short-circuit memoization — when this
+   *  changes, the inline render decides MultiLineChart vs
+   *  GroupedLineChart, so a stale memo would freeze the wrong path. */
+  groupBy?: string[];
   metrics: {
     name: string;
     type: RunLogType;
@@ -48,6 +52,16 @@ export function arePropsEqual(
     prevProps.globalLogYAxis !== nextProps.globalLogYAxis
   ) {
     return false;
+  }
+
+  // groupBy: by-value comparison. Empty vs non-empty switches between
+  // <MultiLineChart> and <GroupedLineChart>; differing chains re-fire
+  // the grouped fetch.
+  const prevG = prevProps.groupBy ?? [];
+  const nextG = nextProps.groupBy ?? [];
+  if (prevG.length !== nextG.length) return false;
+  for (let i = 0; i < prevG.length; i++) {
+    if (prevG[i] !== nextG[i]) return false;
   }
 
   // Deep comparison of metrics array

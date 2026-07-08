@@ -59,6 +59,7 @@ interface UseSelectedRunsReturn {
   handleColorChange: (runId: RunId, color: Color) => void;
   /** Toggle a run's chart visibility (hidden/shown) */
   toggleRunVisibility: (runId: RunId) => void;
+  setRunsHidden: (runIds: RunId[], hidden: boolean) => void;
   /** Show all hidden runs on charts */
   showAllRuns: () => void;
   /** Hide all selected runs from charts */
@@ -66,7 +67,10 @@ interface UseSelectedRunsReturn {
   /** Select the first N runs from the runs array */
   selectFirstN: (n: number) => void;
   /** Select all runs with the given IDs */
-  selectAllByIds: (runIds: RunId[]) => void;
+  selectAllByIds: (runIds: RunId[], runFallbacks?: Run[]) => void;
+  /** Deselect just the runs with the given IDs (counterpart to
+   *  selectAllByIds — used by "Deselect all on page"). */
+  deselectByIds: (runIds: RunId[]) => void;
   /** Deselect all runs */
   deselectAll: () => void;
   /** Shuffle colors for all selected runs */
@@ -648,10 +652,18 @@ export function useSelectedRuns(
   );
 
   const selectAllByIds = useCallback(
-    (runIds: RunId[]) => {
-      if (!runs?.length) return;
+    (runIds: RunId[], runFallbacks?: Run[]) => {
+      // Resolve run objects from the flat `runs` list AND any caller-provided
+      // fallbacks. Grouped-mode leaf runs aren't in the flat list (grouping
+      // skips the flat runs.list query), so the checkbox passes the row's run
+      // object here — without it selecting a grouped run would silently no-op.
+      const runsById = new Map<RunId, Run>();
+      for (const r of runs ?? []) runsById.set(r.id, r);
+      for (const r of runFallbacks ?? []) {
+        if (!runsById.has(r.id)) runsById.set(r.id, r);
+      }
+      if (runsById.size === 0) return;
 
-      const runsById = new Map(runs.map((r) => [r.id, r]));
       const currentSelected = selectedRunsRef.current;
       const usedColors = new Set(Object.values(currentSelected).map((e) => e.color));
 
@@ -677,6 +689,46 @@ export function useSelectedRuns(
     },
     [runs],
   );
+
+  const deselectByIds = useCallback((runIds: RunId[]) => {
+    if (runIds.length === 0) return;
+    const toRemove = new Set(runIds);
+    setSelectedRunsWithColors((prev) => {
+      let changed = false;
+      const next: typeof prev = {};
+      for (const [id, entry] of Object.entries(prev)) {
+        if (toRemove.has(id)) {
+          changed = true;
+          continue;
+        }
+        next[id] = entry;
+      }
+      return changed ? next : prev;
+    });
+    setRunColors((prev) => {
+      let changed = false;
+      const next: typeof prev = {};
+      for (const [id, color] of Object.entries(prev)) {
+        if (toRemove.has(id)) {
+          changed = true;
+          continue;
+        }
+        next[id] = color;
+      }
+      return changed ? next : prev;
+    });
+    setHiddenRunIds((prev) => {
+      let changed = false;
+      const next = new Set(prev);
+      for (const id of runIds) {
+        if (next.has(id)) {
+          next.delete(id);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, []);
 
   const deselectAll = useCallback(() => {
     setSelectedRunsWithColors({});
@@ -748,6 +800,23 @@ export function useSelectedRuns(
     });
   }, []);
 
+  /** Bulk-set the hidden state for a specific list of run IDs.
+   *  Used by the grouped bucket-tree to fan out a single "hide group"
+   *  click across every descendant run, without using a separate
+   *  cascade-state set (which couldn't be overridden per-run). */
+  const setRunsHidden = useCallback((runIds: RunId[], hidden: boolean) => {
+    if (runIds.length === 0) return;
+    setHiddenRunIds((prev) => {
+      const next = new Set(prev);
+      if (hidden) {
+        for (const id of runIds) next.add(id);
+      } else {
+        for (const id of runIds) next.delete(id);
+      }
+      return next;
+    });
+  }, []);
+
   const showAllRuns = useCallback(() => {
     setHiddenRunIds(new Set());
   }, []);
@@ -777,10 +846,12 @@ export function useSelectedRuns(
     handleRunSelection,
     handleColorChange,
     toggleRunVisibility,
+    setRunsHidden,
     showAllRuns,
     hideAllRuns,
     selectFirstN,
     selectAllByIds,
+    deselectByIds,
     deselectAll,
     shuffleColors,
     reassignAllColors,

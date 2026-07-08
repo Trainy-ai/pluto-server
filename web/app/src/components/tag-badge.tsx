@@ -64,7 +64,6 @@ export function TagBadge({ tag, className, truncate }: TagBadgeProps) {
           "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300",
           className
         )}
-        title={`Baseline run: ${parsed.issueId}`}
       >
         <Star className="h-3 w-3 shrink-0" />
         <span>{parsed.display}</span>
@@ -88,7 +87,6 @@ export function TagBadge({ tag, className, truncate }: TagBadgeProps) {
             "dark:bg-purple-900/30 dark:text-purple-300 dark:hover:bg-purple-900/50",
             className
           )}
-          title={`Linear issue: ${parsed.issueId}`}
         >
           <LinearIcon className="h-3 w-3 shrink-0" />
           <span>{parsed.display}</span>
@@ -106,7 +104,6 @@ export function TagBadge({ tag, className, truncate }: TagBadgeProps) {
         truncate ? "max-w-[120px]" : "shrink-0",
         className,
       )}
-      title={parsed.display}
     >
       <span className="truncate">{parsed.display}</span>
     </Badge>

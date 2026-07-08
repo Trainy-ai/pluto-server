@@ -4,6 +4,7 @@ import { protectedOrgProcedure } from "../../../../lib/trpc";
 import { resolveRunId } from "../../../../lib/resolve-run-id";
 import { triggerLinearSyncForTags } from "../../../../lib/linear-sync";
 import { MAX_TAGS_PER_RUN } from "../../../../lib/limits";
+import { hasMultipleGroupTags } from "../../../../lib/group-tag";
 
 export const updateTagsProcedure = protectedOrgProcedure
   .input(
@@ -17,6 +18,13 @@ export const updateTagsProcedure = protectedOrgProcedure
   )
   .mutation(async ({ ctx, input }) => {
     const { runId: encodedRunId, projectName, tags, organizationId } = input;
+
+    if (hasMultipleGroupTags(tags)) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "A run can have at most one group:* tag.",
+      });
+    }
 
     const runId = await resolveRunId(ctx.prisma, encodedRunId, organizationId, projectName);
 

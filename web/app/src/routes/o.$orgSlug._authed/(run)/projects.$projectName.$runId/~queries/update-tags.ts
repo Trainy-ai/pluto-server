@@ -1,6 +1,7 @@
 import { trpc } from "@/utils/trpc";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { errorReason } from "@/lib/error-message";
 import type { inferOutput } from "@trpc/tanstack-react-query";
 import {
   cancelRunsQueries,
@@ -42,13 +43,21 @@ export const useUpdateTags = (orgId: string, projectName: string, runId: string)
 
         return { previousRun, listSnapshots };
       },
-      onError: (_err, newData, context) => {
+      onError: (err, newData, context) => {
         // Roll back the single-run query
         if (context?.previousRun) {
           queryClient.setQueryData(runGetQueryKey, context.previousRun);
         }
         rollbackRunsListCache(queryClient, context?.listSnapshots ?? []);
-        toast.error(`Failed to update tags for run ${runId}`);
+        // Surface the backend's reason (e.g. "A run can have at most one
+        // group:* tag.") behind a "Failed to update tags:" prefix so it's clear
+        // the save failed; fall back to the generic message otherwise.
+        const reason = errorReason(err);
+        toast.error(
+          reason
+            ? `Failed to update tags: ${reason}`
+            : `Failed to update tags for run ${runId}`,
+        );
       },
       onSettled: () => {
         queryClient.invalidateQueries({ queryKey: runGetQueryKey });

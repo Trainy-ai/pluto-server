@@ -6,8 +6,8 @@ import { OrganizationPageTitle } from "@/components/layout/page-title";
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useDocumentTitle } from "@/hooks/use-document-title";
 import { useBestStepTolerance } from "@/hooks/use-best-step-tolerance";
-import type { SortingState } from "@tanstack/react-table";
-import { useQuery } from "@tanstack/react-query";
+import type { ExpandedState, SortingState } from "@tanstack/react-table";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useSelectedRuns } from "./~hooks/use-selected-runs";
 import { useCachedSelectedRunIds } from "./~hooks/use-cached-selected-run-ids";
 import { prefetchListRuns, useListRuns, type Run } from "./~queries/list-runs";
@@ -147,7 +147,14 @@ function RouteComponent() {
         projectName,
         runIds: rawUrlRunIds ?? [],
       },
-      { enabled: !!rawUrlRunIds?.length },
+      {
+        enabled: !!rawUrlRunIds?.length,
+        // Same rationale as `prefetchedSelectedRuns` below — when a deselect
+        // shrinks the `?runs=` URL param, this query rekeys, blinks `data`
+        // to undefined, and `allVisibleRuns` briefly loses its untrimmed
+        // overlay.
+        placeholderData: keepPreviousData,
+      },
     ),
   );
 
@@ -552,6 +559,48 @@ function RouteComponent() {
   const showOnlySelectedKey = `run-table-showOnlySelected:${organizationSlug}:${projectName}`;
   const [showOnlySelected, setShowOnlySelected] = useLocalStorageBool(showOnlySelectedKey);
 
+  // pinSelectedToTop — owned here so a future grouping picker can re-add the
+  // mutex (in v1 it was mutually exclusive with the now-removed group toggle).
+  const pinSelectedToTopKey = `run-table-pinSelectedToTop:${organizationSlug}:${projectName}`;
+  const [pinSelectedToTop, setPinSelectedToTop] = useLocalStorageBool(pinSelectedToTopKey);
+
+  // W&B-style grouping: ordered list of encoded group fields. Empty =
+  // no grouping (the flat table). Persisted per-project so the user's
+  // grouping survives reload.
+  const groupByStorageKey = `run-table-groupBy:v2:${organizationSlug}:${projectName}`;
+  const [groupBy, setGroupByRaw] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(groupByStorageKey);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.every((x) => typeof x === "string")) {
+        return parsed;
+      }
+      return [];
+    } catch {
+      return [];
+    }
+  });
+  // Expanded bucket trails — keyed by JSON-stringified `{field, value}[]`.
+  // Lives in-memory only (so reload-without-loading-a-view collapses to
+  // all); saved views persist + restore this via RunTableViewConfig.
+  const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
+  const handleGroupByChange = useCallback(
+    (next: string[]) => {
+      setGroupByRaw(next);
+      // Switching grouping fields invalidates every prior expanded path
+      // (the trails reference fields that may no longer apply).
+      setExpandedGroups([]);
+      try {
+        if (next.length === 0) localStorage.removeItem(groupByStorageKey);
+        else localStorage.setItem(groupByStorageKey, JSON.stringify(next));
+      } catch {
+        // localStorage may be unavailable (private mode etc.) — non-fatal.
+      }
+    },
+    [groupByStorageKey],
+  );
+
   // Search state — persisted to localStorage per org/project
   const searchStorageKey = `run-table-search:${organizationSlug}:${projectName}`;
   const [searchInput, setSearchInput] = useState<string>(() => {
@@ -619,6 +668,7 @@ function RouteComponent() {
     projectName,
   );
 
+
   // Reset pageBase when sort/filter/search changes so the user starts at page 1
   useEffect(() => {
     setPageBase(0);
@@ -657,7 +707,30 @@ function RouteComponent() {
     isFetching,
     isError,
     error,
-  } = useListRuns(organizationId, projectName, serverFilters.tags, serverFilters.status, debouncedSearch, serverFilters.dateFilters, sortParam, serverFilters.fieldFilters as FieldFilterParam[] | undefined, serverFilters.metricFilters as MetricFilterParam[] | undefined, serverFilters.systemFilters as SystemFilterParam[] | undefined, pageSize, pageBase, listVisibleColumns);
+    // Disable the flat runs.list when grouping is active: the bucket tree
+    // replaces the flat table (data-table.tsx:613), the pagination footer
+    // switches to group-count mode (data-table.tsx:749), side-by-side uses
+    // getByIds, and column/metric dropdowns use their own dedicated
+    // endpoints. The only consumer we lose is `allTags` (initial seed for
+    // the tag-editor popover), which falls back to a direct distinctTags
+    // fetch below — equivalent quality, ~1KB instead of ~10-200KB.
+  } = useListRuns(organizationId, projectName, serverFilters.tags, serverFilters.status, debouncedSearch, serverFilters.dateFilters, sortParam, serverFilters.fieldFilters as FieldFilterParam[] | undefined, serverFilters.metricFilters as MetricFilterParam[] | undefined, serverFilters.systemFilters as SystemFilterParam[] | undefined, pageSize, pageBase, listVisibleColumns, groupBy.length === 0);
+
+  // Total rows the server has actually returned across all fetched
+  // runs.list pages. Used for the *fetch trigger* (Next-button +
+  // typed-page-input), NOT for the totalPages indicator. Decouples the
+  // fetch decision from `displayedRuns.length`, which is inflated by
+  // URL-prefetched / IndexedDB-cached selection runs and was tricking
+  // Next into thinking "we have enough data" when in fact additional
+  // runs.list pages still need fetching.
+  const serverFetchedCount = useMemo(() => {
+    if (!data?.pages) return 0;
+    let count = 0;
+    for (const page of data.pages) {
+      if (page?.runs) count += page.runs.length;
+    }
+    return count;
+  }, [data]);
 
   // Mutation for updating tags
   const updateTagsMutation = useUpdateTags(organizationId, projectName);
@@ -768,7 +841,15 @@ function RouteComponent() {
 
   // Run table view handlers
   const handleLoadView = useCallback(
-    (config: { columns: ColumnConfig[]; baseOverrides: Record<string, any>; filters: any[]; sorting: SortingState; pageSize?: number }) => {
+    (config: {
+      columns: ColumnConfig[];
+      baseOverrides: Record<string, any>;
+      filters: any[];
+      sorting: SortingState;
+      pageSize?: number;
+      groupBy?: string[];
+      expanded?: string[];
+    }) => {
       updateColumns(config.columns);
       setAllOverrides(config.baseOverrides);
       setAllFilters(config.filters);
@@ -776,8 +857,19 @@ function RouteComponent() {
       if (config.pageSize != null) {
         setPageSize(config.pageSize);
       }
+      // Apply groupBy first (clears expanded internally) then restore
+      // the view's own expanded set so the saved buckets re-open.
+      // `config.groupBy === undefined` means "preserve current groupBy" —
+      // the saved-default auto-loader uses this to avoid clobbering the
+      // localStorage-persisted groupBy with a stale snapshot (see
+      // run-table-view-selector.tsx default-init effect). An explicit
+      // empty array still clears grouping as the user expects.
+      if (config.groupBy !== undefined) {
+        handleGroupByChange(config.groupBy);
+      }
+      setExpandedGroups(config.expanded ?? []);
     },
-    [updateColumns, setAllOverrides, setAllFilters],
+    [updateColumns, setAllOverrides, setAllFilters, handleGroupByChange],
   );
 
   const handleResetToDefault = useCallback(() => {
@@ -785,10 +877,10 @@ function RouteComponent() {
     setAllOverrides({});
     setAllFilters([]);
     setSorting([]);
-    // Reset to the application-hardcoded default, not the user's saved
-    // "Default" view (which is its own view and can be loaded separately).
     setPageSize(DEFAULT_PAGE_SIZE);
-  }, [updateColumns, setAllOverrides, setAllFilters]);
+    handleGroupByChange([]);
+    setExpandedGroups([]);
+  }, [updateColumns, setAllOverrides, setAllFilters, handleGroupByChange]);
 
   // Flatten the pages to get all runs, deduplicating by ID.
   // Also merges pre-fetched URL runs that may not be in paginated results.
@@ -820,15 +912,23 @@ function RouteComponent() {
     return Array.from(uniqueRuns.values());
   }, [data, prefetchedUrlRuns]);
 
-  // Candidate tags for the filter and tag-editor dropdowns, derived from the
-  // runs already loaded in the table — NOT a project-wide fetch. The
-  // dropdowns search the backend (runs.distinctTags) for anything beyond
-  // this set, so a project with tens of thousands of tags stays bounded.
-  //
-  // Ordered most-common-first, with the newest run carrying the tag as
-  // the tiebreaker (alphabetical as final stable order). Matches the
-  // server-side ORDER BY in runs.distinctTags.
+  // Candidate tags for the filter and tag-editor dropdowns. Default view
+  // derives them from the runs already loaded in the table (no extra
+  // fetch). Grouped view doesn't load that flat list (the bucket tree
+  // replaces it), so we fall back to a project-wide distinctTags fetch —
+  // ~1KB, server-side ranked by usage, same shape allTags consumers
+  // already expect. Either way, the dropdowns escape this seed and search
+  // the backend once the user starts typing (via useTagSearch).
+  const groupedTagsSeed = useQuery(
+    trpc.runs.distinctTags.queryOptions(
+      { organizationId, projectName, limit: 200 },
+      { enabled: groupBy.length > 0, staleTime: 60_000 },
+    ),
+  );
   const allTags = useMemo(() => {
+    if (groupBy.length > 0) {
+      return groupedTagsSeed.data?.tags ?? [];
+    }
     const counts = new Map<string, number>();
     const latest = new Map<string, number>();
     for (const run of allLoadedRuns) {
@@ -846,7 +946,7 @@ function RouteComponent() {
       if (dt !== 0) return dt;
       return a.localeCompare(b);
     });
-  }, [allLoadedRuns]);
+  }, [allLoadedRuns, groupBy.length, groupedTagsSeed.data]);
 
   // Pre-fetch selected runs' FULL data via runs.getByIds.
   //
@@ -870,7 +970,20 @@ function RouteComponent() {
         projectName,
         runIds: cachedSelectedRunIds,
       },
-      { enabled: cachedSelectedRunIds.length > 0 },
+      {
+        enabled: cachedSelectedRunIds.length > 0,
+        // Hold the previous (untrimmed `_flatConfig` / `_flatSystemMetadata`)
+        // response while the new key refetches. Without this, deselecting any
+        // run blanks `data` for ~300ms, which makes `allVisibleRuns` swap its
+        // selected entries down to the trimmed `runs.list` shape. The
+        // `selectedRunsWithColors` "keep fresh" effect in use-selected-runs
+        // then downgrades stored selection objects too — and in grouped+DOS
+        // mode, `extractRunGroupValue` reads null for the missing config key
+        // and the bucket tree briefly renders an "(unset)" leaf where the
+        // real value used to be. (Reproduced with grouping by Group +
+        // batch_size and deselecting any group/leaf/run.)
+        placeholderData: keepPreviousData,
+      },
     ),
   );
 
@@ -1052,6 +1165,7 @@ function RouteComponent() {
     [organizationId, projectName]
   );
 
+
   const {
     runColors,
     selectedRunsWithColors,
@@ -1060,10 +1174,12 @@ function RouteComponent() {
     handleRunSelection,
     handleColorChange,
     toggleRunVisibility,
+    setRunsHidden,
     showAllRuns,
     hideAllRuns,
     selectFirstN,
     selectAllByIds,
+    deselectByIds,
     deselectAll,
     shuffleColors,
     reassignAllColors,
@@ -1073,6 +1189,32 @@ function RouteComponent() {
     onSelectionChange: debouncedSelectionChange,
     onHiddenChange: debouncedHiddenChange,
   });
+
+  // Intersection count: how many of the CURRENTLY SELECTED runs also
+  // match the toolbar filter. Powers the toolbar's third status line
+  // ("N of your S selected runs match the filter"). Only fires when
+  // BOTH a filter is active AND the user has selected runs — no point
+  // paying an extra RTT for the trivial cases. `filterActive` is the
+  // memoized flag already defined above.
+  const selectedRunIdsForCount = useMemo(
+    () => Object.keys(selectedRunsWithColors),
+    [selectedRunsWithColors],
+  );
+  const shouldFireIntersection = filterActive && selectedRunIdsForCount.length > 0;
+  const { data: selectedFilterMatchCount } = useRunCount(
+    organizationId,
+    projectName,
+    shouldFireIntersection ? serverFilters.tags : undefined,
+    shouldFireIntersection ? serverFilters.status : undefined,
+    // Search intentionally omitted — the third line is about the
+    // filter chips, not the search term (which is a separate lens).
+    undefined,
+    shouldFireIntersection ? serverFilters.dateFilters : undefined,
+    shouldFireIntersection ? (serverFilters.fieldFilters as FieldFilterParam[] | undefined) : undefined,
+    shouldFireIntersection ? (serverFilters.metricFilters as MetricFilterParam[] | undefined) : undefined,
+    shouldFireIntersection ? (serverFilters.systemFilters as SystemFilterParam[] | undefined) : undefined,
+    shouldFireIntersection ? selectedRunIdsForCount : undefined,
+  );
 
   // Enrich selectedRunsWithColors with metric summaries so that runs served
   // from the IndexedDB cache (outOfPage path in mergeSelectedRuns) also carry
@@ -1107,6 +1249,51 @@ function RouteComponent() {
   // prefetchedSelectedRuns (the getByIds cache doesn't refetch instantly)
   // but it's still a legitimate row on page 1 of runs.list — dropping it
   // makes the row vanish from the table the moment you uncheck it.
+  // IDs the server's filtered `runs.list` actually returned for the
+  // current filter. Used by data-table to draw the "Selected runs below"
+  // divider between filter-matched rows and sticky-appended selected-
+  // but-not-matched rows. Built from data.pages so it grows naturally
+  // as more pages are fetched.
+  // Returns `undefined` — NOT an empty Set — while `runs.list` hasn't
+  // landed yet. That signal distinction is load-bearing downstream:
+  // `intersectWithServerFilter(runs, undefined)` short-circuits to
+  // `runs`, whereas an empty Set means "server matched nothing" and
+  // filters everything out. Without this, flat mode with an active
+  // filter chip flashes to zero rows on first load — even though
+  // `runs` (= allVisibleRuns) already has URL-prefetched selection
+  // runs — because the intersect kicks in before `data.pages` is
+  // populated. See Cursor Bugbot review on PR #524.
+  const serverFilteredRunIds = useMemo<Set<string> | undefined>(() => {
+    if (!data?.pages) return undefined;
+    const ids = new Set<string>();
+    for (const p of data.pages) {
+      if (!p) continue;
+      for (const r of p.runs ?? []) if (r.id) ids.add(r.id);
+    }
+    return ids;
+  }, [data]);
+
+  // Unfiltered outermost-group count for the toolbar. Same server
+  // proc the bucket tree uses, but without any toolbar filter or
+  // search — so we get the true "N total groups" denominator even
+  // when the user has a filter active reducing bucket tree's own
+  // `data.totalCount` down. Only fires when grouping is on;
+  // returnAll:true because we only care about the count, not the
+  // values, and the count comes back regardless of paging.
+  const outermostGroupField = groupBy[0];
+  const { data: unfilteredGroupData } = useQuery({
+    ...trpc.runs.distinctGroupValues.queryOptions({
+      organizationId,
+      projectName,
+      field: outermostGroupField ?? "system:name",
+      limit: 1,
+      offset: 0,
+    }),
+    enabled: !!outermostGroupField,
+    staleTime: 60_000,
+  });
+  const totalGroupCountUnfiltered = unfilteredGroupData?.totalCount ?? 0;
+
   const tableRuns = useMemo(() => {
     if (!prefetchedSelectedRuns?.runs?.length) return runs;
     const prefetchedIds = new Set(prefetchedSelectedRuns.runs.map((r: Run) => r.id));
@@ -1135,7 +1322,7 @@ function RouteComponent() {
   );
 
   const handleSetSelected = useCallback(
-    (ids: string[], selected: boolean) => {
+    (ids: string[], selected: boolean, runFallbacks?: Run[]) => {
       if (!selected) {
         ids.forEach((id) => handleRunSelection(id, false));
         return;
@@ -1145,7 +1332,9 @@ function RouteComponent() {
       const available = SELECTED_RUNS_LIMIT - Object.keys(selectedRunsWithColors).length;
       if (available <= 0) return;
       const toAdd = ids.filter((id) => !selectedRunsWithColors[id]).slice(0, available);
-      if (toAdd.length > 0) selectAllByIds(toAdd);
+      // Pass the caller's run objects so grouped-mode rows (absent from the flat
+      // `runs` list) still resolve inside selectAllByIds.
+      if (toAdd.length > 0) selectAllByIds(toAdd, runFallbacks);
     },
     [handleRunSelection, selectAllByIds, selectedRunsWithColors],
   );
@@ -1166,14 +1355,19 @@ function RouteComponent() {
   // Used to partition "Other matches" hits into in-view vs out-of-view.
   const inViewRunIds = useMemo(() => {
     const ids = new Set<string>();
-    if (showOnlySelected) {
+    // When pin-selected-to-top is on, the user's perception of "in view"
+    // is the pinned (= selected) block at the top — the unpinned rows
+    // below are just a paginated slice the user is searching through.
+    // Treat them as out-of-view so the dropdown surfaces non-selected
+    // search matches the same way Display-Only-Selected does.
+    if (showOnlySelected || pinSelectedToTop) {
       for (const id of Object.keys(selectedRunsWithColors)) ids.add(id);
     } else {
       for (const r of tableRuns) ids.add(r.id);
       for (const id of Object.keys(selectedRunsWithColors)) ids.add(id);
     }
     return ids;
-  }, [showOnlySelected, tableRuns, selectedRunsWithColors]);
+  }, [showOnlySelected, pinSelectedToTop, tableRuns, selectedRunsWithColors]);
 
   // Fetch logs only for selected runs (lazy loading)
   const selectedRunIds = useMemo(
@@ -1196,6 +1390,7 @@ function RouteComponent() {
     inViewRunIds,
     filterActive,
     displayOnlySelectedActive: showOnlySelected,
+    pinSelectedToTopActive: pinSelectedToTop,
     enabled: !otherMatchesDismissed,
   });
 
@@ -1439,12 +1634,15 @@ function RouteComponent() {
             <div className="flex h-full min-h-0 flex-col overflow-hidden pr-2">
               <DataTable
                 runs={tableRuns}
+                serverFilteredRunIds={serverFilteredRunIds}
+                filterActive={filterActive}
                 orgSlug={organizationSlug}
                 projectName={projectName}
                 organizationId={organizationId}
                 onColorChange={handleColorChange}
                 onSelectionChange={handleRunSelection}
                 onToggleVisibility={toggleRunVisibility}
+                onSetRunsHidden={setRunsHidden}
                 onTagsUpdate={handleTagsUpdate}
                 onNotesUpdate={handleNotesUpdate}
                 selectedRunsWithColors={enrichedSelectedRunsWithColors}
@@ -1454,9 +1652,14 @@ function RouteComponent() {
                 isFetching={isFetching}
                 runCount={runCount || 0}
                 totalRunCount={totalRunCount || runCount || 0}
+                selectedFilterMatchCount={
+                  shouldFireIntersection ? selectedFilterMatchCount : undefined
+                }
+                totalGroupCountUnfiltered={totalGroupCountUnfiltered}
                 fetchNextPage={fetchNextPage}
                 hasNextPage={hasNextPage}
                 isFetchingNextPage={isFetchingNextPage}
+                serverFetchedCount={serverFetchedCount}
                 allTags={allTags}
                 filters={filters}
                 filterableFields={filterableFields}
@@ -1475,6 +1678,7 @@ function RouteComponent() {
                 onToggleGraphsPanel={toggleGraphsPanel}
                 onSelectFirstN={selectFirstN}
                 onSelectAllByIds={selectAllByIds}
+                onDeselectByIds={deselectByIds}
                 onDeselectAll={deselectAll}
                 onShuffleColors={shuffleColors}
                 onReassignAllColors={reassignAllColors}
@@ -1508,6 +1712,7 @@ function RouteComponent() {
                 onChangeBestStepTolerance={handleChangeBestStepTolerance}
                 sorting={sorting}
                 onSortingChange={setSorting}
+                sortParam={sortParam}
                 statusFilterValues={statusFilterValues}
                 onStatusFilterChange={handleStatusFilterChange}
                 checkedRunIds={selectedIdSet}
@@ -1527,6 +1732,8 @@ function RouteComponent() {
                     currentFilters={filters}
                     currentSorting={sorting}
                     currentPageSize={pageSize}
+                    currentGroupBy={groupBy}
+                    currentExpanded={expandedGroups}
                     activeViewId={activeViewId}
                     onActiveViewChange={setActiveViewId}
                     onLoadView={handleLoadView}
@@ -1538,10 +1745,29 @@ function RouteComponent() {
                 onListModeChange={handleListModeChange}
                 showInherited={urlInherited !== "false"}
                 onInheritedToggle={handleInheritedToggle}
+                groupBy={groupBy}
+                onGroupByChange={handleGroupByChange}
+                expandedGroups={expandedGroups}
+                onExpandedGroupsChange={setExpandedGroups}
                 showOnlySelected={showOnlySelected}
                 onShowOnlySelectedChange={setShowOnlySelected}
+                pinSelectedToTop={pinSelectedToTop}
+                onPinSelectedToTopChange={setPinSelectedToTop}
                 searchOtherMatchesDropdown={
-                  otherMatchesDismissed ? null : (
+                  // Mirror the hook's enabled gate at the render site
+                  // so toggling DOS / Pin / a filter back off makes the
+                  // dropdown disappear in grouped mode too. The hook
+                  // stops firing, but React Query keeps its cached
+                  // data — the memo re-partitions against
+                  // `inViewRunIds`, and in grouped mode that set
+                  // doesn't grow (useListRuns is disabled, so
+                  // `tableRuns` stays empty), leaving the cached
+                  // `outOfView` in place. In flat mode the re-
+                  // partition naturally empties `outOfView`, so this
+                  // gate is a no-op there.
+                  (otherMatchesDismissed
+                    || debouncedSearch.trim().length === 0
+                    || !(filterActive || showOnlySelected || pinSelectedToTop)) ? null : (
                     <SearchOtherMatchesDropdown
                       outOfView={otherMatches.outOfView}
                       inView={otherMatches.inView}
@@ -1549,6 +1775,7 @@ function RouteComponent() {
                       isLoading={otherMatches.isLoading}
                       selectedRunsWithColors={enrichedSelectedRunsWithColors}
                       onSelectRun={(run) => handleRunSelection(run.id, true, run)}
+                      onDeselectRun={(runId) => handleRunSelection(runId, false)}
                       onDismiss={handleDismissOtherMatchesDropdown}
                     />
                   )
@@ -1609,6 +1836,7 @@ function RouteComponent() {
                         onInheritedChange={handleInheritedChange}
                         experimentRunIdsMap={experimentRunIdsMap}
                         hiddenRunIds={hiddenRunIds}
+                        groupBy={groupBy}
                       />
                     </div>
                   )}

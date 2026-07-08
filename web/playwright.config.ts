@@ -76,7 +76,15 @@ trace: "retain-on-failure",
     },
     {
       name: "chromium",
-      timeout: 360_000, // 6 minutes — if a test takes longer, something is wrong
+      // Global upper bound. Individual tests still use `test.setTimeout`
+      // when they need more (e.g. multi-step dashboard flows). Set low
+      // enough that a genuinely hung test can't burn a full CI worker
+      // slot — with the old 6-minute cap + retries: 2, one bad test
+      // could tie up 18 minutes of parallelism (July 2026: 20-minute
+      // "stuck running" hits on the axis / drag-zoom specs when
+      // grouping-v2 shipped, with 165 tests still queued behind
+      // them). 60s is safe headroom over what a healthy test needs.
+      timeout: 60_000,
       testIgnore: [
         /performance\/.*\.spec\.ts/,       // Perf tests run in dedicated pipeline step
         /nan-inf-ingest-e2e\.spec\.ts/,    // Requires Rust ingest; runs in "Non-Finite Metrics Ingestion Test" step

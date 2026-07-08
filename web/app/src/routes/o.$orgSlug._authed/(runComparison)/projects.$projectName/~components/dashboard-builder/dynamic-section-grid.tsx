@@ -36,6 +36,9 @@ interface DynamicSectionGridProps {
   sectionId: string;
   pattern: string;
   patternMode?: "search" | "regex";
+  /** Metric-name grouping for the section (suffix combining). Distinct
+   *  from `workspaceGroupBy` below, which is the run-table grouping
+   *  that drives wandb-style grouped line charts. */
   groupBy?: string[];
   groupPrefixes?: string[];
   groupPrefixRegex?: string;
@@ -47,6 +50,26 @@ interface DynamicSectionGridProps {
   searchState?: SearchState;
   onWidgetCountChange?: (count: number) => void;
   settingsRunId?: string;
+  /** Workspace groupBy chain from the runs table (e.g.
+   *  ["tag-prefix:group", "config:batch_size"]). When non-empty, dynamic
+   *  chart widgets render via GroupedLineChart — unless the widget has
+   *  the per-chart override toggled on. Forwarded to ChartWidget. */
+  workspaceGroupBy?: string[];
+  /** Persisted per-widget overrides from `Section.dynamicWidgetOverrides`.
+   *  Seeds initial state so a saved override survives reloads. */
+  initialWidgetOverrides?: Record<
+    string,
+    { maxGroups?: number; groupingOverride?: "off" }
+  >;
+  /** Fires when the user changes maxGroups or grouping-override through
+   *  the in-chart popover. Marks the dashboard as having unsaved changes
+   *  AND persists the new value into `Section.dynamicWidgetOverrides`
+   *  on the next view save. Omit on read-only dashboards. */
+  onUpdateDynamicWidgetOverride?: (
+    sectionId: string,
+    widgetId: string,
+    patch: { maxGroups?: number; groupingOverride?: "off" | null },
+  ) => void;
   /**
    * Per-metric Step/Ridgeline/Heatmap viewMode overrides saved on this
    * section. Applies to both numeric histogram entries and `{bars}`
@@ -68,6 +91,13 @@ interface WidgetBounds {
   logXAxis?: boolean;
   logYAxis?: boolean;
   yZoomRange?: [number, number] | null;
+  /** Per-widget grouping override. true = force per-run for this
+   *  widget even when the workspace has groupBy active. */
+  groupingOverridden?: boolean;
+  /** Per-widget cap on the number of leaf groups the grouped chart
+   *  query aggregates. Falls back to the backend default (10) when
+   *  undefined. */
+  maxGroups?: number;
 }
 
 export function DynamicSectionGrid({
@@ -85,9 +115,13 @@ export function DynamicSectionGrid({
   searchState,
   onWidgetCountChange,
   settingsRunId,
+  workspaceGroupBy,
+  initialWidgetOverrides,
+  onUpdateDynamicWidgetOverride,
   histogramViewModes,
   onUpdateSectionHistogramViewMode,
 }: DynamicSectionGridProps) {
+  const workspaceGroupingActive = (workspaceGroupBy?.length ?? 0) > 0;
   const hiddenRunIds = useHiddenRunIds();
 
   // Check if a parent sync provider exists (comparison page has one at page level)
@@ -127,7 +161,55 @@ export function DynamicSectionGrid({
   const [fullscreenWidget, setFullscreenWidget] = useState<Widget | null>(null);
   const { setFullscreen } = useFullscreenContext();
   useEffect(() => { setFullscreen(!!fullscreenWidget); }, [fullscreenWidget, setFullscreen]);
-  const [widgetBounds, setWidgetBounds] = useState<Record<string, WidgetBounds>>({});
+  // Seed local widget bounds with the persisted overrides for the
+  // popover-flippable fields (maxGroups, groupingOverridden). Log-scale
+  // and y-zoom stay session-local because they aren't saved to the view.
+  const [widgetBounds, setWidgetBounds] = useState<Record<string, WidgetBounds>>(
+    () => {
+      if (!initialWidgetOverrides) return {};
+      const out: Record<string, WidgetBounds> = {};
+      for (const [id, o] of Object.entries(initialWidgetOverrides)) {
+        out[id] = {
+          maxGroups: o.maxGroups,
+          groupingOverridden: o.groupingOverride === "off" ? true : undefined,
+        };
+      }
+      return out;
+    },
+  );
+  // Re-sync the persisted popover fields (maxGroups, groupingOverridden) when
+  // the active view's overrides change — the useState seed above only runs on
+  // mount, so switching saved views would otherwise leave these on the previous
+  // view's values. Session-local fields (log-scale, y-zoom) are preserved.
+  // Keyed on the stringified overrides so a churny prop identity doesn't refire.
+  const overridesKey = useMemo(
+    () => JSON.stringify(initialWidgetOverrides ?? {}),
+    [initialWidgetOverrides],
+  );
+  const didSyncOverrides = useRef(false);
+  useEffect(() => {
+    // Skip mount — the useState initializer already seeded from the overrides.
+    if (!didSyncOverrides.current) {
+      didSyncOverrides.current = true;
+      return;
+    }
+    setWidgetBounds((prev) => {
+      const next: Record<string, WidgetBounds> = {};
+      for (const id of new Set([
+        ...Object.keys(prev),
+        ...Object.keys(initialWidgetOverrides ?? {}),
+      ])) {
+        const o = initialWidgetOverrides?.[id];
+        next[id] = {
+          ...prev[id],
+          maxGroups: o?.maxGroups,
+          groupingOverridden: o?.groupingOverride === "off" ? true : undefined,
+        };
+      }
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [overridesKey]);
   // Per-widget bin-range overrides for dynamic distributions/bars widgets.
   // Dynamic widgets aren't persisted, so — like the log-scale/zoom overrides
   // in widgetBounds — these live in session-local state and are injected into
@@ -137,13 +219,6 @@ export function DynamicSectionGrid({
   const [barsBinRanges, setBarsBinRanges] = useState<
     Record<string, Record<number, BinRange>>
   >({});
-  // Per-widget log-scale + zoom overrides live in widgetBounds above.
-  // The bars-on-chart per-widget controls (viewMode/depthAxis/binRange/
-  // ignoreOutliers/stepsOnX) used to live here too — they're gone now
-  // that bars moved out into the distributions widget. Distributions
-  // widgets emitted dynamically render with their initial config and
-  // don't persist per-widget customization (matching how line-chart
-  // dynamic widgets already behaved).
   const widgetContentRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   useEffect(() => {
@@ -159,6 +234,41 @@ export function DynamicSectionGrid({
       },
     }));
   }, []);
+
+  // Per-widget grouping override. Local state is the source of truth
+  // for the in-popover UI; we ALSO call up to the dashboard so the
+  // change persists into `Section.dynamicWidgetOverrides` on save AND
+  // marks the dashboard as having unsaved changes (enabling Save).
+  const updateGroupingOverride = useCallback(
+    (widgetId: string, overridden: boolean) => {
+      setWidgetBounds((prev) => ({
+        ...prev,
+        [widgetId]: {
+          ...prev[widgetId],
+          groupingOverridden: overridden,
+        },
+      }));
+      onUpdateDynamicWidgetOverride?.(sectionId, widgetId, {
+        // null clears the override → falls back to workspace grouping.
+        groupingOverride: overridden ? "off" : null,
+      });
+    },
+    [sectionId, onUpdateDynamicWidgetOverride],
+  );
+
+  const updateMaxGroups = useCallback(
+    (widgetId: string, value: number) => {
+      setWidgetBounds((prev) => ({
+        ...prev,
+        [widgetId]: {
+          ...prev[widgetId],
+          maxGroups: value,
+        },
+      }));
+      onUpdateDynamicWidgetOverride?.(sectionId, widgetId, { maxGroups: value });
+    },
+    [sectionId, onUpdateDynamicWidgetOverride],
+  );
 
   if (isLoading) {
     return (
@@ -190,8 +300,13 @@ export function DynamicSectionGrid({
           const isChart = widget.type === "chart";
           const title = widget.config.title || getWidgetTitle(widget);
 
-          // Apply local bounds (log-scale toggles) to chart widgets so the
-          // renderer picks them up without prop threading.
+          // Apply local bounds to widget config for rendering.
+          // For chart widgets, log-scale toggles + grouping overrides apply.
+          // `groupingOverride: "off"` makes ChartWidget fall back to
+          // MultiLineChart even when the workspace has groupBy active —
+          // same mechanism static dashboard widgets use, but driven by
+          // ephemeral per-render state instead of persisted config.
+          // For distributions widgets, session-local bin-range overrides apply.
           let effectiveWidget: Widget = widget;
           if (isChart) {
             effectiveWidget = {
@@ -204,6 +319,11 @@ export function DynamicSectionGrid({
                 yAxisScale: bounds.logYAxis
                   ? "log"
                   : (widget.config as ChartWidgetConfig).yAxisScale,
+                groupingOverride: bounds.groupingOverridden
+                  ? "off"
+                  : (widget.config as ChartWidgetConfig).groupingOverride,
+                maxGroups:
+                  bounds.maxGroups ?? (widget.config as ChartWidgetConfig).maxGroups,
               } as ChartWidgetConfig,
             };
           } else if (widget.type === "distributions") {
@@ -280,6 +400,11 @@ export function DynamicSectionGrid({
                       logXAxis={bounds.logXAxis}
                       logYAxis={bounds.logYAxis}
                       onLogScaleChange={(axis, value) => updateScale(widget.id, axis, value)}
+                      workspaceGroupingActive={workspaceGroupingActive}
+                      groupingOverridden={!!bounds.groupingOverridden}
+                      onGroupingOverrideChange={(overridden) => updateGroupingOverride(widget.id, overridden)}
+                      maxGroups={bounds.maxGroups}
+                      onMaxGroupsChange={(value) => updateMaxGroups(widget.id, value)}
                     >
                       <Button
                         variant="ghost"
@@ -321,6 +446,8 @@ export function DynamicSectionGrid({
                       ...prev,
                       [widget.id]: { ...prev[widget.id], yZoomRange: range },
                     }))}
+                    groupBy={workspaceGroupBy}
+                    hiddenRunIds={hiddenRunIds}
                     onUpdateDistributionsEntryBinRange={(wid, idx, range) =>
                       setBarsBinRanges((prev) => ({
                         ...prev,
@@ -379,6 +506,8 @@ export function DynamicSectionGrid({
                   },
                 }))
               }
+              groupBy={workspaceGroupBy}
+              hiddenRunIds={hiddenRunIds}
             />
           </ChartFullscreenDialog>
         );

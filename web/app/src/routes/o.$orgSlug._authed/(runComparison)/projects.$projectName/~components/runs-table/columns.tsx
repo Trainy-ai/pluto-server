@@ -1,5 +1,4 @@
 import { Link } from "@tanstack/react-router";
-import { TruncatedLabel } from "@/components/shared/truncated-label";
 import type { ColumnDef, Row, SortingState } from "@tanstack/react-table";
 import { Eye, EyeOff } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -21,6 +20,9 @@ import { memo } from "react";
 import { useHiddenRunIds } from "@/hooks/use-hidden-run-ids";
 import { ColumnHeaderMenu } from "./column-header-menu";
 import { StatusColumnHeader } from "./status-column-header";
+import { cn } from "@/lib/utils";
+import { TruncatedLabel } from "@/components/shared/truncated-label";
+import { columnTableId } from "./column-table-id";
 import { getRowRange, getCustomColumnValue, formatCellValue } from "./columns-utils";
 
 type RunId = string;
@@ -51,7 +53,9 @@ const SelectionCell = memo(function SelectionCell({
   const runId = row.original.id;
 
   // Read hidden state directly via hook so the icon stays in sync
-  // (the memoized column definition can't pass a reactive isHidden prop)
+  // (the memoized column definition can't pass a reactive isHidden prop).
+  // Cascade-hide (ancestor bucket hidden) is folded into hiddenRunIds via the
+  // setRunsHidden fan-out, so a single lookup covers both explicit + cascade.
   const hiddenRunIds = useHiddenRunIds();
   const isHidden = hiddenRunIds.has(runId);
 
@@ -71,7 +75,13 @@ const SelectionCell = memo(function SelectionCell({
               onToggleVisibility(runId);
             }}
             aria-label={eyeTooltip}
-            className="relative p-1"
+            // No padding — the button hugs the 16px icon so it never exceeds
+            // the always-present 16px checkbox, keeping row height identical
+            // whether or not the (selected-only) eye is showing. `inline-flex
+            // items-center` centres the icon so the hidden EyeOff (wrapped in an
+            // inline-flex span, which otherwise sits high from the line-box
+            // baseline gap) lines up with the visible Eye.
+            className="relative inline-flex items-center justify-center"
           >
             {isHidden ? (
               <span className="relative inline-flex">
@@ -100,7 +110,12 @@ interface ColumnsProps {
   orgSlug: string;
   projectName: string;
   organizationId?: string;
-  onSelectionChange: (runId: RunId, isSelected: boolean) => void;
+  // 3rd-arg `runFallback` is load-bearing for grouped mode: bucket
+  // runs typically aren't in the flat-table `currentRuns` slice, so
+  // `handleRunSelection` (use-selected-runs.ts:571-572) silently
+  // no-ops without a fallback. Per-row eye click passes `row.original`
+  // so the click registers regardless of which mode rendered the row.
+  onSelectionChange: (runId: RunId, isSelected: boolean, runFallback?: Run) => void;
   onToggleVisibility: (runId: RunId) => void;
   onColorChange: (runId: RunId, color: RunColor) => void;
   onTagsUpdate: (runId: RunId, tags: string[]) => void;
@@ -130,9 +145,21 @@ interface ColumnsProps {
   onStatusFilterChange?: (values: string[]) => void;
   /** Bulk-actions checkbox selection (decoupled from the eye/chart selection) */
   checkedRunIds?: Set<string>;
-  onSetChecked?: (runIds: string[], checked: boolean) => void;
+  onSetChecked?: (runIds: string[], checked: boolean, runFallbacks?: Run[]) => void;
+  /** Grouped-mode header select-all: the flat row model is empty when grouping
+   *  is active, so the header checkbox selects/deselects across all runs in the
+   *  page's buckets via these handlers (same ones the visibility menu uses).
+   *  `groupedPageRunCount` is the total run count on the page — used to render
+   *  the checked / indeterminate state. */
+  groupedPageRunCount?: number;
+  onGroupedSelectAllOnPage?: () => void;
+  onGroupedDeselectAllOnPage?: () => void;
   /** Active chart view ID — passed as search param when navigating to a run */
   activeChartViewId?: string | null;
+  /** True when the page is rendering grouped buckets. Hides the per-row
+   *  color picker in the name cell — the bucket assigns one color to
+   *  every run in it, so individual overrides are meaningless. */
+  isGrouped?: boolean;
   /** Set of pinned column table IDs (includes base + user-pinned custom columns) */
   pinnedColumnIds?: Set<string>;
   /** Callback to toggle pin on a custom column */
@@ -175,7 +202,7 @@ function CheckboxCell({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   table: any;
   checkedRunIds: Set<string>;
-  onSetChecked?: (runIds: string[], checked: boolean) => void;
+  onSetChecked?: (runIds: string[], checked: boolean, runFallbacks?: Run[]) => void;
 }) {
   const runId = row.original.id;
   const checked = checkedRunIds.has(runId);
@@ -197,17 +224,22 @@ function CheckboxCell({
         onSetChecked?.(
           range.map((r) => r.original.id),
           anchorChecked,
+          range.map((r) => r.original),
         );
       } catch {
-        onSetChecked?.([runId], !checked);
+        onSetChecked?.([runId], !checked, [row.original]);
       }
     } else {
-      onSetChecked?.([runId], !checked);
+      onSetChecked?.([runId], !checked, [row.original]);
     }
     lastCheckedIdRef.current = row.id;
   };
 
-  const label = checked ? "Deselect run" : "Select run";
+  const label = atLimit
+    ? `Limit of ${SELECTED_RUNS_LIMIT} selected runs reached — deselect one to add another`
+    : checked
+      ? "Deselect run"
+      : "Select run";
 
   return (
     <div className="flex items-center justify-center">
@@ -216,7 +248,12 @@ function CheckboxCell({
           <Checkbox
             checked={checked}
             onClick={handleClick}
-            disabled={atLimit}
+            // `aria-disabled` (not `disabled`) so the Tooltip's pointer listener
+            // still fires and the limit-reached message shows — browsers swallow
+            // hover events on truly-disabled elements. handleClick already
+            // early-returns when atLimit, so the control stays inert either way.
+            aria-disabled={atLimit}
+            className={atLimit ? "cursor-not-allowed opacity-50" : undefined}
             aria-label={label}
             data-testid="run-checkbox"
           />
@@ -253,7 +290,11 @@ export const columns = ({
   onStatusFilterChange,
   checkedRunIds = EMPTY_CHECKED_SET,
   onSetChecked,
+  groupedPageRunCount = 0,
+  onGroupedSelectAllOnPage,
+  onGroupedDeselectAllOnPage,
   activeChartViewId,
+  isGrouped = false,
   pinnedColumnIds,
   onToggleColumnPin,
   onPinImagesToBestStep,
@@ -289,17 +330,45 @@ export const columns = ({
       header: ({ table }) => {
         const rows = table.getRowModel().rows as Row<Run>[];
         const ids = rows.map((r) => r.original.id);
-        const checkedCount = ids.filter((id) => checkedRunIds.has(id)).length;
-        const allChecked = ids.length > 0 && checkedCount === ids.length;
-        const someChecked = checkedCount > 0 && !allChecked;
+        let allChecked: boolean;
+        let someChecked: boolean;
+        let onChange: (checked: boolean) => void;
+        if (isGrouped) {
+          // The flat row model is empty in grouped mode, so drive the state off
+          // the selected count vs the page's total bucket-run count, and route
+          // the click to the bucket-aware select/deselect-all-on-page handlers
+          // (the same ones behind the visibility menu's "Select all on page").
+          const selected = checkedRunIds.size;
+          allChecked = groupedPageRunCount > 0 && selected >= groupedPageRunCount;
+          someChecked = selected > 0 && !allChecked;
+          onChange = (checked) =>
+            checked ? onGroupedSelectAllOnPage?.() : onGroupedDeselectAllOnPage?.();
+        } else {
+          const checkedCount = ids.filter((id) => checkedRunIds.has(id)).length;
+          allChecked = ids.length > 0 && checkedCount === ids.length;
+          someChecked = checkedCount > 0 && !allChecked;
+          onChange = (checked) =>
+            onSetChecked?.(ids, checked, rows.map((r) => r.original));
+        }
         return (
           <div className="flex items-center justify-center">
-            <Checkbox
-              checked={allChecked ? true : someChecked ? "indeterminate" : false}
-              onCheckedChange={(v) => onSetChecked?.(ids, v === true)}
-              aria-label="Select all runs on this page"
-              data-testid="select-all-checkbox"
-            />
+            {/* Tooltip-wrapped to match the per-run / group checkboxes (the
+                `asChild` trigger overrides data-state, giving every checkbox
+                the same dark look and stopping the fully-checked header from
+                flashing white). */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Checkbox
+                  checked={allChecked ? true : someChecked ? "indeterminate" : false}
+                  onCheckedChange={(v) => onChange(v === true)}
+                  aria-label="Select all runs on this page"
+                  data-testid="select-all-checkbox"
+                />
+              </TooltipTrigger>
+              <TooltipContent side="top" className="text-xs">
+                Select all runs on this page
+              </TooltipContent>
+            </Tooltip>
           </div>
         );
       },
@@ -395,12 +464,17 @@ export const columns = ({
           : null;
         return (
           <div className="flex w-full items-center gap-2 overflow-hidden">
-            <ColorPicker
-              color={color}
-              defaultColor="#6B7280"
-              onChange={(newColor) => onColorChange(runId, newColor)}
-              className="h-5 w-5 flex-shrink-0"
-            />
+            {/* Per-row color picker is hidden in grouped view — the
+                bucket assigns a single color to all its runs and the
+                eye + bucket-header swatch already convey it. */}
+            {!isGrouped && (
+              <ColorPicker
+                color={color}
+                defaultColor="#6B7280"
+                onChange={(newColor) => onColorChange(runId, newColor)}
+                className="h-5 w-5 flex-shrink-0"
+              />
+            )}
             <Link
               to="/o/$orgSlug/projects/$projectName/$runId"
               preload="intent"
@@ -422,9 +496,7 @@ export const columns = ({
   // Dynamic custom columns — accessorFn must return a primitive (string).
   // Returning objects/arrays causes infinite re-render loops with column resize.
   const dynamicColumns = customColumns.map((col): ColumnDef<Run> => {
-    const colTableId = col.source === "metric" && col.aggregation
-      ? `custom-${col.source}-${col.id}-${col.aggregation}`
-      : `custom-${col.source}-${col.id}`;
+    const colTableId = columnTableId(col);
     const displayLabel = col.customLabel ?? col.label;
 
     // Tags column needs special rendering with TagsCell
@@ -561,21 +633,18 @@ export const columns = ({
           return <Skeleton className="h-3 w-12" />;
         }
         const display = formatCellValue(value, col);
+        // TruncatedLabel measures scrollWidth vs clientWidth (with a
+        // ResizeObserver) so the tooltip appears ONLY when the cell
+        // is actually visually truncated — no arbitrary length gate,
+        // no tooltip on fully-visible short text. The Radix content
+        // is capped at max-w-[28rem] with `text-wrap break-all` so
+        // long dependency lists wrap inside the box instead of
+        // running off the viewport into a corner.
         return (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span
-                className={`truncate text-xs ${display === "-" ? "text-muted-foreground/50" : ""}`}
-              >
-                {display}
-              </span>
-            </TooltipTrigger>
-            {display !== "-" && display.length > 20 && (
-              <TooltipContent side="top" sideOffset={4}>
-                <p className="max-w-xs break-all">{display}</p>
-              </TooltipContent>
-            )}
-          </Tooltip>
+          <TruncatedLabel
+            text={display}
+            className={cn("text-xs", display === "-" && "text-muted-foreground/50")}
+          />
         );
       },
     };

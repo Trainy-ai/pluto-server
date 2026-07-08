@@ -26,6 +26,7 @@ const defaultProps = {
   isLoading: false,
   selectedRunsWithColors: {},
   onSelectRun: vi.fn(),
+  onDeselectRun: vi.fn(),
   onDismiss: vi.fn(),
 };
 

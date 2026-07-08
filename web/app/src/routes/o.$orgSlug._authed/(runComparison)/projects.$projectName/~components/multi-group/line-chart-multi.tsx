@@ -1,6 +1,7 @@
 "use client";
 
 import { default as LineChart } from "@/components/charts/line-wrapper";
+import { ChartLoadingSkeleton } from "@/components/charts/chart-loading-skeleton";
 import { memo, useEffect, useMemo } from "react";
 import { computeExperimentSegments } from "@/lib/experiment-data-utils";
 import { useQueries, keepPreviousData } from "@tanstack/react-query";
@@ -24,6 +25,7 @@ import {
 } from "@/lib/chart-data-utils";
 import { resolveChartBuckets } from "@/lib/chart-bucket-estimate";
 import { parseChTimeMs } from "@/components/charts/lib/format";
+import { getDashPattern } from "./metric-dash";
 
 // For active runs, refresh every 30 seconds
 // For completed runs, data never changes so use Infinity
@@ -31,32 +33,6 @@ const ACTIVE_RUN_STALE_TIME = 30 * 1000; // 30 seconds
 const COMPLETED_RUN_STALE_TIME = Infinity; // Never refetch completed runs
 const GC_TIME = 0; // Immediate garbage collection when query is inactive
 
-
-/** Distinct dash patterns per metric index (metric 0 = solid). */
-// Base dash patterns for multi-metric charts. Values are horizontal pixel
-// distances (on, off, ...). For dense data, series-config.ts uses a custom
-// paths builder that renders these as horizontal-distance dashes with
-// subsampled points for noise reduction.
-const METRIC_DASH_PATTERNS: (number[] | undefined)[] = [
-  undefined,              // metric 0: solid           ━━━━━━━━━
-  [16, 10],              // metric 1: dashed          ━  ━  ━  ━
-  [4, 10],               // metric 2: dotted          · · · · · ·
-  [16, 6, 4, 6],         // metric 3: dash-dot        ━ · ━ · ━ ·
-  [24, 8, 4, 8],         // metric 4: long dash-dot   ━━ · ━━ · ━━
-  [16, 6, 4, 6, 4, 6],   // metric 5: dash-dot-dot    ━ · · ━ · ·
-  [30, 14],              // metric 6: long dash       ━━━  ━━━  ━━━
-  [10, 10],              // metric 7: short dash      ━ ━ ━ ━ ━ ━
-  [30, 8, 10, 8],        // metric 8: long-short      ━━━ ━ ━━━ ━
-  [4, 10, 4, 10, 16, 10], // metric 9: dot-dot-dash    · · ━ · · ━
-];
-
-function getDashPattern(metricIndex: number): number[] | undefined {
-  if (metricIndex < METRIC_DASH_PATTERNS.length) {
-    return METRIC_DASH_PATTERNS[metricIndex];
-  }
-  // For 10+ metrics, cycle through patterns 1-9 (skip solid)
-  return METRIC_DASH_PATTERNS[((metricIndex - 1) % 9) + 1];
-}
 
 interface MultiLineChartProps {
   lines: {
@@ -586,7 +562,7 @@ const MultiLineChartInner = memo(
             ? chartColors[colorIndex]
             : pair.line.color,
           dash: useSingleRunColors
-            ? (dashCycle === 0 ? undefined : METRIC_DASH_PATTERNS[((dashCycle - 1) % 9) + 1])
+            ? getDashPattern(dashCycle)
             : getDashPattern(pair.metricIndex),
           rawRunName: pair.line.rawRunName ?? pair.line.runName,
           displayId: pair.line.displayId ?? null,
@@ -833,40 +809,14 @@ const MultiLineChartInner = memo(
     // Initial loading state - show metric title and series names while loading
     if (isInitialLoading) {
       return (
-        <div className="relative flex h-full w-full flex-grow flex-col bg-accent/50">
-          {/* Title */}
-          <div className="p-3 text-center">
-            <h3 className="text-lg font-semibold text-foreground">{title}</h3>
-          </div>
-          {/* Series/run names being loaded */}
-          <div className="flex-1 overflow-hidden px-4 pb-4">
-            <div className="flex flex-wrap gap-2">
-              {lines.slice(0, 10).map((line) => (
-                <div
-                  key={line.runId}
-                  className="flex items-center gap-1.5 rounded-md bg-muted/50 px-2 py-1 text-xs"
-                >
-                  <span
-                    className="h-2 w-2 rounded-full"
-                    style={{ backgroundColor: line.color }}
-                  />
-                  <span className="max-w-[120px] truncate text-muted-foreground">
-                    {line.runName}
-                  </span>
-                </div>
-              ))}
-              {lines.length > 10 && (
-                <div className="rounded-md bg-muted/50 px-2 py-1 text-xs text-muted-foreground">
-                  +{lines.length - 10} more
-                </div>
-              )}
-            </div>
-          </div>
-          {/* Loading spinner overlay */}
-          <div className="absolute inset-0 flex items-center justify-center">
-            <div className="h-6 w-6 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-primary" />
-          </div>
-        </div>
+        <ChartLoadingSkeleton
+          title={title}
+          pills={lines.map((l) => ({
+            id: l.runId,
+            label: l.runName,
+            color: l.color,
+          }))}
+        />
       );
     }
 

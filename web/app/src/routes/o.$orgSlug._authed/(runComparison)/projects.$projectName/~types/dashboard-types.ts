@@ -73,6 +73,18 @@ export interface ChartWidgetConfig extends BaseWidgetConfig {
   smoothing?: SmoothingConfig;
   maxPoints?: number;
   showOriginal: boolean;
+  /** Per-widget override for workspace grouping.
+   *  - "auto" / missing — follow the page's groupBy (default)
+   *  - "off"            — ignore page grouping for this chart only
+   *
+   *  Wandb has a similar per-chart toggle. Lets users keep one chart
+   *  per-run while the rest of the dashboard goes grouped. */
+  groupingOverride?: "auto" | "off";
+  /** Per-widget cap on the number of leaf groups the grouped chart
+   *  query aggregates. Backend default is 10, hard ceiling 100.
+   *  Persists in the saved view's config alongside log-scale toggles
+   *  and the grouping override above. */
+  maxGroups?: number;
 }
 
 // Scatter widget config
@@ -227,6 +239,18 @@ export interface Section {
   // buckets; metrics with the same captured tuple combine into one widget.
   // Zero captures = match-anything filter → one big combined widget.
   dynamicGroupPrefixRegex?: string;
+  // Per-(dynamic-widget) overrides for chart settings that the user can flip
+  // through the in-chart popover. Widgets in a dynamic section are
+  // regenerated from the pattern on every render, so there's no widget
+  // record to merge config into the way static widgets do
+  // (widget.config.maxGroups / .groupingOverride). Instead we keep a map
+  // keyed by the stable widget id derived from the matched metric name —
+  // present here only for fields the user can flip per chart; log-scale
+  // and y-zoom stay session-local (the original `widgetBounds` state).
+  dynamicWidgetOverrides?: Record<
+    string,
+    { maxGroups?: number; groupingOverride?: "off" }
+  >;
   // Per-metric Step/Ridgeline/Heatmap viewMode override for dynamically-
   // generated widgets (applies to both numeric histogram entries and
   // `{bars}` prefix entries). Field name kept for on-disk backwards-compat.

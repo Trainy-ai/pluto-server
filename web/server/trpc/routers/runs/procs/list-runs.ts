@@ -9,6 +9,15 @@ import {
   type MetricAggregation,
   type MetricFilterSpec,
 } from "../../../../lib/queries/metric-summaries";
+import { applyGroupFiltersToInput, loadGroupFilterDataTypes, buildTagPrefixExclusionConditions } from "../../../../lib/group-field";
+
+/** W&B-style grouping filter — drills the listing into one bucket of a
+ *  grouped view. `field` is the encoded group field (e.g. "config:lr"),
+ *  `value` is the bucket label (`null` means the "unset" bucket). */
+const groupFilterSchema = z.object({
+  field: z.string(),
+  value: z.string().nullable(),
+});
 
 const dateFilterSchema = z.object({
   field: z.enum(["createdAt", "updatedAt", "statusUpdated"]),
@@ -299,9 +308,26 @@ export const listRunsProcedure = protectedOrgProcedure
       visibleColumns: z
         .array(z.object({ source: z.enum(["config", "systemMetadata"]), key: z.string() }))
         .optional(),
+      // W&B-style group filters — each one scopes the listing to a
+      // single bucket of a grouped view. Filtering pipeline: regular
+      // filters → group filters (composed on top).
+      groupFilters: z.array(groupFilterSchema).optional(),
     })
   )
   .query(async ({ ctx, input }) => {
+    // Translate group filters into the regular filter arrays so all
+    // sort paths get them "for free". Requires looking up dataType per
+    // config/systemMetadata key so numeric values land in numericValue.
+    if (input.groupFilters && input.groupFilters.length > 0) {
+      const project = await ctx.prisma.projects.findFirst({
+        where: { name: input.projectName, organizationId: input.organizationId },
+        select: { id: true },
+      });
+      if (!project) return { runs: [], nextCursor: null, nextOffset: null };
+      const dataTypes = await loadGroupFilterDataTypes(ctx.prisma, project.id, input.groupFilters);
+      input = applyGroupFiltersToInput(input, input.groupFilters, dataTypes);
+    }
+
     const hasCustomSort = input.sortField && input.sortSource && input.sortDirection;
 
     // ─── Default sort (no custom sort) ───────────────────────────────
@@ -358,8 +384,15 @@ async function defaultCursorQuery(
     direction: "forward" | "backward";
   },
 ) {
-  // If there are field filters, metric filters, or system filters, use raw SQL to handle them
-  if (input.fieldFilters?.length || input.metricFilters?.length || input.systemFilters?.length) {
+  // If there are field filters, metric filters, system filters, or
+  // tag-prefix exclusions (synthetic, from grouping null-bucket
+  // drill-in), use raw SQL to handle them.
+  if (
+    input.fieldFilters?.length ||
+    input.metricFilters?.length ||
+    input.systemFilters?.length ||
+    (input as any).tagPrefixExclusions?.length
+  ) {
     return defaultCursorQueryWithFieldFilters(ctx, input);
   }
 
@@ -521,6 +554,7 @@ async function defaultCursorQueryWithFieldFilters(
 
   // Field filters
   buildFieldFilterConditions(conditions, queryParams, input.fieldFilters);
+  buildTagPrefixExclusionConditions(conditions, queryParams, (input as any).tagPrefixExclusions);
 
   // System filters (name, status, tags, creator.name) — only when not searching
   // (when searching, system filters are already applied inside searchRunIds)
@@ -914,6 +948,7 @@ async function systemColumnSortQuery(
 
   // Field filters
   buildFieldFilterConditions(conditions, queryParams, input.fieldFilters);
+  buildTagPrefixExclusionConditions(conditions, queryParams, (input as any).tagPrefixExclusions);
 
   // System filters (name, status, tags, creator.name) — only when not searching
   let sysNeedsCreator = false;
@@ -1120,6 +1155,7 @@ async function jsonFieldSortQuery(
 
   // Field filters
   buildFieldFilterConditions(conditions, queryParams, input.fieldFilters);
+  buildTagPrefixExclusionConditions(conditions, queryParams, (input as any).tagPrefixExclusions);
 
   // System filters (name, status, tags, creator.name) — only when not searching
   let jsonNeedsCreator = false;
@@ -1316,9 +1352,16 @@ async function getCandidateRunIds(
   const hasDateFilters = input.dateFilters && input.dateFilters.length > 0;
   const hasFieldFilters = input.fieldFilters && input.fieldFilters.length > 0;
   const hasSystemFilters = input.systemFilters && input.systemFilters.length > 0;
+  // Tag-prefix exclusions (drilling into an "(unset)" tag bucket) are a real
+  // restriction too. Without this they fall through to `return null` (= all
+  // runs are candidates) when no other filter is present, so the metric-sort
+  // path would leak tagged runs into the unset bucket. The input type predates
+  // group filters, so read the synthetic field defensively.
+  const hasTagPrefixExclusions =
+    ((input as { tagPrefixExclusions?: string[] }).tagPrefixExclusions?.length ?? 0) > 0;
 
   // No PG filters — all runs in the project are candidates
-  if (!hasSearch && !hasTags && !hasStatus && !hasDateFilters && !hasFieldFilters && !hasSystemFilters) {
+  if (!hasSearch && !hasTags && !hasStatus && !hasDateFilters && !hasFieldFilters && !hasSystemFilters && !hasTagPrefixExclusions) {
     return null;
   }
 
@@ -1363,6 +1406,11 @@ async function getCandidateRunIds(
   if (hasFieldFilters) {
     buildFieldFilterConditions(conditions, queryParams, input.fieldFilters);
   }
+  // Tag-prefix exclusions (drill into an "(unset)" tag bucket) apply
+  // regardless of whether field filters are present — statement level, like
+  // the other 3 call sites. (Was nested inside the `if` above, which dropped
+  // the exclusion on the metric-sort candidate path.)
+  buildTagPrefixExclusionConditions(conditions, queryParams, (input as any).tagPrefixExclusions);
 
   // System filters (name, status, tags, creator.name) — only when not searching
   let candNeedsCreator = false;
@@ -1868,6 +1916,23 @@ export function buildSystemFilterConditions(
           conditions.push(`(r."name" IS NULL OR r."name" NOT ILIKE '%' || $${queryParams.length} || '%')`);
           break;
         }
+        // "is" / "is not" — used by `applyGroupFiltersToInput` to drill
+        // into a single name bucket when the table is grouped by name
+        // (group-field.ts:117). Without these cases the filter was
+        // silently dropped and runs.list returned the full project
+        // unfiltered, breaking selectAllInBucket and any UI that
+        // composes group filters with name. Exact match (case-sensitive)
+        // matches the bucket's distinct value verbatim.
+        case "is": {
+          queryParams.push(v);
+          conditions.push(`r."name" = $${queryParams.length}`);
+          break;
+        }
+        case "is not": {
+          queryParams.push(v);
+          conditions.push(`(r."name" IS NULL OR r."name" != $${queryParams.length})`);
+          break;
+        }
       }
     } else if (field === "status") {
       switch (operator) {
@@ -1949,6 +2014,19 @@ export function buildSystemFilterConditions(
         case "does not contain": {
           queryParams.push(v);
           conditions.push(`(u."name" IS NULL OR u."name" NOT ILIKE '%' || $${queryParams.length} || '%')`);
+          break;
+        }
+        // "is" / "is not" — used by `applyGroupFiltersToInput` when
+        // grouping by Owner (creator.name). See the matching block in
+        // the "name" branch above for the rationale.
+        case "is": {
+          queryParams.push(v);
+          conditions.push(`u."name" = $${queryParams.length}`);
+          break;
+        }
+        case "is not": {
+          queryParams.push(v);
+          conditions.push(`(u."name" IS NULL OR u."name" != $${queryParams.length})`);
           break;
         }
       }

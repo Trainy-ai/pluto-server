@@ -43,6 +43,11 @@ interface RunTableViewConfig {
   filters: RunFilter[];
   sorting: SortingState;
   pageSize?: number;
+  /** Encoded grouping fields — empty/missing = no grouping. */
+  groupBy?: string[];
+  /** Expanded bucket trails (JSON-stringified `{field, value}[]` keys).
+   *  Missing = all collapsed (the default). */
+  expanded?: string[];
 }
 
 const DEFAULT_VIEW_NAME = "Default";
@@ -55,6 +60,8 @@ interface RunTableViewSelectorProps {
   currentFilters: RunFilter[];
   currentSorting: SortingState;
   currentPageSize: number;
+  currentGroupBy: string[];
+  currentExpanded: string[];
   activeViewId: string | null;
   onActiveViewChange: (viewId: string | null) => void;
   onLoadView: (config: RunTableViewConfig) => void;
@@ -69,6 +76,8 @@ export function RunTableViewSelector({
   currentFilters,
   currentSorting,
   currentPageSize,
+  currentGroupBy,
+  currentExpanded,
   activeViewId,
   onActiveViewChange,
   onLoadView,
@@ -110,8 +119,10 @@ export function RunTableViewSelector({
       filters: currentFilters,
       sorting: currentSorting,
       pageSize: currentPageSize,
+      groupBy: currentGroupBy,
+      expanded: currentExpanded,
     };
-  }, [currentColumns, currentBaseOverrides, currentFilters, currentSorting, currentPageSize]);
+  }, [currentColumns, currentBaseOverrides, currentFilters, currentSorting, currentPageSize, currentGroupBy, currentExpanded]);
 
   const handleSelectView = useCallback(
     (view: RunTableView) => {
@@ -273,7 +284,15 @@ export function RunTableViewSelector({
     if (isOnDefault && loadedConfigSnapshotRef.current === null && !defaultSnapshotInitialized.current) {
       if (savedDefaultView) {
         loadedConfigSnapshotRef.current = JSON.stringify(savedDefaultView.config);
-        onLoadView(savedDefaultView.config as RunTableViewConfig);
+        // Strip groupBy from the auto-loaded saved default. groupBy is
+        // persisted independently via localStorage (run-table-groupBy:v2:...)
+        // and handleGroupByChange does NOT write through to the saved view —
+        // so the saved view's groupBy can drift arbitrarily stale. Applying
+        // it here would silently clobber the user's actual grouping on every
+        // page refresh. Leaving config.groupBy undefined makes handleLoadView
+        // preserve the current groupBy state.
+        const { groupBy: _stripped, ...configWithoutGroupBy } = savedDefaultView.config as RunTableViewConfig;
+        onLoadView(configWithoutGroupBy as RunTableViewConfig);
         defaultSnapshotInitialized.current = true;
       } else if (!isLoading) {
         // No saved default — snapshot the current hardcoded default config
@@ -290,7 +309,16 @@ export function RunTableViewSelector({
     if (activeView || isOnDefault) {
       const current = getCurrentConfig();
       const parsed = JSON.parse(snapshot) as RunTableViewConfig;
-      const normalizedSnapshot = { ...parsed, pageSize: parsed.pageSize ?? current.pageSize };
+      // Backfill optional fields so older saved views without them
+      // don't immediately show "unsaved changes":
+      //   - pageSize: pre-existed; missing → matches current
+      //   - groupBy/expanded: added in grouping v2; missing → defaults
+      const normalizedSnapshot = {
+        ...parsed,
+        pageSize: parsed.pageSize ?? current.pageSize,
+        groupBy: parsed.groupBy ?? [],
+        expanded: parsed.expanded ?? [],
+      };
       return JSON.stringify(normalizedSnapshot) !== JSON.stringify(current);
     }
     return false;

@@ -12,7 +12,12 @@ export const useRunCount = (
   fieldFilters?: FieldFilterParam[],
   metricFilters?: MetricFilterParam[],
   systemFilters?: SystemFilterParam[],
+  runIds?: string[],
 ) => {
+  // Keep the runIds set order-independent so an unrelated selection
+  // reorder doesn't invalidate the query. Fresh array literal every
+  // render at the callsite is fine — we sort here before use.
+  const sortedRunIds = runIds && runIds.length > 0 ? [...runIds].sort() : undefined;
   return useQuery<number>({
     placeholderData: (prev) => prev,
     queryKey: trpc.runs.count.queryKey({
@@ -25,6 +30,7 @@ export const useRunCount = (
       fieldFilters: fieldFilters && fieldFilters.length > 0 ? fieldFilters : undefined,
       metricFilters: metricFilters && metricFilters.length > 0 ? metricFilters : undefined,
       systemFilters: systemFilters && systemFilters.length > 0 ? systemFilters : undefined,
+      runIds: sortedRunIds,
     }),
     queryFn: () =>
       trpcClient.runs.count.query({
@@ -37,6 +43,7 @@ export const useRunCount = (
         fieldFilters: fieldFilters && fieldFilters.length > 0 ? fieldFilters : undefined,
         metricFilters: metricFilters && metricFilters.length > 0 ? metricFilters : undefined,
         systemFilters: systemFilters && systemFilters.length > 0 ? systemFilters : undefined,
+        runIds: sortedRunIds,
       }),
     staleTime: 30_000,
   });

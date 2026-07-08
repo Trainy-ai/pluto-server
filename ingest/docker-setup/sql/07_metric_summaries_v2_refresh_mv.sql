@@ -46,6 +46,8 @@ AS SELECT
     sumIf(value * value, isFinite(value))                  AS sum_sq_value,
     min(step)                                              AS min_step,
     max(step)                                              AS max_step,
+    min(time)                                              AS min_time,
+    max(time)                                              AS max_time,
     argMinStateIf(step, value, isFinite(value))            AS argmin_step,
     argMaxStateIf(step, value, isFinite(value))            AS argmax_step,
     toUInt64(toUnixTimestamp64Milli(now64(3)))             AS version_at_compute

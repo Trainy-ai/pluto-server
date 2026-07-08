@@ -19,6 +19,13 @@ interface UseSearchOtherMatchesParams {
   inViewRunIds: Set<string>;
   filterActive: boolean;
   displayOnlySelectedActive: boolean;
+  /** Pin-selected-to-top also constrains the visual top of the table
+   *  to the selected runs, so search hits that fall in the unpinned
+   *  region (or past the page slice) feel "outside view" the same way
+   *  filter / display-only-selected hits do. Enabling this gate keeps
+   *  the dropdown's trigger conditions consistent with what the user
+   *  perceives as a "constrained view". */
+  pinSelectedToTopActive: boolean;
   /**
    * Optional caller-side gate. When `false`, the hook stops firing the
    * underlying `useQuery` (and TanStack cancels any in-flight request).
@@ -59,13 +66,14 @@ export function useSearchOtherMatches({
   inViewRunIds,
   filterActive,
   displayOnlySelectedActive,
+  pinSelectedToTopActive,
   enabled: enabledProp = true,
 }: UseSearchOtherMatchesParams): UseSearchOtherMatchesResult {
   const trimmedQuery = query.trim();
   const enabled =
     enabledProp &&
     trimmedQuery.length > 0 &&
-    (filterActive || displayOnlySelectedActive);
+    (filterActive || displayOnlySelectedActive || pinSelectedToTopActive);
 
   const queryArgs = {
     organizationId,

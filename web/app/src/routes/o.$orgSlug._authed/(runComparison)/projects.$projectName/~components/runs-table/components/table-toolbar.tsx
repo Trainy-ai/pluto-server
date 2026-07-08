@@ -16,6 +16,7 @@ import { VisibilityOptions } from "../visibility-options";
 import { DeleteRunsButton } from "./delete-runs-button";
 import { ColumnPicker } from "../column-picker";
 import { FilterButton } from "../filter-button";
+import { GroupByPicker } from "../group-by-picker";
 import type { RunFilter, FilterableField } from "@/lib/run-filters";
 import { ExperimentRunsToggle, type ListMode } from "./experiment-runs-toggle";
 
@@ -46,6 +47,7 @@ interface TableToolbarProps {
   // Visibility
   onSelectFirstN: (n: number) => void;
   onSelectAllByIds: (runIds: string[]) => void;
+  onDeselectByIds: (runIds: string[]) => void;
   onDeselectAll: () => void;
   onShuffleColors: () => void;
   onReassignAllColors: () => void;
@@ -57,6 +59,19 @@ interface TableToolbarProps {
   pinSelectedToTop: boolean;
   onPinSelectedToTopChange: (v: boolean) => void;
   pageRunIds: string[];
+  deselectablePageRunIds: string[];
+  /** Grouped-mode counts surfaced by GroupedBucketTree via
+   *  onVisibleRootBucketsChange. Only used when groupBy is active. */
+  groupedBucketsOnPage: number;
+  groupedRunsOnPage: number;
+  /** Sum of immediate-next-level distinct-value counts across the
+   *  visible top-level buckets. Only added to the on-page button
+   *  label as "(X leaf groups)" when groupBy.length === 2 — at that
+   *  depth the immediate next IS the leaf. Skipped at depth 3+
+   *  because intermediate subgroup totals don't add up to leaves. */
+  groupedSubgroupsOnPage: number;
+  onSelectAllGroupsOnPage: () => void;
+  onDeselectAllGroupsOnPage: () => void;
   // Filters
   filters: RunFilter[];
   filterableFields: FilterableField[];
@@ -83,6 +98,34 @@ interface TableToolbarProps {
   // Inherited datapoints toggle
   showInherited: boolean;
   onInheritedToggle: () => void;
+  // W&B-style grouping
+  groupBy: string[];
+  onGroupByChange: (groupBy: string[]) => void;
+  /** Number of distinct outer-most group values that contain at least
+   *  one selected run. Only meaningful when groupBy.length > 0;
+   *  rendered above the "N of M runs selected" line so the user can
+   *  see at a glance how many groups they've spanned. */
+  selectedGroupCount: number;
+  /** Selected-leaf-group count. Only valid when groupBy.length ≥ 2
+   *  (at depth 1 the outermost IS the leaf and the two would be the
+   *  same). The visibility popover reads this for the "(X leaf
+   *  groups)" sub-line on "Display only selected" in deep groupings. */
+  selectedLeafGroupCount: number;
+  /** Total number of distinct outer-most group values in the project
+   *  (post toolbar filter / search). Surfaced by GroupedBucketTree
+   *  via the existing onRootTotalCountChange callback (we render
+   *  this here instead of just feeding it to the paginator). */
+  totalGroupCount: number;
+  /** Intersection of the current selection with the toolbar filter.
+   *  Only supplied when both a filter is active AND the selection is
+   *  non-empty (otherwise the extra RTT isn't worth it). Renders as
+   *  a third status line under the "runs selected · Filtered" line. */
+  selectedFilterMatchCount?: number;
+  /** Unfiltered outermost-group total for the "out of N total
+   *  groups" denominator on the selection line. Comes from a
+   *  distinctGroupValues call with no toolbar filter (see index.tsx).
+   *  Falls back to `totalGroupCount` (post-filter) when absent. */
+  totalGroupCountUnfiltered?: number;
 }
 
 export function TableToolbar({
@@ -93,6 +136,8 @@ export function TableToolbar({
   checkedRunsWithColors,
   runCount,
   totalRunCount,
+  selectedFilterMatchCount,
+  totalGroupCountUnfiltered,
   searchQuery,
   onSearchChange,
   onKeyDown,
@@ -105,6 +150,7 @@ export function TableToolbar({
   onToggleGraphsPanel,
   onSelectFirstN,
   onSelectAllByIds,
+  onDeselectByIds,
   onDeselectAll,
   onShuffleColors,
   onReassignAllColors,
@@ -116,6 +162,12 @@ export function TableToolbar({
   pinSelectedToTop,
   onPinSelectedToTopChange,
   pageRunIds,
+  deselectablePageRunIds,
+  groupedBucketsOnPage,
+  groupedRunsOnPage,
+  groupedSubgroupsOnPage,
+  onSelectAllGroupsOnPage,
+  onDeselectAllGroupsOnPage,
   filters,
   filterableFields,
   onAddFilter,
@@ -137,6 +189,11 @@ export function TableToolbar({
   onListModeChange,
   showInherited,
   onInheritedToggle,
+  groupBy,
+  selectedGroupCount,
+  selectedLeafGroupCount,
+  totalGroupCount,
+  onGroupByChange,
 }: TableToolbarProps) {
   return (
     <div className="mb-2 shrink-0 space-y-2">
@@ -163,7 +220,7 @@ export function TableToolbar({
             {showInherited ? "Hide inherited datapoints" : "Show inherited datapoints"}
           </TooltipContent>
         </Tooltip>
-        <div className="min-w-0 truncate pl-1 text-sm text-muted-foreground">
+        <div className="min-w-0 truncate pl-1 text-xs text-muted-foreground">
           {listMode === "experiments" ? (
             <>
               <span className="font-medium">{runCount}</span>
@@ -173,19 +230,67 @@ export function TableToolbar({
             </>
           ) : (
             <>
-              <span className="font-medium">{Object.keys(selectedRunsWithColors).length}</span>
-              {" of "}
-              <span className="font-medium">{totalRunCount}</span>
-              {" runs selected"}
+              {/* Filter / search summary FIRST — filtering is applied
+                  before selection concerns, so the header reads in
+                  the same order the user thinks about it: "here's
+                  what my filter matched, and here's what I picked
+                  out of that". Grouped mode adds the group count
+                  alongside runs because the same filter reduces both
+                  dimensions. Skipped entirely when nothing is
+                  reducing (runCount === totalRunCount). */}
               {runCount < totalRunCount && (
-                <>
-                  {" "}
-                  <span className="text-muted-foreground/50">·</span>
-                  {" "}
-                  <span className="text-muted-foreground/80">
-                    Filtered to {runCount} runs
-                  </span>
-                </>
+                <div className="text-muted-foreground/80">
+                  {filters.length > 0
+                    ? `Filtered to ${groupBy.length > 0 ? `${totalGroupCount} ${totalGroupCount === 1 ? "group" : "groups"} (${runCount} runs)` : `${runCount} runs`}`
+                    : searchQuery.trim().length > 0
+                      ? `Search found ${groupBy.length > 0 ? `${totalGroupCount} ${totalGroupCount === 1 ? "group" : "groups"} (${runCount} runs)` : `${runCount} runs`}`
+                      : `Showing ${runCount} runs`}
+                </div>
+              )}
+              {/* Selection line.
+                  Grouped:
+                    `X groups (S runs) selected out of Y total groups (T total runs)`
+                  X = filter-independent count of outer groups the
+                  selection touches (from selectedAncestorPaths[0]);
+                  Y = unfiltered total from a dedicated
+                  distinctGroupValues call so it stays stable
+                  regardless of the toolbar filter.
+                  Flat:
+                    `S of T runs selected`. */}
+              <div className="text-muted-foreground/80">
+                {groupBy.length > 0 ? (
+                  <>
+                    <span className="font-medium">{selectedGroupCount}</span>
+                    {selectedGroupCount === 1 ? " group (" : " groups ("}
+                    <span className="font-medium">{Object.keys(selectedRunsWithColors).length}</span>
+                    {" runs) selected out of "}
+                    <span className="font-medium">{totalGroupCountUnfiltered ?? totalGroupCount}</span>
+                    {(totalGroupCountUnfiltered ?? totalGroupCount) === 1 ? " total group (" : " total groups ("}
+                    <span className="font-medium">{totalRunCount}</span>
+                    {" total runs)"}
+                  </>
+                ) : (
+                  <>
+                    <span className="font-medium">{Object.keys(selectedRunsWithColors).length}</span>
+                    {" of "}
+                    <span className="font-medium">{totalRunCount}</span>
+                    {" runs selected"}
+                  </>
+                )}
+              </div>
+              {/* Intersection line — only when the filter chips are
+                  active AND the user has runs selected. Answers "how
+                  many of my picks pass the filter?" which is exactly
+                  what DOS/PSTT render in grouped mode. */}
+              {selectedFilterMatchCount != null && Object.keys(selectedRunsWithColors).length > 0 && filters.length > 0 && (showOnlySelected || pinSelectedToTop) && (
+                <div className="text-muted-foreground/80">
+                  <span className="font-medium">{selectedFilterMatchCount}</span>
+                  {" of "}
+                  <span className="font-medium">{Object.keys(selectedRunsWithColors).length}</span>
+                  {" selected "}
+                  {Object.keys(selectedRunsWithColors).length === 1 ? "run matches" : "runs match"}
+                  {" the filter"}
+                </div>
               )}
             </>
           )}
@@ -264,7 +369,14 @@ export function TableToolbar({
       </div>
       <div className="flex items-center gap-2">
         <div className="relative flex-1">
-          <Search className="absolute top-2.5 left-2 h-4 w-4 text-muted-foreground" />
+          <Search
+            className={cn(
+              "absolute top-2.5 left-2 h-4 w-4",
+              searchQuery.trim().length > 0
+                ? "text-primary"
+                : "text-muted-foreground",
+            )}
+          />
           <Input
             placeholder="Search by name or ID..."
             value={searchQuery}
@@ -276,9 +388,17 @@ export function TableToolbar({
             // `focus`. `mousedown` fires on every click regardless of
             // prior focus state — idempotent with onFocus.
             onMouseDown={onSearchFocus}
-            // text-xs (both breakpoints) to match the table rows; Input's base
-            // is text-base md:text-sm, so md:text-xs is needed to override.
-            className="pl-8 text-xs md:text-xs"
+            // Active-state styling when the search has text — primary
+            // border + tinted background so it's obvious results are
+            // refined by a search and the user notices leftover
+            // characters in the input. `text-xs md:text-xs` overrides
+            // Input's base `text-base md:text-sm` so the search box
+            // matches the compact row font size.
+            className={cn(
+              "pl-8 text-xs md:text-xs",
+              searchQuery.trim().length > 0 &&
+                "border-primary bg-primary/5 ring-1 ring-primary/40",
+            )}
           />
           {searchOtherMatchesDropdown}
         </div>
@@ -294,6 +414,7 @@ export function TableToolbar({
           selectedRunsWithColors={selectedRunsWithColors}
           onSelectFirstN={onSelectFirstN}
           onSelectAllOnPage={onSelectAllByIds}
+          onDeselectAllOnPage={onDeselectByIds}
           onDeselectAll={onDeselectAll}
           onShuffleColors={onShuffleColors}
           onReassignAllColors={onReassignAllColors}
@@ -302,10 +423,20 @@ export function TableToolbar({
           pinSelectedToTop={pinSelectedToTop}
           onPinSelectedToTopChange={onPinSelectedToTopChange}
           pageRunIds={pageRunIds}
+          deselectablePageRunIds={deselectablePageRunIds}
+          groupedBucketsOnPage={groupedBucketsOnPage}
+          groupedRunsOnPage={groupedRunsOnPage}
+          groupedSubgroupsOnPage={groupedSubgroupsOnPage}
+          onSelectAllGroupsOnPage={onSelectAllGroupsOnPage}
+          onDeselectAllGroupsOnPage={onDeselectAllGroupsOnPage}
+          selectedGroupCount={selectedGroupCount}
+          selectedLeafGroupCount={selectedLeafGroupCount}
+          groupByLength={groupBy.length}
           totalRunCount={runCount}
           hiddenCount={hiddenCount}
           onShowAllRuns={onShowAllRuns}
           onHideAllRuns={onHideAllRuns}
+          isGrouped={groupBy.length > 0}
         />
       </div>
       <div className="flex items-center justify-between gap-2">
@@ -325,6 +456,12 @@ export function TableToolbar({
             isSearching={isSearchingFields}
             organizationId={organizationId}
             projectName={projectName}
+          />
+          <GroupByPicker
+            groupBy={groupBy}
+            onGroupByChange={onGroupByChange}
+            configKeys={availableConfigKeys}
+            systemMetadataKeys={availableSystemMetadataKeys}
           />
           {onColumnToggle && onClearColumns && (
             <ColumnPicker

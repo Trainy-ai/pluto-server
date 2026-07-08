@@ -34,6 +34,18 @@ export function TagsCell({ tags, allTags, onTagsUpdate, organizationId, projectN
   const onPointerEnter = useCallback(() => { clearTimeout(leaveTimer.current); setIsHovered(true); }, []);
   const onPointerLeave = useCallback(() => { leaveTimer.current = setTimeout(() => setIsHovered(false), 100); }, []);
 
+  // Close the tooltip when ANY scrolling happens — the row the trigger
+  // sits on can move out from under the tooltip otherwise, leaving it
+  // floating awkwardly over the toolbar / other rows. Use a capture-
+  // phase listener so we catch scroll on any ancestor (table container,
+  // page body, etc.).
+  useEffect(() => {
+    if (!isHovered) return;
+    const close = () => setIsHovered(false);
+    window.addEventListener("scroll", close, { capture: true, passive: true });
+    return () => window.removeEventListener("scroll", close, { capture: true } as EventListenerOptions);
+  }, [isHovered]);
+
   // Dynamically compute how many tags fit in the available width
   useEffect(() => {
     const outer = outerRef.current;
@@ -113,7 +125,13 @@ export function TagsCell({ tags, allTags, onTagsUpdate, organizationId, projectN
         {showTooltip && (
           <TooltipContent
             side="top"
-            className="max-w-80 border border-border bg-accent shadow-lg"
+            // bg-popover + a thicker primary-tinted border + stronger
+            // shadow so the tooltip stays legible when it lands over a
+            // selected row's darker bg (where `bg-accent` blended in).
+            // The table scroll container is `isolate`d, so the default
+            // z-50 from Radix is contained within the table and won't
+            // cover toolbar popovers above.
+            className="max-w-80 border-2 border-primary/50 bg-popover text-popover-foreground shadow-2xl"
             onPointerEnter={onPointerEnter}
             onPointerLeave={onPointerLeave}
           >

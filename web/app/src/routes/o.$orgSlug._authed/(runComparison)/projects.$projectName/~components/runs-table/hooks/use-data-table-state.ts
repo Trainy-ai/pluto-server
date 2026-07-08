@@ -1,20 +1,20 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import {
   getCoreRowModel,
-  useReactTable,
   getPaginationRowModel,
+  useReactTable,
   type SortingState,
   type ColumnDef,
 } from "@tanstack/react-table";
 import type { Run } from "../../../~queries/list-runs";
 import type { ColumnConfig } from "../../../~hooks/use-column-config";
 import type { RunFilter } from "@/lib/run-filters";
-import { computeRowSelection, mergeSelectedRuns, ensureSelectedRunsIncluded } from "../selection-utils";
+import { computeRowSelection, mergeSelectedRuns, ensureSelectedRunsIncluded, intersectWithServerFilter, partitionMatchingFirst } from "../selection-utils";
+import { columnTableId } from "../column-table-id";
 import { computeColumnOrder } from "../lib/pinned-columns";
 import { getCustomColumnValue } from "../columns-utils";
 import { useColumnDrag } from "./use-column-drag";
 import { useColumnResize } from "./use-column-resize";
-import { useLocalStorageBool } from "../../../~hooks/use-local-storage-bool";
 
 interface UseDataTableStateParams {
   runs: Run[];
@@ -32,6 +32,22 @@ interface UseDataTableStateParams {
   projectName: string;
   listMode?: "experiments" | "runs";
   showOnlySelected: boolean;
+  pinSelectedToTop: boolean;
+  onPinSelectedToTopChange: (value: boolean) => void;
+  /** IDs the current toolbar filter actually returned from runs.list.
+   *  Under Filter alone (no DOS, no PSTT) we intersect `runs` with
+   *  this set so cached / URL-prefetched / IndexedDB-hydrated
+   *  selected runs that DON'T match the filter drop out of the
+   *  table — otherwise `runs` (= allVisibleRuns upstream) carries
+   *  them through and they render below the filter divider even
+   *  though the user hasn't opted into "keep selection visible". */
+  serverFilteredRunIds?: Set<string>;
+  /** Extra pixels to add to the FIRST (leftmost) column's width when
+   *  rendering the table in grouped mode. Widens the eye column so
+   *  bucket tree's nesting shifts the eye / status dot / name to the
+   *  right by the same `0.5rem + groupBy.length * 1.25rem` step the
+   *  bucket headers use. Zero in flat mode. */
+  groupedIndentPx?: number;
 }
 
 /**
@@ -53,15 +69,15 @@ export function sortRunsByColumn(
   const { id: colId, desc } = sorting[0];
   const dir = desc ? -1 : 1;
 
-  // Resolve sort column: "name" is a base column, everything else is a custom column
+  // Resolve sort column: "name" is a base column, everything else is a custom column.
+  // Mirror the tableId formula in columns.tsx EXACTLY — any divergence here
+  // makes sortRunsByColumn a no-op for system/createdAt/status/group/notes/tags
+  // sorts, which lets the unsorted insertion order of pinned-selected runs leak
+  // through and overrides the server's intended desc order.
   let sortCol: ColumnConfig | null = null;
   if (colId !== "name") {
     sortCol = customColumns.find((c) => {
-      const tableId = c.source === "system"
-        ? `custom-systemMetadata-${c.id}`
-        : c.source === "metric" && c.aggregation
-          ? `custom-metric-${c.id}-${c.aggregation}`
-          : `custom-${c.source}-${c.id}`;
+      const tableId = columnTableId(c);
       return tableId === colId;
     }) ?? null;
     // Unknown column id — e.g. a server-side sort key the client doesn't
@@ -90,8 +106,13 @@ export function sortRunsByColumn(
     if (typeof va === "number" && typeof vb === "number") {
       return (va - vb) * dir;
     }
-    const sa = String(va);
-    const sb = String(vb);
+    // Dates as Date objects via superjson deserialization. String(Date) is
+    // "Thu May 14 2026..." which sorts by day-of-week alphabetically — Mon
+    // (May 18) ends up BEFORE Thu (May 14) because 'M' < 'T'. Normalize Date
+    // objects to ISO strings so they sort chronologically alongside string
+    // ISO timestamps from the same column.
+    const sa = va instanceof Date ? va.toISOString() : String(va);
+    const sb = vb instanceof Date ? vb.toISOString() : String(vb);
     return sa < sb ? -dir : sa > sb ? dir : 0;
   });
   return result;
@@ -112,6 +133,25 @@ export function sortPinnedRuns(
   return sortRunsByColumn(runs, sorting, customColumns);
 }
 
+/**
+ * Effective slice size for the unpinned table under pin-selected-to-top.
+ * The user reads `pageSize` as the total rows on screen, so the unpinned
+ * slice fills whatever pageSize leaves after the pinned block:
+ *   - pinning off        → pageSize
+ *   - pinned <  pageSize → pageSize - pinned
+ *   - pinned >= pageSize → 0 (page collapses to just the pinned block)
+ * Never negative. Callers floor the TanStack page size at 1 separately so
+ * `getPaginationRowModel` doesn't divide by zero.
+ * Exported for unit testing.
+ */
+export function computeEffectivePageSize(
+  pageSize: number,
+  pinnedCount: number,
+  isPinningActive: boolean,
+): number {
+  return isPinningActive ? Math.max(0, pageSize - pinnedCount) : pageSize;
+}
+
 
 export function useDataTableState({
   runs,
@@ -129,6 +169,10 @@ export function useDataTableState({
   projectName,
   listMode,
   showOnlySelected,
+  pinSelectedToTop,
+  onPinSelectedToTopChange,
+  serverFilteredRunIds,
+  groupedIndentPx = 0,
 }: UseDataTableStateParams) {
   const isExperiments = listMode === "experiments";
 
@@ -138,15 +182,17 @@ export function useDataTableState({
   // Custom column resize — uses refs + direct DOM manipulation during drag
   const { getWidth, handleMouseDown, resizeGeneration } = useColumnResize();
 
-  // Drag-and-drop column reordering (custom columns only)
+  const wrappedOnReorderColumns = useCallback(
+    (fromIndex: number, toIndex: number) => {
+      onReorderColumns?.(fromIndex, toIndex);
+    },
+    [onReorderColumns],
+  );
   const { draggedId, dragOverId, handleDragStart, handleDragOver, handleDrop, handleDragEnd } =
-    useColumnDrag(customColumns, onReorderColumns);
+    useColumnDrag(customColumns, wrappedOnReorderColumns);
 
-  // Visibility options state — pinSelectedToTop persisted to localStorage per org/project
-  // showOnlySelected is controlled by parent (lifted state)
-  const pinSelectedToTopKey = `run-table-pinSelectedToTop:${orgSlug}:${projectName}`;
-
-  const [pinSelectedToTop, setPinSelectedToTop] = useLocalStorageBool(pinSelectedToTopKey);
+  // pinSelectedToTop and showOnlySelected are both lifted to the parent — see
+  // UseDataTableStateParams. The parent enforces the group-by mutual exclusion.
 
   // Reset to page 0 when the user toggles "Display only selected" so they
   // don't land on an empty page (filtered dataset is smaller than full list).
@@ -163,11 +209,17 @@ export function useDataTableState({
   // When pinning is active, split into pinned (sticky, always-visible) and unpinned (paginated).
   const isPinningActive = pinSelectedToTop && Object.keys(selectedRunsWithColors).length > 0;
 
-  // Derive pinned runs from selected runs and sort client-side to match column sort.
-  const pinnedRuns = useMemo(
-    () => sortPinnedRuns(isPinningActive, selectedRunsWithColors, sorting, customColumns),
-    [isPinningActive, selectedRunsWithColors, sorting, customColumns],
-  );
+  // Derive pinned runs from selected runs and sort client-side to
+  // match column sort. Under an active filter, apply the same
+  // matching-first partition as `displayedRuns` so the divider lands
+  // at the true boundary between "selected + filter-matching" and
+  // "selected + non-matching" instead of wherever the sort put the
+  // first non-matching row.
+  const pinnedRuns = useMemo(() => {
+    const sorted = sortPinnedRuns(isPinningActive, selectedRunsWithColors, sorting, customColumns);
+    if (!filters.length || !isPinningActive) return sorted;
+    return partitionMatchingFirst(sorted, serverFilteredRunIds);
+  }, [isPinningActive, selectedRunsWithColors, sorting, customColumns, filters.length, serverFilteredRunIds]);
 
   // The main table data: either filtered-to-selected minus pinned, unpinned only, or all runs.
   // When "Display only selected" is active, use mergeSelectedRuns to include
@@ -185,20 +237,64 @@ export function useDataTableState({
   // client sort is redundant but cheap — sortRunsByColumn short-circuits
   // on empty sorting and returns a shallow copy otherwise.
   const displayedRuns = useMemo(() => {
+    // When search is active and the user is in Display-Only-Selected
+    // mode, drop the out-of-page selected pass AND name-filter the
+    // remainder so non-matching selected runs disappear from the
+    // table — matches the grouped-mode behaviour where
+    // `distinctGroupValues` honours search server-side and DOS
+    // narrows the result. The name-match is necessary because `runs`
+    // (= tableRuns) carries URL-prefetched + cached selected runs
+    // regardless of the search filter, so `restrictToInPage` alone
+    // would let those slip through. See GROUPING_V2_PR_NOTES.md
+    // "Flat vs grouped" table.
+    const trimmedSearch = searchQuery?.trim() ?? "";
+    const restrictDOSToSearch = showOnlySelected && trimmedSearch.length > 0;
+    const applyNameMatch = (rs: Run[]): Run[] =>
+      restrictDOSToSearch
+        ? rs.filter((r) => (r.name ?? "").toLowerCase().includes(trimmedSearch.toLowerCase()))
+        : rs;
+    // Filter chips + no viewport toggles: trust the filter chips
+    // and DON'T sticky-append selected-non-matching runs. The user
+    // hasn't opted into keeping selection visible via DOS/PSTT, so
+    // leaking selected runs from outside the filter would fight
+    // what the filter chip promises. Under DOS or PSTT the toggle
+    // IS the "keep selection visible" opt-in and the sticky-append
+    // stays.
+    const filterActive = filters.length > 0;
     let base: Run[];
     if (isPinningActive) {
       const pinnedIds = new Set(Object.keys(selectedRunsWithColors));
       const merged = showOnlySelected
-        ? mergeSelectedRuns(runs, selectedRunsWithColors)
+        ? mergeSelectedRuns(runs, selectedRunsWithColors, restrictDOSToSearch)
         : ensureSelectedRunsIncluded(runs, selectedRunsWithColors);
-      base = merged.filter((r) => !pinnedIds.has(r.id));
+      base = applyNameMatch(merged).filter((r) => !pinnedIds.has(r.id));
     } else if (showOnlySelected) {
-      base = mergeSelectedRuns(runs, selectedRunsWithColors);
+      base = applyNameMatch(mergeSelectedRuns(runs, selectedRunsWithColors, restrictDOSToSearch));
+    } else if (filterActive) {
+      // Filter alone: drop cached / URL-prefetched / IndexedDB-
+      // hydrated rows that don't match the current filter (see
+      // `intersectWithServerFilter` doc for the leak this fixes).
+      base = intersectWithServerFilter(runs, serverFilteredRunIds);
     } else {
       base = ensureSelectedRunsIncluded(runs, selectedRunsWithColors);
     }
-    return sortRunsByColumn(base, sorting, customColumns);
-  }, [runs, showOnlySelected, isPinningActive, selectedRunsWithColors, sorting, customColumns]);
+    const sorted = sortRunsByColumn(base, sorting, customColumns);
+    // Under Filter + DOS/PSTT, promote filter-matching rows to the
+    // front BEFORE TanStack paginates. Without this, a small page
+    // size can slice matching rows onto later pages and the divider
+    // renders as if there were fewer matches than there really are —
+    // e.g. pageSize=10 with 4 matches spread by sort across page 1
+    // and page 3 shows only 2 above the divider on page 1. Stable
+    // partition (preserves the user's sort order within each half),
+    // gated on filterActive so it's a no-op when there's no filter.
+    // Filter-alone case has no non-matching rows to promote against
+    // (base is already intersected with the server filter above), so
+    // skip.
+    if (filterActive && (showOnlySelected || isPinningActive)) {
+      return partitionMatchingFirst(sorted, serverFilteredRunIds);
+    }
+    return sorted;
+  }, [runs, showOnlySelected, searchQuery, isPinningActive, selectedRunsWithColors, sorting, customColumns, filters, serverFilteredRunIds]);
 
   // In "experiments" mode, collapse same-name runs into one row per experiment.
   // Keeps the first occurrence (most recent) as the representative.
@@ -217,9 +313,6 @@ export function useDataTableState({
     return new Set(runs.map((r) => r.name)).size;
   }, [runs]);
 
-  // Keep track of previous data length to maintain pagination position
-  const prevDataLengthRef = useRef(runs.length);
-  const lastPageIndexRef = useRef(pageIndex);
 
   // Compute column ordering: pinned columns first, then unpinned
   const columnOrder = useMemo(
@@ -239,38 +332,57 @@ export function useDataTableState({
     [pinnedRuns, selectedRunsWithColors],
   );
 
-  // Get current page run IDs for "Select all on page" functionality
+  // Effective slice size for the unpinned table when pin-selected-to-top
+  // is active. The user's mental model is that `pageSize` is the total
+  // number of rows on screen, so the unpinned slice should fill whatever
+  // pageSize leaves over after the pinned rows. Two cases:
+  //   - pinned <  pageSize → unpinned per page = pageSize - pinned
+  //   - pinned >= pageSize → unpinned per page = 0 (page count collapses
+  //     to 1; user sees only the pinned rows until they deselect down
+  //     below pageSize).
+  // We floor the table-state value at 1 so TanStack's getPaginationRowModel
+  // doesn't divide by zero; the indicator math below treats the 0 case
+  // specially.
+  const effectivePageSize = computeEffectivePageSize(
+    pageSize,
+    pinnedRuns.length,
+    isPinningActive,
+  );
+  const tablePageSize = Math.max(1, effectivePageSize);
+
+  // IDs in the current unpinned page slice — what "Select all on page"
+  // operates on. Returns [] when effectivePageSize is 0 (pin-to-top is
+  // on and pinned rows already fill the user's pageSize budget), since
+  // there are no unpinned slots to select into.
   const pageRunIds = useMemo(() => {
-    const startIndex = pageIndex * pageSize;
-    const endIndex = startIndex + pageSize;
+    if (effectivePageSize === 0) return [];
+    const startIndex = pageIndex * tablePageSize;
+    const endIndex = startIndex + tablePageSize;
     return displayedRuns.slice(startIndex, endIndex).map((run) => run.id);
-  }, [displayedRuns, pageIndex, pageSize]);
+  }, [displayedRuns, pageIndex, tablePageSize, effectivePageSize]);
 
-  // Maintain pagination position when new data is loaded.
-  // Clamp target page to the valid range so we never land on an empty page
-  // (can happen when pageSize > RUNS_FETCH_LIMIT, e.g. pageSize=100 but
-  // fetch only brings 40 new rows that still fit on page 0).
-  useEffect(() => {
-    if (runs.length > prevDataLengthRef.current) {
-      const maxPage = Math.max(0, Math.ceil(displayedRuns.length / pageSize) - 1);
-      const targetPage = Math.min(lastPageIndexRef.current, maxPage);
-      if (targetPage !== pageIndex) {
-        setPageIndex(targetPage);
-      }
-      prevDataLengthRef.current = runs.length;
-    }
-  }, [runs.length, pageIndex, displayedRuns.length, pageSize]);
+  // IDs the "Deselect all on page" button acts on. In pin-to-top mode
+  // the user's "page" includes the pinned block (which is the entire
+  // selected set, scrolled in place above the unpinned slice), so we
+  // surface all pinned IDs — count matches `# selected` and the
+  // function matches "Deselect all" when pinned >= pageSize. In flat
+  // mode it's the same page slice as Select-all-on-page.
+  const deselectablePageRunIds = useMemo(() => {
+    if (isPinningActive) return pinnedRuns.map((run) => run.id);
+    return pageRunIds;
+  }, [isPinningActive, pinnedRuns, pageRunIds]);
 
-  // Reset prevDataLengthRef when pageSize changes
-  useEffect(() => {
-    prevDataLengthRef.current = runs.length;
-  }, [pageSize, runs.length]);
-
+  // Note: page advance after a click-driven fetch is handled
+  // explicitly in DataTable's `handleFetchNextPage` (setPageIndex after
+  // await fetchNextPage). The old growth-detection effect that lived
+  // here was redundant for clicks AND actively warped the user back to
+  // `lastPageIndexRef` whenever runs.length grew for any non-click
+  // reason — e.g. React Query refetching runs.list after a window-
+  // focus invalidation when another SDK had created a run. Removed.
+  //
   // Reset to page 0 when filters or sorting change to avoid showing empty pages
   useEffect(() => {
     setPageIndex(0);
-    prevDataLengthRef.current = 0;
-    lastPageIndexRef.current = 0;
   }, [filters, searchQuery, sorting]);
 
   const table = useReactTable({
@@ -281,15 +393,19 @@ export function useDataTableState({
     getPaginationRowModel: getPaginationRowModel(),
     manualSorting: true,
     onPaginationChange: (updater) => {
-      const next = typeof updater === "function" ? updater({ pageIndex, pageSize }) : updater;
+      const next = typeof updater === "function" ? updater({ pageIndex, pageSize: tablePageSize }) : updater;
       setPageIndex(next.pageIndex);
-      if (next.pageSize !== pageSize) {
+      // TanStack-driven pageSize changes only come from explicit
+      // setPageSize calls; the user-facing dropdown bypasses table
+      // state and calls onPageSizeChange directly, so this branch
+      // is currently dead but kept for completeness.
+      if (next.pageSize !== tablePageSize) {
         onPageSizeChange(next.pageSize);
       }
     },
     state: {
       rowSelection: currentRowSelection,
-      pagination: { pageIndex, pageSize },
+      pagination: { pageIndex, pageSize: tablePageSize },
       sorting,
       columnOrder,
     },
@@ -314,6 +430,10 @@ export function useDataTableState({
   });
 
   // Compute dynamic pinned column map from the actual rendered header order + widths.
+  // The FIRST column gets `groupedIndentPx` added to its width when
+  // grouping is active — same widening renderColGroup applies — so
+  // subsequent sticky `left:` offsets land in the same place the
+  // colgroup paints column boundaries.
   const pinnedColumnMap = useMemo(() => {
     const map: Record<string, { left: number; isLast: boolean }> = {};
     const headers = table.getHeaderGroups()[0]?.headers ?? [];
@@ -322,31 +442,37 @@ export function useDataTableState({
     pinnedHeaders.forEach((h, i) => {
       const def = h.column.columnDef;
       const isFixed = def.enableResizing === false;
-      const w = isFixed ? (def.size ?? 150) : getWidth(h.column.id, def.size ?? 150);
+      const baseW = isFixed ? (def.size ?? 150) : getWidth(h.column.id, def.size ?? 150);
+      const w = i === 0 ? baseW + groupedIndentPx : baseW;
       map[h.column.id] = { left: cumulativeLeft, isLast: i === pinnedHeaders.length - 1 };
       cumulativeLeft += w;
     });
     return map;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [table, pinnedColumnIds, getWidth, resizeGeneration]);
+  }, [table, pinnedColumnIds, getWidth, resizeGeneration, groupedIndentPx]);
 
   // Table width for fixed layout
-  const tableWidth = useMemo(() =>
-    table.getHeaderGroups()[0]?.headers.reduce((sum, h) => {
+  const tableWidth = useMemo(() => {
+    const headers = table.getHeaderGroups()[0]?.headers ?? [];
+    return headers.reduce((sum, h, i) => {
       const def = h.column.columnDef;
       const isFixed = def.enableResizing === false;
-      return sum + (isFixed ? (def.size ?? 150) : getWidth(h.column.id, def.size ?? 150));
-    }, 0) ?? 0,
+      const baseW = isFixed ? (def.size ?? 150) : getWidth(h.column.id, def.size ?? 150);
+      return sum + (i === 0 ? baseW + groupedIndentPx : baseW);
+    }, 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [table, getWidth, resizeGeneration],
-  );
+  }, [table, getWidth, resizeGeneration, groupedIndentPx]);
 
   return {
     // Pagination
     pageIndex,
     setPageIndex,
-    lastPageIndexRef,
-    prevDataLengthRef,
+    /** Slice size used internally by the unpinned table when pin-
+     *  selected-to-top is on. Equals `pageSize - pinnedCount` (floored
+     *  at 0). When 0, the unpinned section is empty by design (pinned
+     *  rows already fill the user's pageSize budget) and `totalPages`
+     *  should collapse to 1. */
+    effectivePageSize,
     // Resize
     getWidth,
     handleMouseDown,
@@ -360,8 +486,6 @@ export function useDataTableState({
     handleDragEnd,
     // Visibility
     showOnlySelected,
-    pinSelectedToTop,
-    setPinSelectedToTop,
     isPinningActive,
     // Derived data
     pinnedRuns,
@@ -369,6 +493,7 @@ export function useDataTableState({
     displayedRunCount: finalDisplayedRuns.length,
     totalExperimentCount,
     pageRunIds,
+    deselectablePageRunIds,
     pinnedColumnMap,
     tableWidth,
     // Table instances
@@ -376,5 +501,6 @@ export function useDataTableState({
     pinnedTable,
     // Pass through for colSpan usage
     memoizedColumns,
+    columnOrder,
   };
 }

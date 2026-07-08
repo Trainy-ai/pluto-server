@@ -5,6 +5,8 @@ import {
   sortPinnedToTop,
   mergeSelectedRuns,
   ensureSelectedRunsIncluded,
+  intersectWithServerFilter,
+  partitionMatchingFirst,
 } from "../selection-utils";
 import type { Run } from "../../../~queries/list-runs";
 import { makeRun } from "./_fixtures";
@@ -332,5 +334,91 @@ describe("sortPinnedToTop", () => {
 
     expect(sorted).toEqual([]);
     expect(pinnedCount).toBe(0);
+  });
+});
+
+// ── intersectWithServerFilter ────────────────────────────────────────────
+
+describe("intersectWithServerFilter", () => {
+  it("returns runs unchanged when serverFilteredRunIds is undefined", () => {
+    // Query hasn't landed yet — degrade to pre-filter view, don't hide
+    // everything.
+    const runs = [makeRun("A"), makeRun("B")];
+    expect(intersectWithServerFilter(runs, undefined)).toBe(runs);
+  });
+
+  it("drops runs whose id isn't in the server-filtered set", () => {
+    // Regression: `runs` is really allVisibleRuns which merges getByIds
+    // prefetch + IndexedDB — selected non-matching rows survived if we
+    // just returned runs on the filter-alone branch.
+    const A = makeRun("A"), B = makeRun("B"), C = makeRun("C");
+    const set = new Set(["A", "C"]);
+    expect(intersectWithServerFilter([A, B, C], set)).toEqual([A, C]);
+  });
+
+  it("preserves input order among the kept runs", () => {
+    const A = makeRun("A"), B = makeRun("B"), C = makeRun("C"), D = makeRun("D");
+    const set = new Set(["D", "B"]); // order in the set is irrelevant
+    expect(intersectWithServerFilter([A, B, C, D], set).map((r) => r.id)).toEqual(["B", "D"]);
+  });
+
+  it("returns empty when no run matches", () => {
+    const runs = [makeRun("A"), makeRun("B")];
+    expect(intersectWithServerFilter(runs, new Set(["Z"]))).toEqual([]);
+  });
+
+  it("returns empty when the filter set is empty (server matched nothing)", () => {
+    // Distinct from `undefined` (unloaded) — empty set means the filter
+    // matched zero runs and the table should render empty.
+    const runs = [makeRun("A"), makeRun("B")];
+    expect(intersectWithServerFilter(runs, new Set())).toEqual([]);
+  });
+});
+
+// ── partitionMatchingFirst ───────────────────────────────────────────────
+
+describe("partitionMatchingFirst", () => {
+  it("returns runs unchanged when serverFilteredRunIds is undefined", () => {
+    const runs = [makeRun("A"), makeRun("B")];
+    expect(partitionMatchingFirst(runs, undefined)).toBe(runs);
+  });
+
+  it("returns runs unchanged when the set is empty (no filter → no partition)", () => {
+    const runs = [makeRun("A"), makeRun("B")];
+    expect(partitionMatchingFirst(runs, new Set())).toBe(runs);
+  });
+
+  it("promotes matching rows to the front, preserving relative order within each half", () => {
+    // Sort-desc by some column produced [B_bs=512, C_bs=256, A_bs=128,
+    // D_bs=64] where B and A happen to be filter-matching. Regression
+    // fix (d41271d30): without this promotion, pageSize=2 would slice
+    // out [B, C] on page 1 and A would land on page 2 — divider then
+    // fires at row 2 with 1 matched visible instead of 2.
+    const A = makeRun("A"), B = makeRun("B"), C = makeRun("C"), D = makeRun("D");
+    const sorted = [B, C, A, D];
+    const result = partitionMatchingFirst(sorted, new Set(["A", "B"]));
+    expect(result.map((r) => r.id)).toEqual(["B", "A", "C", "D"]);
+  });
+
+  it("all matched → returns matched-only slice (no unmatched appended)", () => {
+    const A = makeRun("A"), B = makeRun("B");
+    expect(partitionMatchingFirst([A, B], new Set(["A", "B"])).map((r) => r.id)).toEqual(["A", "B"]);
+  });
+
+  it("all unmatched → returns unmatched-only slice (matched half empty)", () => {
+    const A = makeRun("A"), B = makeRun("B");
+    expect(partitionMatchingFirst([A, B], new Set(["Z"])).map((r) => r.id)).toEqual(["A", "B"]);
+  });
+
+  it("returns empty when runs is empty regardless of set contents", () => {
+    expect(partitionMatchingFirst([], new Set(["A"]))).toEqual([]);
+  });
+
+  it("is stable — equal partitions preserve original order", () => {
+    // Both halves retain the incoming order so downstream pagination
+    // walks the user's sort within each half.
+    const runs = ["A", "B", "C", "D", "E", "F"].map((id) => makeRun(id));
+    const result = partitionMatchingFirst(runs, new Set(["B", "E", "A"]));
+    expect(result.map((r) => r.id)).toEqual(["A", "B", "E", "C", "D", "F"]);
   });
 });

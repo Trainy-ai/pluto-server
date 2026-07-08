@@ -323,7 +323,7 @@ export function FilterButton({
           )}
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-auto min-w-[20rem] max-w-[36rem] p-0" align="end" onFocusOutside={(e) => e.preventDefault()}>
+      <PopoverContent data-testid="filter-popover" className="w-auto min-w-[20rem] max-w-[36rem] p-0" align="end" onFocusOutside={(e) => e.preventDefault()}>
         {step === "field" ? (
           <Command shouldFilter={false}>
             <div className="relative">
@@ -576,7 +576,7 @@ export function FilterButton({
 
             {/* Primary condition */}
             <Select value={operator} onValueChange={(v) => { setOperator(v); setShowValidation(false); }}>
-              <SelectTrigger className="h-8">
+              <SelectTrigger className="h-8" data-testid="filter-operator">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

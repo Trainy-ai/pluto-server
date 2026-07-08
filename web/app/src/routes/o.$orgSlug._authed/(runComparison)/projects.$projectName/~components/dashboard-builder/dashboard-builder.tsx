@@ -53,6 +53,10 @@ interface DashboardBuilderProps {
   /** When provided, reads line settings from this runId instead of the "full" key */
   settingsRunId?: string;
   searchState?: SearchState;
+  /** Encoded grouping chain — passed through to chart widgets so
+   *  line charts render aggregated per-group data when set. */
+  groupBy?: string[];
+  hiddenRunIds?: Set<string>;
 }
 
 export function DashboardBuilder({
@@ -64,6 +68,8 @@ export function DashboardBuilder({
   onClose,
   settingsRunId,
   searchState,
+  groupBy,
+  hiddenRunIds,
 }: DashboardBuilderProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(1200);
@@ -508,6 +514,31 @@ export function DashboardBuilder({
     setHasChanges(true);
   }, []);
 
+  // Per-widget grouping override. Mutates the matching chart widget's
+  // `groupingOverride` field — saved with the rest of the view config.
+  // `overridden=true` means "ignore the workspace groupBy for this
+  // chart" (chart stays per-run).
+  const updateWidgetGroupingOverride = useCallback(
+    (widgetId: string, overridden: boolean) => {
+      setConfig((prev) => ({
+        ...prev,
+        sections: prev.sections.map((section) => ({
+          ...section,
+          widgets: section.widgets.map((w) =>
+            w.id === widgetId && w.type === "chart"
+              ? {
+                  ...w,
+                  config: { ...w.config, groupingOverride: overridden ? "off" : "auto" },
+                }
+              : w,
+          ),
+        })),
+      }));
+      setHasChanges(true);
+    },
+    [],
+  );
+
   // Distributions-widget per-entry mutators. Each callback targets an
   // entry by INDEX inside config.entries[]. A single distributions
   // widget can hold many bars/histogram entries; the renderer threads
@@ -553,6 +584,72 @@ export function DashboardBuilder({
       setConfig((prev) =>
         configOps.updateWidgetDistributionsEntryStepsOnX(prev, widgetId, index, next),
       );
+      setHasChanges(true);
+    },
+    [],
+  );
+
+  // Per-widget maxGroups cap (1..100). Same mutation shape as the
+  // override above so the saved view's config carries both.
+  const updateWidgetMaxGroups = useCallback(
+    (widgetId: string, value: number) => {
+      setConfig((prev) => ({
+        ...prev,
+        sections: prev.sections.map((section) => ({
+          ...section,
+          widgets: section.widgets.map((w) =>
+            w.id === widgetId && w.type === "chart"
+              ? { ...w, config: { ...w.config, maxGroups: value } }
+              : w,
+          ),
+        })),
+      }));
+      setHasChanges(true);
+    },
+    [],
+  );
+
+  // Per-widget overrides for dynamic sections. Dynamic widgets are
+  // pattern-generated on every render with no Widget record to merge
+  // into, so chart-popover edits (maxGroups, grouping override) land in
+  // `Section.dynamicWidgetOverrides` keyed by widget id. The widget id
+  // is stable across renders because it's derived from the matched
+  // metric name. setHasChanges(true) so the Save button enables
+  // alongside the static path.
+  const updateDynamicWidgetOverride = useCallback(
+    (
+      sectionId: string,
+      widgetId: string,
+      patch: { maxGroups?: number; groupingOverride?: "off" | null },
+    ) => {
+      setConfig((prev) => ({
+        ...prev,
+        sections: prev.sections.map((section) => {
+          if (section.id !== sectionId) return section;
+          const existing = section.dynamicWidgetOverrides ?? {};
+          const prevEntry = existing[widgetId] ?? {};
+          const nextEntry: { maxGroups?: number; groupingOverride?: "off" } = {
+            ...prevEntry,
+          };
+          if (patch.maxGroups !== undefined) nextEntry.maxGroups = patch.maxGroups;
+          if (patch.groupingOverride !== undefined) {
+            if (patch.groupingOverride === null) {
+              delete nextEntry.groupingOverride;
+            } else {
+              nextEntry.groupingOverride = patch.groupingOverride;
+            }
+          }
+          // Drop the entry entirely if every override field is unset —
+          // keeps the saved config tidy.
+          const isEmpty =
+            nextEntry.maxGroups === undefined &&
+            nextEntry.groupingOverride === undefined;
+          const next = { ...existing };
+          if (isEmpty) delete next[widgetId];
+          else next[widgetId] = nextEntry;
+          return { ...section, dynamicWidgetOverrides: next };
+        }),
+      }));
       setHasChanges(true);
     },
     [],
@@ -716,6 +813,9 @@ export function DashboardBuilder({
           searchState={searchState}
           onWidgetCountChange={(count) => handleDynamicWidgetCount(section.id, count)}
           settingsRunId={settingsRunId}
+          workspaceGroupBy={groupBy}
+          initialWidgetOverrides={section.dynamicWidgetOverrides}
+          onUpdateDynamicWidgetOverride={updateDynamicWidgetOverride}
           histogramViewModes={section.histogramViewModes}
           onUpdateSectionHistogramViewMode={updateSectionHistogramViewMode}
         />
@@ -736,6 +836,9 @@ export function DashboardBuilder({
         moveTargets={sectionMoveTargets}
         onFullscreenWidget={setFullscreenWidget}
         onUpdateWidgetScale={updateWidgetScale}
+        onUpdateGroupingOverride={updateWidgetGroupingOverride}
+        onUpdateMaxGroups={updateWidgetMaxGroups}
+        workspaceGroupingActive={(groupBy?.length ?? 0) > 0}
         isEditing={isEditing}
         coarseMode={coarseMode}
         containerWidth={containerWidth - SECTION_HORIZONTAL_PADDING}
@@ -749,6 +852,8 @@ export function DashboardBuilder({
             settingsRunId={settingsRunId}
             yZoomRange={widgetYZoomRanges[widget.id] ?? null}
             onYZoomRangeChange={(range) => setWidgetYZoomRanges((prev) => ({ ...prev, [widget.id]: range }))}
+            groupBy={groupBy}
+            hiddenRunIds={hiddenRunIds}
             onUpdateDistributionsEntryViewMode={updateWidgetDistributionsEntryViewMode}
             onUpdateDistributionsEntryDepthAxis={updateWidgetDistributionsEntryDepthAxis}
             onUpdateDistributionsEntryBinRange={updateWidgetDistributionsEntryBinRange}
@@ -1044,6 +1149,8 @@ export function DashboardBuilder({
               settingsRunId={settingsRunId}
               yZoomRange={widgetYZoomRanges[liveWidget.id] ?? null}
               onYZoomRangeChange={(range) => setWidgetYZoomRanges((prev) => ({ ...prev, [liveWidget.id]: range }))}
+              groupBy={groupBy}
+              hiddenRunIds={hiddenRunIds}
             />
           </ChartFullscreenDialog>
         );

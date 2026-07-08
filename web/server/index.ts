@@ -97,6 +97,13 @@ app.use(
   "/trpc/*",
   trpcServer({
     router: appRouter,
+    // Allow query procedures to be invoked over POST. The client's
+    // httpBatchStreamLink falls back from GET to POST when a single
+    // op's encoded input would push the URL over MAX_URL_LENGTH
+    // (8 KB) — typical for grouped chart queries on large run
+    // selections — and without this flag the server rejects with
+    // "Unsupported POST-request to query procedure" (HTTP 405).
+    allowMethodOverride: true,
     createContext: (_opts, hono) => {
       return createContext({
         hono,

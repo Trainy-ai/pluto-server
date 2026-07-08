@@ -11,6 +11,10 @@ interface SearchOtherMatchesDropdownProps {
   isLoading: boolean;
   selectedRunsWithColors: Record<string, { run: Run; color: string }>;
   onSelectRun: (run: Run) => void;
+  /** Fired when the user clicks a row that's already selected. Lets the
+   *  user toggle a remote (out-of-view) row off without first navigating
+   *  back to it in the main table. */
+  onDeselectRun: (runId: string) => void;
   /** Fired by both Esc and click-outside. Caller decides what to do — the
    *  current parent route uses it to mark the dropdown as dismissed while
    *  leaving the search input value alone. */
@@ -43,6 +47,7 @@ export function SearchOtherMatchesDropdown({
   isLoading,
   selectedRunsWithColors,
   onSelectRun,
+  onDeselectRun,
   onDismiss,
 }: SearchOtherMatchesDropdownProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -86,6 +91,10 @@ export function SearchOtherMatchesDropdown({
     <div
       ref={containerRef}
       data-testid="search-other-matches-dropdown"
+      // The table scroll container now has `isolate` so the row's
+      // sticky-cell zIndex:50 and the sticky <TableHeader> stay
+      // contained — z-50 here is enough and doesn't need to climb
+      // higher to escape the table's stacking context.
       className="absolute top-full left-0 right-0 z-50 mt-1 max-h-80 overflow-y-auto rounded-md border border-border bg-popover shadow-md"
     >
       <div className="px-2 pt-2 pb-1 text-[10px] uppercase tracking-wide text-muted-foreground">
@@ -97,20 +106,38 @@ export function SearchOtherMatchesDropdown({
       {rows.map((run) => {
         const isInView = inViewIds.has(run.id);
         const selectionColor = selectedRunsWithColors[run.id]?.color;
+        const isSelected = !!selectionColor;
+        // SELECTED beats IN VIEW for both interaction + chip: when pin-
+        // to-top is on, every selected run is also counted as in-view,
+        // so we'd otherwise lock the row into "In table" disabled state
+        // and the second click of a toggle would do nothing. Only treat
+        // a row as truly "in table" (and therefore non-interactive)
+        // when it's IN VIEW but NOT selected — that's the only case
+        // where the user would interact with it via the main row eye.
+        const lockedAsInTable = isInView && !isSelected;
         return (
           <button
             key={run.id}
             type="button"
             data-testid={`other-match-row-${run.id}`}
-            aria-disabled={isInView ? "true" : undefined}
-            disabled={isInView}
+            data-selected={isSelected ? "true" : undefined}
+            aria-disabled={lockedAsInTable ? "true" : undefined}
+            disabled={lockedAsInTable}
             onClick={() => {
-              if (isInView) return;
-              onSelectRun(run);
+              if (lockedAsInTable) return;
+              // Toggle: clicking an already-selected row deselects it;
+              // clicking an unselected row selects. Mirrors the main
+              // row eye's behavior so the user can undo a selection
+              // without navigating back to the row's page.
+              if (isSelected) {
+                onDeselectRun(run.id);
+              } else {
+                onSelectRun(run);
+              }
             }}
             className={cn(
               "flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs",
-              isInView
+              lockedAsInTable
                 ? "cursor-default text-muted-foreground/60"
                 : "hover:bg-accent",
             )}
@@ -137,11 +164,11 @@ export function SearchOtherMatchesDropdown({
             <span className="shrink-0 text-xs text-muted-foreground">
               {formatCreatedAt(run.createdAt)}
             </span>
-            {isInView && (
+            {!isSelected && isInView ? (
               <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase tracking-wide">
                 In table
               </span>
-            )}
+            ) : null}
           </button>
         );
       })}

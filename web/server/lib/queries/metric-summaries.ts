@@ -1180,6 +1180,56 @@ export async function queryMetricFilteredRunIds(
   return rows.map((r) => r.runId);
 }
 
+/**
+ * Per-run aggregated value of a single metric across a candidate set.
+ * Used by the bucket-tree group-sort path (`distinctGroupValues`) to mirror
+ * W&B's "sort groups by the average of the column over descendants" — we
+ * pull per-run metric values here, then bucket-AVG them in PostgreSQL.
+ *
+ * Returns one row per run that has at least one summary row for the metric;
+ * runs missing the metric are simply omitted (treated as NULL by the
+ * PG-side LEFT JOIN, sorted NULLS LAST).
+ */
+export async function queryRunMetricValuesByLogName(
+  ch: typeof clickhouse,
+  params: {
+    organizationId: string;
+    projectName: string;
+    logName: string;
+    aggregation: MetricAggregation;
+    candidateRunIds?: number[];
+  },
+): Promise<{ runId: number; value: number }[]> {
+  const { organizationId, projectName, logName, aggregation, candidateRunIds } = params;
+
+  const queryParams: Record<string, unknown> = {
+    tenantId: organizationId,
+    projectName,
+    logName,
+  };
+
+  let candidateFilter = "";
+  if (candidateRunIds && candidateRunIds.length > 0) {
+    candidateFilter = "AND runId IN ({candidateRunIds: Array(UInt64)})";
+    queryParams.candidateRunIds = candidateRunIds;
+  }
+
+  const query = `
+    SELECT
+      runId,
+      ${aggExpression(aggregation)} AS value
+    FROM mlop_metric_summaries_v2 FINAL
+    WHERE tenantId = {tenantId: String}
+      AND projectName = {projectName: String}
+      AND logName = {logName: String}
+      ${candidateFilter}
+    GROUP BY runId
+  `;
+
+  const result = await ch.query(query, queryParams);
+  return (await result.json()) as { runId: number; value: number }[];
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

@@ -97,6 +97,15 @@ export function ensureSelectedRunsIncluded(
 export function mergeSelectedRuns(
   runs: Run[],
   selectedRunsWithColors: Record<string, { run: Run; color: string }>,
+  /** When true, drops the second pass (out-of-page selected). Used
+   *  by the flat-mode displayedRuns memo when search is active so the
+   *  table matches grouped mode's "search filters DOS too" behaviour
+   *  — selected runs that don't match the search term are no longer
+   *  appended to the bottom of the visible page. The full selection
+   *  set is still in `selectedRunsWithColors` (counter, charts, etc.
+   *  use it directly), and the "Other matches — outside current
+   *  view" dropdown still surfaces non-selected hits. */
+  restrictToInPage = false,
 ): Run[] {
   const selectedIds = new Set(Object.keys(selectedRunsWithColors));
   if (selectedIds.size === 0) return [];
@@ -111,6 +120,8 @@ export function mergeSelectedRuns(
     }
   }
 
+  if (restrictToInPage) return inPage;
+
   // Second: selected runs NOT in the paginated array (from cache / other pages)
   const outOfPage: Run[] = [];
   for (const [id, entry] of Object.entries(selectedRunsWithColors)) {
@@ -120,4 +131,54 @@ export function mergeSelectedRuns(
   }
 
   return [...inPage, ...outOfPage];
+}
+
+/**
+ * Filter-alone reconciliation: drop `runs` whose id ISN'T in the
+ * server's filter-matched ID set. `runs` upstream is really
+ * `allVisibleRuns`, which merges getByIds (URL-prefetched + IndexedDB-
+ * hydrated) selection runs — those bypass the toolbar filter, so a
+ * plain "return runs" leaks selected-non-matching rows into the table
+ * whenever a user has an active filter chip but NO viewport toggle.
+ *
+ * When `serverFilteredRunIds` is undefined (query hasn't landed yet
+ * or filter is off), returns `runs` unchanged.
+ */
+export function intersectWithServerFilter<T extends { id: string }>(
+  runs: T[],
+  serverFilteredRunIds: ReadonlySet<string> | undefined,
+): T[] {
+  if (!serverFilteredRunIds) return runs;
+  return runs.filter((r) => serverFilteredRunIds.has(r.id));
+}
+
+/**
+ * Stable partition that promotes filter-matching rows to the front.
+ *
+ * Used to guarantee "all matching runs on page 1" under
+ * Filter + DOS/PSTT with small pageSize. Without this, TanStack's
+ * client sort could scatter matched runs across pages by whatever
+ * column the user was sorting on, and the filter divider then landed
+ * on page 1 with only a partial matching-set visible.
+ *
+ * Order within each half is preserved — so if `runs` was sorted by
+ * batch_size desc, the matched half comes out sorted by batch_size
+ * desc, and same for the unmatched half.
+ *
+ * No-op (returns the input reference untouched) when
+ * `serverFilteredRunIds` is undefined or empty, or when `runs` is
+ * empty, so callers can hand any set in without a preflight check.
+ */
+export function partitionMatchingFirst<T extends { id: string }>(
+  runs: T[],
+  serverFilteredRunIds: ReadonlySet<string> | undefined,
+): T[] {
+  if (!serverFilteredRunIds || serverFilteredRunIds.size === 0) return runs;
+  if (runs.length === 0) return runs;
+  const matched: T[] = [];
+  const unmatched: T[] = [];
+  for (const r of runs) {
+    (serverFilteredRunIds.has(r.id) ? matched : unmatched).push(r);
+  }
+  return [...matched, ...unmatched];
 }

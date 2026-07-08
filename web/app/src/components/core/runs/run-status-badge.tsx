@@ -72,7 +72,18 @@ export function RunStatusBadge({ run }: { run: BaseRun }) {
           <Badge
             data-testid="run-status-badge"
             variant={config.variant}
-            className={cn("font-medium", config.className)}
+            // text-[11px]: smaller than base Badge text-xs (12px), closer
+            // to the surrounding table row metadata.
+            // min-w-[5rem] + justify-center: force a consistent width
+            // across all statuses so "Failed" (6 chars) doesn't render
+            // visibly narrower than "Completed" / "Cancelled" /
+            // "Terminated" (9-10 chars). The longest label is 10 chars
+            // — at ~7px/char + px-2 padding, 5rem (80px) fits all of
+            // them with the text centered.
+            className={cn(
+              "text-[11px] font-medium min-w-[5rem] justify-center",
+              config.className,
+            )}
           >
             {config.label}
           </Badge>

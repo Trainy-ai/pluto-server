@@ -37,6 +37,10 @@ interface MetricsDisplayProps {
   /** Run IDs marked hidden — passed into ChartSyncProvider so charts mounting
    *  after a state change see the right value via the synchronous ref-sync path. */
   hiddenRunIds?: Set<string>;
+  /** Encoded grouping chain — when non-empty, line-chart widgets render
+   *  one aggregated line + min/max band per group instead of one line
+   *  per run. */
+  groupBy?: string[];
 }
 
 /**
@@ -57,6 +61,7 @@ export const MetricsDisplay = memo(function MetricsDisplay({
   onInheritedChange,
   experimentRunIdsMap,
   hiddenRunIds,
+  groupBy,
 }: MetricsDisplayProps) {
   const [searchState, setSearchState] = useState<SearchState>({
     query: "",
@@ -214,6 +219,8 @@ export const MetricsDisplay = memo(function MetricsDisplay({
             organizationId={organizationId}
             projectName={projectName}
             searchState={searchState}
+            groupBy={groupBy}
+            hiddenRunIds={hiddenRunIds}
           />
         </div>
         </FullscreenProvider>
@@ -275,6 +282,7 @@ export const MetricsDisplay = memo(function MetricsDisplay({
                 projectName={projectName}
                 globalLogXAxis={settings.xAxisLogScale}
                 globalLogYAxis={settings.yAxisLogScale}
+                groupBy={groupBy}
               />
             </VirtualizedGroup>
           );

@@ -64,6 +64,7 @@ describe("useSearchOtherMatches", () => {
           inViewRunIds: new Set(),
           filterActive: true,
           displayOnlySelectedActive: false,
+          pinSelectedToTopActive: false,
         }),
       { wrapper: makeWrapper() },
     );
@@ -82,6 +83,7 @@ describe("useSearchOtherMatches", () => {
           inViewRunIds: new Set(),
           filterActive: false,
           displayOnlySelectedActive: false,
+          pinSelectedToTopActive: false,
         }),
       { wrapper: makeWrapper() },
     );
@@ -103,6 +105,7 @@ describe("useSearchOtherMatches", () => {
           inViewRunIds: new Set(),
           filterActive: true,
           displayOnlySelectedActive: false,
+          pinSelectedToTopActive: false,
         }),
       { wrapper: makeWrapper() },
     );
@@ -129,6 +132,7 @@ describe("useSearchOtherMatches", () => {
           inViewRunIds: new Set(),
           filterActive: false,
           displayOnlySelectedActive: true,
+          pinSelectedToTopActive: false,
         }),
       { wrapper: makeWrapper() },
     );
@@ -150,6 +154,7 @@ describe("useSearchOtherMatches", () => {
           inViewRunIds: new Set(["A"]),
           filterActive: true,
           displayOnlySelectedActive: false,
+          pinSelectedToTopActive: false,
         }),
       { wrapper: makeWrapper() },
     );
@@ -170,6 +175,7 @@ describe("useSearchOtherMatches", () => {
           inViewRunIds: new Set(),
           filterActive: true,
           displayOnlySelectedActive: false,
+          pinSelectedToTopActive: false,
           enabled: false,
         }),
       { wrapper: makeWrapper() },

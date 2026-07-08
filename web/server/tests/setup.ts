@@ -1790,6 +1790,302 @@ async function setupTestData(): Promise<TestData> {
     console.log('   ✓ zoom-visibility runs already exist');
   }
 
+  // 5e2. grouping-chart-test — deterministic FLAT-LINE runs (constant y,
+  // no noise) so grouped-chart band aggregates are analytically exact and
+  // e2e can assert real numbers. Grouped by `tag-prefix:group`:
+  //   group a = runs at y {2,4,6}  -> mean 4,  band [2,6]
+  //   group b = runs at y {10,20}  -> mean 15, band [10,20]
+  // Subgrouped by `config:batch_size`: a/bs16 = {4,6} -> mean 5, band [4,6].
+  // Hiding gc-a3 (y=6) -> group a becomes {2,4} -> mean 3, band [2,4].
+  console.log('\n5️⃣e2 Creating grouping-chart-test runs...');
+  const groupingChartProject = await prisma.projects.upsert({
+    where: {
+      organizationId_name: { organizationId: org.id, name: 'grouping-chart-test' },
+    },
+    create: { name: 'grouping-chart-test', organizationId: org.id },
+    update: {},
+  });
+
+  const gcExisting = await prisma.runs.findFirst({
+    where: { projectId: groupingChartProject.id, organizationId: org.id, name: 'gc-a1' },
+    select: { id: true },
+  });
+
+  if (!gcExisting) {
+    const gcSeed = [
+      { name: 'gc-a1', group: 'a', batchSize: 8, y: 2 },
+      { name: 'gc-a2', group: 'a', batchSize: 16, y: 4 },
+      { name: 'gc-a3', group: 'a', batchSize: 16, y: 6 },
+      { name: 'gc-b1', group: 'b', batchSize: 8, y: 10 },
+      { name: 'gc-b2', group: 'b', batchSize: 16, y: 20 },
+    ];
+    const GC_STEPS = 20;
+    const GC_METRICS = ['train/loss', 'train/accuracy'];
+    // Created ~363 days in the past so auto-select doesn't grab them.
+    const gcBase = new Date(Date.now() - 363 * 24 * 60 * 60 * 1000);
+
+    const gcRuns: { id: bigint; y: number; createdAt: Date }[] = [];
+    for (let i = 0; i < gcSeed.length; i++) {
+      const s = gcSeed[i];
+      const createdAt = new Date(gcBase.getTime() + i * 1000);
+      const run = await prisma.runs.create({
+        data: {
+          name: s.name,
+          organizationId: org.id,
+          projectId: groupingChartProject.id,
+          createdById: user.id,
+          creatorApiKeyId: apiKey.id,
+          status: 'COMPLETED',
+          tags: [`group:${s.group}`],
+          config: { batch_size: s.batchSize },
+          systemMetadata: { hostname: 'gc-host', python: '3.11' },
+          createdAt,
+          updatedAt: createdAt,
+        },
+      });
+      gcRuns.push({ id: run.id, y: s.y, createdAt });
+      // Backfill so `config:batch_size` is groupable/filterable server-side.
+      await extractAndUpsertColumnKeys(
+        prisma,
+        org.id,
+        groupingChartProject.id,
+        { batch_size: s.batchSize },
+        { hostname: 'gc-host', python: '3.11' },
+        run.id,
+      );
+    }
+
+    await prisma.runLogs.createMany({
+      data: gcRuns.flatMap((r) =>
+        GC_METRICS.map((logName) => ({
+          runId: r.id,
+          logName,
+          logGroup: 'train',
+          logType: 'METRIC' as const,
+        })),
+      ),
+      skipDuplicates: true,
+    });
+
+    const gcClickhouseUrl = process.env.CLICKHOUSE_URL;
+    if (gcClickhouseUrl) {
+      const gcClickhouse = createClient({
+        url: gcClickhouseUrl,
+        username: process.env.CLICKHOUSE_USER || 'default',
+        password: process.env.CLICKHOUSE_PASSWORD || '',
+      });
+      const gcRows: Record<string, unknown>[] = [];
+      for (const r of gcRuns) {
+        const base = r.createdAt.getTime();
+        for (const logName of GC_METRICS) {
+          for (let step = 0; step < GC_STEPS; step++) {
+            gcRows.push({
+              tenantId: org.id,
+              projectName: groupingChartProject.name,
+              runId: Number(r.id),
+              logGroup: 'train',
+              logName,
+              time: new Date(base + step * 1000).toISOString().replace('T', ' ').replace('Z', ''),
+              step,
+              value: r.y, // FLAT, no noise -> exact per-step band mean/min/max.
+            });
+          }
+        }
+      }
+      await gcClickhouse.insert({ table: 'mlop_metrics', values: gcRows, format: 'JSONEachRow' });
+      await gcClickhouse.close();
+      console.log(`   ✓ Seeded ${gcRows.length} grouping-chart-test datapoints (flat lines)`);
+    }
+    console.log(`   ✓ Created grouping-chart-test with ${gcRuns.length} flat-line runs`);
+  } else {
+    console.log('   ✓ grouping-chart-test runs already exist');
+  }
+
+  // 5e2b. "Grouped Multi-Metric Test" dashboard on grouping-chart-test — one
+  // static widget charting BOTH metrics (train/loss + train/accuracy). Grouped,
+  // this renders 2 groups × 2 metrics; the fix under test gives each metric a
+  // distinct dash (color = group, dash = metric).
+  const groupedMultiMetricConfig = {
+    version: 1,
+    sections: [
+      {
+        id: 'section-mm',
+        name: 'Multi-Metric',
+        collapsed: false,
+        widgets: [
+          {
+            id: 'widget-mm-loss-acc',
+            type: 'chart',
+            config: {
+              metrics: ['train/loss', 'train/accuracy'],
+              xAxis: 'step',
+              yAxisScale: 'linear',
+              xAxisScale: 'linear',
+              aggregation: 'LAST',
+              showOriginal: false,
+            },
+            layout: { x: 0, y: 0, w: 12, h: 4 },
+          },
+        ],
+      },
+    ],
+    settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
+  };
+  await prisma.dashboardView.upsert({
+    where: {
+      organizationId_projectId_name: {
+        organizationId: org.id,
+        projectId: groupingChartProject.id,
+        name: 'Grouped Multi-Metric Test',
+      },
+    },
+    update: { config: groupedMultiMetricConfig },
+    create: {
+      name: 'Grouped Multi-Metric Test',
+      organizationId: org.id,
+      projectId: groupingChartProject.id,
+      createdById: user.id,
+      isDefault: false,
+      config: groupedMultiMetricConfig,
+    },
+  });
+  console.log('   ✓ Created Grouped Multi-Metric Test dashboard view');
+
+  // 5e3. grouping-scale-test — 22 runs, all under tag group:big, each with a
+  // distinct name and a distinct config.sub. Serves all three pagination layers,
+  // table-only (no metrics):
+  //   - leaf runs: group by Group → 1 bucket, 22 runs → "01-10 of 22"
+  //   - top-level footer: group by Name → 22 name-groups > DEFAULT_PAGE_SIZE 20
+  //     → 2 pages
+  //   - nested subgroups: group by Group → config:sub → 22 subgroups → inline
+  //     "01-10 of 22"
+  console.log('\n5️⃣e3 Creating grouping-scale-test runs...');
+  const groupingScaleProject = await prisma.projects.upsert({
+    where: {
+      organizationId_name: { organizationId: org.id, name: 'grouping-scale-test' },
+    },
+    create: { name: 'grouping-scale-test', organizationId: org.id },
+    update: {},
+  });
+  const gsExisting = await prisma.runs.findFirst({
+    where: { projectId: groupingScaleProject.id, organizationId: org.id, name: 'gs-00' },
+    select: { id: true },
+  });
+  if (!gsExisting) {
+    const gsBase = new Date(Date.now() - 362 * 24 * 60 * 60 * 1000);
+    await prisma.runs.createMany({
+      data: Array.from({ length: 22 }, (_, i) => ({
+        name: `gs-${String(i).padStart(2, '0')}`,
+        tags: ['group:big'],
+        config: { sub: `s${String(i).padStart(2, '0')}` },
+        organizationId: org.id,
+        projectId: groupingScaleProject.id,
+        createdById: user.id,
+        creatorApiKeyId: apiKey.id,
+        status: 'COMPLETED' as const,
+        createdAt: new Date(gsBase.getTime() + i * 1000),
+        updatedAt: new Date(gsBase.getTime() + i * 1000),
+      })),
+      skipDuplicates: true,
+    });
+    // Backfill config.sub so it's groupable server-side (nested subgroups).
+    const gsRuns = await prisma.runs.findMany({
+      where: { projectId: groupingScaleProject.id, organizationId: org.id },
+      select: { id: true, config: true, systemMetadata: true },
+    });
+    for (const gsRun of gsRuns) {
+      await extractAndUpsertColumnKeys(
+        prisma,
+        org.id,
+        groupingScaleProject.id,
+        gsRun.config,
+        gsRun.systemMetadata,
+        gsRun.id,
+      );
+    }
+    console.log('   ✓ Created grouping-scale-test with 22 runs (group:big, distinct config.sub)');
+  } else {
+    console.log('   ✓ grouping-scale-test runs already exist');
+  }
+
+  // 5e4. grouping-many-test — 12 single-run groups (group:g00..g11), each with a
+  // flat train/loss line, so grouping by Group produces 12 chart series and the
+  // 10-group cap (grouped-line-chart.tsx: effectiveMaxGroups = maxGroups ?? 10)
+  // triggers the "Showing 10 of ... 12 total selected groups" truncation banner.
+  console.log('\n5️⃣e4 Creating grouping-many-test runs...');
+  const groupingManyProject = await prisma.projects.upsert({
+    where: {
+      organizationId_name: { organizationId: org.id, name: 'grouping-many-test' },
+    },
+    create: { name: 'grouping-many-test', organizationId: org.id },
+    update: {},
+  });
+  const gmExisting = await prisma.runs.findFirst({
+    where: { projectId: groupingManyProject.id, organizationId: org.id, name: 'mm-00' },
+    select: { id: true },
+  });
+  if (!gmExisting) {
+    const GM_STEPS = 15;
+    const gmBase = new Date(Date.now() - 361 * 24 * 60 * 60 * 1000);
+    const gmRuns: { id: bigint; y: number; createdAt: Date }[] = [];
+    for (let i = 0; i < 12; i++) {
+      const createdAt = new Date(gmBase.getTime() + i * 1000);
+      const run = await prisma.runs.create({
+        data: {
+          name: `mm-${String(i).padStart(2, '0')}`,
+          organizationId: org.id,
+          projectId: groupingManyProject.id,
+          createdById: user.id,
+          creatorApiKeyId: apiKey.id,
+          status: 'COMPLETED',
+          tags: [`group:g${String(i).padStart(2, '0')}`],
+          createdAt,
+          updatedAt: createdAt,
+        },
+      });
+      gmRuns.push({ id: run.id, y: i + 1, createdAt });
+    }
+    await prisma.runLogs.createMany({
+      data: gmRuns.map((r) => ({
+        runId: r.id,
+        logName: 'train/loss',
+        logGroup: 'train',
+        logType: 'METRIC' as const,
+      })),
+      skipDuplicates: true,
+    });
+    const gmChUrl = process.env.CLICKHOUSE_URL;
+    if (gmChUrl) {
+      const gmCh = createClient({
+        url: gmChUrl,
+        username: process.env.CLICKHOUSE_USER || 'default',
+        password: process.env.CLICKHOUSE_PASSWORD || '',
+      });
+      const gmRows: Record<string, unknown>[] = [];
+      for (const r of gmRuns) {
+        const base = r.createdAt.getTime();
+        for (let step = 0; step < GM_STEPS; step++) {
+          gmRows.push({
+            tenantId: org.id,
+            projectName: groupingManyProject.name,
+            runId: Number(r.id),
+            logGroup: 'train',
+            logName: 'train/loss',
+            time: new Date(base + step * 1000).toISOString().replace('T', ' ').replace('Z', ''),
+            step,
+            value: r.y,
+          });
+        }
+      }
+      await gmCh.insert({ table: 'mlop_metrics', values: gmRows, format: 'JSONEachRow' });
+      await gmCh.close();
+      console.log(`   ✓ Seeded ${gmRows.length} grouping-many-test datapoints (12 groups)`);
+    }
+    console.log('   ✓ Created grouping-many-test with 12 single-run groups');
+  } else {
+    console.log('   ✓ grouping-many-test runs already exist');
+  }
+
   // 5f. Create pin-test runs with deterministic train/loss curves + images
   // at specific steps — used by image-pinning E2E tests for argmin/argmax
   // and "with image" variants. Each run has:
@@ -2514,6 +2810,76 @@ async function setupTestData(): Promise<TestData> {
   }
 
   console.log(`   ✓ Ensured ${createdMultiIndexRuns.length} multi-index-media runs are seeded`);
+
+  // 5h. Seed `run-groups-test` — the canonical project the Grouping v2
+  //     smoke tests read from (Suite 17c). Five runs: one ungrouped,
+  //     two under `group:alpha`, one each under `group:beta` and
+  //     `group:gamma`. Encoded as `group:*` tag prefixes rather than a
+  //     dedicated Runs.group column — matches how grouping-v2 emits
+  //     bucket paths for `field: "tag-prefix:group"`. The mutation-
+  //     isolated projects (mut-2a/2b/2c/mut-3/view-7) the retired
+  //     run-groups.spec.ts owned were dropped when that spec went away.
+  console.log('\n5️⃣h Creating run-groups project...');
+
+  // `optimizer` is a string config key (distinct values sgd/adam/adamw)
+  // so the `config:optimizer` grouping smoke tests (Suite 17e) match on
+  // textValue — avoids numeric `numericValue::text` formatting ambiguity
+  // in an assertion we can't run locally. Buckets: sgd×2 (both alpha),
+  // adam×2 (beta+gamma), adamw×1 (solo).
+  const runGroupsSeed: Array<{ name: string; groupTag: string | null; optimizer: string }> = [
+    { name: 'rg-solo', groupTag: null, optimizer: 'adamw' },
+    { name: 'rg-alpha-1', groupTag: 'alpha', optimizer: 'sgd' },
+    { name: 'rg-alpha-2', groupTag: 'alpha', optimizer: 'sgd' },
+    { name: 'rg-beta', groupTag: 'beta', optimizer: 'adam' },
+    { name: 'rg-gamma', groupTag: 'gamma', optimizer: 'adam' },
+  ];
+
+  const runGroupsProject = await prisma.projects.upsert({
+    where: {
+      organizationId_name: { organizationId: org.id, name: 'run-groups-test' },
+    },
+    create: { name: 'run-groups-test', organizationId: org.id },
+    update: {},
+  });
+
+  await prisma.runs.createMany({
+    data: runGroupsSeed.map((r) => ({
+      name: r.name,
+      tags: r.groupTag ? [`group:${r.groupTag}`] : [],
+      // config.optimizer powers the `config:optimizer` grouping smoke
+      // tests (Suite 17e).
+      config: { optimizer: r.optimizer },
+      organizationId: org.id,
+      projectId: runGroupsProject.id,
+      createdById: user.id,
+      creatorApiKeyId: apiKey.id,
+      status: 'COMPLETED' as const,
+      updatedAt: new Date(),
+    })),
+    skipDuplicates: true,
+  });
+
+  // Backfill ProjectColumnKey + RunFieldValue so `config:optimizer` is
+  // groupable/filterable server-side — grouping/group-filtering read
+  // run_field_values, NOT the raw config JSON (see distinct-group-values.ts
+  // and list-runs.ts). Same helper the bulk-run seed uses.
+  const runGroupsRuns = await prisma.runs.findMany({
+    where: { projectId: runGroupsProject.id, organizationId: org.id },
+    select: { id: true, config: true, systemMetadata: true },
+  });
+  for (const rgRun of runGroupsRuns) {
+    await extractAndUpsertColumnKeys(
+      prisma,
+      org.id,
+      runGroupsProject.id,
+      rgRun.config,
+      rgRun.systemMetadata,
+      rgRun.id,
+    );
+  }
+  console.log(
+    `   ✓ Ensured run-groups-test with ${runGroupsSeed.length} runs (+ config:optimizer backfill)`,
+  );
 
   // 6. Create a run in org 2 for org-switching tests
   console.log('\n6️⃣  Creating test run in org 2...');

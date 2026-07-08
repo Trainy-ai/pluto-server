@@ -12,6 +12,14 @@ import { extractCaptionFromDOM } from "@/components/charts/chart-export-utils";
 interface ChartSettings {
   logXAxis?: boolean;
   logYAxis?: boolean;
+  /** Charts tab override for workspace grouping. true = force
+   *  per-run for this chart only; undefined/false = follow. Backed
+   *  by the same localStorage entry as the log-scale toggles. */
+  groupingOverride?: boolean;
+  /** Per-chart cap on the number of distinct leaf groups the grouped
+   *  query aggregates (default 10, max 100). Lives alongside the
+   *  log-scale toggles so all per-chart prefs share one key. */
+  maxGroups?: number;
 }
 
 function getSettingsKey(groupId: string, metricName: string): string {
@@ -34,7 +42,9 @@ function saveSettings(groupId: string, metricName: string, settings: ChartSettin
   const key = getSettingsKey(groupId, metricName);
   const hasValues =
     settings.logXAxis != null ||
-    settings.logYAxis != null;
+    settings.logYAxis != null ||
+    settings.groupingOverride != null ||
+    settings.maxGroups != null;
   if (!hasValues) {
     localStorage.removeItem(key);
   } else {
@@ -52,6 +62,14 @@ interface ChartCardWrapperProps {
     yZoom?: boolean,
     yZoomRange?: [number, number] | null,
     onYZoomRangeChange?: (range: [number, number] | null) => void,
+    /** True when the per-chart override toggle is ON (this chart
+     *  ignores workspace grouping). The render function uses this to
+     *  pick GroupedLineChart vs MultiLineChart. */
+    groupingOverridden?: boolean,
+    /** Per-chart cap on rendered leaf groups — forwarded to
+     *  GroupedLineChart's `maxGroups` prop. Undefined means defer to
+     *  the backend's default (10). */
+    maxGroups?: number,
   ) => React.ReactNode;
   /** Incrementing this key forces re-reading settings from localStorage (used after reset all) */
   boundsResetKey?: number;
@@ -59,6 +77,13 @@ interface ChartCardWrapperProps {
   globalLogXAxis?: boolean;
   /** Global Y-axis log scale from settings panel (used as default when no per-chart override) */
   globalLogYAxis?: boolean;
+  /** True when the page has active groupBy — controls visibility of
+   *  the per-chart "Override Grouping" toggle in the gear popover. */
+  workspaceGroupingActive?: boolean;
+  /** Fires when the user flips the per-chart override toggle. The
+   *  parent (MultiGroup → ChartCardWrapper) needs to know so it can
+   *  swap GroupedLineChart out for MultiLineChart on this widget. */
+  onGroupingOverrideChange?: (overridden: boolean) => void;
 }
 
 export function ChartCardWrapper({
@@ -68,6 +93,8 @@ export function ChartCardWrapper({
   boundsResetKey = 0,
   globalLogXAxis = false,
   globalLogYAxis = false,
+  workspaceGroupingActive,
+  onGroupingOverrideChange,
 }: ChartCardWrapperProps) {
   const [settings, setSettings] = useState<ChartSettings>(() =>
     loadSettings(groupId, metricName)
@@ -102,6 +129,37 @@ export function ChartCardWrapper({
     [groupId, metricName]
   );
 
+  const handleGroupingOverrideChange = useCallback(
+    (overridden: boolean) => {
+      setSettings((prev) => {
+        const next = {
+          ...prev,
+          groupingOverride: overridden || undefined,
+        };
+        saveSettings(groupId, metricName, next);
+        return next;
+      });
+      // Bubble up so MultiGroup picks the right render path on the
+      // next pass.
+      onGroupingOverrideChange?.(overridden);
+    },
+    [groupId, metricName, onGroupingOverrideChange],
+  );
+
+  // Effective override for the popover toggle's initial state.
+  const groupingOverridden = settings.groupingOverride ?? false;
+
+  const handleMaxGroupsChange = useCallback(
+    (value: number) => {
+      setSettings((prev) => {
+        const next = { ...prev, maxGroups: value };
+        saveSettings(groupId, metricName, next);
+        return next;
+      });
+    },
+    [groupId, metricName],
+  );
+
   const handleYZoomRangeChange = useCallback((range: [number, number] | null) => {
     setYZoomRange(range);
   }, []);
@@ -112,7 +170,7 @@ export function ChartCardWrapper({
     <>
       <div ref={chartContainerRef} className="group relative h-full w-full" data-testid="chart-card" data-log-x-scale={effectiveLogXAxis || undefined} data-log-y-scale={effectiveLogYAxis || undefined}>
         {/* Chart content */}
-        {renderChart(undefined, effectiveLogXAxis, effectiveLogYAxis, true, yZoomRange, handleYZoomRangeChange)}
+        {renderChart(undefined, effectiveLogXAxis, effectiveLogYAxis, true, yZoomRange, handleYZoomRangeChange, groupingOverridden, settings.maxGroups)}
 
         {/* Hover toolbar - top right */}
         <div className="absolute top-1 right-1 z-10 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
@@ -130,6 +188,11 @@ export function ChartCardWrapper({
             logXAxis={effectiveLogXAxis}
             logYAxis={effectiveLogYAxis}
             onLogScaleChange={handleLogScaleChange}
+            workspaceGroupingActive={workspaceGroupingActive}
+            groupingOverridden={groupingOverridden}
+            onGroupingOverrideChange={handleGroupingOverrideChange}
+            maxGroups={settings.maxGroups}
+            onMaxGroupsChange={handleMaxGroupsChange}
           >
             <Button
               variant="ghost"
@@ -170,7 +233,7 @@ export function ChartCardWrapper({
           logYAxis={effectiveLogYAxis}
           onLogScaleChange={handleLogScaleChange}
         >
-          {renderChart(undefined, effectiveLogXAxis, effectiveLogYAxis, true, yZoomRange, handleYZoomRangeChange)}
+          {renderChart(undefined, effectiveLogXAxis, effectiveLogYAxis, true, yZoomRange, handleYZoomRangeChange, groupingOverridden, settings.maxGroups)}
         </ChartFullscreenDialog>
       )}
     </>

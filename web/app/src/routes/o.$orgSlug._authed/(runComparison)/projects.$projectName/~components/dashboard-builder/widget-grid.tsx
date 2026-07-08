@@ -5,7 +5,7 @@ import "react-resizable/css/styles.css";
 import "./widget-grid.css";
 import { cn } from "@/lib/utils";
 import { VirtualizedChart } from "@/components/core/virtualized-chart";
-import type { Widget, HistogramViewMode } from "../../~types/dashboard-types";
+import type { Widget, ChartWidgetConfig, HistogramViewMode } from "../../~types/dashboard-types";
 import { WidgetCard } from "./widget-card";
 import type { SectionLocation } from "./use-dashboard-config";
 import { ImageStepSyncProvider, useImageStepSyncContext } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~context/image-step-sync-context";
@@ -27,6 +27,16 @@ interface WidgetGridProps {
   cols?: number;
   rowHeight?: number;
   containerWidth?: number;
+  /** True when the page has active groupBy — controls visibility of
+   *  the per-chart grouping toggle in WidgetCard's settings popover. */
+  workspaceGroupingActive?: boolean;
+  /** Per-widget grouping override callback (persists into the
+   *  widget's ChartWidgetConfig.groupingOverride field). `overridden`
+   *  semantics: true = override workspace (per-run); false = follow. */
+  onUpdateGroupingOverride?: (widgetId: string, overridden: boolean) => void;
+  /** Per-widget maxGroups callback (persists into the widget's
+   *  ChartWidgetConfig.maxGroups field). */
+  onUpdateMaxGroups?: (widgetId: string, value: number) => void;
 }
 
 export function WidgetGrid({
@@ -46,6 +56,9 @@ export function WidgetGrid({
   cols: colsProp = 12,
   rowHeight = 80,
   containerWidth = 1200,
+  workspaceGroupingActive,
+  onUpdateGroupingOverride,
+  onUpdateMaxGroups,
 }: WidgetGridProps) {
   const cols = coarseMode ? 6 : colsProp;
 
@@ -247,6 +260,23 @@ export function WidgetGrid({
               moveTargets={moveTargets}
               onFullscreen={() => onFullscreenWidget?.(widget)}
               onUpdateScale={(axis, value) => onUpdateWidgetScale?.(widget.id, axis, value)}
+              workspaceGroupingActive={workspaceGroupingActive}
+              groupingOverridden={
+                widget.type === "chart"
+                  ? (widget.config as ChartWidgetConfig).groupingOverride === "off"
+                  : undefined
+              }
+              onGroupingOverrideChange={(overridden) =>
+                onUpdateGroupingOverride?.(widget.id, overridden)
+              }
+              maxGroups={
+                widget.type === "chart"
+                  ? (widget.config as ChartWidgetConfig).maxGroups
+                  : undefined
+              }
+              onMaxGroupsChange={(value) =>
+                onUpdateMaxGroups?.(widget.id, value)
+              }
               onUpdateHistogramMode={(mode) => onUpdateWidgetHistogramMode?.(widget.id, mode)}
               renderWidget={() => renderWidget(widget)}
             />

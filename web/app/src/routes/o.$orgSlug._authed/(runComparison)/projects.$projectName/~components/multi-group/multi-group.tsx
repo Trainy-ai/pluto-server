@@ -2,6 +2,7 @@
 
 import { DropdownRegion } from "@/components/core/runs/dropdown-region/dropdown-region";
 import { MultiLineChart } from "./line-chart-multi";
+import { GroupedLineChart } from "./grouped-line-chart";
 import { MultiGroupAudio } from "./audio";
 import { MultiGroupImage } from "./image";
 import { MultiGroupVideo } from "./video";
@@ -47,6 +48,11 @@ interface MultiGroupProps {
   globalLogXAxis?: boolean;
   /** Global Y-axis log scale from settings panel */
   globalLogYAxis?: boolean;
+  /** Active grouping chain — when non-empty, METRIC charts in this
+   *  group render via <GroupedLineChart> instead of <MultiLineChart>.
+   *  Non-line widget types (histogram, audio, image, video) stay
+   *  per-run regardless. */
+  groupBy?: string[];
 }
 
 // Constants for responsive design
@@ -70,8 +76,10 @@ export const MultiGroup = ({
   boundsResetKey,
   globalLogXAxis,
   globalLogYAxis,
+  groupBy,
 }: MultiGroupProps) => {
   const hiddenRunIds = useHiddenRunIds();
+  const isGrouped = !!groupBy && groupBy.length > 0;
 
   // Memoize lines arrays for each metric to prevent recreation
   const memoizedLines = useMemo(() => {
@@ -111,20 +119,51 @@ export const MultiGroup = ({
               boundsResetKey={boundsResetKey}
               globalLogXAxis={globalLogXAxis}
               globalLogYAxis={globalLogYAxis}
-              renderChart={(_onResetBounds, logXAxis, logYAxis, _yZoom, yZoomRange, onYZoomRangeChange) => (
-                <MultiLineChart
-                  lines={lines}
-                  title={metric.name}
-                  xlabel="step"
-                  organizationId={organizationId}
-                  projectName={projectName}
-                  allRunsCompleted={allRunsCompleted}
-                  logXAxis={logXAxis}
-                  logYAxis={logYAxis}
-                  yZoomRange={yZoomRange}
-                  onYZoomRangeChange={onYZoomRangeChange}
-                />
-              )}
+              workspaceGroupingActive={isGrouped}
+              // No upward callback needed — the inline renderChart
+              // closure reads groupingOverridden from its arguments
+              // each render.
+              renderChart={(_onResetBounds, logXAxis, logYAxis, _yZoom, yZoomRange, onYZoomRangeChange, groupingOverridden, maxGroups) =>
+                isGrouped && !groupingOverridden ? (
+                  <GroupedLineChart
+                    organizationId={organizationId}
+                    projectName={projectName}
+                    groupBy={groupBy!}
+                    metrics={[metric.name]}
+                    // metric.data carries the user-selected runs that
+                    // have this metric — exactly the universe the
+                    // chart should aggregate over. Backend then drops
+                    // anything in hiddenRunIds before grouping.
+                    selectedRunIds={metric.data.map((d) => d.runId)}
+                    hiddenRunIds={Array.from(hiddenRunIds)}
+                    title={metric.name}
+                    xlabel="step"
+                    logXAxis={logXAxis}
+                    logYAxis={logYAxis}
+                    yZoomRange={yZoomRange}
+                    onYZoomRangeChange={onYZoomRangeChange}
+                    // Charts tab doesn't carry a per-run settings
+                    // selector; GroupedLineChart defaults to "full"
+                    // inside, the same key MultiLineChart uses for
+                    // the comparison view.
+                    settingsRunId={undefined}
+                    maxGroups={maxGroups}
+                  />
+                ) : (
+                  <MultiLineChart
+                    lines={lines}
+                    title={metric.name}
+                    xlabel="step"
+                    organizationId={organizationId}
+                    projectName={projectName}
+                    allRunsCompleted={allRunsCompleted}
+                    logXAxis={logXAxis}
+                    logYAxis={logYAxis}
+                    yZoomRange={yZoomRange}
+                    onYZoomRangeChange={onYZoomRangeChange}
+                  />
+                )
+              }
             />
           );
         }
@@ -205,6 +244,12 @@ export const MultiGroup = ({
       boundsResetKey,
       globalLogXAxis,
       globalLogYAxis,
+      // Without isGrouped + groupBy in the deps, the inline render
+      // functions stay frozen against the previous `isGrouped` value
+      // after a preset switch — the user sees stale per-run lines (or
+      // stale grouped lines) until they hard-refresh.
+      isGrouped,
+      groupBy,
     ],
   );
 

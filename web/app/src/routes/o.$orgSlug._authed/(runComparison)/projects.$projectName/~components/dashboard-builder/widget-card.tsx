@@ -59,6 +59,18 @@ interface WidgetCardProps {
   moveTargets?: MoveTarget[];
   onFullscreen?: () => void;
   onUpdateScale?: (axis: "x" | "y", value: boolean) => void;
+  /** True when the page has active groupBy — controls visibility of
+   *  the per-chart "Override Grouping" toggle in Chart Settings. */
+  workspaceGroupingActive?: boolean;
+  /** Per-chart override: true = override (force per-run); false /
+   *  undefined = follow workspace grouping. Persisted via
+   *  ChartWidgetConfig.groupingOverride. */
+  groupingOverridden?: boolean;
+  onGroupingOverrideChange?: (overridden: boolean) => void;
+  /** Per-widget maxGroups cap (1..100). Persisted via
+   *  ChartWidgetConfig.maxGroups. */
+  maxGroups?: number;
+  onMaxGroupsChange?: (value: number) => void;
   onUpdateHistogramMode?: (mode: HistogramViewMode) => void;
   renderWidget: () => ReactNode;
 }
@@ -73,6 +85,11 @@ export function WidgetCard({
   moveTargets,
   onFullscreen,
   onUpdateScale,
+  workspaceGroupingActive,
+  groupingOverridden,
+  onGroupingOverrideChange,
+  maxGroups,
+  onMaxGroupsChange,
   onUpdateHistogramMode,
   renderWidget,
 }: WidgetCardProps) {
@@ -145,6 +162,11 @@ export function WidgetCard({
                 logXAxis={chartConfig?.xAxisScale === "log"}
                 logYAxis={chartConfig?.yAxisScale === "log"}
                 onLogScaleChange={(axis, value) => onUpdateScale?.(axis, value)}
+                workspaceGroupingActive={workspaceGroupingActive}
+                groupingOverridden={groupingOverridden}
+                onGroupingOverrideChange={onGroupingOverrideChange}
+                maxGroups={maxGroups}
+                onMaxGroupsChange={onMaxGroupsChange}
               >
                 <Button
                   variant="ghost"

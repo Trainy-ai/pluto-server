@@ -3,6 +3,13 @@ import { protectedOrgProcedure } from "../../../../lib/trpc";
 import { countRunsWithSearch } from "../../../../lib/run-search";
 import { buildFieldFilterConditions, buildSystemFilterConditions } from "./list-runs";
 import { queryMetricFilteredRunIds } from "../../../../lib/queries/metric-summaries";
+import { applyGroupFiltersToInput, loadGroupFilterDataTypes, buildTagPrefixExclusionConditions } from "../../../../lib/group-field";
+import { sqidDecode } from "../../../../lib/sqid";
+
+const groupFilterSchema = z.object({
+  field: z.string(),
+  value: z.string().nullable(),
+});
 
 const dateFilterSchema = z.object({
   field: z.enum(["createdAt", "updatedAt", "statusUpdated"]),
@@ -43,9 +50,40 @@ export const countRunsProcedure = protectedOrgProcedure
       fieldFilters: z.array(fieldFilterSchema).optional(),
       metricFilters: z.array(metricFilterSchema).optional(),
       systemFilters: z.array(systemFilterSchema).optional(),
+      groupFilters: z.array(groupFilterSchema).optional(),
+      /** Restrict the count to this set of Sqid run ids intersected
+       *  with the rest of the filter conditions. Used by the toolbar's
+       *  "N of your S selected runs match the filter" line — we
+       *  pass the selected runs and get back how many satisfy the
+       *  current toolbar filter. Sqids decoded server-side. */
+      runIds: z.array(z.string()).max(1000).optional(),
     })
   )
   .query(async ({ ctx, input }) => {
+    // Decode Sqid run ids up-front — every downstream branch needs
+    // them in bigint form. If the user passed runIds but none decoded
+    // to valid bigints, the intersection is trivially empty.
+    let runIdBigints: bigint[] | null = null;
+    if (input.runIds && input.runIds.length > 0) {
+      runIdBigints = [];
+      for (const sqid of input.runIds) {
+        const decoded = sqidDecode(sqid);
+        if (decoded != null) runIdBigints.push(BigInt(decoded));
+      }
+      if (runIdBigints.length === 0) return 0;
+    }
+    // Translate group filters into the regular filter arrays so both
+    // the search-count and standard-count paths get them.
+    if (input.groupFilters && input.groupFilters.length > 0) {
+      const project = await ctx.prisma.projects.findFirst({
+        where: { name: input.projectName, organizationId: input.organizationId },
+        select: { id: true },
+      });
+      if (!project) return 0;
+      const dataTypes = await loadGroupFilterDataTypes(ctx.prisma, project.id, input.groupFilters);
+      input = applyGroupFiltersToInput(input, input.groupFilters, dataTypes);
+    }
+
     // If search is provided, use search count
     if (input.search && input.search.trim()) {
       return countRunsWithSearch(ctx.prisma, {
@@ -58,12 +96,16 @@ export const countRunsProcedure = protectedOrgProcedure
       });
     }
 
-    // Use raw SQL when any advanced filters are present
+    // Use raw SQL when any advanced filters are present, or when a
+    // runIds intersection is requested (simplest place to add the
+    // `r.id = ANY(...)` clause — the Prisma-count branch below has no
+    // easy hook for it).
     const hasFieldFilters = input.fieldFilters && input.fieldFilters.length > 0;
     const hasMetricFilters = input.metricFilters && input.metricFilters.length > 0;
     const hasSystemFilters = input.systemFilters && input.systemFilters.length > 0;
+    const hasTagPrefixExclusions = !!(input as any).tagPrefixExclusions?.length;
 
-    if (hasFieldFilters || hasMetricFilters || hasSystemFilters) {
+    if (hasFieldFilters || hasMetricFilters || hasSystemFilters || hasTagPrefixExclusions || runIdBigints) {
       const conditions: string[] = [];
       const queryParams: (string | bigint | string[] | number)[] = [];
 
@@ -109,6 +151,9 @@ export const countRunsProcedure = protectedOrgProcedure
         buildFieldFilterConditions(conditions, queryParams, input.fieldFilters);
       }
 
+      // Tag-prefix exclusions ("(unset)" bucket drill-in)
+      buildTagPrefixExclusionConditions(conditions, queryParams, (input as any).tagPrefixExclusions);
+
       // Metric filters — query ClickHouse for matching run IDs
       if (hasMetricFilters && input.metricFilters) {
         const mfRunIds = await queryMetricFilteredRunIds(ctx.clickhouse, {
@@ -118,6 +163,14 @@ export const countRunsProcedure = protectedOrgProcedure
         });
         if (mfRunIds.length === 0) return 0;
         queryParams.push(mfRunIds.map((id) => BigInt(id)) as any);
+        conditions.push(`r.id = ANY($${queryParams.length}::bigint[])`);
+      }
+
+      // Restrict to the caller's Sqid-decoded selection (if any).
+      // Placed before system filters so `queryParams.length` doesn't
+      // shift under later conditionals.
+      if (runIdBigints) {
+        queryParams.push(runIdBigints as any);
         conditions.push(`r.id = ANY($${queryParams.length}::bigint[])`);
       }
 

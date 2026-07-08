@@ -33,7 +33,45 @@ export function buildScalesConfig({
 }: ScalesConfigParams): uPlot.Scales {
   return {
     x: logXAxis
-      ? { distr: 3 }
+      ? {
+          distr: 3,
+          auto: true,
+          // Guard against scaleMin <= 0. uPlot's logAxisSplits enters an
+          // infinite loop when given scaleMin = 0: log(0) = -Infinity →
+          // foundIncr = pow(10, -Inf) = 0 → split = scaleMin + foundIncr
+          // never advances → splits.push() runs forever → browser OOMs
+          // with "Invalid array length" (Array max length exceeded).
+          //
+          // filterDataForLogScale strips x <= 0 from each series before
+          // data hits uPlot, but uPlot can still pass dataMin = 0 to the
+          // range callback during chart-recreate transitions (the scale
+          // briefly holds stale linear-mode bounds before the new data
+          // is applied) — or if a series carries a leading 0 that wasn't
+          // stripped.
+          //
+          // If dataMin isn't positive, scan self.data[0] for the
+          // smallest actual positive x and use that. Falling back to
+          // a tiny epsilon like 1e-10 (an earlier attempt) made the
+          // axis render from 1e-10 to dataMax with mostly-empty space
+          // on the left — technically valid but visually broken.
+          range: (self, dataMin, dataMax) => {
+            const findMinPositive = (): number => {
+              const xs = self.data[0];
+              if (!xs || xs.length === 0) return 1;
+              let m = Infinity;
+              for (let i = 0; i < xs.length; i++) {
+                const v = xs[i];
+                if (v != null && v > 0 && v < m) m = v;
+              }
+              return Number.isFinite(m) ? m : 1;
+            };
+            const safeMin =
+              dataMin != null && dataMin > 0 ? dataMin : findMinPositive();
+            const safeMax =
+              dataMax != null && dataMax > safeMin ? dataMax : safeMin * 10;
+            return [safeMin, safeMax];
+          },
+        }
       : isDateTime
         ? { time: true, auto: true }
         : { auto: true },

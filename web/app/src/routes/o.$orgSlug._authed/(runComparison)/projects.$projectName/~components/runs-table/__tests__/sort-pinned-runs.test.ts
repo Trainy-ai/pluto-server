@@ -72,7 +72,7 @@ describe("sortPinnedRuns", () => {
     it("ascending", () => {
       const result = sortPinnedRuns(
         true, makeSelected(runs),
-        [{ id: "custom-systemMetadata-createdAt", desc: false }], cols,
+        [{ id: "custom-system-createdAt", desc: false }], cols,
       );
       expect(names(result)).toEqual(["earliest", "mid", "latest"]);
     });
@@ -80,7 +80,7 @@ describe("sortPinnedRuns", () => {
     it("descending", () => {
       const result = sortPinnedRuns(
         true, makeSelected(runs),
-        [{ id: "custom-systemMetadata-createdAt", desc: true }], cols,
+        [{ id: "custom-system-createdAt", desc: true }], cols,
       );
       expect(names(result)).toEqual(["latest", "mid", "earliest"]);
     });

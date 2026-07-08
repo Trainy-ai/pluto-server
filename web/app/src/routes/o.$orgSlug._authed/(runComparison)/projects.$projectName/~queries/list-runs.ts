@@ -30,6 +30,11 @@ export const useListRuns = (
   // flat field-value blobs on each row. [] → empty blobs (no keys).
   // omitted → legacy behavior (every key for every run; unbounded payload).
   visibleColumns?: VisibleColumn[],
+  // When false, skip the fetch entirely (returns empty pages). Used by the
+  // project page to disable the flat list when grouping is active — the
+  // bucket tree drives the UI in that mode and the flat list is never
+  // rendered, so the ~10-200KB payload is pure waste.
+  enabled: boolean = true,
 ) => {
   // Fetch at least 2x the display page size so clicking "next" always has data
   const fetchLimit = Math.max(pageSize ? pageSize * 2 : RUNS_FETCH_LIMIT, RUNS_FETCH_LIMIT);
@@ -120,6 +125,7 @@ export const useListRuns = (
     staleTime: 5 * 1000 * 60,
     initialPageParam: undefined,
     placeholderData: keepPreviousData,
+    enabled,
   });
 };
 

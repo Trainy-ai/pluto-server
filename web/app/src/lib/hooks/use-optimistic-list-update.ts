@@ -36,7 +36,17 @@ export function patchRunsListCache(
     })
     .forEach(([queryKey, data]) => {
       snapshots.push([queryKey, data]);
-      if (!data) return;
+      // A cached but never-enabled infinite query can be a truthy `{}`
+      // rather than `undefined` (React Query's `placeholderData:
+      // keepPreviousData` on an initially-disabled query — see
+      // useListRuns). Guarding on `!data` alone let those partial
+      // shapes through and `data.pages.map(...)` two lines below
+      // threw `Cannot read properties of undefined (reading 'map')`
+      // inside the mutation's onMutate, which surfaced as a
+      // misleading "Failed to update notes" toast even though the
+      // server hadn't been called yet. Skip anything that isn't a
+      // fully-formed infinite-query snapshot.
+      if (!data || !Array.isArray(data.pages)) return;
       queryClient.setQueryData<InfiniteData<ListRunResponse>>(queryKey, {
         ...data,
         pages: data.pages.map((page) => ({
@@ -73,7 +83,10 @@ export function removeRunsFromListCache(
     })
     .forEach(([queryKey, data]) => {
       snapshots.push([queryKey, data]);
-      if (!data) return;
+      // See `patchRunsListCache` above for why we guard `data.pages`
+      // as well as `data` — partial infinite-query snapshots leak
+      // through the `!data` check under keepPreviousData.
+      if (!data || !Array.isArray(data.pages)) return;
       queryClient.setQueryData<InfiniteData<ListRunResponse>>(queryKey, {
         ...data,
         pages: data.pages.map((page) => ({

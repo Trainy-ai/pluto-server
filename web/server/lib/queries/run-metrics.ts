@@ -559,22 +559,49 @@ export async function queryRunMetricsBatchBucketedByLogName(
     queryParams.stepMax = stepMax;
   }
 
-  // When no zoom range is provided, read bounds from mlop_metric_summaries
-  // (refreshable MV, ≤5 min stale on the right edge for RUNNING runs).
-  // When zoomed, scan raw v2 within the explicit step range.
+  // PER-RUN bounds. Was: a single (min, max) across the union of all
+  // selected runs, which forces every run to share the same bucket
+  // width. With mixed run lengths (e.g. one 500K-step run + one
+  // 200-step run, 1000 buckets), bucketWidth = 500 and the short run
+  // collapses to ONE bucket → renders as a lone bucket-center dot
+  // instead of a line. Computing min/max per run gives each run its
+  // own bucket width tied to ITS data, so short runs draw as proper
+  // lines.
+  //
+  // arrayJoin({runIds}) ensures every requested run produces a row
+  // even before the summaries MV catches up for RUNNING runs (mirrors
+  // the existing fallback pattern in buildSummaryBoundsBodyMultiMetric).
   const boundsCte = stepMin === undefined || stepMax === undefined
-    ? `bounds AS (${buildSummaryBoundsBodySingleMetric(" AND logName = {logName: String}")})`
+    ? `bounds AS (
+        SELECT
+          rids.runId AS runId,
+          ifNull(sb.rawMinStep, toUInt64(0)) AS minStep,
+          coalesce(nullIf(sb.rawMaxStep, 0), toUInt64(1000)) AS maxStep
+        FROM (SELECT arrayJoin({runIds: Array(UInt64)}) AS runId) rids
+        LEFT JOIN (
+          SELECT runId,
+            min(min_step) AS rawMinStep,
+            max(max_step) AS rawMaxStep
+          FROM mlop_metric_summaries_v2
+          WHERE tenantId = {tenantId: String}
+            AND projectName = {projectName: String}
+            AND runId IN ({runIds: Array(UInt64)})
+            AND logName = {logName: String}
+          GROUP BY runId
+        ) sb ON rids.runId = sb.runId
+      )`
     : `bounds AS (
-        SELECT min(step) AS minStep, max(step) AS maxStep
+        SELECT runId, min(step) AS minStep, max(step) AS maxStep
         FROM mlop_metrics_v2
         WHERE ${whereClause}${boundsStepRange}
+        GROUP BY runId
       )`;
 
   const query = `
     WITH
       ${boundsCte},
       params AS (
-        SELECT minStep,
+        SELECT runId, minStep,
           greatest(toUInt64(1), intDiv(maxStep - minStep + 1, toUInt64({numBuckets: UInt32}))) AS bucketWidth
         FROM bounds
       )
@@ -589,7 +616,7 @@ export async function queryRunMetricsBatchBucketedByLogName(
       toUInt64(count()) AS count,
       toUInt8((countIf(isNaN(m.value)) > 0) + (countIf(isInfinite(m.value) AND m.value > 0) > 0) * 2 + (countIf(isInfinite(m.value) AND m.value < 0) > 0) * 4) AS nonFiniteFlags
     FROM mlop_metrics_v2 m FINAL
-    CROSS JOIN params p
+    INNER JOIN params p ON m.runId = p.runId
     WHERE ${whereClause}${mainStepRange}
     GROUP BY m.runId, bucket
     ORDER BY m.runId, bucket ASC
@@ -686,14 +713,42 @@ export async function queryRunMetricsMultiMetricBatchBucketed(
       ORDER BY m.logName, m.runId, bucket ASC
     `;
   } else {
-    // Bounds CTE: per-metric min/max from mlop_metric_summaries. arrayJoin
-    // ensures every requested logName produces a bounds row even if the
-    // refresh hasn't populated a summary for it yet.
+    // PER-(runId, logName) bounds. Was: per-logName aggregated across all
+    // selected runs, which gave every run the same bucket width and
+    // collapsed short runs to a single bucket whenever a longer run was
+    // also selected. Computing min/max per (run, metric) gives each run
+    // its own bucket grid keyed to its own data length, so short runs
+    // draw as real lines instead of lone bucket-center dots.
+    //
+    // Cross-join (arrayJoin runIds) × (arrayJoin logNames) materialises
+    // every requested (run, metric) pair so RUNNING runs without a
+    // summary row yet still produce a usable [0, 1000] fallback. Mirrors
+    // the existing ifNull/coalesce fallback chain on the legacy
+    // per-logName path.
     query = `
       WITH
-        bounds AS (${buildSummaryBoundsBodyMultiMetric()}),
+        bounds AS (
+          SELECT
+            rids.runId AS runId,
+            lns.ln AS logName,
+            ifNull(sb.rawMinStep, toUInt64(0)) AS minStep,
+            coalesce(nullIf(sb.rawMaxStep, 0), toUInt64(1000)) AS maxStep
+          FROM (SELECT arrayJoin({runIds: Array(UInt64)}) AS runId) rids
+          CROSS JOIN (SELECT arrayJoin({logNames: Array(String)}) AS ln) lns
+          LEFT JOIN (
+            SELECT runId, logName,
+              min(min_step) AS rawMinStep,
+              max(max_step) AS rawMaxStep
+            FROM mlop_metric_summaries_v2
+            WHERE tenantId = {tenantId: String}
+              AND projectName = {projectName: String}
+              AND runId IN ({runIds: Array(UInt64)})
+              AND logName IN ({logNames: Array(String)})
+            GROUP BY runId, logName
+          ) sb ON rids.runId = sb.runId AND lns.ln = sb.logName
+        ),
         params AS (
-          SELECT logName, minStep,
+          SELECT runId, logName, minStep,
             greatest(toUInt64(1), intDiv(maxStep - minStep + 1, toUInt64({numBuckets: UInt32}))) AS bucketWidth
           FROM bounds
         )
@@ -709,7 +764,7 @@ export async function queryRunMetricsMultiMetricBatchBucketed(
         toUInt64(count()) AS count,
         toUInt8((countIf(isNaN(m.value)) > 0) + (countIf(isInfinite(m.value) AND m.value > 0) > 0) * 2 + (countIf(isInfinite(m.value) AND m.value < 0) > 0) * 4) AS nonFiniteFlags
       FROM mlop_metrics_v2 m FINAL
-      INNER JOIN params p ON m.logName = p.logName
+      INNER JOIN params p ON m.runId = p.runId AND m.logName = p.logName
       WHERE ${whereClause}
       GROUP BY m.logName, m.runId, bucket
       ORDER BY m.logName, m.runId, bucket ASC
@@ -764,6 +819,312 @@ export function toColumnar(points: BucketedMetricDataPoint[]): ColumnarBucketedS
     nfFlags[i] = p.nonFiniteFlags;
   }
   return { steps, times, values, minYs, maxYs, counts, nfFlags };
+}
+
+/** Aggregated bucketed series for one group of runs at one logName.
+ *  Mean = value (the line); min/max = envelope across runs in the group
+ *  inside each bucket. */
+export async function queryRunMetricsGroupedBatchBucketed(
+  ch: typeof clickhouse,
+  params: {
+    organizationId: string;
+    projectName: string;
+    /** Maps each numeric runId to the bucket trail it belongs to
+     *  (the JSON-stringified GroupFilter[] key). One CH query covers
+     *  ALL groups at once via an inline (runId, groupKey) join. */
+    runGroupKeyMap: Map<number, string>;
+    logNames: string[];
+    buckets?: number;
+    stepMin?: number;
+    stepMax?: number;
+    preview?: boolean;
+    /** "step" (default), "time" (absolute wall-clock), or
+     *  "relative-time" (per-run baselined). All three modes now use
+     *  per-(groupKey, logName) bucket bounds, so a short-duration
+     *  group rendered alongside a long-duration group keeps its full
+     *  resolution. Custom-metric-x is still deferred — see
+     *  grouped-line-chart.tsx TODO. */
+    xAxis?: "step" | "time" | "relative-time";
+  }
+): Promise<Record<string, Record<string, BucketedMetricDataPoint[]>>> {
+  const { organizationId, projectName, runGroupKeyMap, logNames, stepMin, stepMax, preview, xAxis = "step" } = params;
+
+  if (runGroupKeyMap.size === 0 || logNames.length === 0) return {};
+
+  // Flatten the group-membership map into the parallel arrays
+  // ClickHouse parameter binding expects. The two arrays are correlated
+  // by index — the SQL stitches them back together with `arrayJoin` +
+  // `tupleElement`.
+  const runIds: number[] = [];
+  const groupKeys: string[] = [];
+  for (const [runId, groupKey] of runGroupKeyMap) {
+    runIds.push(runId);
+    groupKeys.push(groupKey);
+  }
+  const numBuckets = params.buckets ?? (preview ? PREVIEW_BUCKETS : DEFAULT_BUCKETS);
+
+  const queryParams: Record<string, unknown> = {
+    tenantId: organizationId,
+    projectName,
+    runIds,
+    groupKeys,
+    logNames,
+    numBuckets,
+  };
+
+  let whereClause = `
+    m.tenantId = {tenantId: String}
+    AND m.projectName = {projectName: String}
+    AND m.runId IN ({runIds: Array(UInt64)})
+    AND m.logName IN ({logNames: Array(String)})
+  `;
+
+  let mainStepRange = "";
+  const hasStepRange = stepMin !== undefined && stepMax !== undefined;
+  if (hasStepRange) {
+    mainStepRange = ` AND m.step >= {stepMin: UInt64} AND m.step <= {stepMax: UInt64}`;
+    queryParams.stepMin = stepMin;
+    queryParams.stepMax = stepMax;
+  }
+
+  // `groups` CTE turns the parallel runIds[]/groupKeys[] arrays into a
+  // (runId, groupKey) join table the main aggregation can join on.
+  // `arrayMap + tuple + arrayJoin` is the canonical ClickHouse idiom
+  // for "make a virtual table from two correlated arrays".
+  const groupsCte = `
+    groups AS (
+      SELECT
+        tupleElement(t, 1) AS runId,
+        tupleElement(t, 2) AS groupKey
+      FROM (
+        SELECT arrayJoin(arrayMap(
+          (rid, gk) -> tuple(rid, gk),
+          {runIds: Array(UInt64)},
+          {groupKeys: Array(String)}
+        )) AS t
+      )
+    )
+  `;
+
+  let query: string;
+  if (xAxis === "relative-time") {
+    // Relative-time mode: bucket by per-run elapsed time. Each run's
+    // own first-log timestamp is its baseline; we subtract that from
+    // every sample BEFORE bucketing so runs that started at different
+    // wall-clocks line up on a common 0-axis. The bucket-start
+    // relative-ms is encoded in the `step` field (UInt64) so the
+    // frontend can read it without DateTime64 epoch arithmetic.
+    //
+    // PER-(groupKey, logName) bounds AND per-run baselines come from
+    // mlop_metric_summaries_v2 — same trick the step-axis branch uses,
+    // tiny one-row-per-(run, metric) read instead of a raw scan. Was:
+    // two raw scans (baselines + bounds) on top of the main scan;
+    // now: zero raw scans for bounds, just the main aggregation.
+    query = `
+      WITH
+        ${groupsCte},
+        run_baselines AS (
+          SELECT runId, toUInt64(toUnixTimestamp64Milli(min(min_time))) AS baselineMs
+          FROM mlop_metric_summaries_v2 FINAL
+          WHERE tenantId = {tenantId: String}
+            AND projectName = {projectName: String}
+            AND runId IN ({runIds: Array(UInt64)})
+            AND logName IN ({logNames: Array(String)})
+          GROUP BY runId
+        ),
+        bounds AS (
+          SELECT
+            g.groupKey AS groupKey,
+            s.logName AS logName,
+            toUInt64(0) AS minMs,
+            max(toUInt64(toUnixTimestamp64Milli(s.max_time)) - rb.baselineMs) AS maxMs
+          FROM mlop_metric_summaries_v2 s FINAL
+          INNER JOIN groups g ON s.runId = g.runId
+          INNER JOIN run_baselines rb ON s.runId = rb.runId
+          WHERE s.tenantId = {tenantId: String}
+            AND s.projectName = {projectName: String}
+            AND s.runId IN ({runIds: Array(UInt64)})
+            AND s.logName IN ({logNames: Array(String)})
+          GROUP BY g.groupKey, s.logName
+        ),
+        params AS (
+          SELECT groupKey, logName, minMs,
+            greatest(toUInt64(1), intDiv(maxMs - minMs + 1, toUInt64({numBuckets: UInt32}))) AS bucketWidth
+          FROM bounds
+        )
+      SELECT
+        m.logName AS logName,
+        g.groupKey AS groupKey,
+        intDiv(toUInt64(toUnixTimestamp64Milli(m.time)) - rb.baselineMs, p.bucketWidth) AS bucket,
+        -- Bucket-start relative-ms encoded in step. Frontend reads
+        -- this as the x-axis value and divides by 1000 for seconds.
+        any(toUInt64(p.minMs + intDiv(toUInt64(toUnixTimestamp64Milli(m.time)) - rb.baselineMs, p.bucketWidth) * p.bucketWidth)) AS step,
+        argMin(m.time, m.time) AS time,
+        avgIf(m.value, isFinite(m.value)) AS value,
+        minIf(m.value, isFinite(m.value)) AS minY,
+        maxIf(m.value, isFinite(m.value)) AS maxY,
+        toUInt64(uniqExact(m.runId)) AS count,
+        toUInt8((countIf(isNaN(m.value)) > 0) + (countIf(isInfinite(m.value) AND m.value > 0) > 0) * 2 + (countIf(isInfinite(m.value) AND m.value < 0) > 0) * 4) AS nonFiniteFlags
+      FROM mlop_metrics_v2 m FINAL
+      INNER JOIN groups g ON m.runId = g.runId
+      INNER JOIN run_baselines rb ON m.runId = rb.runId
+      INNER JOIN params p ON g.groupKey = p.groupKey AND m.logName = p.logName
+      WHERE ${whereClause}
+      GROUP BY m.logName, g.groupKey, bucket
+      ORDER BY m.logName, g.groupKey, bucket ASC
+    `;
+  } else if (xAxis === "time") {
+    // Time-x mode: bucket by absolute wall-clock time (DateTime64
+    // millis). Bounds come from mlop_metric_summaries_v2's
+    // min_time / max_time columns — tiny one-row-per-(run, metric)
+    // read instead of a raw scan. stepMin/stepMax are ignored in time
+    // mode — drag-zoom on a time axis would need timeMin/timeMax,
+    // which is a separate follow-up.
+    //
+    // PER-(groupKey, logName) bounds — same shape as the step-axis
+    // branch below. Shared bounds would let one group's wall-clock
+    // span dictate the bucketWidth for everyone, collapsing
+    // short-duration groups to a single bucket.
+    query = `
+      WITH
+        ${groupsCte},
+        bounds AS (
+          SELECT
+            g.groupKey AS groupKey,
+            s.logName AS logName,
+            toUInt64(toUnixTimestamp64Milli(min(s.min_time))) AS minMs,
+            toUInt64(toUnixTimestamp64Milli(max(s.max_time))) AS maxMs
+          FROM mlop_metric_summaries_v2 s FINAL
+          INNER JOIN groups g ON s.runId = g.runId
+          WHERE s.tenantId = {tenantId: String}
+            AND s.projectName = {projectName: String}
+            AND s.runId IN ({runIds: Array(UInt64)})
+            AND s.logName IN ({logNames: Array(String)})
+          GROUP BY g.groupKey, s.logName
+        ),
+        params AS (
+          SELECT groupKey, logName, minMs,
+            greatest(toUInt64(1), intDiv(maxMs - minMs + 1, toUInt64({numBuckets: UInt32}))) AS bucketWidth
+          FROM bounds
+        )
+      SELECT
+        m.logName AS logName,
+        g.groupKey AS groupKey,
+        intDiv(toUInt64(toUnixTimestamp64Milli(m.time)) - p.minMs, p.bucketWidth) AS bucket,
+        argMin(m.step, m.time) AS step,
+        toDateTime64(toFloat64(any(p.minMs + intDiv(toUInt64(toUnixTimestamp64Milli(m.time)) - p.minMs, p.bucketWidth) * p.bucketWidth)) / 1000, 3) AS time,
+        avgIf(m.value, isFinite(m.value)) AS value,
+        minIf(m.value, isFinite(m.value)) AS minY,
+        maxIf(m.value, isFinite(m.value)) AS maxY,
+        toUInt64(uniqExact(m.runId)) AS count,
+        toUInt8((countIf(isNaN(m.value)) > 0) + (countIf(isInfinite(m.value) AND m.value > 0) > 0) * 2 + (countIf(isInfinite(m.value) AND m.value < 0) > 0) * 4) AS nonFiniteFlags
+      FROM mlop_metrics_v2 m FINAL
+      INNER JOIN groups g ON m.runId = g.runId
+      INNER JOIN params p ON g.groupKey = p.groupKey AND m.logName = p.logName
+      WHERE ${whereClause}
+      GROUP BY m.logName, g.groupKey, bucket
+      ORDER BY m.logName, g.groupKey, bucket ASC
+    `;
+  } else if (hasStepRange) {
+    // Zoom/preview: explicit step range, no bounds CTE needed —
+    // bucketWidth derives directly from (stepMax - stepMin).
+    query = `
+      WITH ${groupsCte}
+      SELECT
+        m.logName AS logName,
+        g.groupKey AS groupKey,
+        intDiv(m.step - {stepMin: UInt64}, greatest(toUInt64(1), intDiv({stepMax: UInt64} - {stepMin: UInt64} + 1, toUInt64({numBuckets: UInt32})))) AS bucket,
+        any(toUInt64({stepMin: UInt64} + intDiv(m.step - {stepMin: UInt64}, greatest(toUInt64(1), intDiv({stepMax: UInt64} - {stepMin: UInt64} + 1, toUInt64({numBuckets: UInt32})))) * greatest(toUInt64(1), intDiv({stepMax: UInt64} - {stepMin: UInt64} + 1, toUInt64({numBuckets: UInt32}))))) AS step,
+        argMin(m.time, m.step) AS time,
+        avgIf(m.value, isFinite(m.value)) AS value,
+        minIf(m.value, isFinite(m.value)) AS minY,
+        maxIf(m.value, isFinite(m.value)) AS maxY,
+        toUInt64(uniqExact(m.runId)) AS count,
+        toUInt8((countIf(isNaN(m.value)) > 0) + (countIf(isInfinite(m.value) AND m.value > 0) > 0) * 2 + (countIf(isInfinite(m.value) AND m.value < 0) > 0) * 4) AS nonFiniteFlags
+      FROM mlop_metrics_v2 m FINAL
+      INNER JOIN groups g ON m.runId = g.runId
+      WHERE ${whereClause}${mainStepRange}
+      GROUP BY m.logName, g.groupKey, bucket
+      ORDER BY m.logName, g.groupKey, bucket ASC
+    `;
+  } else {
+    // PER-(groupKey, logName) bounds. Was: per-logName aggregated across
+    // every selected run, which collapsed short groups to a single
+    // bucket whenever a longer group was in the chart. Same fix as the
+    // flat (non-grouped) batch path — each group now gets its own
+    // bucket width derived from ITS OWN runs' min/max step.
+    query = `
+      WITH
+        ${groupsCte},
+        bounds AS (
+          SELECT
+            g.groupKey AS groupKey,
+            lns.ln AS logName,
+            ifNull(min(sb.minStep), toUInt64(0)) AS minStep,
+            coalesce(nullIf(max(sb.maxStep), 0), toUInt64(1000)) AS maxStep
+          FROM groups g
+          CROSS JOIN (SELECT arrayJoin({logNames: Array(String)}) AS ln) lns
+          LEFT JOIN (
+            SELECT runId, logName,
+              min(min_step) AS minStep,
+              max(max_step) AS maxStep
+            FROM mlop_metric_summaries_v2
+            WHERE tenantId = {tenantId: String}
+              AND projectName = {projectName: String}
+              AND runId IN ({runIds: Array(UInt64)})
+              AND logName IN ({logNames: Array(String)})
+            GROUP BY runId, logName
+          ) sb ON g.runId = sb.runId AND lns.ln = sb.logName
+          GROUP BY g.groupKey, lns.ln
+        ),
+        params AS (
+          SELECT groupKey, logName, minStep,
+            greatest(toUInt64(1), intDiv(maxStep - minStep + 1, toUInt64({numBuckets: UInt32}))) AS bucketWidth
+          FROM bounds
+        )
+      SELECT
+        m.logName AS logName,
+        g.groupKey AS groupKey,
+        intDiv(m.step - p.minStep, p.bucketWidth) AS bucket,
+        any(toUInt64(p.minStep + intDiv(m.step - p.minStep, p.bucketWidth) * p.bucketWidth)) AS step,
+        argMin(m.time, m.step) AS time,
+        avgIf(m.value, isFinite(m.value)) AS value,
+        minIf(m.value, isFinite(m.value)) AS minY,
+        maxIf(m.value, isFinite(m.value)) AS maxY,
+        toUInt64(uniqExact(m.runId)) AS count,
+        toUInt8((countIf(isNaN(m.value)) > 0) + (countIf(isInfinite(m.value) AND m.value > 0) > 0) * 2 + (countIf(isInfinite(m.value) AND m.value < 0) > 0) * 4) AS nonFiniteFlags
+      FROM mlop_metrics_v2 m FINAL
+      INNER JOIN groups g ON m.runId = g.runId
+      INNER JOIN params p ON g.groupKey = p.groupKey AND m.logName = p.logName
+      WHERE ${whereClause}
+      GROUP BY m.logName, g.groupKey, bucket
+      ORDER BY m.logName, g.groupKey, bucket ASC
+    `;
+  }
+
+  const result = await ch.query(query, queryParams);
+  const rows = sanitizeBucketedRows(
+    (await result.json()) as (BucketedMetricDataPoint & { logName: string; groupKey: string })[]
+  );
+
+  // Group by logName → groupKey. Output shape matches the flat path
+  // (`Record<logName, Record<key, points[]>>`) with `key` swapped from
+  // encoded runId to bucket pathKey.
+  const out: Record<string, Record<string, BucketedMetricDataPoint[]>> = {};
+  for (const row of rows) {
+    const byGroup = out[row.logName] ?? (out[row.logName] = {});
+    const arr = byGroup[row.groupKey] ?? (byGroup[row.groupKey] = []);
+    arr.push({
+      step: row.step,
+      time: row.time,
+      value: row.value,
+      minY: row.minY,
+      maxY: row.maxY,
+      count: row.count,
+      nonFiniteFlags: row.nonFiniteFlags,
+    });
+  }
+  return out;
 }
 
 export async function queryRunMetricsBatchByLogName(

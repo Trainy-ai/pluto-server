@@ -641,7 +641,128 @@ describe('SDK API Endpoints (with API Key)', () => {
         expect(data.error).toBe('Run not found');
       });
     });
+
+    describe.skipIf(!hasApiKey)('Group-tag invariant (at most one group:* tag)', () => {
+      it('Test 7.6: /create rejects two caller-supplied group:* tags', async () => {
+        const response = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `two-group-tags-${Date.now()}`,
+            tags: ['group:alpha', 'group:beta'],
+          }),
+        });
+
+        expect(response.status).toBe(400);
+        const data = await response.json();
+        expect(data.error).toBe('A run can have at most one group:* tag.');
+      });
+
+      it('Test 7.7: /create accepts a single group:* tag', async () => {
+        const response = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `one-group-tag-${Date.now()}`,
+            tags: ['group:solo', 'baseline'],
+          }),
+        });
+
+        expect(response.status).toBe(200);
+        const { runId } = await response.json();
+
+        const details = await makeRequest(`/api/runs/details/${runId}`, {
+          method: 'GET',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+        });
+        expect(details.status).toBe(200);
+        const detailData = await details.json();
+        expect(detailData.tags).toContain('group:solo');
+      });
+
+      it('Test 7.8: /tags/update rejects two group:* tags and leaves tags untouched', async () => {
+        const createResponse = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `update-two-group-${Date.now()}`,
+            tags: ['group:initial'],
+          }),
+        });
+        expect(createResponse.status).toBe(200);
+        const { runId } = await createResponse.json();
+
+        const updateResponse = await makeRequest('/api/runs/tags/update', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+          body: JSON.stringify({
+            runId,
+            tags: ['group:one', 'group:two'],
+          }),
+        });
+
+        expect(updateResponse.status).toBe(400);
+        const data = await updateResponse.json();
+        expect(data.error).toBe('A run can have at most one group:* tag.');
+
+        // The rejected update must NOT have mutated the run's tags.
+        const details = await makeRequest(`/api/runs/details/${runId}`, {
+          method: 'GET',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+        });
+        const detailData = await details.json();
+        expect(detailData.tags).toContain('group:initial');
+      });
+
+      it('Test 7.9: fork keeps the explicit group:* over the inherited one', async () => {
+        // Parent run carries group:parent-grp.
+        const parentResponse = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `fork-parent-${Date.now()}`,
+            tags: ['group:parent-grp', 'shared'],
+          }),
+        });
+        expect(parentResponse.status).toBe(200);
+        const { runId: parentRunId } = await parentResponse.json();
+
+        // Fork it, inheriting the parent's tags AND supplying an explicit
+        // group:* override. Inherited group:parent-grp + explicit
+        // group:child-grp is a legitimate override, not a rejection.
+        const forkResponse = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            runName: `fork-child-${Date.now()}`,
+            forkRunId: parentRunId,
+            forkStep: 0,
+            inheritTags: true,
+            tags: ['group:child-grp'],
+          }),
+        });
+
+        expect(forkResponse.status).toBe(200);
+        const { runId: childRunId } = await forkResponse.json();
+
+        const details = await makeRequest(`/api/runs/details/${childRunId}`, {
+          method: 'GET',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+        });
+        expect(details.status).toBe(200);
+        const detailData = await details.json();
+        // Explicit override wins; the inherited group:* is dropped.
+        expect(detailData.tags).toContain('group:child-grp');
+        expect(detailData.tags).not.toContain('group:parent-grp');
+      });
+    });
   });
+
 
   describe('Test Suite 8: Config Management', () => {
     const hasApiKey = TEST_API_KEY.length > 0;
@@ -3034,6 +3155,437 @@ describe('SDK API Endpoints (with API Key)', () => {
     });
   });
 
+  // -----------------------------------------------------------------
+  // Test Suite 17c: W&B-style grouping API (runs.distinctGroupValues +
+  // runs.list/count groupFilters). Exercises every field kind the
+  // server allows; uses the seeded `run-groups-test` project (5 runs,
+  // 3 distinct group:* tags: alpha[×2], beta, gamma, + 1 ungrouped).
+  // -----------------------------------------------------------------
+  describe('Test Suite 17c: Grouping v2 API', () => {
+    const TEST_EMAIL = process.env.TEST_USER_EMAIL || 'test-smoke@mlop.local';
+    const TEST_PASSWORD = 'TestPassword123!';
+    const RG_PROJECT = 'run-groups-test';
+    let sessionCookie: string | null = null;
+    let serverAvailable = false;
+    let orgId = '';
+
+    beforeAll(async () => {
+      try {
+        const healthCheck = await makeRequest('/api/health');
+        serverAvailable = healthCheck.status === 200;
+      } catch {
+        serverAvailable = false;
+      }
+      if (!serverAvailable) return;
+      const signInResponse = await makeRequest('/api/auth/sign-in/email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: TEST_EMAIL, password: TEST_PASSWORD }),
+      });
+      const setCookie = signInResponse.headers.get('set-cookie');
+      const match = setCookie?.match(/better_auth\.session_token=([^;]+)/);
+      if (match) sessionCookie = `better_auth.session_token=${match[1]}`;
+      if (!sessionCookie) return;
+      const auth = await (await makeTrpcRequest('auth', {}, { Cookie: sessionCookie }, 'GET')).json();
+      orgId = auth.result?.data?.activeOrganization?.id ?? '';
+    });
+
+    it('Test 17c.1: tag-prefix:group returns 3 buckets, alpha first', async () => {
+      if (!sessionCookie || !orgId) return;
+      const response = await makeTrpcRequest('runs.distinctGroupValues', {
+        organizationId: orgId,
+        projectName: RG_PROJECT,
+        field: 'tag-prefix:group',
+      }, { Cookie: sessionCookie }, 'GET');
+      expect(response.status).toBe(200);
+      const data = (await response.json()).result?.data;
+      // Seeded: alpha×2, beta×1, gamma×1, + rg-solo without a group tag.
+      // The null/unset bucket is intentionally NOT returned for tag-prefix
+      // groupings (see distinct-group-values.ts).
+      const values: Array<{ value: string; count: number }> = data?.values ?? [];
+      const byName = Object.fromEntries(values.map((v) => [v.value, v.count]));
+      expect(byName).toEqual({ alpha: 2, beta: 1, gamma: 1 });
+      expect(values[0]?.value).toBe('alpha'); // count DESC → highest first
+    });
+
+    it('Test 17c.2: parentFilters narrow to a single bucket', async () => {
+      if (!sessionCookie || !orgId) return;
+      const response = await makeTrpcRequest('runs.distinctGroupValues', {
+        organizationId: orgId,
+        projectName: RG_PROJECT,
+        field: 'system:status',
+        parentFilters: [{ field: 'tag-prefix:group', value: 'alpha' }],
+      }, { Cookie: sessionCookie }, 'GET');
+      expect(response.status).toBe(200);
+      const values: Array<{ value: string; count: number }> =
+        (await response.json()).result?.data?.values ?? [];
+      // Both alpha runs were seeded as COMPLETED — only one bucket.
+      expect(values).toEqual([{ value: 'COMPLETED', count: 2 }]);
+    });
+
+    it('Test 17c.3: valueSearch filters bucket labels', async () => {
+      if (!sessionCookie || !orgId) return;
+      const response = await makeTrpcRequest('runs.distinctGroupValues', {
+        organizationId: orgId,
+        projectName: RG_PROJECT,
+        field: 'tag-prefix:group',
+        valueSearch: 'alph',
+      }, { Cookie: sessionCookie }, 'GET');
+      expect(response.status).toBe(200);
+      const values: Array<{ value: string }> =
+        (await response.json()).result?.data?.values ?? [];
+      expect(values.map((v) => v.value)).toEqual(['alpha']);
+    });
+
+    it('Test 17c.4: runs.list groupFilters returns only matching runs', async () => {
+      if (!sessionCookie || !orgId) return;
+      const response = await makeTrpcRequest('runs.list', {
+        organizationId: orgId,
+        projectName: RG_PROJECT,
+        groupFilters: [{ field: 'tag-prefix:group', value: 'alpha' }],
+        limit: 50,
+      }, { Cookie: sessionCookie }, 'GET');
+      expect(response.status).toBe(200);
+      const runs: Array<{ name: string; tags: string[] }> =
+        (await response.json()).result?.data?.runs ?? [];
+      // Names are rg-alpha-1 and rg-alpha-2 in the seed; we don't care
+      // about order, only that they're the right runs.
+      const names = runs.map((r) => r.name).sort();
+      expect(names).toEqual(['rg-alpha-1', 'rg-alpha-2']);
+      // Tag is the canonical group:alpha encoding.
+      expect(runs.every((r) => r.tags.includes('group:alpha'))).toBe(true);
+    });
+
+    it('Test 17c.5: runs.count groupFilters matches runs.list', async () => {
+      if (!sessionCookie || !orgId) return;
+      const countRes = await makeTrpcRequest('runs.count', {
+        organizationId: orgId,
+        projectName: RG_PROJECT,
+        groupFilters: [{ field: 'tag-prefix:group', value: 'alpha' }],
+      }, { Cookie: sessionCookie }, 'GET');
+      expect(countRes.status).toBe(200);
+      const count = (await countRes.json()).result?.data;
+      expect(count).toBe(2);
+    });
+
+    it('Test 17c.6: invalid system field returns empty', async () => {
+      if (!sessionCookie || !orgId) return;
+      // notes is intentionally NOT in SUPPORTED_SYSTEM_GROUP_FIELDS; the
+      // proc must reject quietly with no rows rather than 400.
+      const response = await makeTrpcRequest('runs.distinctGroupValues', {
+        organizationId: orgId,
+        projectName: RG_PROJECT,
+        field: 'system:notes',
+      }, { Cookie: sessionCookie }, 'GET');
+      expect(response.status).toBe(200);
+      const data = (await response.json()).result?.data;
+      expect(data?.values ?? []).toEqual([]);
+    });
+
+    it('Test 17c.7: malformed field encoding returns empty', async () => {
+      if (!sessionCookie || !orgId) return;
+      const response = await makeTrpcRequest('runs.distinctGroupValues', {
+        organizationId: orgId,
+        projectName: RG_PROJECT,
+        field: 'not-a-real-kind:status',
+      }, { Cookie: sessionCookie }, 'GET');
+      expect(response.status).toBe(200);
+      expect((await response.json()).result?.data?.values ?? []).toEqual([]);
+    });
+
+    it('Test 17c.8: limit + offset paginate', async () => {
+      if (!sessionCookie || !orgId) return;
+      const page1 = (await (await makeTrpcRequest('runs.distinctGroupValues', {
+        organizationId: orgId,
+        projectName: RG_PROJECT,
+        field: 'tag-prefix:group',
+        limit: 2,
+        offset: 0,
+      }, { Cookie: sessionCookie }, 'GET')).json()).result?.data;
+      const page2 = (await (await makeTrpcRequest('runs.distinctGroupValues', {
+        organizationId: orgId,
+        projectName: RG_PROJECT,
+        field: 'tag-prefix:group',
+        limit: 2,
+        offset: 2,
+      }, { Cookie: sessionCookie }, 'GET')).json()).result?.data;
+      expect(page1?.values?.length).toBe(2);
+      expect(page1?.hasMore).toBe(true);
+      // Total distinct = 3 (alpha, beta, gamma); page 2 has the leftover.
+      expect(page2?.values?.length).toBe(1);
+      expect(page2?.hasMore).toBe(false);
+      const seen = [...(page1.values ?? []), ...(page2.values ?? [])]
+        .map((v: { value: string }) => v.value)
+        .sort();
+      expect(seen).toEqual(['alpha', 'beta', 'gamma']);
+    });
+
+    // ---------------------------------------------------------------
+    // Filter propagation: distinctGroupValues must honour the toolbar
+    // filter chips at every depth. Before we added extractServerFilters
+    // to the bucket-tree query, the outer group counts came back
+    // pre-filter and the UI showed nonsensical "1 group / 8 runs"
+    // reads under Filter=Failed with 0 matching runs anywhere. These
+    // tests pin the round-trip so a regression in the filter
+    // threading (list-runs.ts / group-field.ts) blows up here first.
+    // ---------------------------------------------------------------
+    it('Test 17c.9: distinctGroupValues honours status filter at the outer level', async () => {
+      if (!sessionCookie || !orgId) return;
+      // All seeded rg-* runs are COMPLETED → status=[COMPLETED]
+      // returns every group. status=[FAILED] returns none.
+      const okRes = await makeTrpcRequest('runs.distinctGroupValues', {
+        organizationId: orgId,
+        projectName: RG_PROJECT,
+        field: 'tag-prefix:group',
+        status: ['COMPLETED'],
+      }, { Cookie: sessionCookie }, 'GET');
+      const okVals = (await okRes.json()).result?.data?.values ?? [];
+      expect(okVals.map((v: { value: string }) => v.value).sort()).toEqual(['alpha', 'beta', 'gamma']);
+
+      const failedRes = await makeTrpcRequest('runs.distinctGroupValues', {
+        organizationId: orgId,
+        projectName: RG_PROJECT,
+        field: 'tag-prefix:group',
+        status: ['FAILED'],
+      }, { Cookie: sessionCookie }, 'GET');
+      const failedData = (await failedRes.json()).result?.data;
+      expect(failedData?.values ?? []).toEqual([]);
+      expect(failedData?.totalCount ?? 0).toBe(0);
+    });
+
+    it('Test 17c.10: distinctGroupValues honours status filter under parentFilters (nested depth)', async () => {
+      if (!sessionCookie || !orgId) return;
+      // Drill: group=alpha → names inside. Alpha bucket has rg-alpha-1
+      // + rg-alpha-2 with status=COMPLETED. status=[COMPLETED] returns
+      // both. status=[FAILED] returns none — verifies the nested-depth
+      // query also applies the toolbar filter, not just the outer one.
+      const okRes = await makeTrpcRequest('runs.distinctGroupValues', {
+        organizationId: orgId,
+        projectName: RG_PROJECT,
+        field: 'system:name',
+        parentFilters: [{ field: 'tag-prefix:group', value: 'alpha' }],
+        status: ['COMPLETED'],
+      }, { Cookie: sessionCookie }, 'GET');
+      const okVals = (await okRes.json()).result?.data?.values ?? [];
+      expect(okVals.map((v: { value: string }) => v.value).sort()).toEqual(['rg-alpha-1', 'rg-alpha-2']);
+
+      const failedRes = await makeTrpcRequest('runs.distinctGroupValues', {
+        organizationId: orgId,
+        projectName: RG_PROJECT,
+        field: 'system:name',
+        parentFilters: [{ field: 'tag-prefix:group', value: 'alpha' }],
+        status: ['FAILED'],
+      }, { Cookie: sessionCookie }, 'GET');
+      expect((await failedRes.json()).result?.data?.values ?? []).toEqual([]);
+    });
+
+    // ---------------------------------------------------------------
+    // runs.count with runIds — the intersection endpoint added for
+    // the toolbar's third status line ("N of your S selected runs
+    // match the filter"). Verifies the Sqid-decode + `r.id = ANY(...)`
+    // path in runs-count.ts, and that the intersection composes with
+    // the rest of the filter conditions rather than replacing them.
+    // ---------------------------------------------------------------
+    it('Test 17c.11: runs.count with runIds intersects the selection with other filters', async () => {
+      if (!sessionCookie || !orgId) return;
+      // Fetch alpha runs so we have real Sqid ids to intersect on.
+      const listRes = await makeTrpcRequest('runs.list', {
+        organizationId: orgId,
+        projectName: RG_PROJECT,
+        groupFilters: [{ field: 'tag-prefix:group', value: 'alpha' }],
+        limit: 50,
+      }, { Cookie: sessionCookie }, 'GET');
+      const runs: Array<{ id: string; name: string }> =
+        (await listRes.json()).result?.data?.runs ?? [];
+      expect(runs.length).toBe(2);
+      const alphaIds = runs.map((r) => r.id);
+
+      // Baseline — runIds alone returns |runIds|.
+      const alphaOnly = await makeTrpcRequest('runs.count', {
+        organizationId: orgId,
+        projectName: RG_PROJECT,
+        runIds: alphaIds,
+      }, { Cookie: sessionCookie }, 'GET');
+      expect((await alphaOnly.json()).result?.data).toBe(2);
+
+      // runIds + a filter the runs satisfy → still |runIds|.
+      const alphaAndCompleted = await makeTrpcRequest('runs.count', {
+        organizationId: orgId,
+        projectName: RG_PROJECT,
+        runIds: alphaIds,
+        status: ['COMPLETED'],
+      }, { Cookie: sessionCookie }, 'GET');
+      expect((await alphaAndCompleted.json()).result?.data).toBe(2);
+
+      // runIds + a filter the runs DON'T satisfy → 0 (intersection).
+      const alphaAndFailed = await makeTrpcRequest('runs.count', {
+        organizationId: orgId,
+        projectName: RG_PROJECT,
+        runIds: alphaIds,
+        status: ['FAILED'],
+      }, { Cookie: sessionCookie }, 'GET');
+      expect((await alphaAndFailed.json()).result?.data).toBe(0);
+    });
+
+    it('Test 17c.12: runs.count returns 0 for empty / all-invalid runIds without touching other filters', async () => {
+      if (!sessionCookie || !orgId) return;
+      // All-invalid Sqids short-circuit to 0 before we hit the SQL —
+      // otherwise we'd count all matching-filter runs by accident.
+      const allInvalid = await makeTrpcRequest('runs.count', {
+        organizationId: orgId,
+        projectName: RG_PROJECT,
+        runIds: ['ZZZZ_definitely_not_a_sqid', 'another_bogus'],
+      }, { Cookie: sessionCookie }, 'GET');
+      expect((await allInvalid.json()).result?.data).toBe(0);
+
+      // But NO runIds param at all → falls back to plain count.
+      const noRunIds = await makeTrpcRequest('runs.count', {
+        organizationId: orgId,
+        projectName: RG_PROJECT,
+      }, { Cookie: sessionCookie }, 'GET');
+      expect((await noRunIds.json()).result?.data).toBe(5); // rg-solo + 4 grouped
+    });
+  });
+
+  // -----------------------------------------------------------------
+  // Test Suite 17d: group:* tag invariant — at most one group:* tag
+  // per run. tRPC rejects ambiguous updates; HTTP silently dedups.
+  // -----------------------------------------------------------------
+  describe('Test Suite 17d: group:* tag invariant', () => {
+    const TEST_EMAIL = process.env.TEST_USER_EMAIL || 'test-smoke@mlop.local';
+    const TEST_PASSWORD = 'TestPassword123!';
+    let sessionCookie: string | null = null;
+    let orgId = '';
+
+    beforeAll(async () => {
+      const signInResponse = await makeRequest('/api/auth/sign-in/email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: TEST_EMAIL, password: TEST_PASSWORD }),
+      });
+      const setCookie = signInResponse.headers.get('set-cookie');
+      const match = setCookie?.match(/better_auth\.session_token=([^;]+)/);
+      if (match) sessionCookie = `better_auth.session_token=${match[1]}`;
+      if (!sessionCookie) return;
+      const auth = await (await makeTrpcRequest('auth', {}, { Cookie: sessionCookie }, 'GET')).json();
+      orgId = auth.result?.data?.activeOrganization?.id ?? '';
+    });
+
+    it('Test 17d.1: runs.updateTags rejects 2 group:* tags', async () => {
+      if (!sessionCookie || !orgId) return;
+      const response = await makeTrpcRequest('runs.updateTags', {
+        organizationId: orgId,
+        projectName: 'run-groups-test',
+        // Any SQID — Zod validation happens before the row lookup, and
+        // the group-tag check runs before resolveRunId.
+        runId: 'aB',
+        tags: ['foo', 'group:one', 'group:two'],
+      }, { Cookie: sessionCookie }, 'POST');
+      expect(response.status).toBe(400);
+      const body = await response.json();
+      expect(JSON.stringify(body)).toMatch(/at most one group:\* tag/i);
+    });
+
+    it('Test 17d.2: runs.updateTags accepts exactly one group:* tag', async () => {
+      if (!sessionCookie || !orgId) return;
+      // The invariant check passes, so we expect either 200 (run found
+      // and updated) or 404 (run id 'aB' likely doesn't exist for this
+      // user) — but never 400 from the group-tag check.
+      const response = await makeTrpcRequest('runs.updateTags', {
+        organizationId: orgId,
+        projectName: 'run-groups-test',
+        runId: 'aB',
+        tags: ['foo', 'group:one'],
+      }, { Cookie: sessionCookie }, 'POST');
+      // 200 = updated, 404 = run not found (id didn't resolve), both OK.
+      expect([200, 404]).toContain(response.status);
+    });
+  });
+
+  // -----------------------------------------------------------------
+  // Test Suite 17e: Grouping v2 API — config-field grouping. Suite 17c
+  // covers tag-prefix + system fields; the server also supports the
+  // `config:*` kind (distinct-group-values.ts / list-runs.ts read
+  // run_field_values), but nothing exercised it. Uses the seeded
+  // `run-groups-test` project: config.optimizer = sgd (rg-alpha-1/2),
+  // adam (rg-beta/gamma), adamw (rg-solo).
+  // -----------------------------------------------------------------
+  describe('Test Suite 17e: Grouping v2 API — config fields', () => {
+    const RG_PROJECT = 'run-groups-test';
+    const TEST_EMAIL = process.env.TEST_USER_EMAIL || 'test-smoke@mlop.local';
+    const TEST_PASSWORD = 'TestPassword123!';
+    let sessionCookie: string | null = null;
+    let orgId = '';
+
+    beforeAll(async () => {
+      const signInResponse = await makeRequest('/api/auth/sign-in/email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: TEST_EMAIL, password: TEST_PASSWORD }),
+      });
+      const setCookie = signInResponse.headers.get('set-cookie');
+      const match = setCookie?.match(/better_auth\.session_token=([^;]+)/);
+      if (match) sessionCookie = `better_auth.session_token=${match[1]}`;
+      if (!sessionCookie) return;
+      const auth = await (await makeTrpcRequest('auth', {}, { Cookie: sessionCookie }, 'GET')).json();
+      orgId = auth.result?.data?.activeOrganization?.id ?? '';
+    });
+
+    it('Test 17e.1: config:optimizer returns 3 buckets with correct counts', async () => {
+      if (!sessionCookie || !orgId) return;
+      const response = await makeTrpcRequest('runs.distinctGroupValues', {
+        organizationId: orgId,
+        projectName: RG_PROJECT,
+        field: 'config:optimizer',
+      }, { Cookie: sessionCookie }, 'GET');
+      expect(response.status).toBe(200);
+      const values: Array<{ value: string; count: number }> =
+        (await response.json()).result?.data?.values ?? [];
+      // Order isn't guaranteed for the two count-2 buckets, so compare as
+      // a map. sgd: rg-alpha-1/2, adam: rg-beta/gamma, adamw: rg-solo.
+      const byName = Object.fromEntries(values.map((v) => [v.value, v.count]));
+      expect(byName).toEqual({ sgd: 2, adam: 2, adamw: 1 });
+    });
+
+    it('Test 17e.2: runs.list + runs.count groupFilters on config:optimizer', async () => {
+      if (!sessionCookie || !orgId) return;
+      const listRes = await makeTrpcRequest('runs.list', {
+        organizationId: orgId,
+        projectName: RG_PROJECT,
+        groupFilters: [{ field: 'config:optimizer', value: 'sgd' }],
+        limit: 50,
+      }, { Cookie: sessionCookie }, 'GET');
+      expect(listRes.status).toBe(200);
+      const runs: Array<{ name: string }> =
+        (await listRes.json()).result?.data?.runs ?? [];
+      expect(runs.map((r) => r.name).sort()).toEqual(['rg-alpha-1', 'rg-alpha-2']);
+
+      const countRes = await makeTrpcRequest('runs.count', {
+        organizationId: orgId,
+        projectName: RG_PROJECT,
+        groupFilters: [{ field: 'config:optimizer', value: 'sgd' }],
+      }, { Cookie: sessionCookie }, 'GET');
+      expect(countRes.status).toBe(200);
+      expect((await countRes.json()).result?.data).toBe(2);
+    });
+
+    it('Test 17e.3: config:optimizer nested under a tag-prefix parent', async () => {
+      if (!sessionCookie || !orgId) return;
+      // Two-level chain: parent group:alpha (rg-alpha-1/2) → config:optimizer.
+      // Both alpha runs use sgd, so exactly one leaf bucket of count 2.
+      const response = await makeTrpcRequest('runs.distinctGroupValues', {
+        organizationId: orgId,
+        projectName: RG_PROJECT,
+        field: 'config:optimizer',
+        parentFilters: [{ field: 'tag-prefix:group', value: 'alpha' }],
+      }, { Cookie: sessionCookie }, 'GET');
+      expect(response.status).toBe(200);
+      const values: Array<{ value: string; count: number }> =
+        (await response.json()).result?.data?.values ?? [];
+      expect(values).toEqual([{ value: 'sgd', count: 2 }]);
+    });
+  });
+
   describe('Test Suite 18: Run Table Views (Unauthenticated)', () => {
     it('Test 18.1: List run table views - Unauthorized (no session)', async () => {
       const response = await makeTrpcRequest('runTableViews.list', {
@@ -3401,6 +3953,7 @@ describe('SDK API Endpoints (with API Key)', () => {
       const data = await response.json();
       expect(data.error).toBeDefined();
     });
+
 
     // Clean up: remove the default view directly since API blocks it
     // In practice, test DB is ephemeral so this is fine

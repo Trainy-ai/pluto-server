@@ -8,10 +8,18 @@ import { cn } from "@/lib/utils";
 import { usePaletteType, type PaletteType } from "@/components/ui/color-picker";
 import type { Run } from "../../~queries/list-runs";
 
+/** Render "1 run" / "5 runs", "1 leaf group" / "3 leaf groups" etc.
+ *  Keeps the count + noun together so all the popover labels stay
+ *  consistent on the singular/plural boundary. */
+function plural(n: number, singular: string, pluralForm?: string): string {
+  return `${n} ${n === 1 ? singular : (pluralForm ?? `${singular}s`)}`;
+}
+
 interface VisibilityOptionsProps {
   selectedRunsWithColors: Record<string, { run: Run; color: string }>;
   onSelectFirstN: (n: number) => void;
   onSelectAllOnPage: (pageRunIds: string[]) => void;
+  onDeselectAllOnPage: (pageRunIds: string[]) => void;
   onDeselectAll: () => void;
   onShuffleColors: () => void;
   onReassignAllColors: () => void;
@@ -20,16 +28,45 @@ interface VisibilityOptionsProps {
   pinSelectedToTop: boolean;
   onPinSelectedToTopChange: (value: boolean) => void;
   pageRunIds: string[];
+  deselectablePageRunIds: string[];
+  /** Grouped-mode parallel inputs (only used when isGrouped). Count =
+   *  number of top-level buckets on the current page. runCount = sum
+   *  of leaf runs across those buckets. Click handlers lazy-fetch the
+   *  leaf run IDs and call selectAllByIds / deselectByIds. */
+  groupedBucketsOnPage: number;
+  groupedRunsOnPage: number;
+  /** Sum of immediate-next-level distinct-value counts across the
+   *  visible page. Only added to the on-page label as "(X leaf
+   *  groups)" when groupByLength === 2 (next level = leaf). */
+  groupedSubgroupsOnPage: number;
+  /** Count of distinct outermost groups with ≥1 selected run. */
+  selectedGroupCount: number;
+  /** Count of distinct leaf groups with ≥1 selected run. Only
+   *  meaningful when groupByLength ≥ 2 — at depth 1 the outermost
+   *  IS the leaf so this duplicates selectedGroupCount. */
+  selectedLeafGroupCount: number;
+  /** Depth of active grouping. Drives which noun is rendered:
+   *  depth 1 → just "(N groups)"; depth ≥ 2 → "(N groups) (X leaf
+   *  groups)". */
+  groupByLength: number;
+  onSelectAllGroupsOnPage: () => void;
+  onDeselectAllGroupsOnPage: () => void;
   totalRunCount: number;
   hiddenCount: number;
   onShowAllRuns: () => void;
   onHideAllRuns: () => void;
+  /** Page has active groupBy. Both DOS and Pin compose with the
+   *  bucket tree by filtering/reordering buckets and leaf runs
+   *  client-side based on selectedAncestorPaths (see group-by-utils
+   *  computeSelectedAncestorPaths). The two toggles stay enabled. */
+  isGrouped?: boolean;
 }
 
 export const VisibilityOptions = memo(function VisibilityOptions({
   selectedRunsWithColors,
   onSelectFirstN,
   onSelectAllOnPage,
+  onDeselectAllOnPage,
   onDeselectAll,
   onShuffleColors,
   onReassignAllColors,
@@ -38,10 +75,20 @@ export const VisibilityOptions = memo(function VisibilityOptions({
   pinSelectedToTop,
   onPinSelectedToTopChange,
   pageRunIds,
+  deselectablePageRunIds,
+  groupedBucketsOnPage,
+  groupedRunsOnPage,
+  groupedSubgroupsOnPage,
+  selectedGroupCount,
+  selectedLeafGroupCount,
+  groupByLength,
+  onSelectAllGroupsOnPage,
+  onDeselectAllGroupsOnPage,
   totalRunCount,
   hiddenCount,
   onShowAllRuns,
   onHideAllRuns,
+  isGrouped,
 }: VisibilityOptionsProps) {
   const [open, setOpen] = useState(false);
   const [autoSelectCount, setAutoSelectCount] = useState(5);
@@ -105,11 +152,15 @@ export const VisibilityOptions = memo(function VisibilityOptions({
       </Button>
 
       {open && (
-        <div data-testid="visibility-dropdown" className="absolute right-0 top-full z-50 mt-1 w-64 rounded-md border bg-popover text-popover-foreground shadow-md animate-in fade-in-0 zoom-in-95">
+        <div data-testid="visibility-dropdown" className="absolute right-0 top-full z-50 mt-1 w-72 rounded-md border bg-popover text-popover-foreground shadow-md animate-in fade-in-0 zoom-in-95">
           <div className="p-3 space-y-3">
             {/* Auto-select first N */}
             <div className="space-y-2">
               <div className="flex items-center justify-between">
+                {/* Plain "Auto-select first" — the counter on the right
+                    + the "Select first N runs" Apply button below
+                    spell out the unit so the user can't mistake it for
+                    selecting groups. */}
                 <span className="text-sm">Auto-select first</span>
                 <div className="flex items-center gap-1">
                   <Button
@@ -141,19 +192,32 @@ export const VisibilityOptions = memo(function VisibilityOptions({
                 className="w-full h-7 text-xs"
                 onClick={handleAutoSelect}
               >
-                Apply
+                Select first {autoSelectCount} {autoSelectCount === 1 ? "run" : "runs"}
               </Button>
             </div>
 
             <Separator />
 
-            {/* Display only selected toggle */}
-            <div className="flex items-center justify-between">
-              <Label
-                htmlFor="show-only-selected"
-                className="text-sm cursor-pointer"
-              >
-                Display only selected ({selectedCount})
+            {/* Display only selected — composes with grouping by
+                filtering each level's buckets to selected-containing
+                only (see GroupedBucketTree). Two-line layout in
+                grouped mode keeps the main label readable when both
+                the group and run counts are long. */}
+            <div className="flex items-center justify-between gap-2">
+              <Label htmlFor="show-only-selected" className="cursor-pointer flex-1 min-w-0">
+                <div className="text-sm">Display only selected{isGrouped ? "" : ` (${selectedCount})`}</div>
+                {/* At depth ≥ 2, also surface the leaf-group count
+                    (selectedLeafGroupCount comes off
+                    selectedAncestorPaths[lastDepth] upstream). At
+                    depth 1 the outermost IS the leaf so we'd be
+                    repeating selectedGroupCount — skip. */}
+                {isGrouped && (
+                  <div className="text-xs text-muted-foreground mt-0.5">
+                    ({plural(selectedGroupCount, "group")})
+                    {groupByLength >= 2 && ` (${plural(selectedLeafGroupCount, "leaf group")})`}
+                    {" "}({plural(selectedCount, "run")})
+                  </div>
+                )}
               </Label>
               <Switch
                 id="show-only-selected"
@@ -162,12 +226,11 @@ export const VisibilityOptions = memo(function VisibilityOptions({
               />
             </div>
 
-            {/* Pin selected to top toggle */}
+            {/* Pin selected to top — composes with grouping by
+                reordering buckets and leaf runs so selected-containing
+                items come first at every level. */}
             <div className="flex items-center justify-between">
-              <Label
-                htmlFor="pin-selected-top"
-                className="text-sm cursor-pointer"
-              >
+              <Label htmlFor="pin-selected-top" className="text-sm cursor-pointer">
                 Pin selected to top
               </Label>
               <Switch
@@ -213,20 +276,75 @@ export const VisibilityOptions = memo(function VisibilityOptions({
 
             <Separator />
 
-            {/* Select all on page / Deselect all */}
+            {/* Select all on page / Deselect all on page. In flat
+                mode they act on the visible page slice (pageRunIds).
+                In grouped mode they act on every leaf run inside the
+                visible top-level buckets — selectAllInBucket /
+                deselectBucket logic, but iterated externally so the
+                visibility popover can drive it. */}
+            {/* Button heights: h-8 in flat mode (single-line content)
+                and h-auto + py-1.5 in grouped mode so the two-line
+                "(N groups) (M runs)" sub-text breathes. The sub-text
+                is left-aligned under the main label to match the
+                Display-only-selected stack above. */}
             <div className="space-y-1">
+              {isGrouped ? (
+                <>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full h-auto py-1.5 text-xs justify-start flex-col items-start gap-0.5"
+                    onClick={onSelectAllGroupsOnPage}
+                    disabled={groupedBucketsOnPage === 0}
+                  >
+                    <span>Select all on page</span>
+                    <span className="text-muted-foreground font-normal">
+                      ({plural(groupedBucketsOnPage, "group")})
+                      {groupByLength === 2 && ` (${plural(groupedSubgroupsOnPage, "leaf group")})`}
+                      {" "}({plural(groupedRunsOnPage, "run")})
+                    </span>
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full h-auto py-1.5 text-xs justify-start flex-col items-start gap-0.5"
+                    onClick={onDeselectAllGroupsOnPage}
+                    disabled={groupedBucketsOnPage === 0}
+                  >
+                    <span>Deselect all on page</span>
+                    <span className="text-muted-foreground font-normal">
+                      ({plural(groupedBucketsOnPage, "group")})
+                      {groupByLength === 2 && ` (${plural(groupedSubgroupsOnPage, "leaf group")})`}
+                      {" "}({plural(groupedRunsOnPage, "run")})
+                    </span>
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full h-8 text-xs justify-start"
+                    onClick={() => onSelectAllOnPage(pageRunIds)}
+                    disabled={pageRunIds.length === 0}
+                  >
+                    Select all on page ({pageRunIds.length})
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full h-8 text-xs justify-start"
+                    onClick={() => onDeselectAllOnPage(deselectablePageRunIds)}
+                    disabled={deselectablePageRunIds.length === 0}
+                  >
+                    Deselect all on page ({deselectablePageRunIds.length})
+                  </Button>
+                </>
+              )}
               <Button
                 variant="ghost"
                 size="sm"
-                className="w-full h-7 text-xs justify-start"
-                onClick={() => onSelectAllOnPage(pageRunIds)}
-              >
-                Select all on page ({pageRunIds.length})
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="w-full h-7 text-xs justify-start"
+                className="w-full h-8 text-xs justify-start"
                 onClick={onDeselectAll}
               >
                 Deselect all

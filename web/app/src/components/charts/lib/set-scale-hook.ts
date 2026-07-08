@@ -63,6 +63,22 @@ export function buildSetScaleHook({
       const isProgrammatic = isProgrammaticScaleRef.current;
       const isSyncing = chartSyncContextRef.current?.isSyncingZoomRef?.current ?? false;
 
+      // ZOOM RANGE CHANGE: Notify parent of zoom range for server re-fetch.
+      // MUST fire before the Y-rescale `else if` below, which `return`s
+      // early and would otherwise skip this callback. Flat charts still
+      // get zoom-refetched via syncedZoomRange (set further down by
+      // syncXScale), but grouped charts only listen to the local
+      // callback — so without this line, grouped charts never see zoom
+      // and zoomQuery stays disabled, leaving them at the base bucket
+      // density.
+      if (!isProgrammatic && !isSyncing) {
+        if (zoomRangeTimerRef.current) {
+          clearTimeout(zoomRangeTimerRef.current);
+          zoomRangeTimerRef.current = null;
+        }
+        onZoomRangeChangeRef.current?.([xMin, xMax]);
+      }
+
       // ZOOM SYNC: Broadcast X scale to other charts via context
       // Only sync if this is a user-initiated zoom (drag), not a programmatic scale change.
       // Programmatic changes (chart init, zoom sync from context, syncXScale propagation)
@@ -156,9 +172,14 @@ export function buildSetScaleHook({
             }
           }
 
-          // "No data in view" toast
+          // "No data in view" toast — only when the chart actually has
+          // data outside the zoom window (xData non-empty). An empty
+          // xData means the chart is mid-mount / mid-swap (e.g. when
+          // the user toggles the per-chart grouping override and the
+          // GroupedLineChart ↔ MultiLineChart swap briefly renders an
+          // empty uPlot), not a real zoom-past-data condition.
           const zoomKey = `${xMin.toFixed(2)}-${xMax.toFixed(2)}`;
-          if (!hasVisibleData && userHasZoomedRef.current && noDataToastShownRef.current !== zoomKey) {
+          if (!hasVisibleData && xData.length > 0 && userHasZoomedRef.current && noDataToastShownRef.current !== zoomKey) {
             noDataToastShownRef.current = zoomKey;
             toast.info("No data points in current view", {
               description: "Double-click the chart to reset zoom",
@@ -171,9 +192,11 @@ export function buildSetScaleHook({
 
       // No-data check for the userHasZoomedY path (already deferred above for auto-range)
       const zoomKey = `${xMin.toFixed(2)}-${xMax.toFixed(2)}`;
-      if (noDataToastShownRef.current !== zoomKey && userHasZoomedRef.current) {
+      const xData = u.data[0] as number[];
+      // Same guard as the deferred path: skip when xData is empty
+      // (mid-mount / mid-swap), not a real zoom-past-data condition.
+      if (noDataToastShownRef.current !== zoomKey && userHasZoomedRef.current && xData.length > 0) {
         // Quick check — only need one data point
-        const xData = u.data[0] as number[];
         let lo2 = 0; let hi2 = xData.length - 1;
         while (lo2 <= hi2) { const m = (lo2 + hi2) >>> 1; if (xData[m] < xMin) lo2 = m + 1; else hi2 = m - 1; }
         let found = false;
@@ -189,19 +212,6 @@ export function buildSetScaleHook({
             duration: 4000,
           });
         }
-      }
-
-      // ZOOM RANGE CHANGE: Notify parent of zoom range for server re-fetch.
-      // Uses captured isProgrammatic/isSyncing from before syncXScale modified the ref.
-      // Fire synchronously — drag.setScale:true only triggers on mouseup (not during drag),
-      // so debouncing is unnecessary and causes timer scheduling issues.
-      if (!isProgrammatic && !isSyncing) {
-        // Cancel any pending timer from a previous zoom
-        if (zoomRangeTimerRef.current) {
-          clearTimeout(zoomRangeTimerRef.current);
-          zoomRangeTimerRef.current = null;
-        }
-        onZoomRangeChangeRef.current?.([xMin, xMax]);
       }
 
     }

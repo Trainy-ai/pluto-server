@@ -58,9 +58,25 @@ export const queryClient = new QueryClient({
 export const trpcClient = createTRPCClient<AppRouter>({
   links: [
     splitLink({
+      // Route MUTATIONS through the plain non-streaming httpLink and
+      // let queries/subscriptions keep using the batch stream link.
+      //
+      // The stream link parses responses as a newline-delimited JSON
+      // stream (one line per op-completion). Under nginx's
+      // `proxy_buffering off` (required so streams flow at all), if
+      // the client-side stream reader errors mid-chunk — a transient
+      // network hiccup, a connection reset, a mid-flight abort — the
+      // whole mutation Promise rejects with "Failed to fetch" and
+      // useUpdateNotes/useUpdateTags fire their error toasts even
+      // though the server has already committed the write. Users
+      // then think their edit failed and either retry (double-write)
+      // or give up (thinking they lost data).
+      //
+      // Mutations don't benefit from batching (nothing else waits for
+      // them) or streaming (single-response). A plain fetch is more
+      // resilient and equally fast for the one-response case.
       condition(op) {
-        // return Boolean(op.path == "runs.data.graph");
-        return false;
+        return op.type === "mutation";
       },
       true: httpLink({
         url: trpcUrl,
@@ -77,6 +93,15 @@ export const trpcClient = createTRPCClient<AppRouter>({
         ? httpBatchLink({
             url: trpcUrl,
             maxURLLength: MAX_URL_LENGTH,
+            // Fall back to POST when a single op's encoded input would
+            // push the GET URL past MAX_URL_LENGTH (the server rejects
+            // with HTTP 414 otherwise). Hits the grouped chart query
+            // first — its input carries every selected runId, and a
+            // selection that covers several large groups can easily
+            // top 8 KB of input alone. maxURLLength still drives batch
+            // splitting; methodOverride only fires when even the
+            // single-op URL is too long.
+            methodOverride: "POST",
             fetch(url, options) {
               return fetch(url, {
                 ...options,
@@ -89,6 +114,7 @@ export const trpcClient = createTRPCClient<AppRouter>({
             url: trpcUrl,
             maxItems: 30,
             maxURLLength: MAX_URL_LENGTH,
+            methodOverride: "POST",
             fetch(url, options) {
               return fetch(url, {
                 ...options,

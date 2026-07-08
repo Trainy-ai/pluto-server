@@ -37,6 +37,7 @@ import type { prisma } from "../lib/prisma";
 import type { ApiKey, Organization, User } from "@prisma/client";
 import { extractAndUpsertColumnKeys } from "../lib/extract-column-keys";
 import { MAX_TAGS_PER_RUN } from "../lib/limits";
+import { dedupGroupTagsKeepLast, hasMultipleGroupTags } from "../lib/group-tag";
 import { deepMerge } from "../lib/deep-merge";
 import { generateRunPrefix } from "../lib/run-prefix";
 import { transitionRunStatus, recordRunCreatedEvent } from "../lib/run-status";
@@ -137,6 +138,15 @@ router.use(createRunRoute.path, withApiKey);
 router.openapi(createRunRoute, async (c) => {
   const apiKey = c.get("apiKey");
   const { runName, projectName, externalId, tags, loggerSettings, systemMetadata, config, createdAt, updatedAt, forkRunId, forkStep, inheritConfig, inheritTags } = c.req.valid("json");
+
+  // A caller may not send more than one `group:*` tag of their own in a
+  // single request — that's a self-contradiction, so reject it up front
+  // (mirrors the tRPC/UI rule) before any project upsert / run-number
+  // increment. Inherited fork-parent group tags are exempt: they resolve
+  // against the caller's explicit group via keep-last at create time below.
+  if (hasMultipleGroupTags(tags ?? [])) {
+    return c.json({ error: "A run can have at most one group:* tag." }, 400);
+  }
 
   const ctx = await createContext({ hono: c });
 
@@ -290,9 +300,15 @@ router.openapi(createRunRoute, async (c) => {
 
       // Merge inherited tags with explicit tags
       const explicitTags = tags || [];
-      const finalTags = inheritedTags.length > 0
+      const mergedTags = inheritedTags.length > 0
         ? [...new Set([...inheritedTags, ...explicitTags])]
         : explicitTags;
+      // Inherited (fork) group:* + explicit group:* is a legitimate
+      // override, not a contradiction — the caller's own tags were already
+      // validated to hold at most one group:* above, so any remaining
+      // conflict is inherited-vs-explicit. Keep-last so the explicit /
+      // W&B-derived tag clobbers the inherited one.
+      const finalTags = dedupGroupTagsKeepLast(mergedTags);
 
       // Create the run and its initial `null -> RUNNING` status event
       // atomically so the timeline cannot miss the creation event if a
@@ -875,6 +891,10 @@ const updateTagsRoute = createRoute({
       description: "Tags updated successfully",
       content: { "application/json": { schema: SuccessSchema } },
     },
+    400: {
+      description: "Invalid tags (e.g. more than one group:* tag)",
+      content: { "application/json": { schema: ErrorSchema } },
+    },
     404: {
       description: "Run not found",
       content: { "application/json": { schema: ErrorSchema } },
@@ -894,9 +914,18 @@ router.openapi(updateTagsRoute, async (c) => {
   });
   const previousTags = existingRun?.tags ?? [];
 
+  // A run may carry at most one `group:*` tag. This path has no tag
+  // inheritance (unlike /create), so the caller's array is authoritative —
+  // reject a multi-group payload outright (mirrors the tRPC/UI rule)
+  // rather than silently dropping tags.
+  if (hasMultipleGroupTags(tags)) {
+    return c.json({ error: "A run can have at most one group:* tag." }, 400);
+  }
+  const finalTags = tags;
+
   const result = await c.get("prisma").runs.updateMany({
     where: { id: runId, organizationId: apiKey.organization.id },
-    data: { tags },
+    data: { tags: finalTags },
   });
 
   if (result.count === 0) {
@@ -904,7 +933,7 @@ router.openapi(updateTagsRoute, async (c) => {
   }
 
   // Fire-and-forget Linear sync for any linear: tags (including removed ones)
-  triggerLinearSyncForTags(c.get("prisma"), apiKey.organization.id, tags, previousTags);
+  triggerLinearSyncForTags(c.get("prisma"), apiKey.organization.id, finalTags, previousTags);
 
   return c.json({ success: true }, 200);
 });

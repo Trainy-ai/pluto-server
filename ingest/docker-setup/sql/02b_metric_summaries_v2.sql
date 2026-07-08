@@ -52,6 +52,14 @@ CREATE TABLE IF NOT EXISTS mlop_metric_summaries_v2 (
     -- per-step "bounds" CTE on the raw mlop_metrics_v2 table.
     min_step            UInt64,
     max_step            UInt64,
+    -- min/max wall-clock time per (run, metric). Mirrors the role of
+    -- min/max_step for the time + relative-time x-axes: grouped chart
+    -- queries can pull per-group time bounds from this tiny summary
+    -- table instead of running an inline min/max(time) scan on raw
+    -- mlop_metrics_v2 (which would double the work for time-axis
+    -- charts vs step-axis ones).
+    min_time            DateTime64(3),
+    max_time            DateTime64(3),
     -- Step at which the metric reached its min / max value. Powers the
     -- "Pin to best step" fast path — without these, the only way to
     -- learn the argmin step was to scan raw mlop_metrics for the run.

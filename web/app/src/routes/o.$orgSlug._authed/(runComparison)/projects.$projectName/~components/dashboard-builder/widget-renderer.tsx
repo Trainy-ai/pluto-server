@@ -26,6 +26,11 @@ interface WidgetRendererProps {
   yZoomRange?: [number, number] | null;
   /** Called when user drags to zoom Y axis, or null on reset */
   onYZoomRangeChange?: (range: [number, number] | null) => void;
+  /** Encoded grouping chain. Only applied to chart widgets — other
+   *  widget types (histogram, file-group, future media) stay per-run
+   *  per PLAN-grouping-v2-charts.md scope. */
+  groupBy?: string[];
+  hiddenRunIds?: Set<string>;
   // Distributions-widget per-entry persistence. Each callback is keyed
   // by the entry's INDEX in config.entries[] — bars/histogram entries
   // are positional inside the widget and the same prefix/metric could
@@ -78,6 +83,8 @@ export function WidgetRenderer({
   settingsRunId,
   yZoomRange,
   onYZoomRangeChange,
+  groupBy,
+  hiddenRunIds,
   onUpdateDistributionsEntryViewMode,
   onUpdateDistributionsEntryDepthAxis,
   onUpdateDistributionsEntryBinRange,
@@ -98,6 +105,8 @@ export function WidgetRenderer({
           settingsRunId={settingsRunId}
           yZoomRange={yZoomRange}
           onYZoomRangeChange={onYZoomRangeChange}
+          groupBy={groupBy}
+          hiddenRunIds={hiddenRunIds ? Array.from(hiddenRunIds) : undefined}
         />
       );
     case "histogram":

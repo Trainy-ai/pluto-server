@@ -7,7 +7,11 @@ export const getByIdsProcedure = protectedOrgProcedure
   .input(
     z.object({
       projectName: z.string(),
-      runIds: z.array(z.string()).max(100),
+      // Grouping workflows routinely have >100 selected runs (one chart can
+      // aggregate hundreds of runs across groups). Server work is linear in
+      // runIds (SQID decode + one bulk findMany + one RunFieldValue
+      // findMany), so 1000 is a safe practical ceiling.
+      runIds: z.array(z.string()).max(1000),
     }),
   )
   .query(async ({ ctx, input }) => {

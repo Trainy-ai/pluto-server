@@ -43,6 +43,36 @@ export const RunTableViewConfigSchema = z.object({
   filters: z.array(FilterSchema).default([]),
   sorting: z.array(SortSchema).default([]),
   pageSize: z.number().int().positive().optional(),
+  // W&B-style grouping: ordered list of encoded group fields, e.g.
+  // ["tag-prefix:group", "system:status"]. Empty/missing = no grouping.
+  // Lenient on read so v1 rows that stored groupBy as `"group" | null`
+  // (a single string or null) load instead of throwing — the v1 sentinel
+  // "group" is treated as the new `tag-prefix:group` field; null/missing
+  // collapses to []. New writes always go through the array form.
+  groupBy: z
+    .preprocess((value) => {
+      if (value == null) return undefined;
+      if (typeof value === "string") {
+        return value === "group" ? ["tag-prefix:group"] : [value];
+      }
+      return value;
+    }, z.array(z.string()).optional()),
+  // Encoded bucket trails the user has expanded — each entry is a
+  // JSON-stringified array of `{field, value}` pairs. Saved views ride
+  // the expand state with them; reload-without-view collapses to all.
+  // Lenient on read for legacy v1 rows that stored `expanded` as
+  // `true | Record<string, boolean>`; we just drop those (collapse all)
+  // since the v1 row-id keys don't translate to v2 bucket trails.
+  expanded: z
+    .preprocess((value) => {
+      if (value == null) return undefined;
+      if (Array.isArray(value) && value.every((v) => typeof v === "string")) {
+        return value;
+      }
+      // v1 sentinel values (`true` / `Record<string, boolean>`) are not
+      // expressible in the v2 form; collapse all rather than throw.
+      return undefined;
+    }, z.array(z.string()).optional()),
 });
 export type RunTableViewConfig = z.infer<typeof RunTableViewConfigSchema>;
 

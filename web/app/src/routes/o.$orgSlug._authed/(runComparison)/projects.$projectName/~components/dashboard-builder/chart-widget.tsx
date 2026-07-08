@@ -5,6 +5,7 @@ import type { ChartWidgetConfig } from "../../~types/dashboard-types";
 import type { GroupedMetrics } from "@/lib/grouping/types";
 import type { SelectedRunWithColor } from "../../~hooks/use-selected-runs";
 import { MultiLineChart } from "../multi-group/line-chart-multi";
+import { GroupedLineChart } from "../multi-group/grouped-line-chart";
 import {
   resolveMetrics,
   isGlobValue,
@@ -33,6 +34,13 @@ interface ChartWidgetProps {
   yZoomRange?: [number, number] | null;
   /** Called when user drags to zoom Y axis, or null on reset */
   onYZoomRangeChange?: (range: [number, number] | null) => void;
+  /** Encoded grouping chain — when non-empty, the widget renders one
+   *  line + min/max band per group via <GroupedLineChart> instead of
+   *  one line per run via <MultiLineChart>. */
+  groupBy?: string[];
+  /** Run IDs the user has hidden from charts; excluded from the
+   *  grouped aggregate so the band/mean re-shapes as eyes toggle. */
+  hiddenRunIds?: string[];
 }
 
 export function ChartWidget({
@@ -44,6 +52,8 @@ export function ChartWidget({
   settingsRunId,
   yZoomRange,
   onYZoomRangeChange,
+  groupBy,
+  hiddenRunIds,
 }: ChartWidgetProps) {
   void _groupedMetrics; // currently unused — kept on the interface for parity with other widgets
 
@@ -201,6 +211,57 @@ export function ChartWidget({
           <p>No runs selected</p>
           <p className="text-xs">Select runs from the list to view data</p>
         </div>
+      </div>
+    );
+  }
+
+  // Per-widget grouping opt-out via Chart Settings popover.
+  const effectiveGroupBy =
+    config.groupingOverride === "off" ? undefined : groupBy;
+
+  // Grouped path — replaces MultiLineChart entirely when the page has
+  // an active groupBy AND the widget has not opted out. Tradeoffs
+  // (zoom-refetch / smoothing / lineage) are documented in
+  // PLAN-grouping-v2-charts.md and grouped-line-chart.tsx.
+  if (effectiveGroupBy && effectiveGroupBy.length > 0) {
+    return (
+      <div className="flex h-full flex-col">
+        <GroupedLineChart
+          organizationId={organizationId}
+          projectName={projectName}
+          groupBy={effectiveGroupBy}
+          metrics={metrics}
+          // The user's comparison — backend filters by `id IN
+          // (selectedRunIds)` before grouping so the chart aggregates
+          // ONLY over selected runs (matches flat-mode behaviour).
+          selectedRunIds={selectedRunIds}
+          hiddenRunIds={hiddenRunIds}
+          title={displayTitle}
+          subtitle={tooltipSubtitle}
+          xlabel={
+            config.xAxis === "time" || config.xAxis === "absolute-time"
+              ? "time"
+              : config.xAxis === "relative-time"
+                ? "time (s)"
+                : "step"
+          }
+          // Step / absolute-time / relative-time wired through for
+          // grouped charts. Custom-metric x-axis falls back to step;
+          // see PLAN-grouping-v2-charts.md.
+          xAxis={
+            config.xAxis === "time" || config.xAxis === "absolute-time"
+              ? "time"
+              : config.xAxis === "relative-time"
+                ? "relative-time"
+                : "step"
+          }
+          logXAxis={config.xAxisScale === "log" ? true : undefined}
+          logYAxis={config.yAxisScale === "log" ? true : undefined}
+          yZoomRange={yZoomRange}
+          onYZoomRangeChange={onYZoomRangeChange}
+          settingsRunId={settingsRunId}
+          maxGroups={config.maxGroups}
+        />
       </div>
     );
   }
