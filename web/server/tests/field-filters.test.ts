@@ -84,6 +84,26 @@ describe('buildFieldFilterConditions', () => {
     expect(conditions[1]).toContain('fv1');
   });
 
+  it('correlates the subquery on projectId so Postgres can use the (projectId, source, key) index', () => {
+    // Perf regression guard: without `fv."projectId" = r."projectId"` in the
+    // EXISTS/NOT EXISTS join, a negated filter ("is none of") compiles to a
+    // NOT EXISTS anti-join that seq-scans every run_field_values row in the org
+    // (~550ms on large projects). The projectId correlation lets it use the
+    // rfv_proj_src_key_num index. It's a no-op semantically (a run's field
+    // values always share its projectId) but essential for the plan.
+    for (const op of ['exists', 'not exists', 'is any of', 'is none of', 'contains', 'is'] as const) {
+      const conditions: string[] = [];
+      const params: any[] = ['org-1'];
+      buildFieldFilterConditions(conditions, params, [
+        { source: 'config', key: 'model.name', dataType: op === 'is any of' || op === 'is none of' ? 'option' : 'text', operator: op, values: ['a'] },
+      ]);
+      expect(conditions).toHaveLength(1);
+      expect(conditions[0], `operator "${op}" must correlate on projectId`).toContain(
+        '."projectId" = r."projectId"',
+      );
+    }
+  });
+
   it('should use correct source in subquery for systemMetadata', () => {
     const conditions: string[] = [];
     const params: any[] = [];

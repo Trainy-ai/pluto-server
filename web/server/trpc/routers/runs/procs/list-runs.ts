@@ -1684,7 +1684,15 @@ export function buildFieldFilterConditions(
     queryParams.push(ff.key);
     const keyIdx = queryParams.length;
 
-    const baseJoin = `${alias}."runId" = r.id AND ${alias}."source" = $${srcIdx} AND ${alias}."key" = $${keyIdx}`;
+    // Correlate on projectId too — not just runId. A run's field-value rows
+    // always carry the run's projectId, so this never changes results, but it
+    // lets Postgres push the outer project scope into the subquery and use the
+    // `(projectId, source, key, …)` index (rfv_proj_src_key_num) instead of
+    // sequentially scanning every run_field_values row in the org. Without it a
+    // negated filter ("is none of" / `$nin`, compiled to a NOT EXISTS anti-join)
+    // seq-scans the whole table — observed at ~550ms on large projects with
+    // Hydra-scale configs (thousands of field-value rows per run).
+    const baseJoin = `${alias}."runId" = r.id AND ${alias}."projectId" = r."projectId" AND ${alias}."source" = $${srcIdx} AND ${alias}."key" = $${keyIdx}`;
 
     // "exists" / "not exists" operators — no value comparison needed
     if (ff.operator === "exists") {
