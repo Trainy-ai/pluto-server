@@ -66,7 +66,9 @@ describe('buildFieldFilterConditions', () => {
     expect(conditions).toHaveLength(1);
     expect(conditions[0]).toContain('EXISTS');
     expect(conditions[0]).toContain('"numericValue"');
-    expect(params).toContain(32);
+    // Numeric values bind as strings cast with ::double precision (see the
+    // regression suite below) — never as a raw JS number.
+    expect(params).toContain('32');
   });
 
   it('should handle multiple filters with separate aliases', () => {
@@ -199,7 +201,7 @@ describe('buildValueCondition', () => {
       }, params);
 
       expect(result).toContain('"numericValue" =');
-      expect(params).toContain(32);
+      expect(params).toContain('32');
     });
 
     it('should generate not-equal for "is not"', () => {
@@ -221,7 +223,7 @@ describe('buildValueCondition', () => {
       }, params);
 
       expect(result).toContain('"numericValue" >');
-      expect(params).toContain(0.001);
+      expect(params).toContain('0.001');
     });
 
     it('should generate < for "is less than"', () => {
@@ -262,8 +264,8 @@ describe('buildValueCondition', () => {
       }, params);
 
       expect(result).toContain('BETWEEN');
-      expect(params).toContain(7);
-      expect(params).toContain(25);
+      expect(params).toContain('7');
+      expect(params).toContain('25');
     });
 
     it('should generate NOT BETWEEN for "is not between"', () => {
@@ -295,6 +297,77 @@ describe('buildValueCondition', () => {
       }, params);
 
       expect(result).toBeNull();
+    });
+
+    // ─── Regression: binary-format / prepared-statement plan caching ──────
+    //
+    // `numericValue` is a Float8 column and the generated SQL text is identical
+    // for every value, so Prisma's per-connection prepared-statement cache locks
+    // the bind param's binary type to whatever value first prepared it. An
+    // integer prepares it as int binary; a subsequent float on the SAME cached
+    // statement is sent as float8 binary and Postgres rejects it with
+    // `22P03 incorrect binary data format in bind parameter N`. The fix is to
+    // bind every numeric value as a STRING cast with `$N::double precision` so
+    // the wire format is always text (deterministic) and the cached plan stays
+    // valid for both integer- and float-valued filters. These tests pin that
+    // contract at the SQL/param level; without it the runtime query 22P03s.
+    describe('binary-format regression (string param + ::double precision cast)', () => {
+      const NUMERIC_CASES: Array<{ operator: string; values: unknown[]; expectedParams: string[] }> = [
+        { operator: 'is', values: [32], expectedParams: ['32'] },
+        { operator: 'is not', values: [32], expectedParams: ['32'] },
+        { operator: 'is greater than', values: [0.001], expectedParams: ['0.001'] },
+        { operator: '>', values: [0.001], expectedParams: ['0.001'] },
+        { operator: 'is less than', values: [1.5], expectedParams: ['1.5'] },
+        { operator: '<', values: [1.5], expectedParams: ['1.5'] },
+        { operator: 'is greater than or equal to', values: [100], expectedParams: ['100'] },
+        { operator: '>=', values: [100], expectedParams: ['100'] },
+        { operator: 'is less than or equal to', values: [100], expectedParams: ['100'] },
+        { operator: '<=', values: [100], expectedParams: ['100'] },
+        { operator: 'is between', values: [7, 25.5], expectedParams: ['7', '25.5'] },
+        { operator: 'is not between', values: [7, 25.5], expectedParams: ['7', '25.5'] },
+      ];
+
+      for (const { operator, values, expectedParams } of NUMERIC_CASES) {
+        it(`"${operator}" casts placeholders to double precision and binds string params`, () => {
+          const params: any[] = [];
+          const result = buildValueCondition('fv0', {
+            source: 'config', key: 'lr', dataType: 'number', operator, values,
+          }, params)!;
+
+          expect(result).not.toBeNull();
+          // Every numericValue placeholder must carry the ::double precision cast.
+          const placeholders = result.match(/\$\d+/g) ?? [];
+          expect(placeholders.length).toBe(expectedParams.length);
+          for (const ph of placeholders) {
+            expect(result).toContain(`${ph}::double precision`);
+          }
+          // Params are bound as strings (text wire format), never raw JS numbers.
+          expect(params).toEqual(expectedParams);
+          for (const p of params) {
+            expect(typeof p).toBe('string');
+          }
+        });
+      }
+
+      it('integer- and float-valued filters produce byte-identical SQL text (the caching hazard)', () => {
+        // Same operator, one integer value and one float value: the SQL text must
+        // match exactly (that identity is what makes the prepared-statement cache
+        // reuse one plan across both), which is precisely why the params must be
+        // text-cast rather than typed by JS number-ness.
+        const p1: any[] = [];
+        const intSql = buildValueCondition('fv0', {
+          source: 'config', key: 'epochs', dataType: 'number', operator: 'is', values: [100],
+        }, p1);
+        const p2: any[] = [];
+        const floatSql = buildValueCondition('fv0', {
+          source: 'config', key: 'lr', dataType: 'number', operator: 'is', values: [0.001],
+        }, p2);
+
+        expect(intSql).toBe(floatSql);
+        expect(intSql).toContain('::double precision');
+        expect(p1).toEqual(['100']);
+        expect(p2).toEqual(['0.001']);
+      });
     });
   });
 

@@ -1764,66 +1764,77 @@ export function buildValueCondition(
   }
 
   if (dataType === "number") {
+    // Bind numeric values as STRINGS cast with `$N::double precision`, never as
+    // raw JS numbers. `numericValue` is a Float8 column, but the placeholder SQL
+    // text (`"numericValue" = $N`) is identical for every value, so Prisma's
+    // prepared-statement cache locks the param's binary type to whatever value
+    // first prepared it on a pooled connection. A JS integer prepares it as int
+    // binary; the next float value on that cached statement is then sent as
+    // float8 binary and Postgres rejects the mismatch with
+    // `22P03 incorrect binary data format in bind parameter N`. Passing a string
+    // + explicit cast makes the wire format deterministic (always text), so the
+    // cached plan is valid for both integer- and float-valued filters.
+    const cast = (idx: number) => `$${idx}::double precision`;
     switch (operator) {
       case "is": {
         const n = Number(values[0]);
         if (isNaN(n)) return null;
-        queryParams.push(n);
-        return `${alias}."numericValue" = $${queryParams.length}`;
+        queryParams.push(String(n));
+        return `${alias}."numericValue" = ${cast(queryParams.length)}`;
       }
       case "is not": {
         const n = Number(values[0]);
         if (isNaN(n)) return null;
-        queryParams.push(n);
-        return `(${alias}."numericValue" IS NULL OR ${alias}."numericValue" != $${queryParams.length})`;
+        queryParams.push(String(n));
+        return `(${alias}."numericValue" IS NULL OR ${alias}."numericValue" != ${cast(queryParams.length)})`;
       }
       case "is greater than":
       case ">": {
         const n = Number(values[0]);
         if (isNaN(n)) return null;
-        queryParams.push(n);
-        return `${alias}."numericValue" > $${queryParams.length}`;
+        queryParams.push(String(n));
+        return `${alias}."numericValue" > ${cast(queryParams.length)}`;
       }
       case "is less than":
       case "<": {
         const n = Number(values[0]);
         if (isNaN(n)) return null;
-        queryParams.push(n);
-        return `${alias}."numericValue" < $${queryParams.length}`;
+        queryParams.push(String(n));
+        return `${alias}."numericValue" < ${cast(queryParams.length)}`;
       }
       case "is greater than or equal to":
       case ">=": {
         const n = Number(values[0]);
         if (isNaN(n)) return null;
-        queryParams.push(n);
-        return `${alias}."numericValue" >= $${queryParams.length}`;
+        queryParams.push(String(n));
+        return `${alias}."numericValue" >= ${cast(queryParams.length)}`;
       }
       case "is less than or equal to":
       case "<=": {
         const n = Number(values[0]);
         if (isNaN(n)) return null;
-        queryParams.push(n);
-        return `${alias}."numericValue" <= $${queryParams.length}`;
+        queryParams.push(String(n));
+        return `${alias}."numericValue" <= ${cast(queryParams.length)}`;
       }
       case "is between": {
         const n1 = Number(values[0]);
         const n2 = Number(values[1]);
         if (isNaN(n1) || isNaN(n2)) return null;
-        queryParams.push(n1);
+        queryParams.push(String(n1));
         const lo = queryParams.length;
-        queryParams.push(n2);
+        queryParams.push(String(n2));
         const hi = queryParams.length;
-        return `${alias}."numericValue" BETWEEN $${lo} AND $${hi}`;
+        return `${alias}."numericValue" BETWEEN ${cast(lo)} AND ${cast(hi)}`;
       }
       case "is not between": {
         const n1 = Number(values[0]);
         const n2 = Number(values[1]);
         if (isNaN(n1) || isNaN(n2)) return null;
-        queryParams.push(n1);
+        queryParams.push(String(n1));
         const lo = queryParams.length;
-        queryParams.push(n2);
+        queryParams.push(String(n2));
         const hi = queryParams.length;
-        return `(${alias}."numericValue" IS NULL OR ${alias}."numericValue" NOT BETWEEN $${lo} AND $${hi})`;
+        return `(${alias}."numericValue" IS NULL OR ${alias}."numericValue" NOT BETWEEN ${cast(lo)} AND ${cast(hi)})`;
       }
       default:
         return null;
