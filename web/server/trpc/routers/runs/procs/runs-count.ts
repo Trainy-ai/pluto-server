@@ -148,7 +148,7 @@ export const countRunsProcedure = protectedOrgProcedure
 
       // Field filters (EXISTS subqueries on run_field_values)
       if (hasFieldFilters) {
-        buildFieldFilterConditions(conditions, queryParams, input.fieldFilters);
+        buildFieldFilterConditions(conditions, queryParams, input.fieldFilters, { organizationId: input.organizationId, projectName: input.projectName });
       }
 
       // Tag-prefix exclusions ("(unset)" bucket drill-in)

@@ -10,6 +10,8 @@ import {
   type MetricFilterSpec,
 } from "../../../../lib/queries/metric-summaries";
 import { applyGroupFiltersToInput, loadGroupFilterDataTypes, buildTagPrefixExclusionConditions } from "../../../../lib/group-field";
+import { fieldFilterSchema, buildFieldFilterConditions, type FieldFilter } from "./field-filter-sql";
+export * from "./field-filter-sql";
 
 /** W&B-style grouping filter — drills the listing into one bucket of a
  *  grouped view. `field` is the encoded group field (e.g. "config:lr"),
@@ -25,61 +27,6 @@ const dateFilterSchema = z.object({
   value: z.string().datetime(),
   value2: z.string().datetime().optional(),
 });
-
-// The complete operator vocabulary the field-filter builder (buildValueCondition
-// below) accepts, across all dataTypes — symbolic + phrase synonyms, exists/not
-// exists, and negated forms. Used to document the `FieldFilterTerm` OpenAPI
-// component (web/server/index.ts) and by the run-filter compiler. NOTE: kept as
-// the operator vocabulary, but `fieldFilterSchema.operator` stays `z.string()`
-// at runtime — the schema is shared with the tRPC table-UI input and the web/app
-// frontend (which type operators as plain strings), so a strict enum here would
-// break their type-checks. The OpenAPI enum is published doc-only.
-export const FIELD_FILTER_OPERATORS = [
-  "contains",
-  "does not contain",
-  "equals",
-  "is",
-  "is not",
-  "starts with",
-  "ends with",
-  "regex",
-  "is greater than",
-  ">",
-  "is less than",
-  "<",
-  "is greater than or equal to",
-  ">=",
-  "is less than or equal to",
-  "<=",
-  "is between",
-  "is not between",
-  "is before",
-  "is on or before",
-  "is after",
-  "is on or after",
-  "is any of",
-  "is none of",
-  "exists",
-  "not exists",
-] as const;
-
-export type FieldFilterOperator = (typeof FIELD_FILTER_OPERATORS)[number];
-
-export const fieldFilterSchema = z.object({
-  source: z.enum(["config", "systemMetadata"]),
-  key: z.string(),
-  dataType: z.enum(["text", "number", "date", "option"]),
-  operator: z.string(),
-  values: z.array(z.any()),
-});
-
-export type FieldFilter = z.infer<typeof fieldFilterSchema>;
-
-// The SQL builders below dispatch on the operator string and ignore unknowns, so
-// they accept a structurally-typed term with `operator` widened to string. This
-// lets callers that keep their own looser filter schema (e.g. runs-count) reuse
-// the builders without coupling to the operator enum.
-type FieldFilterCondition = Omit<FieldFilter, "operator"> & { operator: string };
 
 const metricFilterSchema = z.object({
   logName: z.string(),
@@ -553,7 +500,7 @@ async function defaultCursorQueryWithFieldFilters(
   }
 
   // Field filters
-  buildFieldFilterConditions(conditions, queryParams, input.fieldFilters);
+  buildFieldFilterConditions(conditions, queryParams, input.fieldFilters, { organizationId: input.organizationId, projectName: input.projectName });
   buildTagPrefixExclusionConditions(conditions, queryParams, (input as any).tagPrefixExclusions);
 
   // System filters (name, status, tags, creator.name) — only when not searching
@@ -947,7 +894,7 @@ async function systemColumnSortQuery(
   }
 
   // Field filters
-  buildFieldFilterConditions(conditions, queryParams, input.fieldFilters);
+  buildFieldFilterConditions(conditions, queryParams, input.fieldFilters, { organizationId: input.organizationId, projectName: input.projectName });
   buildTagPrefixExclusionConditions(conditions, queryParams, (input as any).tagPrefixExclusions);
 
   // System filters (name, status, tags, creator.name) — only when not searching
@@ -1154,7 +1101,7 @@ async function jsonFieldSortQuery(
   }
 
   // Field filters
-  buildFieldFilterConditions(conditions, queryParams, input.fieldFilters);
+  buildFieldFilterConditions(conditions, queryParams, input.fieldFilters, { organizationId: input.organizationId, projectName: input.projectName });
   buildTagPrefixExclusionConditions(conditions, queryParams, (input as any).tagPrefixExclusions);
 
   // System filters (name, status, tags, creator.name) — only when not searching
@@ -1404,7 +1351,7 @@ async function getCandidateRunIds(
   }
 
   if (hasFieldFilters) {
-    buildFieldFilterConditions(conditions, queryParams, input.fieldFilters);
+    buildFieldFilterConditions(conditions, queryParams, input.fieldFilters, { organizationId: input.organizationId, projectName: input.projectName });
   }
   // Tag-prefix exclusions (drill into an "(unset)" tag bucket) apply
   // regardless of whether field filters are present — statement level, like
@@ -1498,16 +1445,6 @@ function getSqlCastType(field: string): string {
   return "timestamptz";
 }
 
-/** Map negated operators to their positive equivalents.
- *  Negated field filters use NOT EXISTS with the positive condition
- *  so that runs without the field at all are correctly included. */
-const NEGATED_TO_POSITIVE: Record<string, FieldFilterOperator> = {
-  "does not contain": "contains",
-  "is not": "is",
-  "is not between": "is between",
-  "is none of": "is any of",
-};
-
 /**
  * Resolve the set of run IDs matching a list of field filters, scoped to an
  * organization (and optionally a project). Reuses {@link buildFieldFilterConditions}
@@ -1536,7 +1473,7 @@ export async function queryFieldFilteredRunIds(
     conditions.push(`r."projectId" = $${queryParams.length}`);
   }
 
-  buildFieldFilterConditions(conditions, queryParams, input.fieldFilters);
+  buildFieldFilterConditions(conditions, queryParams, input.fieldFilters, { organizationId: input.organizationId, projectId: input.projectId });
 
   const query = `
     SELECT r.id
@@ -1656,255 +1593,6 @@ export async function queryFieldSortedRunIds(
 
   const rows = await prisma.$queryRawUnsafe(query, ...queryParams);
   return rows.map((row) => row.id);
-}
-
-/**
- * Append EXISTS subqueries for field filters against run_field_values.
- * Each filter becomes an EXISTS (or NOT EXISTS) clause correlated on r.id.
- *
- * Negated operators (e.g. "does not contain") use NOT EXISTS with the positive
- * condition so that rows without the field are included in the result.
- */
-export function buildFieldFilterConditions(
-  conditions: string[],
-  queryParams: (string | bigint | string[] | number)[],
-  fieldFilters?: FieldFilterCondition[],
-) {
-  if (!fieldFilters?.length) return;
-
-  for (let i = 0; i < fieldFilters.length; i++) {
-    const ff = fieldFilters[i];
-    const alias = `fv${i}`;
-
-    // Positional param for source
-    queryParams.push(ff.source);
-    const srcIdx = queryParams.length;
-
-    // Positional param for key
-    queryParams.push(ff.key);
-    const keyIdx = queryParams.length;
-
-    // Correlate on projectId too — not just runId. A run's field-value rows
-    // always carry the run's projectId, so this never changes results, but it
-    // lets Postgres push the outer project scope into the subquery and use the
-    // `(projectId, source, key, …)` index (rfv_proj_src_key_num) instead of
-    // sequentially scanning every run_field_values row in the org. Without it a
-    // negated filter ("is none of" / `$nin`, compiled to a NOT EXISTS anti-join)
-    // seq-scans the whole table — observed at ~550ms on large projects with
-    // Hydra-scale configs (thousands of field-value rows per run).
-    const baseJoin = `${alias}."runId" = r.id AND ${alias}."projectId" = r."projectId" AND ${alias}."source" = $${srcIdx} AND ${alias}."key" = $${keyIdx}`;
-
-    // "exists" / "not exists" operators — no value comparison needed
-    if (ff.operator === "exists") {
-      conditions.push(`EXISTS (SELECT 1 FROM "run_field_values" ${alias} WHERE ${baseJoin})`);
-      continue;
-    }
-    if (ff.operator === "not exists") {
-      conditions.push(`NOT EXISTS (SELECT 1 FROM "run_field_values" ${alias} WHERE ${baseJoin})`);
-      continue;
-    }
-
-    // Check if this is a negated operator — if so, build the positive condition
-    // and wrap in NOT EXISTS so that runs without the field are included.
-    const positiveOp = NEGATED_TO_POSITIVE[ff.operator];
-    if (positiveOp) {
-      const positiveFilter = { ...ff, operator: positiveOp };
-      const valueCond = buildValueCondition(alias, positiveFilter, queryParams);
-      if (valueCond) {
-        conditions.push(`NOT EXISTS (SELECT 1 FROM "run_field_values" ${alias} WHERE ${baseJoin} AND ${valueCond})`);
-      }
-    } else {
-      // Positive operator — use EXISTS normally
-      const valueCond = buildValueCondition(alias, ff, queryParams);
-      if (valueCond) {
-        conditions.push(`EXISTS (SELECT 1 FROM "run_field_values" ${alias} WHERE ${baseJoin} AND ${valueCond})`);
-      }
-    }
-  }
-}
-
-/**
- * Build the value comparison part of a field filter EXISTS subquery.
- * Returns the SQL condition string, or null if the operator is unknown.
- */
-export function buildValueCondition(
-  alias: string,
-  ff: FieldFilterCondition,
-  queryParams: (string | bigint | string[] | number)[],
-): string | null {
-  const { dataType, operator, values } = ff;
-
-  if (dataType === "text") {
-    const v = values[0] != null ? String(values[0]) : "";
-    switch (operator) {
-      case "contains": {
-        queryParams.push(v);
-        return `${alias}."textValue" ILIKE '%' || $${queryParams.length} || '%'`;
-      }
-      case "does not contain": {
-        queryParams.push(v);
-        return `(${alias}."textValue" IS NULL OR ${alias}."textValue" NOT ILIKE '%' || $${queryParams.length} || '%')`;
-      }
-      case "equals":
-      case "is": {
-        queryParams.push(v);
-        return `${alias}."textValue" = $${queryParams.length}`;
-      }
-      case "is not": {
-        queryParams.push(v);
-        return `(${alias}."textValue" IS NULL OR ${alias}."textValue" != $${queryParams.length})`;
-      }
-      case "starts with": {
-        queryParams.push(v);
-        return `${alias}."textValue" ILIKE $${queryParams.length} || '%'`;
-      }
-      case "ends with": {
-        queryParams.push(v);
-        return `${alias}."textValue" ILIKE '%' || $${queryParams.length}`;
-      }
-      case "regex": {
-        queryParams.push(v);
-        return `${alias}."textValue" ~ $${queryParams.length}`;
-      }
-      default:
-        return null;
-    }
-  }
-
-  if (dataType === "number") {
-    // Bind numeric values as STRINGS cast with `$N::double precision`, never as
-    // raw JS numbers. `numericValue` is a Float8 column, but the placeholder SQL
-    // text (`"numericValue" = $N`) is identical for every value, so Prisma's
-    // prepared-statement cache locks the param's binary type to whatever value
-    // first prepared it on a pooled connection. A JS integer prepares it as int
-    // binary; the next float value on that cached statement is then sent as
-    // float8 binary and Postgres rejects the mismatch with
-    // `22P03 incorrect binary data format in bind parameter N`. Passing a string
-    // + explicit cast makes the wire format deterministic (always text), so the
-    // cached plan is valid for both integer- and float-valued filters.
-    const cast = (idx: number) => `$${idx}::double precision`;
-    switch (operator) {
-      case "is": {
-        const n = Number(values[0]);
-        if (isNaN(n)) return null;
-        queryParams.push(String(n));
-        return `${alias}."numericValue" = ${cast(queryParams.length)}`;
-      }
-      case "is not": {
-        const n = Number(values[0]);
-        if (isNaN(n)) return null;
-        queryParams.push(String(n));
-        return `(${alias}."numericValue" IS NULL OR ${alias}."numericValue" != ${cast(queryParams.length)})`;
-      }
-      case "is greater than":
-      case ">": {
-        const n = Number(values[0]);
-        if (isNaN(n)) return null;
-        queryParams.push(String(n));
-        return `${alias}."numericValue" > ${cast(queryParams.length)}`;
-      }
-      case "is less than":
-      case "<": {
-        const n = Number(values[0]);
-        if (isNaN(n)) return null;
-        queryParams.push(String(n));
-        return `${alias}."numericValue" < ${cast(queryParams.length)}`;
-      }
-      case "is greater than or equal to":
-      case ">=": {
-        const n = Number(values[0]);
-        if (isNaN(n)) return null;
-        queryParams.push(String(n));
-        return `${alias}."numericValue" >= ${cast(queryParams.length)}`;
-      }
-      case "is less than or equal to":
-      case "<=": {
-        const n = Number(values[0]);
-        if (isNaN(n)) return null;
-        queryParams.push(String(n));
-        return `${alias}."numericValue" <= ${cast(queryParams.length)}`;
-      }
-      case "is between": {
-        const n1 = Number(values[0]);
-        const n2 = Number(values[1]);
-        if (isNaN(n1) || isNaN(n2)) return null;
-        queryParams.push(String(n1));
-        const lo = queryParams.length;
-        queryParams.push(String(n2));
-        const hi = queryParams.length;
-        return `${alias}."numericValue" BETWEEN ${cast(lo)} AND ${cast(hi)}`;
-      }
-      case "is not between": {
-        const n1 = Number(values[0]);
-        const n2 = Number(values[1]);
-        if (isNaN(n1) || isNaN(n2)) return null;
-        queryParams.push(String(n1));
-        const lo = queryParams.length;
-        queryParams.push(String(n2));
-        const hi = queryParams.length;
-        return `(${alias}."numericValue" IS NULL OR ${alias}."numericValue" NOT BETWEEN ${cast(lo)} AND ${cast(hi)})`;
-      }
-      default:
-        return null;
-    }
-  }
-
-  if (dataType === "date") {
-    switch (operator) {
-      case "is before":
-      case "is on or before": {
-        const v = String(values[0]);
-        queryParams.push(v);
-        return `${alias}."textValue" < $${queryParams.length}`;
-      }
-      case "is after":
-      case "is on or after": {
-        const v = String(values[0]);
-        queryParams.push(v);
-        return `${alias}."textValue" > $${queryParams.length}`;
-      }
-      case "is between": {
-        const v1 = String(values[0]);
-        const v2 = String(values[1]);
-        queryParams.push(v1);
-        const lo = queryParams.length;
-        queryParams.push(v2);
-        const hi = queryParams.length;
-        return `${alias}."textValue" BETWEEN $${lo} AND $${hi}`;
-      }
-      default:
-        return null;
-    }
-  }
-
-  if (dataType === "option") {
-    switch (operator) {
-      case "is any of": {
-        const arr = (Array.isArray(values[0]) ? values[0] : values).map(String);
-        queryParams.push(arr as any);
-        return `${alias}."textValue" = ANY($${queryParams.length}::text[])`;
-      }
-      case "is none of": {
-        const arr = (Array.isArray(values[0]) ? values[0] : values).map(String);
-        queryParams.push(arr as any);
-        return `(${alias}."textValue" IS NULL OR ${alias}."textValue" != ALL($${queryParams.length}::text[]))`;
-      }
-      case "is": {
-        const v = String(values[0]);
-        queryParams.push(v);
-        return `${alias}."textValue" = $${queryParams.length}`;
-      }
-      case "is not": {
-        const v = String(values[0]);
-        queryParams.push(v);
-        return `(${alias}."textValue" IS NULL OR ${alias}."textValue" != $${queryParams.length})`;
-      }
-      default:
-        return null;
-    }
-  }
-
-  return null;
 }
 
 /**

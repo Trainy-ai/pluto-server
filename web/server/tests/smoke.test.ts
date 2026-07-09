@@ -9986,6 +9986,41 @@ describe('SDK API Endpoints (with API Key)', () => {
         expect((await resNone.json()).runs).toEqual([]);
       });
 
+      it('Test 38.4b: negated operators exclude matches and include runs missing the key', async () => {
+        // "is none of" compiles to `r.id NOT IN (<positive match set>)`
+        // (field-filter-sql.ts). Two semantics pinned here end-to-end:
+        //   1. the matching run (config-filter-target, model.name = "dit") is
+        //      excluded;
+        //   2. runs that don't have the key AT ALL (the bulk runs) are
+        //      included — a run without the field trivially satisfies
+        //      "is none of".
+        const res = await listWithFilters([
+          { source: 'config', key: 'model.name', dataType: 'option', operator: 'is none of', values: [['dit']] },
+        ]);
+        expect(res.status).toBe(200);
+        const names = (await res.json()).runs.map((r: { name: string }) => r.name);
+        expect(names).not.toContain('config-filter-target');
+        expect(names.length).toBeGreaterThan(0); // bulk runs (no model.name key) remain
+
+        // "is not" (text) — same exclusion + missing-key inclusion contract.
+        const resIsNot = await listWithFilters([
+          { source: 'config', key: 'model.name', dataType: 'text', operator: 'is not', values: ['dit'] },
+        ]);
+        expect(resIsNot.status).toBe(200);
+        const isNotNames = (await resIsNot.json()).runs.map((r: { name: string }) => r.name);
+        expect(isNotNames).not.toContain('config-filter-target');
+        expect(isNotNames.length).toBeGreaterThan(0);
+
+        // "not exists" — only runs without the key at all.
+        const resNotExists = await listWithFilters([
+          { source: 'config', key: 'model.name', dataType: 'text', operator: 'not exists', values: [] },
+        ]);
+        expect(resNotExists.status).toBe(200);
+        const neNames = (await resNotExists.json()).runs.map((r: { name: string }) => r.name);
+        expect(neNames).not.toContain('config-filter-target');
+        expect(neNames.length).toBeGreaterThan(0);
+      });
+
       it('Test 38.5: malformed fieldFilters JSON returns 400', async () => {
         const qs = new URLSearchParams({
           projectName: TEST_PROJECT_NAME,

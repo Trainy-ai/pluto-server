@@ -1,9 +1,12 @@
 /**
  * Unit tests for buildFieldFilterConditions and buildValueCondition
- * from list-runs.ts.
+ * (field-filter-sql.ts, re-exported from list-runs.ts).
  *
  * Tests the SQL generation for field filters against run_field_values.
- * These functions generate EXISTS subqueries with parameterized SQL.
+ * Positive operators generate correlated EXISTS subqueries; negated operators
+ * (and "not exists") generate uncorrelated `r.id NOT IN (...)` subqueries so
+ * Postgres always evaluates them as a single hashed-subplan pass (see the
+ * incident notes on buildFieldFilterConditions).
  */
 
 import { describe, it, expect } from 'vitest';
@@ -12,11 +15,14 @@ import {
   buildValueCondition,
 } from '../trpc/routers/runs/procs/list-runs';
 
+// Default scope for tests: a resolved project id (the common case).
+const SCOPE = { organizationId: 'org-1', projectId: 123n };
+
 describe('buildFieldFilterConditions', () => {
   it('should do nothing when fieldFilters is empty', () => {
     const conditions: string[] = [];
     const params: any[] = [];
-    buildFieldFilterConditions(conditions, params, []);
+    buildFieldFilterConditions(conditions, params, [], SCOPE);
     expect(conditions).toHaveLength(0);
     expect(params).toHaveLength(0);
   });
@@ -24,7 +30,7 @@ describe('buildFieldFilterConditions', () => {
   it('should do nothing when fieldFilters is undefined', () => {
     const conditions: string[] = [];
     const params: any[] = [];
-    buildFieldFilterConditions(conditions, params, undefined);
+    buildFieldFilterConditions(conditions, params, undefined, SCOPE);
     expect(conditions).toHaveLength(0);
     expect(params).toHaveLength(0);
   });
@@ -34,7 +40,7 @@ describe('buildFieldFilterConditions', () => {
     const params: any[] = ['org-1']; // pre-existing param
     buildFieldFilterConditions(conditions, params, [
       { source: 'config', key: 'batch_size', dataType: 'number', operator: 'exists', values: [] },
-    ]);
+    ], SCOPE);
 
     expect(conditions).toHaveLength(1);
     expect(conditions[0]).toContain('EXISTS');
@@ -45,15 +51,16 @@ describe('buildFieldFilterConditions', () => {
     expect(params).toContain('batch_size');
   });
 
-  it('should generate NOT EXISTS subquery for "not exists" operator', () => {
+  it('should generate an uncorrelated NOT IN subquery for "not exists" operator', () => {
     const conditions: string[] = [];
     const params: any[] = ['org-1'];
     buildFieldFilterConditions(conditions, params, [
       { source: 'config', key: 'optional_field', dataType: 'text', operator: 'not exists', values: [] },
-    ]);
+    ], SCOPE);
 
     expect(conditions).toHaveLength(1);
-    expect(conditions[0]).toContain('NOT EXISTS');
+    expect(conditions[0]).toContain('r.id NOT IN');
+    expect(conditions[0]).not.toContain('NOT EXISTS');
   });
 
   it('should generate value comparison for numeric "is" operator', () => {
@@ -61,7 +68,7 @@ describe('buildFieldFilterConditions', () => {
     const params: any[] = ['org-1'];
     buildFieldFilterConditions(conditions, params, [
       { source: 'config', key: 'batch_size', dataType: 'number', operator: 'is', values: [32] },
-    ]);
+    ], SCOPE);
 
     expect(conditions).toHaveLength(1);
     expect(conditions[0]).toContain('EXISTS');
@@ -77,26 +84,22 @@ describe('buildFieldFilterConditions', () => {
     buildFieldFilterConditions(conditions, params, [
       { source: 'config', key: 'batch_size', dataType: 'number', operator: 'is', values: [32] },
       { source: 'config', key: 'lr', dataType: 'number', operator: 'is greater than', values: [0.001] },
-    ]);
+    ], SCOPE);
 
     expect(conditions).toHaveLength(2);
     expect(conditions[0]).toContain('fv0');
     expect(conditions[1]).toContain('fv1');
   });
 
-  it('correlates the subquery on projectId so Postgres can use the (projectId, source, key) index', () => {
-    // Perf regression guard: without `fv."projectId" = r."projectId"` in the
-    // EXISTS/NOT EXISTS join, a negated filter ("is none of") compiles to a
-    // NOT EXISTS anti-join that seq-scans every run_field_values row in the org
-    // (~550ms on large projects). The projectId correlation lets it use the
-    // rfv_proj_src_key_num index. It's a no-op semantically (a run's field
-    // values always share its projectId) but essential for the plan.
-    for (const op of ['exists', 'not exists', 'is any of', 'is none of', 'contains', 'is'] as const) {
+  it('correlates positive-operator subqueries on projectId (index-friendly semi-join)', () => {
+    // Positive filters stay as correlated EXISTS; the projectId correlation
+    // lets Postgres use the rfv_proj_src_key_num index in the semi-join.
+    for (const op of ['exists', 'is any of', 'contains', 'is'] as const) {
       const conditions: string[] = [];
       const params: any[] = ['org-1'];
       buildFieldFilterConditions(conditions, params, [
-        { source: 'config', key: 'model.name', dataType: op === 'is any of' || op === 'is none of' ? 'option' : 'text', operator: op, values: ['a'] },
-      ]);
+        { source: 'config', key: 'model.name', dataType: op === 'is any of' ? 'option' : 'text', operator: op, values: ['a'] },
+      ], SCOPE);
       expect(conditions).toHaveLength(1);
       expect(conditions[0], `operator "${op}" must correlate on projectId`).toContain(
         '."projectId" = r."projectId"',
@@ -104,12 +107,83 @@ describe('buildFieldFilterConditions', () => {
     }
   });
 
+  describe('negated operators compile to an uncorrelated NOT IN (hashed-subplan) shape', () => {
+    // Incident regression guard (2026-07-09 prod P2024 storm): a negated filter
+    // compiled as a correlated NOT EXISTS anti-join is at the planner's mercy —
+    // under a row-count misestimate Postgres picks a nested-loop-with-Materialize
+    // plan that rescans the materialized match set once per run (~500s at 170K
+    // runs; starved the 5-connection Prisma pool). An uncorrelated
+    // `r.id NOT IN (SELECT ...)` is always ONE inner scan + hashed-subplan
+    // probes, independent of join planning, so the subquery must contain NO
+    // reference to the outer alias `r`.
+    const NEGATED: Array<{ op: string; dataType: string; values: unknown[] }> = [
+      { op: 'is none of', dataType: 'option', values: [['a', 'b']] },
+      { op: 'is not', dataType: 'text', values: ['a'] },
+      { op: 'does not contain', dataType: 'text', values: ['a'] },
+      { op: 'is not between', dataType: 'number', values: [1, 2] },
+      { op: 'not exists', dataType: 'text', values: [] },
+    ];
+
+    for (const { op, dataType, values } of NEGATED) {
+      it(`"${op}" emits r.id NOT IN with no outer correlation`, () => {
+        const conditions: string[] = [];
+        const params: any[] = ['org-1'];
+        buildFieldFilterConditions(conditions, params, [
+          { source: 'config', key: 'model.name', dataType: dataType as any, operator: op, values },
+        ], SCOPE);
+        expect(conditions).toHaveLength(1);
+        const sql = conditions[0];
+        expect(sql).toContain('r.id NOT IN');
+        // Uncorrelated: past the leading "r.id NOT IN", nothing may reference
+        // the outer alias.
+        const inner = sql.replace('r.id NOT IN', '');
+        expect(inner, `subquery for "${op}" must not correlate on r`).not.toMatch(/\br\./);
+        // Negation is applied by NOT IN alone — the subquery matches the
+        // POSITIVE condition (no doubled negation).
+        expect(sql).not.toContain('NOT EXISTS');
+      });
+    }
+
+    it('scopes the subquery by the resolved projectId when available', () => {
+      const conditions: string[] = [];
+      const params: any[] = [];
+      buildFieldFilterConditions(conditions, params, [
+        { source: 'config', key: 'user', dataType: 'option', operator: 'is none of', values: [['a']] },
+      ], { organizationId: 'org-1', projectId: 42n });
+      expect(conditions[0]).toContain('."projectId" = $');
+      expect(params).toContain(42n);
+    });
+
+    it('scopes the subquery via a projects scalar subquery when only projectName is known', () => {
+      const conditions: string[] = [];
+      const params: any[] = [];
+      buildFieldFilterConditions(conditions, params, [
+        { source: 'config', key: 'user', dataType: 'option', operator: 'is none of', values: [['a']] },
+      ], { organizationId: 'org-1', projectName: 'proj-a' });
+      expect(conditions[0]).toContain('SELECT sp.id FROM "projects" sp');
+      expect(params).toContain('org-1');
+      expect(params).toContain('proj-a');
+      // Still uncorrelated w.r.t. the outer runs alias.
+      expect(conditions[0].replace('r.id NOT IN', '')).not.toMatch(/\br\./);
+    });
+
+    it('falls back to organizationId scope when no project is known', () => {
+      const conditions: string[] = [];
+      const params: any[] = [];
+      buildFieldFilterConditions(conditions, params, [
+        { source: 'config', key: 'user', dataType: 'option', operator: 'is none of', values: [['a']] },
+      ], { organizationId: 'org-1' });
+      expect(conditions[0]).toContain('."organizationId" = $');
+      expect(params).toContain('org-1');
+    });
+  });
+
   it('should use correct source in subquery for systemMetadata', () => {
     const conditions: string[] = [];
     const params: any[] = [];
     buildFieldFilterConditions(conditions, params, [
       { source: 'systemMetadata', key: 'hostname', dataType: 'text', operator: 'contains', values: ['gpu'] },
-    ]);
+    ], SCOPE);
 
     expect(params).toContain('systemMetadata');
     expect(params).toContain('hostname');

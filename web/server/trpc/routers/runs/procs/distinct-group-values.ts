@@ -364,7 +364,7 @@ export const distinctGroupValuesProcedure = protectedOrgProcedure
       }
     }
 
-    buildFieldFilterConditions(conditions, queryParams, merged.fieldFilters);
+    buildFieldFilterConditions(conditions, queryParams, merged.fieldFilters, { organizationId: input.organizationId, projectName: input.projectName });
     buildTagPrefixExclusionConditions(conditions, queryParams, merged.tagPrefixExclusions);
 
     if (input.metricFilters?.length) {
@@ -691,7 +691,7 @@ export const distinctGroupValuesProcedure = protectedOrgProcedure
           }
         }
       }
-      buildFieldFilterConditions(sConditions, sParams, merged.fieldFilters);
+      buildFieldFilterConditions(sConditions, sParams, merged.fieldFilters, { organizationId: input.organizationId, projectName: input.projectName });
       buildTagPrefixExclusionConditions(sConditions, sParams, merged.tagPrefixExclusions);
 
       // metricFilters: reuse the run-id set if needed. Re-run is cheap
