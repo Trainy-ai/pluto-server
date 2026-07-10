@@ -144,9 +144,20 @@ export async function queryMetricSummariesBatch(
 // Argmin/argmax step — find the step where a metric's value is min/max
 // ---------------------------------------------------------------------------
 
-const IMAGE_FILE_FILTER = `(
+// Matches any renderable media sample (image / video / audio) so the
+// "pin to nearest media step" actions snap to video and audio widgets too,
+// not just images. `fileType` is stored as either a MIME type (e.g.
+// 'image/png') or a bare extension (e.g. 'png', 'mp4', 'wav') by the ingest,
+// so we match both forms. Excludes non-media artifacts (checkpoints, text, etc.).
+const MEDIA_FILE_FILTER = `(
   startsWith(fileType, 'image/')
-  OR fileType IN ('png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp')
+  OR startsWith(fileType, 'video/')
+  OR startsWith(fileType, 'audio/')
+  OR fileType IN (
+    'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp',
+    'mp4', 'webm', 'avi', 'mov', 'mkv',
+    'mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac'
+  )
 )`;
 
 /**
@@ -338,7 +349,7 @@ async function queryImageLogsPerRun(
     WHERE tenantId = {tenantId: String}
       AND projectName = {projectName: String}
       AND runId IN ({runIds: Array(UInt64)})
-      AND ${IMAGE_FILE_FILTER}
+      AND ${MEDIA_FILE_FILTER}
   `;
   const result = await ch.query(query, {
     tenantId: organizationId,
@@ -434,7 +445,7 @@ async function queryNearestImagePerLogForGlobalSteps(
         ON f.tenantId = {tenantId: String}
        AND f.projectName = {projectName: String}
        AND f.runId = t.runId
-      WHERE ${IMAGE_FILE_FILTER.replace(/fileType/g, "f.fileType")}
+      WHERE ${MEDIA_FILE_FILTER.replace(/fileType/g, "f.fileType")}
     )
     SELECT runId, kind, image_log, image_step, dist, alt_image_step
     FROM ranked
@@ -556,7 +567,7 @@ async function queryArgminArgmaxStepsPerImageLogRawFallback(
         AND m.projectName = {projectName: String}
         AND m.logName = {logName: String}
         AND isFinite(m.value)
-        AND ${IMAGE_FILE_FILTER.replace(/fileType/g, "f.fileType")}
+        AND ${MEDIA_FILE_FILTER.replace(/fileType/g, "f.fileType")}
     ) t
     WHERE rn = 1 AND dist <= {toleranceSteps: UInt64}
     GROUP BY runId, image_log

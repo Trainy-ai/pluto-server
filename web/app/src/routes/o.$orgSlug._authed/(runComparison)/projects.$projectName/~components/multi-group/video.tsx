@@ -12,7 +12,6 @@ import { MediaSettingsPopover } from "@/components/core/media-settings-popover";
 import { TruncatedLabel } from "@/components/shared/truncated-label";
 import { useSampleIndexSync } from "./use-sample-index-sync";
 import { MediaPinLabel } from "@/components/core/media-pin-label";
-import { ClearAllPinsButton } from "@/components/core/clear-all-pins-button";
 import { pinRingClass } from "@/components/core/image-viewer/pin-styles";
 import { useMediaPins } from "./use-media-pins";
 
@@ -182,13 +181,15 @@ export const MultiGroupVideo = ({
       title={logName}
       className="h-full w-full"
       toolbarExtra={
-        <>
-          <MediaSettingsPopover syncMode={mode} onSyncModeChange={setMode} />
-          <ClearAllPinsButton
-            pinnedRunCount={pinnedRunCount}
-            onClearAllPins={clearAllPins}
-          />
-        </>
+        // "Clear all pins" lives inside the settings popover (matching the
+        // image widget) rather than as a standalone toolbar button, so the
+        // three media widgets expose it identically.
+        <MediaSettingsPopover
+          syncMode={mode}
+          onSyncModeChange={setMode}
+          pinnedRunCount={pinnedRunCount}
+          onClearAllPins={clearAllPins}
+        />
       }
     >
     <div

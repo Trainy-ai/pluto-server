@@ -72,7 +72,7 @@ export async function queryRunFiles(
     SELECT fileName, fileType, fileSize, logName, logGroup, time, step, caption
     FROM mlop_files
     WHERE ${whereClause}
-    ORDER BY step ASC
+    ORDER BY step ASC, sampleIndex ASC, fileName ASC
     LIMIT {limit: UInt32}
   `;
   queryParams.limit = limit;
@@ -148,7 +148,10 @@ export async function queryRunFilesByLogName(
     AND runId = {runId: UInt64}
     AND logName = {logName: String}
     AND logGroup = {logGroup: String}
-    ORDER BY step ASC, fileName ASC
+    -- sampleIndex (SDK-supplied list position) is the real order for
+    -- multi-sample-per-step list logging; fileName is only a stable
+    -- tiebreak for legacy rows where every sampleIndex defaults to 0.
+    ORDER BY step ASC, sampleIndex ASC, fileName ASC
     LIMIT {maxFiles: UInt32}
   `;
 
@@ -221,7 +224,7 @@ export async function queryRunFileTree(
     WHERE tenantId = {tenantId: String}
     AND projectName = {projectName: String}
     AND runId = {runId: UInt64}
-    ORDER BY logName ASC, step ASC, fileName ASC
+    ORDER BY logName ASC, step ASC, sampleIndex ASC, fileName ASC
     LIMIT {limit: UInt32}
   `;
 

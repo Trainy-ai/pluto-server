@@ -278,8 +278,13 @@ export const distinctGroupValuesProcedure = protectedOrgProcedure
     // fetchSubgroups reuse the same per-run-value rows. One round trip
     // for the sort column (if it's a metric); one parallel batch for
     // every metric in `aggregateColumns`.
-    const prefetchedMetricValues = await prefetchSortRunMetricValues(input, ctx);
-    const prefetchedAggMetricValues = await prefetchAggregateMetricValues(input, ctx);
+    // Independent ClickHouse round trips (sort-column values vs. aggregate-
+    // column values) — run them concurrently so we pay one round-trip
+    // latency, not two, before the main query.
+    const [prefetchedMetricValues, prefetchedAggMetricValues] = await Promise.all([
+      prefetchSortRunMetricValues(input, ctx),
+      prefetchAggregateMetricValues(input, ctx),
+    ]);
 
     // Resolve dataType for config/sysmeta sort fields when the caller
     // didn't provide one. project_column_keys carries it for every

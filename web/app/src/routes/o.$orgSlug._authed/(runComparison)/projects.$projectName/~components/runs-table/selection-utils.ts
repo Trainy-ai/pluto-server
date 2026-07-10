@@ -13,15 +13,14 @@ export function computeRowSelection(
 ): Record<string, boolean> {
   const selection: Record<string, boolean> = {};
 
-  if (displayedRuns.length > 0) {
-    const selectedIds = new Set(Object.keys(selectedRunsWithColors));
-
-    if (selectedIds.size > 0) {
-      displayedRuns.forEach((run) => {
-        if (run?.id && selectedIds.has(run.id)) {
-          selection[run.id] = true;
-        }
-      });
+  // Index directly into the selection Record (O(1) per lookup) rather than
+  // materializing a Set of ALL selected ids just to call `.has`. This is
+  // called once per expanded leaf bucket, so with a large selection the old
+  // `new Set(Object.keys(...))` was an O(selection) allocation per call for
+  // no benefit — we only ever probe the (bounded) displayed page's ids.
+  for (const run of displayedRuns) {
+    if (run?.id && selectedRunsWithColors[run.id]) {
+      selection[run.id] = true;
     }
   }
 

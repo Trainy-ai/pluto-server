@@ -228,6 +228,14 @@ pub struct FileUploadInfo {
     // that don't send the field.
     #[serde(default)]
     pub caption: Option<String>,
+    // 0-based position of this file within the list logged for one
+    // (logName, step) in a single log() call. Sent by the SDK; the read path
+    // sorts by it so list-logged samples keep the order the user logged them
+    // in instead of falling back to fileName sort. `#[serde(default)]` keeps
+    // older SDKs (which omit it) at 0 — no `deny_unknown_fields` here, so a
+    // newer SDK talking to an older server is also harmless (field ignored).
+    #[serde(rename = "sampleIndex", default)]
+    pub sample_index: u32,
 }
 
 /// Response containing presigned URLs for requested files
@@ -281,6 +289,7 @@ pub async fn generate_presigned_urls(
             file_size: file.file_size,
             step: file.step,
             caption: file.caption.clone(),
+            sample_index: file.sample_index,
         };
 
         // Create the full database row structure
@@ -545,6 +554,22 @@ mod tests {
         }"#;
         let req: FileUploadRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.files[0].caption, None);
+    }
+
+    #[test]
+    fn test_deserialize_file_upload_request_sample_index() {
+        // Absent sampleIndex (older SDK) → 0; explicit value round-trips.
+        let json = r#"{
+            "files": [
+                {"fileName": "a.png", "logName": "images", "fileSize": 100, "fileType": "png", "step": 1, "time": 1000},
+                {"fileName": "b.png", "logName": "images", "fileSize": 100, "fileType": "png", "step": 1, "time": 1000, "sampleIndex": 1},
+                {"fileName": "c.png", "logName": "images", "fileSize": 100, "fileType": "png", "step": 1, "time": 1000, "sampleIndex": 2}
+            ]
+        }"#;
+        let req: FileUploadRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.files[0].sample_index, 0);
+        assert_eq!(req.files[1].sample_index, 1);
+        assert_eq!(req.files[2].sample_index, 2);
     }
 
     #[test]

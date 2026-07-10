@@ -1,5 +1,6 @@
 import { Fragment, useState, useCallback, useMemo, useEffect, useRef } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import {
   getCoreRowModel,
   useReactTable,
@@ -331,7 +332,7 @@ export function GroupedBucketTree(props: GroupedBucketTreeProps) {
               limit: PER_PAGE,
               offset: page * PER_PAGE,
             }),
-          })) as { runs: Run[]; hasMore?: boolean } | undefined;
+          })) as { runs: Run[]; nextOffset: number | null } | undefined;
           if (!result?.runs?.length) return;
           for (const r of result.runs) {
             // Pass the run object as the 3rd arg — handleRunSelection
@@ -340,8 +341,20 @@ export function GroupedBucketTree(props: GroupedBucketTreeProps) {
             // Bucket runs typically aren't in the flat page slice.
             onSelectionChangeRef.current(r.id, true, r);
           }
-          if (!result.hasMore || result.runs.length < PER_PAGE) return;
+          // runs.list signals "more pages" via `nextOffset` (a number), NOT a
+          // `hasMore` flag — it's null once the bucket is exhausted. (The old
+          // `!result.hasMore` check read undefined → always truthy → stopped
+          // after page 0, capping select-all at 200 and making the cap toast
+          // below unreachable.)
+          if (result.nextOffset == null) return;
         }
+        // Fell through all MAX_PAGES with runs still remaining: we selected
+        // the first PER_PAGE * MAX_PAGES and the rest were silently dropped.
+        // Surface that instead of leaving the user to think the whole group
+        // is selected. (Proper fix is a server-side select-by-filter path.)
+        toast.warning(
+          `Selected the first ${(PER_PAGE * MAX_PAGES).toLocaleString()} runs in this group. Selecting all of a larger group isn't supported yet.`,
+        );
       } catch (err) {
         console.error(
           "[grouped-bucket-tree] selectAllInBucket failed:",
@@ -494,6 +507,15 @@ function BucketLevel({
     sortDirection,
     sortAggregation,
     aggregateColumns,
+  },
+  {
+    // Same rationale as the leaf query below: when footer-paginated, `offset`
+    // is in the key, so paging buckets rekeys and would blank `data` → the
+    // isLoading branch replaces the bucket rows with a spinner (the same black
+    // gap, one level up). Holding the previous page also keeps the clamp
+    // effects from seeing a momentarily empty `values` and snapping pageIndex
+    // back to 0. No-op in returnAll mode (offset omitted, key stable).
+    placeholderData: keepPreviousData,
   });
   const { data, isLoading } = useQuery(queryOptions);
 
@@ -658,6 +680,13 @@ function BucketLevel({
     const maxPage = Math.max(0, Math.ceil(nestedOrderedFull.length / PAGE_SIZE) - 1);
     if (nestedPageIndex > maxPage) setNestedPageIndex(maxPage);
   }, [nestedOrderedFull, nestedPageIndex]);
+
+  // Restart nested pagination at page 1 on a sort change — same rationale as
+  // the leaf pager in BucketRuns: a re-sort reorders the bucket list, and
+  // keepPreviousData no longer blanks `values` to trigger the clamp reset.
+  useEffect(() => {
+    setNestedPageIndex(0);
+  }, [sortField, sortSource, sortDirection, sortAggregation]);
 
   const values = useMemo(() => {
     // Nested + (DOS or Pin): the FULL ordered list lives in
@@ -1657,6 +1686,16 @@ function BucketRuns({
     sortAggregation,
     limit: clientPaginateLeaf ? 200 : PAGE_SIZE,
     offset: clientPaginateLeaf ? 0 : runsPageIndex * PAGE_SIZE,
+  },
+  {
+    // Server-paginated leaf: `offset` is in the query key, so clicking the
+    // inline pager rekeys and (without this) blanks `data` → `isLoading`
+    // flips true → all rows unmount to a single "Loading runs…" row, i.e.
+    // the ~1s black gap on page change (worst on big buckets whose ClickHouse
+    // page fetch is slow). keepPreviousData holds the previous page's rows on
+    // screen until the next arrives — a smooth swap. No-op when client-
+    // paginating (offset pinned to 0, key stable).
+    placeholderData: keepPreviousData,
   });
   const { data, isLoading } = useQuery(queryOptions);
   // Parallel count so we know the total before users start paginating.
@@ -1744,6 +1783,15 @@ function BucketRuns({
     const maxPage = Math.max(0, Math.ceil(effectiveTotalRuns / PAGE_SIZE) - 1);
     if (runsPageIndex > maxPage) setRunsPageIndex(maxPage);
   }, [effectiveTotalRuns, runsPageIndex]);
+
+  // Restart leaf pagination at page 1 whenever the sort changes — a re-sort
+  // reorders the whole bucket, so staying on page N would show an arbitrary
+  // middle slice of the new order. This used to fall out of the query rekey
+  // momentarily blanking the list (empty-list clamp); `keepPreviousData`
+  // removed that blink, so the reset is now explicit.
+  useEffect(() => {
+    setRunsPageIndex(0);
+  }, [sortField, sortSource, sortDirection, sortAggregation]);
 
   // Push the bucket color through the page-level color state for every
   // run in this bucket that's ALREADY in the selection. Re-fires only

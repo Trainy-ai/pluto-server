@@ -448,10 +448,46 @@ export function DataTable({
   // shrinks the bucket total, so a stale deep offset would otherwise strand the
   // tree on an out-of-range (empty) page until the user paged back. (Filters are
   // an array prop — stringify for a stable dep.)
+  //
+  // Sort is included too, mirroring the leaf/nested pagers (which reset to page 1
+  // on re-sort): a re-sort reorders the top-level bucket list, so keep the footer
+  // on page 1 of the new order rather than a middle page. Without this, keepPrevious
+  // Data would also briefly show the prior sort's bucket page while the root query
+  // refetches at the old offset under the new sort.
   const filtersKey = useMemo(() => JSON.stringify(filters), [filters]);
   useEffect(() => {
     setGroupedPageIndex(0);
-  }, [groupByKey, pageSize, filtersKey, searchQuery]);
+  }, [
+    groupByKey,
+    pageSize,
+    filtersKey,
+    searchQuery,
+    sortParam?.field,
+    sortParam?.source,
+    sortParam?.direction,
+    sortParam?.aggregation,
+  ]);
+
+  // Stable identity for the grouped bucket-tree's base filters. This object
+  // was previously built inline in JSX on every render — and because it's a
+  // dependency of GroupedBucketTree's render-hot `bucketSelectionSignal` memo,
+  // a fresh identity each render defeated that memo entirely: it rebuilt the
+  // covering selection Sets (O(selected × depth)) and re-rendered every bucket
+  // header on ANY parent render (hover/scroll/keystroke). Memoizing on the
+  // filter inputs keeps the reference stable so the signal only recomputes on
+  // an actual selection/filter change.
+  const groupBaseFilters = useMemo(
+    () => ({
+      search: searchQuery && searchQuery.trim() ? searchQuery.trim() : undefined,
+      ...(extractServerFilters(filters) as Omit<
+        ReturnType<typeof extractServerFilters>,
+        "status"
+      > & {
+        status?: ("RUNNING" | "COMPLETED" | "FAILED" | "TERMINATED" | "CANCELLED")[];
+      }),
+    }),
+    [searchQuery, filters],
+  );
 
 
   const hiddenRunIdsRef = useRef(hiddenRunIds);
@@ -1172,18 +1208,12 @@ export function DataTable({
                   aggregateColumns={bucketAggregateColumns}
                   aggregateColIdIndex={bucketAggregateColIdIndex}
                   metricColumnSpecs={bucketMetricColumnSpecs}
-                  baseFilters={{
-                    search: searchQuery && searchQuery.trim() ? searchQuery.trim() : undefined,
-                    // Toolbar filters threaded through extractServerFilters
-                    // so the bucket tree reflects status/tags/date/field/
-                    // metric/system filters the same way the flat runs.list
-                    // query does. Only affects grouped mode; flat mode wires
-                    // these directly into the runs.list query in index.tsx.
-                    // status values come from STATUS_OPTIONS so the cast is
-                    // safe; extractServerFilters' looser string[] return type
-                    // exists for callers that don't care about the enum.
-                    ...(extractServerFilters(filters) as Omit<ReturnType<typeof extractServerFilters>, "status"> & { status?: ("RUNNING" | "COMPLETED" | "FAILED" | "TERMINATED" | "CANCELLED")[] }),
-                  }}
+                  // Memoized above (groupBaseFilters) so its identity is
+                  // stable across renders — see the comment there. Threads the
+                  // toolbar status/tags/date/field/metric/system filters into
+                  // the bucket tree the same way flat mode wires them into
+                  // runs.list in index.tsx.
+                  baseFilters={groupBaseFilters}
                 />
               </TableBody>
             </Table>

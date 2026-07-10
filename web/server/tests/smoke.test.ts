@@ -9891,6 +9891,43 @@ describe('SDK API Endpoints (with API Key)', () => {
       expect(uncaptioned).toBeDefined();
       expect(uncaptioned?.caption).toBeNull();
     });
+
+    it('Test 39.3: /api/runs/files returns list samples in sampleIndex order, not fileName order', async () => {
+      if (!hasApiKey) {
+        console.log('   ⊘ Skipping: TEST_API_KEY not set');
+        return;
+      }
+
+      const runId = await resolveBulkRun000Id();
+      if (runId == null) {
+        console.log('   ⊘ Skipping: bulk-run-000 not seeded');
+        return;
+      }
+
+      const response = await makeRequest(
+        `/api/runs/files?runId=${runId}&projectName=${TEST_PROJECT_NAME}&logName=media/order_samples`,
+        { headers: { 'Authorization': `Bearer ${TEST_API_KEY}` } }
+      );
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      const names = (data.files as { fileName: string; step: number }[])
+        .filter((f) => f.step === 0)
+        .map((f) => f.fileName);
+
+      // The fixture seeded sampleIndex 0..3 as order_d, order_c, order_b,
+      // order_a — i.e. the fileNames sort the OPPOSITE way to the logged
+      // order. Getting them back in sampleIndex sequence (not alphabetical
+      // order_a..order_d) proves the read path orders by
+      // `step ASC, sampleIndex ASC, fileName ASC`. This is the regression
+      // guard for multi-sample-per-step list logging showing up scrambled.
+      expect(names).toEqual([
+        'order_d.png',
+        'order_c.png',
+        'order_b.png',
+        'order_a.png',
+      ]);
+    });
   });
 
   // ---------------------------------------------------------------------------

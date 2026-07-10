@@ -274,20 +274,21 @@ export function ColumnHeaderMenu({
                       Pin steppers at max value
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
-                    {/* Visually group the (with image) actions + their
+                    {/* Visually group the (with media) actions + their
                         tolerance input under a labeled section so it's
                         unambiguous that tolerance only governs the
-                        image-coupled variants. */}
+                        media-coupled variants. Applies to any media step
+                        (image, video, audio), not just images. */}
                     <DropdownMenuLabel className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                      Pin to nearest image step
+                      Pin to nearest media step
                     </DropdownMenuLabel>
                     <DropdownMenuItem onClick={() => handlePinClick("argmin-with-image")}>
                       <span className="mr-2 w-4 text-center">★</span>
-                      Pin steppers at min (with image)
+                      Pin steppers at min (with media)
                     </DropdownMenuItem>
                     <DropdownMenuItem onClick={() => handlePinClick("argmax-with-image")}>
                       <span className="mr-2 w-4 text-center">★</span>
-                      Pin steppers at max (with image)
+                      Pin steppers at max (with media)
                     </DropdownMenuItem>
                     {onChangeBestStepTolerance && (
                       <div
@@ -318,7 +319,7 @@ export function ColumnHeaderMenu({
                         </label>
                         <p className="mt-1.5 whitespace-normal break-words text-[11px] leading-snug text-muted-foreground">
                           Max gap between a metric step and the nearest
-                          image. Increase if pins come up empty.
+                          media. Increase if pins come up empty.
                         </p>
                       </div>
                     )}

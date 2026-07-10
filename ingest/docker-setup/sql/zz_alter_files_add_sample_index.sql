@@ -1,0 +1,11 @@
+-- Idempotent migration for long-lived ClickHouse volumes that predate the
+-- sampleIndex column (there is no CH migration runner — create_tables.sh just
+-- replays every *.sql on startup, and `files.sql`'s CREATE TABLE IF NOT EXISTS
+-- is a no-op once the table exists, so pre-existing volumes never gain the new
+-- column without this ALTER).
+--
+-- Filename intentionally sorts AFTER `files.sql` (`.` < `_` byte-wise, and 'z'
+-- sorts last among the unnumbered files) so the base table is guaranteed to
+-- exist when this runs, on both fresh and migrated databases. ADD COLUMN
+-- IF NOT EXISTS makes it a clean no-op when the column is already present.
+ALTER TABLE mlop_files ADD COLUMN IF NOT EXISTS sampleIndex UInt32 DEFAULT 0 CODEC(ZSTD(1));

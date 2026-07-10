@@ -2157,6 +2157,13 @@ async function setupTestData(): Promise<TestData> {
       { runId: run.id, logName: 'train/loss', logGroup: 'train', logType: 'METRIC' as const },
       { runId: run.id, logName: 'images/training_viz', logGroup: 'images', logType: 'IMAGE' as const },
       { runId: run.id, logName: 'images/attention_maps', logGroup: 'images', logType: 'IMAGE' as const },
+      // Video + audio mirrors of the two image widgets, at the SAME steps, so
+      // the per-widget "with media" argmin pin snaps to the same per-widget
+      // steps for video/audio as for images (media-best-step-pinning E2E).
+      { runId: run.id, logName: 'video/training_viz', logGroup: 'video', logType: 'VIDEO' as const },
+      { runId: run.id, logName: 'video/attention_maps', logGroup: 'video', logType: 'VIDEO' as const },
+      { runId: run.id, logName: 'audio/training_viz', logGroup: 'audio', logType: 'AUDIO' as const },
+      { runId: run.id, logName: 'audio/attention_maps', logGroup: 'audio', logType: 'AUDIO' as const },
     ]),
     skipDuplicates: true,
   });
@@ -2282,6 +2289,92 @@ async function setupTestData(): Promise<TestData> {
     if (pinTestS3Uploads.length > 0) {
       await Promise.all(pinTestS3Uploads);
       console.log(`   ✓ Uploaded ${pinTestS3Uploads.length} pin-test PNGs to S3`);
+    }
+
+    // --- video + audio media at the SAME deterministic steps as the image
+    // widgets. Reusing trainingVizSteps/attentionMapsSteps means the per-widget
+    // "with media" argmin snaps to the same per-widget steps (PIN_TEST_EXPECTED)
+    // for video/audio as for images — proving the media-coupled pin works
+    // beyond images. Stub bytes: a valid silent WAV and a minimal ftyp+mdat MP4
+    // (won't play, but the media viewer + pin badge still render).
+    function makePinTestWav(): Buffer {
+      const sampleRate = 16000;
+      const numSamples = Math.floor(sampleRate * 0.05);
+      const dataSize = numSamples * 2;
+      const buf = Buffer.alloc(44 + dataSize);
+      buf.write('RIFF', 0);
+      buf.writeUInt32LE(36 + dataSize, 4);
+      buf.write('WAVE', 8);
+      buf.write('fmt ', 12);
+      buf.writeUInt32LE(16, 16);
+      buf.writeUInt16LE(1, 20);
+      buf.writeUInt16LE(1, 22);
+      buf.writeUInt32LE(sampleRate, 24);
+      buf.writeUInt32LE(sampleRate * 2, 28);
+      buf.writeUInt16LE(2, 32);
+      buf.writeUInt16LE(16, 34);
+      buf.write('data', 36);
+      buf.writeUInt32LE(dataSize, 40);
+      return buf;
+    }
+    function makePinTestMp4(): Buffer {
+      const ftyp = Buffer.from([
+        0x00, 0x00, 0x00, 0x14, 0x66, 0x74, 0x79, 0x70,
+        0x69, 0x73, 0x6f, 0x6d, 0x00, 0x00, 0x02, 0x00,
+        0x69, 0x73, 0x6f, 0x6d,
+      ]);
+      const mdat = Buffer.alloc(8);
+      mdat.writeUInt32BE(8, 0);
+      mdat.write('mdat', 4);
+      return Buffer.concat([ftyp, mdat]);
+    }
+
+    const avFileRows: Record<string, unknown>[] = [];
+    const avS3Uploads: Promise<unknown>[] = [];
+    const pinTestWav = makePinTestWav();
+    const pinTestMp4 = makePinTestMp4();
+    for (const run of createdPinTestRuns) {
+      const baseTime = run.createdAt.getTime();
+      const avConfigs = [
+        { logName: 'video/training_viz', logGroup: 'video', steps: run.trainingVizSteps, ext: 'mp4', fileType: 'video/mp4', bytes: pinTestMp4 },
+        { logName: 'video/attention_maps', logGroup: 'video', steps: run.attentionMapsSteps, ext: 'mp4', fileType: 'video/mp4', bytes: pinTestMp4 },
+        { logName: 'audio/training_viz', logGroup: 'audio', steps: run.trainingVizSteps, ext: 'wav', fileType: 'audio/wav', bytes: pinTestWav },
+        { logName: 'audio/attention_maps', logGroup: 'audio', steps: run.attentionMapsSteps, ext: 'wav', fileType: 'audio/wav', bytes: pinTestWav },
+      ];
+      for (const { logName, logGroup, steps, ext, fileType, bytes } of avConfigs) {
+        for (const step of steps) {
+          const fileName = `step_${String(step).padStart(4, '0')}.${ext}`;
+          const s3Key = `${org.id}/${project.name}/${run.id}/${logName}/${fileName}`;
+          avFileRows.push({
+            tenantId: org.id,
+            projectName: project.name,
+            runId: Number(run.id),
+            logGroup,
+            logName,
+            time: new Date(baseTime + step * 1000).toISOString().replace('T', ' ').replace('Z', ''),
+            step,
+            fileName,
+            fileType,
+            fileSize: bytes.length,
+          });
+          avS3Uploads.push(
+            pinTestS3.send(new PutObjectCommand({
+              Bucket: pinTestStorageBucket,
+              Key: s3Key,
+              Body: bytes,
+              ContentType: fileType,
+            })),
+          );
+        }
+      }
+    }
+    if (avFileRows.length > 0) {
+      await pinTestCh.insert({ table: 'mlop_files', values: avFileRows, format: 'JSONEachRow' });
+      console.log(`   ✓ Inserted ${avFileRows.length} pin-test video/audio file rows`);
+    }
+    if (avS3Uploads.length > 0) {
+      await Promise.all(avS3Uploads);
+      console.log(`   ✓ Uploaded ${avS3Uploads.length} pin-test video/audio files to S3`);
     }
 
     // mlop_metric_summaries population is handled by the end-of-setup
@@ -4014,6 +4107,78 @@ async function setupTestData(): Promise<TestData> {
   });
   console.log('   ✓ Created Image Pinning Test dashboard view');
 
+  // 11b-bis-1b. "Media Best-Step Test" dashboard — the video/audio analogue of
+  // "Image Pinning Test", used by media-best-step-pinning.spec.ts to verify the
+  // per-widget "with media" argmin pin snaps video AND audio widgets (not just
+  // images) now that the best-step file filter matches all media. Two widgets
+  // per media type at DISTINCT logNames (training_viz vs attention_maps) so the
+  // per-widget-differs assertion has two steps to compare.
+  const mediaBestStepDashboardConfig = {
+    version: 1,
+    sections: [
+      {
+        id: 'media-best-step-dynamic-section',
+        name: 'Media Best-Step Dynamic',
+        collapsed: false,
+        widgets: [],
+        dynamicPattern: '^(video|audio)/(training_viz|attention_maps)$',
+        dynamicPatternMode: 'regex',
+      },
+      {
+        id: 'media-best-step-static-section',
+        name: 'Media Best-Step Static',
+        collapsed: false,
+        widgets: [
+          {
+            id: 'media-best-step-static-video-training',
+            type: 'file-group',
+            config: { files: ['video/training_viz'] },
+            layout: { x: 0, y: 0, w: 6, h: 5 },
+          },
+          {
+            id: 'media-best-step-static-video-attention',
+            type: 'file-group',
+            config: { files: ['video/attention_maps'] },
+            layout: { x: 6, y: 0, w: 6, h: 5 },
+          },
+          {
+            id: 'media-best-step-static-audio-training',
+            type: 'file-group',
+            config: { files: ['audio/training_viz'] },
+            layout: { x: 0, y: 5, w: 6, h: 5 },
+          },
+          {
+            id: 'media-best-step-static-audio-attention',
+            type: 'file-group',
+            config: { files: ['audio/attention_maps'] },
+            layout: { x: 6, y: 5, w: 6, h: 5 },
+          },
+        ],
+      },
+    ],
+    settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
+  };
+
+  await prisma.dashboardView.upsert({
+    where: {
+      organizationId_projectId_name: {
+        organizationId: org.id,
+        projectId: project.id,
+        name: 'Media Best-Step Test',
+      },
+    },
+    update: { config: mediaBestStepDashboardConfig },
+    create: {
+      name: 'Media Best-Step Test',
+      organizationId: org.id,
+      projectId: project.id,
+      createdById: user.id,
+      isDefault: false,
+      config: mediaBestStepDashboardConfig,
+    },
+  });
+  console.log('   ✓ Created Media Best-Step Test dashboard view');
+
   // 11b-bis-2. Create "Media Pinning Test" dashboard view for the
   // video-audio-pinning E2E tests. Mirrors "Image Pinning Test": a static
   // section with TWO widgets per media type, each a DISTINCT logName
@@ -4939,6 +5104,46 @@ async function setupTestData(): Promise<TestData> {
             ),
           );
         }
+
+        // Multi-sample-per-step media whose fileName order is the REVERSE of
+        // the logged (sampleIndex) order — lets the smoke test prove the read
+        // path sorts by sampleIndex, not fileName. All four share step 0, so
+        // sampleIndex is the only thing that can produce the correct order.
+        const orderLogName = 'media/order_samples';
+        const orderSamples = [
+          { sampleIndex: 0, fileName: 'order_d.png' },
+          { sampleIndex: 1, fileName: 'order_c.png' },
+          { sampleIndex: 2, fileName: 'order_b.png' },
+          { sampleIndex: 3, fileName: 'order_a.png' },
+        ];
+        for (const { sampleIndex, fileName } of orderSamples) {
+          const png = createSimplePNG(8, 8, (sampleIndex * 60) % 256, 90, 160);
+          const s3Key = `${org.id}/${project.name}/${run.id}/${orderLogName}/${fileName}`;
+          imageFileRows.push({
+            tenantId: org.id,
+            projectName: project.name,
+            runId: Number(run.id),
+            logGroup: 'media',
+            logName: orderLogName,
+            time: new Date(baseTime).toISOString().replace('T', ' ').replace('Z', ''),
+            step: 0,
+            fileName,
+            fileType: 'image/png',
+            fileSize: png.length,
+            caption: null as string | null,
+            sampleIndex,
+          });
+          s3Uploads.push(
+            s3.send(
+              new PutObjectCommand({
+                Bucket: storageBucket,
+                Key: s3Key,
+                Body: png,
+                ContentType: 'image/png',
+              }),
+            ),
+          );
+        }
       }
 
       // Register the captioned-samples IMAGE log so it appears in run logs.
@@ -4946,6 +5151,17 @@ async function setupTestData(): Promise<TestData> {
         data: fileSeedRuns.map((run) => ({
           runId: run.id,
           logName: 'media/captioned_samples',
+          logGroup: 'media',
+          logType: 'IMAGE' as const,
+        })),
+        skipDuplicates: true,
+      });
+
+      // Register the order-samples IMAGE log (sampleIndex ordering fixture).
+      await prisma.runLogs.createMany({
+        data: fileSeedRuns.map((run) => ({
+          runId: run.id,
+          logName: 'media/order_samples',
           logGroup: 'media',
           logType: 'IMAGE' as const,
         })),

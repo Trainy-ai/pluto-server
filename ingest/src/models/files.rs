@@ -34,11 +34,18 @@ pub struct FilesRow {
     pub file_size: u64,
     // Optional user-provided caption for media files (image/audio/video).
     // Maps to the Nullable(String) `caption` column in mlop_files.
-    // Must stay the last field to match the column order in files.sql.
     // `#[serde(default)]` lets old DLQ envelopes (serialized before this
     // field existed) deserialize cleanly to None.
     #[serde(rename = "caption", default)]
     pub caption: Option<String>,
+    // 0-based position of this file within the list logged for one
+    // (logName, step) in a single log() call. Populated by the SDK from the
+    // list position; the read path sorts by it to restore the user's sample
+    // order. Must stay the last field to match the column order in files.sql
+    // (appended last there and by the ADD COLUMN migration). `#[serde(default)]`
+    // keeps older SDKs / pre-existing DLQ envelopes (which omit it) at 0.
+    #[serde(rename = "sampleIndex", default)]
+    pub sample_index: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -81,6 +88,10 @@ pub struct FileInput {
     pub file_size: u64,
     #[serde(default)]
     pub caption: Option<String>,
+    // 0-based sample position within a single-call list log; see FilesRow.
+    // `#[serde(default)]` keeps older SDKs (which omit it) at 0.
+    #[serde(rename = "sampleIndex", default)]
+    pub sample_index: u32,
 }
 
 impl InputData for FileInput {
@@ -109,6 +120,7 @@ impl DatabaseRow<FileInput, FilesEnrichment> for FilesRow {
             file_type: input.file_type,
             file_size: input.file_size,
             caption: input.caption,
+            sample_index: input.sample_index,
         })
     }
 
@@ -171,6 +183,7 @@ mod tests {
             step: 1,
             file_size: 2048,
             caption: Some("a cute cat".to_string()),
+            sample_index: 2,
         };
         let row =
             <FilesRow as DatabaseRow<FileInput, FilesEnrichment>>::from(input, make_enrichment())
@@ -183,6 +196,8 @@ mod tests {
         assert_eq!(row.tenant_id, "tenant-1");
         assert_eq!(row.run_id, 42);
         assert_eq!(row.caption.as_deref(), Some("a cute cat"));
+        // sampleIndex is carried through verbatim from input to row.
+        assert_eq!(row.sample_index, 2);
     }
 
     #[test]
@@ -195,6 +210,7 @@ mod tests {
             step: 1,
             file_size: 2048,
             caption: None,
+            sample_index: 0,
         };
         let row =
             <FilesRow as DatabaseRow<FileInput, FilesEnrichment>>::from(input, make_enrichment())
@@ -212,6 +228,7 @@ mod tests {
             step: 1,
             file_size: 1024,
             caption: None,
+            sample_index: 0,
         };
         let row =
             <FilesRow as DatabaseRow<FileInput, FilesEnrichment>>::from(input, make_enrichment())
@@ -236,7 +253,26 @@ mod tests {
             step: 0,
             file_size: 0,
             caption: None,
+            sample_index: 0,
         };
         assert!(input.validate().is_ok());
+    }
+
+    // A FileInput payload that omits sampleIndex (older SDK) deserializes to 0,
+    // and an explicit value round-trips. This is what keeps a new server safe
+    // against old-SDK writes.
+    #[test]
+    fn test_file_input_sample_index_default_and_explicit() {
+        let without: FileInput = serde_json::from_str(
+            r#"{"log_name":"images","file_name":"a.png","file_type":"png","time":1,"step":1,"file_size":1}"#,
+        )
+        .unwrap();
+        assert_eq!(without.sample_index, 0);
+
+        let with: FileInput = serde_json::from_str(
+            r#"{"log_name":"images","file_name":"a.png","file_type":"png","time":1,"step":1,"file_size":1,"sampleIndex":3}"#,
+        )
+        .unwrap();
+        assert_eq!(with.sample_index, 3);
     }
 }
