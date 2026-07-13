@@ -845,26 +845,53 @@ export function DataTable({
     }
   };
 
-  const renderColGroup = useCallback(() =>
-    table.getHeaderGroups()[0]?.headers.map((header, i) => {
+  const renderColGroup = useCallback(() => {
+    const headers = table.getHeaderGroups()[0]?.headers ?? [];
+    // One column flexes to absorb leftover horizontal space. Without
+    // this, `table-layout: fixed` + `minWidth: 100%` distributes the
+    // panel's slack proportionally across *every* column, inflating the
+    // narrow fixed columns (checkbox, eye, status) far beyond the width
+    // they need. Anchoring the flex to the LAST PINNED column (Name, in
+    // the common case) keeps every sticky `left` offset correct — no
+    // sticky column sits to its right — so only that one column grows.
+    const pinnedHeaders = headers.filter((h) => pinnedColumnIds.has(h.column.id));
+    const flexColId = pinnedHeaders[pinnedHeaders.length - 1]?.column.id;
+    return headers.map((header, i) => {
       const def = header.column.columnDef;
       const isFixed = def.enableResizing === false;
-      const baseW = isFixed ? (def.size ?? 150) : getWidth(header.column.id, def.size ?? 150);
+      const colId = header.column.id;
+      // Sentinel getWidth read: -1 means the user hasn't dragged this
+      // column, so it may still flex; an explicit resize pins it.
+      const manualW = getWidth(colId, -1);
+      const isResized = manualW !== -1;
+      const baseW = isFixed
+        ? (def.size ?? 150)
+        : isResized
+          ? manualW
+          : (def.size ?? 150);
       // Widen the FIRST column by the grouped indent so headers, run
       // rows, and bucket headers all share the same column boundaries.
       // Subsequent columns naturally shift right via the `<table>`'s
       // table-fixed layout.
       const w = i === 0 ? baseW + groupedIndentPx : baseW;
+      // Flex the anchor column only while it hasn't been manually
+      // resized — a deliberate drag always wins over auto-fill.
+      const isFlex = colId === flexColId && !isResized;
       return (
         <col
           key={header.id}
-          data-col-id={header.column.id}
-          style={{ width: w, minWidth: def.minSize ?? MIN_COL_WIDTH }}
+          data-col-id={colId}
+          style={
+            isFlex
+              ? { width: "auto", minWidth: (def.minSize ?? MIN_COL_WIDTH) + (i === 0 ? groupedIndentPx : 0) }
+              : { width: w, minWidth: def.minSize ?? MIN_COL_WIDTH }
+          }
         />
       );
-    }),
+    });
+  },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [table, getWidth, resizeGeneration, groupedIndentPx],
+    [table, getWidth, resizeGeneration, groupedIndentPx, pinnedColumnIds],
   );
 
   const renderRow = useCallback(
