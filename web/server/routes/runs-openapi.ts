@@ -89,8 +89,8 @@ const createRunRoute = createRoute({
             loggerSettings: z.string().optional().nullable().openapi({ description: "Logger settings as JSON string" }),
             systemMetadata: z.string().optional().nullable().openapi({ description: "System metadata as JSON string" }),
             config: z.string().optional().nullable().openapi({ description: "Run configuration as JSON string", example: '{"lr": 0.001}' }),
-            createdAt: z.number().optional().nullable().openapi({ description: "Creation timestamp in milliseconds" }),
-            updatedAt: z.number().optional().nullable().openapi({ description: "Update timestamp in milliseconds" }),
+            createdAt: z.number().int().min(0).max(8640000000000000).optional().nullable().openapi({ description: "Creation timestamp in epoch milliseconds (backfill/migration)" }),
+            updatedAt: z.number().int().min(0).max(8640000000000000).optional().nullable().openapi({ description: "Update timestamp in epoch milliseconds (backfill/migration)" }),
             forkRunId: z.number().optional().nullable().openapi({ description: "ID of the run to fork from. Creates a child run that inherits metrics up to forkStep." }),
             forkStep: z.number().optional().nullable().openapi({ description: "Step at which to fork. Required when forkRunId is provided. The child run inherits all metrics up to and including this step." }),
             inheritConfig: z.boolean().optional().nullable().openapi({ description: "Whether to inherit config from the parent run (default: true). Only applies when forkRunId is provided." }),
@@ -165,8 +165,8 @@ router.openapi(createRunRoute, async (c) => {
       name: projectName,
       organizationId: apiKey.organization.id,
       runPrefix: generatedPrefix,
-      createdAt: createdAt ? new Date(createdAt) : new Date(),
-      updatedAt: updatedAt ? new Date(updatedAt) : new Date(),
+      createdAt: createdAt != null ? new Date(createdAt) : new Date(),
+      updatedAt: updatedAt != null ? new Date(updatedAt) : new Date(),
     },
     select: { id: true, runPrefix: true, nextRunNumber: true },
   });
@@ -330,6 +330,11 @@ router.openapi(createRunRoute, async (c) => {
             creatorApiKeyId: apiKey.id,
             forkedFromRunId: resolvedForkRunId,
             forkStep: resolvedForkStep,
+            // Honor client-supplied historical timestamps (migration/backfill
+            // tooling replaying runs recorded elsewhere). Note updatedAt is
+            // @updatedAt in the schema, so later status updates bump it again.
+            ...(createdAt != null ? { createdAt: new Date(createdAt) } : {}),
+            ...(updatedAt != null ? { updatedAt: new Date(updatedAt) } : {}),
           },
           select: { id: true, number: true },
         });
@@ -338,6 +343,9 @@ router.openapi(createRunRoute, async (c) => {
           source: "api",
           apiKeyId: apiKey.id,
           actorId: apiKey.user.id,
+          // Keep the status timeline consistent with a backfilled run row —
+          // the implicit creation event carries the same historical moment.
+          ...(createdAt != null ? { createdAt: new Date(createdAt) } : {}),
         });
         return created;
       });

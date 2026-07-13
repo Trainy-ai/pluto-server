@@ -198,6 +198,8 @@ export async function recordRunCreatedEvent(
     source: RunStatusTransitionSource;
     apiKeyId?: string | null;
     actorId?: string | null;
+    /** Historical creation time for backfilled/migrated runs; defaults to now(). */
+    createdAt?: Date;
   }
 ) {
   await tx.runStatusEvent.create({
@@ -208,6 +210,7 @@ export async function recordRunCreatedEvent(
       source: args.source,
       apiKeyId: args.apiKeyId ?? null,
       actorId: args.actorId ?? null,
+      ...(args.createdAt != null ? { createdAt: args.createdAt } : {}),
     },
   });
 }
