@@ -30,7 +30,7 @@
     "preview": "vite preview"
   },
   "devDependencies": {
-    "@better-auth/sso": "1.4.10",
+    "@better-auth/sso": "1.6.11",
     "@eslint/js": "9.39.2",
     "@tanstack/router-plugin": "1.115.3",
     "@testing-library/jest-dom": "6.9.1",
