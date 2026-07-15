@@ -4396,6 +4396,67 @@ describe('SDK API Endpoints (with API Key)', () => {
         `   ${running.length} running run(s); heartbeatAt: ${running.map((r: any) => r.heartbeatAt ?? 'null').join(', ') || '—'}`,
       );
     });
+
+    it('Test 20.12: runs.getByIds enriches runs with heartbeatAt like runs.list (Duration 0s regression)', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+
+      // Regression: selected rows in the runs table render from getByIds
+      // (untrimmed blobs for side-by-side), which overwrite the runs.list
+      // rows client-side. getByIds used to omit heartbeatAt entirely, so a
+      // selected RUNNING run's Duration fell back to updatedAt − createdAt
+      // ≈ 0 → "0s" while the run had been live for hours.
+      const listResponse = await makeTrpcRequest('runs.list', {
+        projectName: TEST_PROJECT_NAME,
+        limit: 50,
+      }, { 'Cookie': sessionCookie }, 'GET');
+      expect(listResponse.status).toBe(200);
+      const listData = await listResponse.json();
+      const listRuns = listData.result?.data?.runs;
+      expect(Array.isArray(listRuns)).toBe(true);
+      if (listRuns.length === 0) {
+        console.log('   No runs in project - skipping');
+        return;
+      }
+
+      const response = await makeTrpcRequest('runs.getByIds', {
+        projectName: TEST_PROJECT_NAME,
+        runIds: listRuns.map((r: any) => r.id),
+      }, { 'Cookie': sessionCookie }, 'GET');
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      const runs = data.result?.data?.runs;
+      expect(Array.isArray(runs)).toBe(true);
+      expect(runs.length).toBe(listRuns.length);
+
+      // Same contract as runs.list (Test 20.11): the field is always present,
+      // null for terminal runs, and a valid timestamp ≥ createdAt when a live
+      // run has reported metrics.
+      const listById = new Map(listRuns.map((r: any) => [r.id, r]));
+      for (const run of runs) {
+        expect('heartbeatAt' in run).toBe(true);
+        if (run.status !== 'RUNNING') {
+          expect(run.heartbeatAt).toBeNull();
+        } else if (run.heartbeatAt !== null) {
+          const hb = new Date(run.heartbeatAt).getTime();
+          expect(Number.isNaN(hb)).toBe(false);
+          expect(hb).toBeGreaterThanOrEqual(new Date(run.createdAt).getTime());
+          // Parity with runs.list: a live run that has a heartbeat there must
+          // have one here too (both read the same ClickHouse MAX(time)).
+          const listRun = listById.get(run.id) as any;
+          if (listRun?.heartbeatAt != null) {
+            expect(run.heartbeatAt).not.toBeNull();
+          }
+        }
+      }
+
+      const running = runs.filter((r: any) => r.status === 'RUNNING');
+      console.log(
+        `   getByIds: ${running.length} running run(s); heartbeatAt: ${running.map((r: any) => r.heartbeatAt ?? 'null').join(', ') || '—'}`,
+      );
+    });
   });
 
   describe('Test Suite 21: Server-Side Field Filtering (Authenticated)', () => {

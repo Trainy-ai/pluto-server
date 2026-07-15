@@ -182,12 +182,17 @@ export async function attachFieldValues(
  *
  * One bounded ClickHouse query over just the running runs on this page; skipped
  * entirely when the page has none.
+ *
+ * Exported for runs.getByIds: selected rows in the runs table render from
+ * getByIds (untrimmed field-value blobs for side-by-side) and overwrite the
+ * runs.list rows client-side, so getByIds must carry the same `heartbeatAt`
+ * or a selected RUNNING run's Duration collapses to updatedAt − createdAt ≈ 0.
  */
-async function attachHeartbeat(
+export async function attachHeartbeat<T extends { id: bigint; status?: unknown }>(
   ctx: any,
-  runs: { id: bigint; [k: string]: any }[],
+  runs: T[],
   input: { organizationId: string; projectName: string },
-): Promise<typeof runs> {
+): Promise<(T & { heartbeatAt: Date | null })[]> {
   const running = runs.filter((r) => r.status === "RUNNING");
   if (running.length === 0) {
     return runs.map((r) => ({ ...r, heartbeatAt: null }));

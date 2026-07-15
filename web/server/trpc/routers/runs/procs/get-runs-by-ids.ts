@@ -2,6 +2,7 @@ import { z } from "zod";
 import { protectedOrgProcedure } from "../../../../lib/trpc";
 import { resolveRunId } from "../../../../lib/resolve-run-id";
 import { sqidEncode } from "../../../../lib/sqid";
+import { attachHeartbeat } from "./list-runs";
 
 export const getByIdsProcedure = protectedOrgProcedure
   .input(
@@ -57,6 +58,14 @@ export const getByIdsProcedure = protectedOrgProcedure
       },
     });
 
+    // These rows overwrite the runs.list rows client-side for selected runs
+    // (see allVisibleRuns in projects.$projectName/index.tsx), so they must
+    // carry the same heartbeatAt or a RUNNING run's Duration reads 0s.
+    const runsWithHeartbeat = await attachHeartbeat(ctx, runs, {
+      organizationId,
+      projectName,
+    });
+
     // Enrich with field values so custom columns render immediately
     const fieldRows = await ctx.prisma.runFieldValue.findMany({
       where: { runId: { in: runs.map((r) => r.id) } },
@@ -75,7 +84,7 @@ export const getByIdsProcedure = protectedOrgProcedure
     }
 
     return {
-      runs: runs.map((r) => {
+      runs: runsWithHeartbeat.map((r) => {
         const fv = byRun.get(Number(r.id));
         return {
           ...r,
