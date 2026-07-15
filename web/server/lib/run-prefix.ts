@@ -41,3 +41,24 @@ export function generateRunPrefix(projectName: string): string {
 
   return prefix.toUpperCase();
 }
+
+/**
+ * Parses a Neptune-style display ID (e.g. "MMP-1") into its prefix and number.
+ *
+ * Returns null when the string is not in PREFIX-NUMBER format. The prefix is
+ * upper-cased to match the stored `Projects.runPrefix`.
+ *
+ * NOTE: a display ID is NOT globally unique. The prefix is derived from the
+ * project name via `generateRunPrefix`, so distinct project names can collapse
+ * to the same prefix (e.g. "monitor_tests" and "monitor-tests" both → "MTE").
+ * Combined with per-project run numbering, a display ID like "MTE-1" can match
+ * runs in several projects. Callers must scope by project (or handle ambiguity)
+ * when resolving a display ID to a single run.
+ */
+export function parseDisplayId(displayId: string): { prefix: string; number: number } | null {
+  const match = displayId.match(/^([A-Za-z0-9]+)-(\d+)$/);
+  if (!match) {
+    return null;
+  }
+  return { prefix: match[1].toUpperCase(), number: parseInt(match[2], 10) };
+}

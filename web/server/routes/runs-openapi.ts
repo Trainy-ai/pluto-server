@@ -39,7 +39,7 @@ import { extractAndUpsertColumnKeys } from "../lib/extract-column-keys";
 import { MAX_TAGS_PER_RUN } from "../lib/limits";
 import { dedupGroupTagsKeepLast, hasMultipleGroupTags } from "../lib/group-tag";
 import { deepMerge } from "../lib/deep-merge";
-import { generateRunPrefix } from "../lib/run-prefix";
+import { generateRunPrefix, parseDisplayId } from "../lib/run-prefix";
 import { transitionRunStatus, recordRunCreatedEvent } from "../lib/run-status";
 import { attachFieldValues, queryFieldFilteredRunIds, queryFieldSortedRunIds, MAX_JSON_SORT_OFFSET, fieldFilterSchema, type FieldFilter } from "../trpc/routers/runs/procs/list-runs";
 import { compileRunFilter, FilterError } from "../lib/queries/run-filter";
@@ -489,7 +489,7 @@ const resumeRunRoute = createRoute({
             runId: z.number().optional().openapi({ description: "Numeric ID of the run to resume", example: 123 }),
             displayId: z.string().optional().openapi({ description: "Human-readable display ID (e.g., 'MMP-1')", example: "MMP-1" }),
             externalId: z.string().optional().openapi({ description: "User-provided external ID", example: "my-training-run-v1" }),
-            projectName: z.string().optional().openapi({ description: "Project name (required when using externalId, since externalId is scoped to a project)", example: "my-project" }),
+            projectName: z.string().optional().openapi({ description: "Project name. Required when using externalId (which is scoped to a project). Optional but recommended with displayId to disambiguate when distinct project names share a run-prefix.", example: "my-project" }),
           }).refine(
             (data) => [data.runId, data.displayId, data.externalId].filter((v) => v !== undefined).length === 1,
             { message: "Provide exactly one of: runId, displayId, or externalId" },
@@ -527,6 +527,10 @@ const resumeRunRoute = createRoute({
       description: "Run not found",
       content: { "application/json": { schema: ErrorSchema } },
     },
+    409: {
+      description: "Display ID is ambiguous across multiple projects; specify projectName",
+      content: { "application/json": { schema: ErrorSchema } },
+    },
   },
 });
 
@@ -556,22 +560,36 @@ router.openapi(resumeRunRoute, async (c) => {
     });
   } else if (body.displayId !== undefined) {
     // Parse display ID (e.g., "MMP-1" → prefix "MMP", number 1)
-    const match = body.displayId.match(/^([^-]+)-(\d+)$/);
-    if (!match) {
+    const parsed = parseDisplayId(body.displayId);
+    if (!parsed) {
       return c.json({ error: "Invalid displayId format. Expected PREFIX-NUMBER (e.g., 'MMP-1')" }, 400);
     }
-    const [, prefix, numberStr] = match;
-    run = await ctx.prisma.runs.findFirst({
+    // A display ID's prefix is derived from the project name and is not unique
+    // across projects, so scope by projectName when provided and otherwise
+    // detect cross-project ambiguity rather than silently resuming the wrong run.
+    const matches = await ctx.prisma.runs.findMany({
       where: {
-        number: parseInt(numberStr, 10),
+        number: parsed.number,
         organizationId,
-        project: { runPrefix: prefix.toUpperCase() },
+        project: {
+          runPrefix: parsed.prefix,
+          ...(body.projectName ? { name: body.projectName } : {}),
+        },
       },
       select: {
         id: true, number: true, status: true,
         project: { select: { name: true, runPrefix: true } },
       },
+      orderBy: { id: "asc" },
+      take: 2,
     });
+    if (matches.length > 1) {
+      const projectNames = matches.map((m) => m.project.name).join(", ");
+      return c.json({
+        error: `displayId '${body.displayId}' is ambiguous across multiple projects (e.g. ${projectNames}). Specify projectName to disambiguate.`,
+      }, 409);
+    }
+    run = matches[0] ?? null;
   } else if (body.externalId !== undefined) {
     // Lookup by external ID (requires projectName since externalId is scoped to project)
     if (!body.projectName) {
@@ -1925,6 +1943,9 @@ const getRunByDisplayIdRoute = createRoute({
     params: z.object({
       displayId: z.string().openapi({ description: "Display ID in PREFIX-NUMBER format (e.g., 'MMP-1')" }),
     }),
+    query: z.object({
+      projectName: z.string().optional().openapi({ description: "Name of the project the run belongs to. A display ID's prefix is derived from its project name, so distinct names (e.g. 'monitor_tests' and 'monitor-tests') can collapse to the same prefix and make the display ID ambiguous across projects. Provide this to resolve to the intended project; omit it only when the display ID is known to be unique." }),
+    }),
   },
   responses: {
     200: {
@@ -1964,6 +1985,10 @@ const getRunByDisplayIdRoute = createRoute({
       description: "Run not found",
       content: { "application/json": { schema: ErrorSchema } },
     },
+    409: {
+      description: "Display ID is ambiguous across multiple projects; specify projectName",
+      content: { "application/json": { schema: ErrorSchema } },
+    },
   },
 });
 
@@ -1971,21 +1996,26 @@ router.use("/details/by-display-id/:displayId", withApiKey);
 router.openapi(getRunByDisplayIdRoute, async (c) => {
   const apiKey = c.get("apiKey");
   const { displayId } = c.req.valid("param");
+  const { projectName } = c.req.valid("query");
   const prismaClient = c.get("prisma");
   const organizationId = apiKey.organization.id;
 
-  const match = displayId.match(/^([A-Za-z0-9]+)-(\d+)$/);
-  if (!match) {
+  const parsed = parseDisplayId(displayId);
+  if (!parsed) {
     return c.json({ error: "Invalid display ID format. Expected PREFIX-NUMBER (e.g., 'MMP-1')" }, 400);
   }
 
-  const [, prefix, numberStr] = match;
-  const run = await prismaClient.runs.findFirst({
+  // A display ID resolves to (runPrefix, number), but runPrefix is derived from
+  // the project name and is NOT unique across projects. When projectName is
+  // supplied we scope to that project; otherwise we fetch up to two candidates
+  // to detect (and refuse to silently guess on) cross-project ambiguity.
+  const runs = await prismaClient.runs.findMany({
     where: {
-      number: parseInt(numberStr, 10),
+      number: parsed.number,
       organizationId,
       project: {
-        runPrefix: prefix.toUpperCase(),
+        runPrefix: parsed.prefix,
+        ...(projectName ? { name: projectName } : {}),
       },
     },
     include: {
@@ -1995,11 +2025,22 @@ router.openapi(getRunByDisplayIdRoute, async (c) => {
         take: 1000,
       },
     },
+    orderBy: { id: "asc" },
+    take: 2,
   });
 
-  if (!run) {
+  if (runs.length === 0) {
     return c.json({ error: "Run not found" }, 404);
   }
+
+  if (runs.length > 1) {
+    const projectNames = runs.map((r) => r.project.name).join(", ");
+    return c.json({
+      error: `Display ID '${displayId}' is ambiguous across multiple projects (e.g. ${projectNames}). Specify projectName to disambiguate.`,
+    }, 409);
+  }
+
+  const run = runs[0];
 
   const computedDisplayId = run.number != null && run.project.runPrefix
     ? `${run.project.runPrefix}-${run.number}`

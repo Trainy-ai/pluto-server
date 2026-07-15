@@ -5989,6 +5989,96 @@ describe('SDK API Endpoints (with API Key)', () => {
         expect(lookupResponse.status).toBe(404);
       });
     });
+
+    // Regression: a display ID's prefix is derived from the project name, so
+    // distinct names that differ only by separator (e.g. "monitor_tests" vs
+    // "monitor-tests") collapse to the same prefix. Combined with per-project
+    // run numbering, the same display ID (e.g. "MTE-1") exists in both projects.
+    // The lookup must not silently return the run from the wrong project.
+    describe.skipIf(!hasApiKey)('Cross-Project Display ID Disambiguation', () => {
+      // These two names both split to ["...", "collide", "<ts>"] and produce an
+      // identical run-prefix, but are distinct project names.
+      const ts = Date.now();
+      const projectA = `mte-collide-${ts}`;
+      const projectB = `mte_collide_${ts}`;
+      let runIdA = 0;
+      let runIdB = 0;
+      let sharedDisplayId = '';
+
+      it('Test 23.10: two collision projects yield the same display ID', async () => {
+        const createA = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+          body: JSON.stringify({ projectName: projectA, runName: `collide-a-${ts}` }),
+        });
+        expect(createA.status).toBe(200);
+        const dataA = await createA.json();
+
+        const createB = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+          body: JSON.stringify({ projectName: projectB, runName: `collide-b-${ts}` }),
+        });
+        expect(createB.status).toBe(200);
+        const dataB = await createB.json();
+
+        runIdA = dataA.runId;
+        runIdB = dataB.runId;
+        sharedDisplayId = dataA.displayId;
+
+        // Same prefix + same per-project number 1 => identical display ID,
+        // but distinct underlying runs.
+        expect(dataA.displayId).toBe(dataB.displayId);
+        expect(runIdA).not.toBe(runIdB);
+      });
+
+      it('Test 23.11: lookup without projectName is rejected as ambiguous (409)', async () => {
+        const res = await makeRequest(`/api/runs/details/by-display-id/${sharedDisplayId}`, {
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+        });
+        expect(res.status).toBe(409);
+      });
+
+      it('Test 23.12: projectName scopes the lookup to the correct project', async () => {
+        const resA = await makeRequest(
+          `/api/runs/details/by-display-id/${sharedDisplayId}?projectName=${encodeURIComponent(projectA)}`,
+          { headers: { 'Authorization': `Bearer ${TEST_API_KEY}` } },
+        );
+        expect(resA.status).toBe(200);
+        const detailsA = await resA.json();
+        expect(detailsA.id).toBe(runIdA);
+        expect(detailsA.projectName).toBe(projectA);
+
+        const resB = await makeRequest(
+          `/api/runs/details/by-display-id/${sharedDisplayId}?projectName=${encodeURIComponent(projectB)}`,
+          { headers: { 'Authorization': `Bearer ${TEST_API_KEY}` } },
+        );
+        expect(resB.status).toBe(200);
+        const detailsB = await resB.json();
+        expect(detailsB.id).toBe(runIdB);
+        expect(detailsB.projectName).toBe(projectB);
+      });
+
+      it('Test 23.13: resume by display ID is likewise scoped by projectName', async () => {
+        const resB = await makeRequest('/api/runs/resume', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+          body: JSON.stringify({ displayId: sharedDisplayId, projectName: projectB }),
+        });
+        expect(resB.status).toBe(200);
+        const dataB = await resB.json();
+        expect(dataB.runId).toBe(runIdB);
+        expect(dataB.projectName).toBe(projectB);
+
+        // Ambiguous resume without projectName is rejected rather than guessed.
+        const resAmbiguous = await makeRequest('/api/runs/resume', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${TEST_API_KEY}` },
+          body: JSON.stringify({ displayId: sharedDisplayId }),
+        });
+        expect(resAmbiguous.status).toBe(409);
+      });
+    });
   });
 
   // ============================================================================
