@@ -7,9 +7,9 @@ import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useDocumentTitle } from "@/hooks/use-document-title";
 import { useBestStepTolerance } from "@/hooks/use-best-step-tolerance";
 import type { ExpandedState, SortingState } from "@tanstack/react-table";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useSelectedRuns } from "./~hooks/use-selected-runs";
-import { useCachedSelectedRunIds } from "./~hooks/use-cached-selected-run-ids";
+import { useRunListAssembly, useTableViewPartition } from "./~hooks/use-run-list-model";
 import { prefetchListRuns, useListRuns, type Run } from "./~queries/list-runs";
 import { useSelectedRunLogs } from "./~queries/selected-run-logs";
 import { useUpdateTags } from "./~queries/update-tags";
@@ -124,60 +124,12 @@ function RouteComponent() {
   const navigate = useNavigate();
   useDocumentTitle(projectName);
 
-  // Parse comma-separated run IDs from URL into array (may be display IDs like "MMP-1" or SQIDs)
-  const rawUrlRunIds = useMemo(() => {
-    if (!urlRunsParam) return undefined;
-    const ids = urlRunsParam.split(",").map((id) => id.trim()).filter(Boolean);
-    return ids.length > 0 ? ids : undefined;
-  }, [urlRunsParam]);
-
   // Parse hidden run IDs from URL
   const urlHiddenIds = useMemo(() => {
     if (!urlHiddenParam) return undefined;
     const ids = urlHiddenParam.split(",").map((id) => id.trim()).filter(Boolean);
     return ids.length > 0 ? ids : undefined;
   }, [urlHiddenParam]);
-
-  // Pre-fetch runs specified in URL params (they may not be in the paginated results)
-  // The getByIds endpoint resolves both display IDs (MMP-1) and SQIDs to actual runs
-  const { data: prefetchedUrlRuns } = useQuery(
-    trpc.runs.getByIds.queryOptions(
-      {
-        organizationId,
-        projectName,
-        runIds: rawUrlRunIds ?? [],
-      },
-      {
-        enabled: !!rawUrlRunIds?.length,
-        // Same rationale as `prefetchedSelectedRuns` below — when a deselect
-        // shrinks the `?runs=` URL param, this query rekeys, blinks `data`
-        // to undefined, and `allVisibleRuns` briefly loses its untrimmed
-        // overlay.
-        placeholderData: keepPreviousData,
-      },
-    ),
-  );
-
-  // Map URL run IDs to SQIDs for selection matching.
-  // URL may contain display IDs (MMP-1) but useSelectedRuns matches on SQIDs.
-  const urlRunIds = useMemo(() => {
-    if (!rawUrlRunIds?.length) return undefined;
-    if (!prefetchedUrlRuns?.runs?.length) return rawUrlRunIds; // pass through until resolved
-    // Build display-ID → SQID mapping from prefetched runs
-    const displayIdToSqid = new Map<string, string>();
-    for (const run of prefetchedUrlRuns.runs) {
-      // Map SQID to itself (for when URL already contains SQIDs)
-      displayIdToSqid.set(run.id, run.id);
-      // Map display ID (e.g., "MMP-179") to SQID
-      if (run.number != null && run.project?.runPrefix) {
-        displayIdToSqid.set(`${run.project.runPrefix}-${run.number}`, run.id);
-      }
-    }
-    const resolved = rawUrlRunIds
-      .map((id) => displayIdToSqid.get(id))
-      .filter((id): id is string => id != null);
-    return resolved.length > 0 ? resolved : undefined;
-  }, [rawUrlRunIds, prefetchedUrlRuns]);
 
   // Persist last selected dashboard view to localStorage per org/project
   const dashboardStorageKey = `run-table-dashboard:${organizationSlug}:${projectName}`;
@@ -882,35 +834,23 @@ function RouteComponent() {
     setExpandedGroups([]);
   }, [updateColumns, setAllOverrides, setAllFilters, handleGroupByChange]);
 
-  // Flatten the pages to get all runs, deduplicating by ID.
-  // Also merges pre-fetched URL runs that may not be in paginated results.
-  const allLoadedRuns = useMemo(() => {
-    if (!data?.pages) return [];
-
-    const allRuns = data.pages.flatMap((page) => {
-      if (!page) return [];
-      return page.runs || [];
-    });
-
-    // Deduplicate by run ID
-    const uniqueRuns = new Map();
-    allRuns.forEach((run) => {
-      if (run.id && !uniqueRuns.has(run.id)) {
-        uniqueRuns.set(run.id, run);
-      }
-    });
-
-    // Merge pre-fetched URL runs (may not be in paginated results)
-    if (prefetchedUrlRuns?.runs) {
-      for (const run of prefetchedUrlRuns.runs) {
-        if (run.id && !uniqueRuns.has(run.id)) {
-          uniqueRuns.set(run.id, run);
-        }
-      }
-    }
-
-    return Array.from(uniqueRuns.values());
-  }, [data, prefetchedUrlRuns]);
+  // Assemble the run collections from their sources — runs.list pages, the
+  // ?runs= URL prefetch, and the IndexedDB-cached selection prefetch. All
+  // merge rules live in ~lib/run-list-model.ts (unit-tested); the hook only
+  // wires them to queries.
+  const {
+    urlRunIds,
+    allLoadedRuns,
+    cachedSelectedRunIds,
+    prefetchedSelectedRuns,
+    allVisibleRuns,
+    serverFilteredRunIds,
+  } = useRunListAssembly({
+    organizationId,
+    projectName,
+    urlRunsParam,
+    pages: data?.pages,
+  });
 
   // Candidate tags for the filter and tag-editor dropdowns. Default view
   // derives them from the runs already loaded in the table (no extra
@@ -947,72 +887,6 @@ function RouteComponent() {
       return a.localeCompare(b);
     });
   }, [allLoadedRuns, groupBy.length, groupedTagsSeed.data]);
-
-  // Pre-fetch selected runs' FULL data via runs.getByIds.
-  //
-  // runs.list now trims its per-run flat blobs to only visibleColumns,
-  // which means rows arriving from the table don't have every config /
-  // systemMetadata key the side-by-side diff view needs. We resolve that
-  // here: always fetch full blobs for every selected run via getByIds
-  // (which is not trimmed), regardless of whether the run also happens
-  // to be on the current table page. Side-by-side then reads from this
-  // source for guaranteed completeness.
-  //
-  // The previous behavior — only fetching runs "missing" from the table
-  // — worked when runs.list carried full blobs. With the trim in place,
-  // it would miss keys on runs that happen to be on the current page.
-  const cachedSelectedRunIds = useCachedSelectedRunIds(organizationId, projectName);
-
-  const { data: prefetchedSelectedRuns } = useQuery(
-    trpc.runs.getByIds.queryOptions(
-      {
-        organizationId,
-        projectName,
-        runIds: cachedSelectedRunIds,
-      },
-      {
-        enabled: cachedSelectedRunIds.length > 0,
-        // Hold the previous (untrimmed `_flatConfig` / `_flatSystemMetadata`)
-        // response while the new key refetches. Without this, deselecting any
-        // run blanks `data` for ~300ms, which makes `allVisibleRuns` swap its
-        // selected entries down to the trimmed `runs.list` shape. The
-        // `selectedRunsWithColors` "keep fresh" effect in use-selected-runs
-        // then downgrades stored selection objects too — and in grouped+DOS
-        // mode, `extractRunGroupValue` reads null for the missing config key
-        // and the bucket tree briefly renders an "(unset)" leaf where the
-        // real value used to be. (Reproduced with grouping by Group +
-        // batch_size and deselecting any group/leaf/run.)
-        placeholderData: keepPreviousData,
-      },
-    ),
-  );
-
-  // Merge pre-fetched selected runs AND URL-specified runs into the loaded runs array.
-  // Without merging prefetchedUrlRuns, runs specified via ?runs= that aren't on the
-  // current page can't be found by buildSelectionFromUrlParams, causing the URL
-  // selection to silently fail and fall back to default auto-select.
-  //
-  // Precedence (highest first):
-  //   prefetchedSelectedRuns  (full `_flatConfig` / `_flatSystemMetadata` blobs)
-  //   prefetchedUrlRuns       (also full blobs — from getByIds)
-  //   allLoadedRuns           (from runs.list; blobs trimmed to visibleColumns)
-  //
-  // Selected runs must use the prefetched (untrimmed) version so downstream
-  // consumers — notably the side-by-side diff view — see every config and
-  // systemMetadata key, not just the runs-table columns. A plain "add if
-  // missing" merge would silently drop to the trimmed version whenever the
-  // selected run happened to also be on the current table page.
-  const allVisibleRuns = useMemo(() => {
-    const byId = new Map<string, typeof allLoadedRuns[number]>();
-    // Seed with trimmed rows first...
-    for (const r of allLoadedRuns) byId.set(r.id, r);
-    // ...then overwrite with untrimmed rows where they exist.
-    for (const r of prefetchedUrlRuns?.runs ?? []) byId.set(r.id, r);
-    for (const r of prefetchedSelectedRuns?.runs ?? []) byId.set(r.id, r);
-    return byId.size === allLoadedRuns.length
-      ? allLoadedRuns.map((r) => byId.get(r.id) ?? r)
-      : Array.from(byId.values());
-  }, [allLoadedRuns, prefetchedSelectedRuns, prefetchedUrlRuns]);
 
   // Extract metric column specs for the summaries query
   const metricColumnSpecs = useMemo(() => {
@@ -1239,40 +1113,6 @@ function RouteComponent() {
     return changed ? result : selectedRunsWithColors;
   }, [selectedRunsWithColors, metricSummariesData, metricColumnSpecs.length]);
 
-  // Filter out true phantom runs from prefetchedSelectedRuns.
-  // useCachedSelectedRunIds reads from IndexedDB once on mount and doesn't
-  // update within the session, so prefetchedSelectedRuns can contain runs
-  // that aren't on the current runs.list page AND aren't selected anymore
-  // (e.g. cached from a prior session). Those are phantoms and would render
-  // as ghost rows. But a run that's also on the current page must NOT be
-  // filtered: when the user deselects a URL-linked run, it stays in
-  // prefetchedSelectedRuns (the getByIds cache doesn't refetch instantly)
-  // but it's still a legitimate row on page 1 of runs.list — dropping it
-  // makes the row vanish from the table the moment you uncheck it.
-  // IDs the server's filtered `runs.list` actually returned for the
-  // current filter. Used by data-table to draw the "Selected runs below"
-  // divider between filter-matched rows and sticky-appended selected-
-  // but-not-matched rows. Built from data.pages so it grows naturally
-  // as more pages are fetched.
-  // Returns `undefined` — NOT an empty Set — while `runs.list` hasn't
-  // landed yet. That signal distinction is load-bearing downstream:
-  // `intersectWithServerFilter(runs, undefined)` short-circuits to
-  // `runs`, whereas an empty Set means "server matched nothing" and
-  // filters everything out. Without this, flat mode with an active
-  // filter chip flashes to zero rows on first load — even though
-  // `runs` (= allVisibleRuns) already has URL-prefetched selection
-  // runs — because the intersect kicks in before `data.pages` is
-  // populated. See Cursor Bugbot review on PR #524.
-  const serverFilteredRunIds = useMemo<Set<string> | undefined>(() => {
-    if (!data?.pages) return undefined;
-    const ids = new Set<string>();
-    for (const p of data.pages) {
-      if (!p) continue;
-      for (const r of p.runs ?? []) if (r.id) ids.add(r.id);
-    }
-    return ids;
-  }, [data]);
-
   // Unfiltered outermost-group count for the toolbar. Same server
   // proc the bucket tree uses, but without any toolbar filter or
   // search — so we get the true "N total groups" denominator even
@@ -1294,23 +1134,18 @@ function RouteComponent() {
   });
   const totalGroupCountUnfiltered = unfilteredGroupData?.totalCount ?? 0;
 
-  const tableRuns = useMemo(() => {
-    if (!prefetchedSelectedRuns?.runs?.length) return runs;
-    const prefetchedIds = new Set(prefetchedSelectedRuns.runs.map((r: Run) => r.id));
-    const actualSelectedIds = new Set(Object.keys(selectedRunsWithColors));
-    const pageIds = new Set(allLoadedRuns.map((r) => r.id));
-    return runs.filter((r) => {
-      // Not from the prefetched-selected set → always a real row.
-      if (!prefetchedIds.has(r.id)) return true;
-      // Currently selected → keep (user wants it visible).
-      if (actualSelectedIds.has(r.id)) return true;
-      // On the current runs.list page → keep (it's a real table row, the
-      // prefetch just happened to overlap).
-      if (pageIds.has(r.id)) return true;
-      // Otherwise: phantom from a stale IndexedDB cache; drop it.
-      return false;
-    });
-  }, [runs, prefetchedSelectedRuns, selectedRunsWithColors, allLoadedRuns]);
+  // Selection-aware partition: the rows the table actually shows (with
+  // stale-prefetch phantoms dropped) and the "in view" id set the search
+  // "Other matches" dropdown partitions against. Rules live in
+  // ~lib/run-list-model.ts.
+  const { tableRuns, inViewRunIds } = useTableViewPartition({
+    runs,
+    allLoadedRuns,
+    prefetchedSelectedRuns,
+    selectedRunsWithColors,
+    showOnlySelected,
+    pinSelectedToTop,
+  });
 
   // Unified selection: the checkbox column is the single selection control — a
   // checked run is plotted on the charts (?runs=) AND the target of bulk actions
@@ -1346,28 +1181,6 @@ function RouteComponent() {
     },
     [handleRunSelection],
   );
-
-  // Which run IDs are actually rendered in the table right now. The set
-  // depends on whether "Display only selected" is on:
-  // - on  → table renders only selected runs (mergeSelectedRuns)
-  // - off → table renders tableRuns (server fetch) plus any selected runs
-  //         sticky-appended via ensureSelectedRunsIncluded
-  // Used to partition "Other matches" hits into in-view vs out-of-view.
-  const inViewRunIds = useMemo(() => {
-    const ids = new Set<string>();
-    // When pin-selected-to-top is on, the user's perception of "in view"
-    // is the pinned (= selected) block at the top — the unpinned rows
-    // below are just a paginated slice the user is searching through.
-    // Treat them as out-of-view so the dropdown surfaces non-selected
-    // search matches the same way Display-Only-Selected does.
-    if (showOnlySelected || pinSelectedToTop) {
-      for (const id of Object.keys(selectedRunsWithColors)) ids.add(id);
-    } else {
-      for (const r of tableRuns) ids.add(r.id);
-      for (const id of Object.keys(selectedRunsWithColors)) ids.add(id);
-    }
-    return ids;
-  }, [showOnlySelected, pinSelectedToTop, tableRuns, selectedRunsWithColors]);
 
   // Fetch logs only for selected runs (lazy loading)
   const selectedRunIds = useMemo(
