@@ -333,6 +333,7 @@ model Runs {
   logs          RunLogs[]
   triggers      RunTriggers[]
   statusEvents  RunStatusEvent[]
+  heartbeat     RunHeartbeat?
   Notification  Notification[]
   RunGraphNode  RunGraphNode[]
   RunGraphEdge  RunGraphEdge[]
@@ -434,6 +435,21 @@ model RunStatusEvent {
 
   @@index([runId, createdAt])
   @@map("run_status_events")
+}
+
+// Liveness signal for a run. The SDK's monitor thread POSTs /api/runs/trigger
+// every few seconds; that endpoint upserts `lastSeen` here (write-coalesced, so
+// a healthy run touches this row at most once per coalesce window). The
+// stale-run monitor reads `lastSeen` and marks a run FAILED once it has gone
+// quiet past a short grace — far tighter and more direct than inferring
+// liveness from ClickHouse metric arrival. One row per run (runId is the PK),
+// so DDP fan-out from N ranks collapses onto a single row.
+model RunHeartbeat {
+  runId    BigInt   @id
+  run      Runs     @relation(fields: [runId], references: [id], onDelete: Cascade)
+  lastSeen DateTime @default(now())
+
+  @@map("run_heartbeats")
 }
 
 enum NotificationType {

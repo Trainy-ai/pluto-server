@@ -1,10 +1,11 @@
 import hashlib
 import logging
 import os
+import time
 from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 from python.emails import send_email
@@ -58,10 +59,165 @@ def get_last_update_times(ch_client, run_ids):
         return None
 
 
+def get_last_heartbeats(session, run_ids):
+    """Batch-fetch the last heartbeat time per run from run_heartbeats.
+
+    Returns {run_id: aware datetime}, or None on a read failure. A missing
+    entry means "no heartbeat on record" and sends that run down the legacy
+    fallback path; a failed read must NOT masquerade as that (an "empty"
+    result would demote every heartbeat-tracked run to the fallback signals,
+    which can be legitimately old — e.g. updatedAt on a long-running run —
+    and falsely reap live runs). Callers skip the cycle on None, mirroring
+    the ClickHouse fetch.
+    """
+    if not run_ids:
+        return {}
+
+    # `IN :ids` with an expanding bindparam works on both Postgres and SQLite
+    # (local/test), unlike the Postgres-only `= ANY(:ids)`.
+    stmt = text(
+        'SELECT "runId", "lastSeen" FROM run_heartbeats WHERE "runId" IN :ids'
+    ).bindparams(bindparam("ids", expanding=True))
+
+    try:
+        rows = session.execute(stmt, {"ids": list(run_ids)}).fetchall()
+    except Exception:
+        logger.exception("Error fetching heartbeats")
+        return None
+
+    heartbeats = {}
+    for run_id, last_seen in rows:
+        if last_seen is None:
+            continue
+        # psycopg2 returns a datetime; pysqlite (local/test) returns an ISO
+        # string for a TIMESTAMP column, so parse it like get_last_update_times.
+        if isinstance(last_seen, str):
+            try:
+                last_seen = datetime.fromisoformat(last_seen)
+            except ValueError:
+                continue
+        if last_seen.tzinfo is None:
+            last_seen = last_seen.replace(tzinfo=timezone.utc)
+        heartbeats[run_id] = last_seen
+    return heartbeats
+
+
+# The SDK monitor thread hits /api/runs/trigger every few seconds. We only need
+# `lastSeen` to be at most this stale for the stale-run monitor to work, so the
+# upsert refreshes the row at most once per this window. This coalescing is what
+# keeps heartbeat writes cheap: an active run touches its heartbeat row ~once per
+# HEARTBEAT_COALESCE_SECONDS regardless of poll rate, and DDP ranks sharing a
+# runId collapse onto the same row. Keep it comfortably below the monitor's
+# heartbeat grace (see process_runs `heartbeat_grace`): by design a healthy
+# run's row may be this stale, so the grace must leave several missed windows
+# of headroom (150s grace / 30s coalesce = 5x) before a run is reaped.
+HEARTBEAT_COALESCE_SECONDS = int(os.getenv("HEARTBEAT_COALESCE_SECONDS", "30"))
+
+# Process start reference for the boot-race guard in process_runs. On a fresh
+# process every heartbeat row may be stale simply because nothing was up to
+# record pings while this service was down — not because the runs are dead.
+_PROCESS_STARTED_AT = time.monotonic()
+
+# Heartbeat write-failure streak (per process; each replica tracks its own).
+# record_heartbeat is deliberately best-effort, so without this a broken write
+# path (bad migration, permissions, lock pile-up) would stay silent right up
+# until the stale-run monitor mass-reaps healthy runs. Surfaced on /healthz
+# and escalated to a CRITICAL log once staleness is genuinely accumulating.
+_heartbeat_write_failures = {"consecutive": 0, "since": None}
+
+
+def heartbeat_write_status():
+    """Health snapshot of the heartbeat write path, exposed on /healthz.
+
+    `failingForSeconds` beyond HEARTBEAT_COALESCE_SECONDS means stored
+    `lastSeen` values are genuinely aging (a healthy run's row is allowed to
+    be one coalesce window old); once they age past `heartbeat_grace` the
+    stale-run monitor will falsely reap live runs. Alert well before that.
+    """
+    since = _heartbeat_write_failures["since"]
+    if since is None:
+        return {"failing": False}
+    return {
+        "failing": True,
+        "consecutiveFailures": _heartbeat_write_failures["consecutive"],
+        "failingForSeconds": int(time.monotonic() - since),
+    }
+
+
+def record_heartbeat(session, run_id):
+    """Upsert the run's liveness timestamp, coalescing frequent pings.
+
+    The INSERT ... ON CONFLICT writes a new row version only when the stored
+    `lastSeen` is older than HEARTBEAT_COALESCE_SECONDS; a ping inside that
+    window matches the WHERE-false branch and is a true no-op (no dead tuple,
+    no WAL on Postgres). DDP ranks racing on the same runId serialise on the
+    row and all but the first collapse to no-ops. Best-effort: a heartbeat
+    failure must never break the cancel-trigger response, so we swallow and
+    roll back. Branches on dialect so local/test SQLite works too.
+    """
+    try:
+        if session.get_bind().dialect.name == "sqlite":
+            # SQLite (local/test): ISO datetime text compares chronologically.
+            session.execute(
+                text(
+                    """
+                    INSERT INTO run_heartbeats ("runId", "lastSeen")
+                    VALUES (:run_id, datetime('now'))
+                    ON CONFLICT ("runId") DO UPDATE SET "lastSeen" = datetime('now')
+                    WHERE run_heartbeats."lastSeen" < datetime('now', :neg_interval)
+                    """
+                ),
+                {
+                    "run_id": run_id,
+                    "neg_interval": f"-{HEARTBEAT_COALESCE_SECONDS} seconds",
+                },
+            )
+        else:
+            session.execute(
+                text(
+                    """
+                    INSERT INTO run_heartbeats ("runId", "lastSeen")
+                    VALUES (:run_id, NOW())
+                    ON CONFLICT ("runId") DO UPDATE SET "lastSeen" = NOW()
+                    WHERE run_heartbeats."lastSeen"
+                        < NOW() - make_interval(secs => :coalesce_seconds)
+                    """
+                ),
+                {"run_id": run_id, "coalesce_seconds": HEARTBEAT_COALESCE_SECONDS},
+            )
+        session.commit()
+        if _heartbeat_write_failures["since"] is not None:
+            logger.info(
+                "Heartbeat writes recovered after %d consecutive failures",
+                _heartbeat_write_failures["consecutive"],
+            )
+        _heartbeat_write_failures["consecutive"] = 0
+        _heartbeat_write_failures["since"] = None
+    except Exception:
+        _heartbeat_write_failures["consecutive"] += 1
+        if _heartbeat_write_failures["since"] is None:
+            _heartbeat_write_failures["since"] = time.monotonic()
+        failing_for = time.monotonic() - _heartbeat_write_failures["since"]
+        if failing_for >= HEARTBEAT_COALESCE_SECONDS:
+            # Distinctive marker for log-based alerting: past one coalesce
+            # window the stored lastSeen values are genuinely aging, and once
+            # they cross heartbeat_grace the stale-run monitor will falsely
+            # reap healthy runs.
+            logger.critical(
+                "HEARTBEAT_WRITES_FAILING failing_for=%ds consecutive=%d — "
+                "lastSeen is going stale for all active runs; the stale-run "
+                "monitor will falsely reap them once it exceeds heartbeat_grace",
+                int(failing_for),
+                _heartbeat_write_failures["consecutive"],
+            )
+        logger.exception("Failed to record heartbeat for run %s", run_id)
+        session.rollback()
+
+
 STALE_RUN_LOCK_ID = 8675309  # arbitrary unique ID for pg_try_advisory_lock
 
 
-def process_runs(session, ch_client, smtp_config, grace=1800):
+def process_runs(session, ch_client, smtp_config, grace=1800, heartbeat_grace=150):
     # Acquire a Postgres advisory lock so only one instance runs per cycle.
     # pg_try_advisory_xact_lock is non-blocking and auto-releases at transaction end.
     acquired = session.execute(
@@ -91,49 +247,93 @@ def process_runs(session, ch_client, smtp_config, grace=1800):
         logger.error("Failed to get last update times from ClickHouse, skipping this cycle")
         return None
 
+    # Primary liveness signal: the SDK heartbeat persisted by /api/runs/trigger.
+    # It is a direct, low-latency signal independent of the metric ingest
+    # pipeline and of how often the user calls log(), so it carries a much
+    # tighter grace than the ClickHouse fallback.
+    heartbeats = get_last_heartbeats(session, run_ids)
+
+    if heartbeats is None:
+        logger.error("Failed to fetch heartbeats from Postgres, skipping this cycle")
+        return None
+
+    # Boot-race guard: if this process just (re)started, heartbeat rows may be
+    # stale only because nothing was up to record pings during the preceding
+    # outage or deploy (the reaper and the API share a pod via start.sh). Until
+    # the process has been up for one full heartbeat_grace — long enough for
+    # the API to accept a round of ~4s SDK pings and refresh every live run's
+    # row — do not judge heartbeat-tracked runs at all. Fallback-path runs
+    # (no heartbeat row) are unaffected: their signals do not depend on this
+    # service being up.
+    warming_up = (time.monotonic() - _PROCESS_STARTED_AT) < heartbeat_grace
+
     now_utc = datetime.now(timezone.utc)
     failed_run_ids = []
+    skipped_warm_up = 0
 
     for run in valid_runs:
-        last_update_time = last_updates.get(run.id)
+        last_seen = heartbeats.get(run.id)
+        last_metric = last_updates.get(run.id)
+        if last_seen is not None and warming_up:
+            # Cannot trust heartbeat staleness yet — leave this run un-judged
+            # for this cycle. The threshold checks at the bottom of the loop
+            # still run.
+            skipped_warm_up += 1
+        else:
+            if last_seen is not None:
+                # Heartbeat present → tight, direct liveness check. But do not let a
+                # frozen heartbeat (e.g. the ping write failing while training is
+                # otherwise healthy and still logging) falsely reap a live run:
+                # take the most recent of the heartbeat and the last ClickHouse
+                # metric, so a run is only reaped when *both* signals are quiet.
+                signal_time = last_seen
+                if last_metric is not None and last_metric > signal_time:
+                    signal_time = last_metric
+                threshold = heartbeat_grace
+                reason = "heartbeat-timeout"
+            else:
+                # No heartbeat on record (older SDK, noop mode, or a run that has
+                # not pinged since this shipped): fall back to the last ClickHouse
+                # metric, then to updatedAt, on the original (looser) grace.
+                signal_time = last_metric
+                if signal_time is None:
+                    signal_time = run.updatedAt.replace(tzinfo=timezone.utc)
+                threshold = grace
+                reason = "stale"
 
-        # Fallback to updatedAt if no metrics found
-        if last_update_time is None:
-            last_update_time = run.updatedAt.replace(tzinfo=timezone.utc)
-
-        time_diff = now_utc - last_update_time
-        if timedelta(seconds=grace) < time_diff < timedelta(days=16384):
-            logger.info(
-                f"Marking run {run.id} as FAILED (project={run.project.name}, "
-                f"last_update={last_update_time.isoformat()}, "
-                f"stale_for={int(time_diff.total_seconds())}s)"
-            )
-            transition_run_status(
-                session,
-                run_id=run.id,
-                to_status="FAILED",
-                source="stale-monitor",
-                metadata={
-                    "reason": "stale",
-                    "grace_seconds": grace,
-                    "stale_for_seconds": int(time_diff.total_seconds()),
-                    "last_update_time": last_update_time.isoformat(),
-                },
-            )
-            # Refresh the in-memory ORM copy so downstream code (send_alert)
-            # observes the new status without another round-trip.
-            run.status = "FAILED"
-            send_alert(
-                session,
-                run,
-                smtp_config,
-                last_update_time,
-                title="Status Update",
-                body=f"The run may have stalled and requires attention - last update exceeded {grace} seconds",
-                level=NotificationType.RUN_FAILED,
-                email=False,
-            )
-            failed_run_ids.append(run.id)
+            time_diff = now_utc - signal_time
+            if timedelta(seconds=threshold) < time_diff < timedelta(days=16384):
+                logger.info(
+                    f"Marking run {run.id} as FAILED (project={run.project.name}, "
+                    f"reason={reason}, last_seen={signal_time.isoformat()}, "
+                    f"quiet_for={int(time_diff.total_seconds())}s, threshold={threshold}s)"
+                )
+                transition_run_status(
+                    session,
+                    run_id=run.id,
+                    to_status="FAILED",
+                    source="stale-monitor",
+                    metadata={
+                        "reason": reason,
+                        "grace_seconds": threshold,
+                        "stale_for_seconds": int(time_diff.total_seconds()),
+                        "last_update_time": signal_time.isoformat(),
+                    },
+                )
+                # Refresh the in-memory ORM copy so downstream code (send_alert)
+                # observes the new status without another round-trip.
+                run.status = "FAILED"
+                send_alert(
+                    session,
+                    run,
+                    smtp_config,
+                    signal_time,
+                    title="Status Update",
+                    body=f"The run may have stalled and requires attention - no activity for over {threshold} seconds",
+                    level=NotificationType.RUN_FAILED,
+                    email=False,
+                )
+                failed_run_ids.append(run.id)
 
         # Check thresholds (still per-run, only for runs with triggers configured)
         if run.loggerSettings and run.loggerSettings.get("trigger"):
@@ -148,6 +348,12 @@ def process_runs(session, ch_client, smtp_config, grace=1800):
                         threshold=v.get("threshold"),
                         operator=v.get("operator"),
                     )
+
+    if skipped_warm_up:
+        logger.info(
+            f"Warm-up ({heartbeat_grace}s after process start): left "
+            f"{skipped_warm_up} heartbeat-tracked runs un-judged this cycle"
+        )
 
     try:
         session.commit()

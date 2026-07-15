@@ -150,6 +150,17 @@ class RunTriggers(Base):
         return f"<RunTriggers(id={self.id}, runId={self.runId}, trigger={self.trigger}, triggerType={self.triggerType})>"
 
 
+class RunHeartbeat(Base):
+    __tablename__ = "run_heartbeats"
+    runId = Column(BigInteger, ForeignKey("runs.id"), primary_key=True)
+    lastSeen = Column(DateTime(timezone=True), server_default=func.now())
+
+    run = relationship("Run", backref="heartbeat")
+
+    def __repr__(self):
+        return f"<RunHeartbeat(runId={self.runId}, lastSeen={self.lastSeen})>"
+
+
 class RunGraphNode(Base):
     __tablename__ = "run_graph_nodes"
     id = Column(BigInteger, primary_key=True)

@@ -13,7 +13,13 @@ from sqlalchemy.orm import Session, sessionmaker
 from compat.migrate import get_client, list_runs, migrate_all, migrate_run_v1
 from python.env import get_database_url, get_smtp_config
 from python.models import Run, RunStatus, RunTriggers, RunTriggerType
-from python.server import check_run, send_alert, process_runs
+from python.server import (
+    check_run,
+    heartbeat_write_status,
+    process_runs,
+    record_heartbeat,
+    send_alert,
+)
 
 load_dotenv()
 
@@ -97,7 +103,13 @@ def get_db():
 
 @app.get("/healthz")
 async def healthz():
-    return {"status": "ok"}
+    # heartbeatWrites reports whether record_heartbeat (best-effort, errors
+    # swallowed on the request path) is silently failing. Kept as a 200 with a
+    # payload rather than a failing status code: restarting the pod would not
+    # fix a DB-side issue and would take the trigger endpoint down with it.
+    # External monitors should alert when `failing` is true for more than
+    # about a minute (see heartbeat_write_status docstring).
+    return {"status": "ok", "heartbeatWrites": heartbeat_write_status()}
 
 
 @app.get("/version")
@@ -111,9 +123,6 @@ async def version():
     }
 
 
-# Sync `def`: FastAPI runs it in its worker threadpool so the synchronous
-# SQLAlchemy calls below do not block the event loop (and thus do not hold a
-# pooled connection while the loop is stalled).
 @app.post("/api/runs/trigger")
 def get_run_triggers(
     runId: int = Body(..., embed=True),
@@ -123,6 +132,10 @@ def get_run_triggers(
     # check_run validates the API key (raising 401 for a missing/invalid token)
     # and loads the run, so no separate check_api_key call is needed here.
     run = check_run(session, runId, authorization)
+
+    # Record liveness on every poll. This is the signal the stale-run monitor
+    # uses to reap dead runs quickly (see process_runs). Coalesced + best-effort.
+    record_heartbeat(session, runId)
 
     if not run.status == RunStatus.CANCELLED:
         triggers = session.query(RunTriggers).filter(

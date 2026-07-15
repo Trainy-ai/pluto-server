@@ -118,6 +118,77 @@ class TestStaleRunIntegration:
             session.close()
             engine.dispose()
 
+    def test_stale_heartbeat_marks_failed(self):
+        """A RUNNING run with a stale run_heartbeats row is marked FAILED on the
+        tight heartbeat grace, exercising the full heartbeat read path."""
+        from sqlalchemy import text
+
+        from python.models import Run
+        from python.server import process_runs
+
+        import time
+
+        import python.server as ps
+
+        db_url = get_test_db_url()
+        session, engine = get_session(db_url)
+        ch_client = get_ch_client()
+
+        # Simulate a long-running process so the boot-race guard does not
+        # skip heartbeat judgement (this test process just started).
+        orig_started_at = ps._PROCESS_STARTED_AT
+        ps._PROCESS_STARTED_AT = time.monotonic() - 10_000
+
+        try:
+            existing_run = session.query(Run).first()
+            if not existing_run:
+                pytest.skip("No runs in test database")
+
+            run = Run(
+                name="integration-test-heartbeat",
+                projectId=existing_run.projectId,
+                organizationId=existing_run.organizationId,
+                status="RUNNING",
+                updatedAt=datetime.now(timezone.utc),  # fresh — heartbeat decides
+            )
+            session.add(run)
+            session.commit()
+            run_id = run.id
+
+            # Insert a heartbeat 5 minutes old.
+            session.execute(
+                text(
+                    'INSERT INTO run_heartbeats ("runId", "lastSeen") '
+                    "VALUES (:id, NOW() - make_interval(secs => 300))"
+                ),
+                {"id": run_id},
+            )
+            session.commit()
+
+            failed_ids = process_runs(
+                session, ch_client, smtp_config={}, grace=1800, heartbeat_grace=60
+            )
+
+            session.refresh(run)
+            assert run.status == "FAILED", f"Expected FAILED, got {run.status}"
+            assert run_id in (failed_ids or [])
+
+        finally:
+            ps._PROCESS_STARTED_AT = orig_started_at
+            try:
+                test_runs = (
+                    session.query(Run)
+                    .filter(Run.name == "integration-test-heartbeat")
+                    .all()
+                )
+                for r in test_runs:
+                    session.delete(r)  # cascade removes the heartbeat row
+                session.commit()
+            except Exception:
+                session.rollback()
+            session.close()
+            engine.dispose()
+
     def test_active_run_not_marked_with_fresh_session(self):
         """A RUNNING run with recent updatedAt stays RUNNING (validates session caching fix)."""
         from python.models import Run
@@ -176,5 +247,103 @@ class TestStaleRunIntegration:
                 session.commit()
             except Exception:
                 session.rollback()
+            session.close()
+            engine.dispose()
+
+
+class TestHeartbeatPostgres:
+    """Exercise record_heartbeat's POSTGRES branch against a real database.
+
+    The unit tests in test_heartbeat.py execute the SQLite dialect branch;
+    without this test the SQL that production actually runs (INSERT ... ON
+    CONFLICT ... make_interval) is never asserted anywhere — record_heartbeat
+    swallows errors by design, so even the SDK-driven E2E suites would not go
+    red on a broken statement.
+    """
+
+    def test_record_heartbeat_postgres_upsert_and_coalesce(self):
+        from sqlalchemy import text
+
+        from python.server import (
+            HEARTBEAT_COALESCE_SECONDS,
+            get_last_heartbeats,
+            record_heartbeat,
+        )
+
+        db_url = get_test_db_url()
+        session, engine = get_session(db_url)
+        run_id = None
+
+        try:
+            # Any existing run satisfies the FK; raw SQL keeps this test
+            # independent of the ORM model's column set.
+            row = session.execute(
+                text('SELECT id FROM runs ORDER BY id LIMIT 1')
+            ).fetchone()
+            if not row:
+                pytest.skip("No runs in test database")
+            run_id = row[0]
+
+            # Start clean so a leftover row from a prior test run cannot
+            # turn the insert into a coalesced no-op.
+            session.execute(
+                text('DELETE FROM run_heartbeats WHERE "runId" = :id'),
+                {"id": run_id},
+            )
+            session.commit()
+
+            # 1) Insert path: row appears with a fresh lastSeen.
+            record_heartbeat(session, run_id)
+            hb = get_last_heartbeats(session, [run_id])
+            assert hb is not None and run_id in hb, "insert branch failed"
+            age = (datetime.now(timezone.utc) - hb[run_id]).total_seconds()
+            assert age < 30, f"fresh lastSeen expected, got {age:.0f}s old"
+
+            # 2) Coalesce path: backdate INSIDE the window — a ping must be
+            # a no-op (lastSeen stays backdated).
+            inside = HEARTBEAT_COALESCE_SECONDS // 2
+            session.execute(
+                text(
+                    'UPDATE run_heartbeats SET "lastSeen" = '
+                    'NOW() - make_interval(secs => :s) WHERE "runId" = :id'
+                ),
+                {"s": inside, "id": run_id},
+            )
+            session.commit()
+            record_heartbeat(session, run_id)
+            hb = get_last_heartbeats(session, [run_id])
+            age = (datetime.now(timezone.utc) - hb[run_id]).total_seconds()
+            assert age >= inside - 5, (
+                f"ping inside the {HEARTBEAT_COALESCE_SECONDS}s window must "
+                f"coalesce; lastSeen refreshed (age {age:.0f}s)"
+            )
+
+            # 3) Refresh path: backdate OUTSIDE the window — a ping must
+            # rewrite lastSeen to ~now.
+            session.execute(
+                text(
+                    'UPDATE run_heartbeats SET "lastSeen" = '
+                    'NOW() - make_interval(secs => :s) WHERE "runId" = :id'
+                ),
+                {"s": HEARTBEAT_COALESCE_SECONDS * 2, "id": run_id},
+            )
+            session.commit()
+            record_heartbeat(session, run_id)
+            hb = get_last_heartbeats(session, [run_id])
+            age = (datetime.now(timezone.utc) - hb[run_id]).total_seconds()
+            assert age < HEARTBEAT_COALESCE_SECONDS, (
+                f"ping outside the window must refresh lastSeen, got "
+                f"{age:.0f}s old"
+            )
+        finally:
+            if run_id is not None:
+                try:
+                    session.execute(
+                        text('DELETE FROM run_heartbeats WHERE "runId" = :id'),
+                        {"id": run_id},
+                    )
+                    session.commit()
+                except Exception:
+                    session.rollback()
             session.close()
             engine.dispose()
