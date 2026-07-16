@@ -13,6 +13,7 @@ import { queryClient } from "@/utils/trpc";
 import { LocalCache } from "@/lib/db/local-cache";
 import type { inferOutput } from "@trpc/tanstack-react-query";
 import { prefetchLocalQuery, useLocalQuery } from "@/lib/hooks/use-local-query";
+import { useAuth } from "@/lib/auth/client";
 
 type ProjectData = inferOutput<typeof trpc.projects.list>;
 
@@ -71,7 +72,13 @@ export const Route = createFileRoute("/o/$orgSlug/_authed/projects/")({
 
 function RouteComponent() {
   const { organizationId, organizationSlug } = Route.useRouteContext();
+  const { data: session } = useAuth();
   useDocumentTitle("Projects");
+
+  // Project deletion is destructive (wipes all runs), so only surface the
+  // action for owners/admins — the server enforces the same rule.
+  const memberRole = session?.activeOrganization?.membership?.role;
+  const canDelete = memberRole === "OWNER" || memberRole === "ADMIN";
   const [lastRefreshed, setLastRefreshed] = useState<Date | undefined>(
     undefined,
   );
@@ -162,7 +169,11 @@ function RouteComponent() {
           <Card>
             <CardContent className="p-4">
               <DataTable
-                columns={columns({ orgSlug: organizationSlug })}
+                columns={columns({
+                  orgSlug: organizationSlug,
+                  organizationId,
+                  canDelete,
+                })}
                 data={projectsData?.projects ?? []}
                 pageCount={pageCount}
                 pageIndex={pageIndex}

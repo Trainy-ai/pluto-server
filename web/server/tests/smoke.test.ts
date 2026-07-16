@@ -9959,6 +9959,46 @@ describe('SDK API Endpoints (with API Key)', () => {
     });
   });
 
+  describe('Test Suite 40: Delete Project (projects.delete)', () => {
+    it('Test 40.1: Delete project - Unauthorized (no session)', async () => {
+      const response = await makeTrpcRequest('projects.delete', {
+        organizationId: 'test-org-id',
+        projectName: TEST_PROJECT_NAME,
+      }, {}, 'POST');
+
+      // Should fail without authentication
+      expect(response.status).toBe(401);
+    });
+
+    it('Test 40.2: Delete project - Invalid input (empty projectName)', async () => {
+      const response = await makeTrpcRequest('projects.delete', {
+        organizationId: 'test-org-id',
+        projectName: '',
+      }, {}, 'POST');
+
+      // min(1) on projectName → validation error (400), or 401 if auth runs first
+      expect([400, 401]).toContain(response.status);
+    });
+
+    it('Test 40.3: Delete project - Invalid input (missing projectName)', async () => {
+      const response = await makeTrpcRequest('projects.delete', {
+        organizationId: 'test-org-id',
+      }, {}, 'POST');
+
+      // Should return 400 (validation error) or 401 (auth check comes first)
+      expect([400, 401]).toContain(response.status);
+    });
+
+    it('Test 40.4: Delete project - Invalid input (missing organizationId)', async () => {
+      const response = await makeTrpcRequest('projects.delete', {
+        projectName: TEST_PROJECT_NAME,
+      }, {}, 'POST');
+
+      // Should return 400 (validation error) or 401 (auth check comes first)
+      expect([400, 401]).toContain(response.status);
+    });
+  });
+
   // Test Suite 39: Image/Media Captions (linum feedback #6)
   // Verifies the caption flows through ingest→ClickHouse→backend on the
   // /api/runs/files response. setup.ts seeds media/captioned_samples with one

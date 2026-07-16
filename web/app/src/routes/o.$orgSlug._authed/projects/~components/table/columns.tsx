@@ -4,13 +4,19 @@ import type { ColumnDef } from "@tanstack/react-table";
 import type { inferOutput } from "@trpc/tanstack-react-query";
 import { ExternalLinkIcon, Clock } from "lucide-react";
 import { RunStatusBadge } from "@/components/core/runs/run-status-badge";
+import { DeleteProjectButton } from "../delete-project-button";
 
 type Project = inferOutput<typeof trpc.projects.list>["projects"][0];
 
 export const columns = ({
   orgSlug,
+  organizationId,
+  canDelete,
 }: {
   orgSlug: string;
+  organizationId: string;
+  /** Only owners/admins may delete projects; hides the actions column otherwise. */
+  canDelete: boolean;
 }): ColumnDef<Project>[] => [
   {
     header: "Name",
@@ -105,4 +111,21 @@ export const columns = ({
       return <RunStatusBadge run={lastRun} />;
     },
   },
+  ...(canDelete
+    ? ([
+        {
+          id: "actions",
+          header: "",
+          cell: ({ row }) => (
+            <div className="flex justify-end">
+              <DeleteProjectButton
+                organizationId={organizationId}
+                projectName={row.original.name}
+                runCount={row.original.runCount}
+              />
+            </div>
+          ),
+        },
+      ] satisfies ColumnDef<Project>[])
+    : []),
 ];
