@@ -217,11 +217,14 @@ class RunFilterCompiler {
       : "systemMetadata";
     const key = field.slice(source.length + 1);
     if (!key) throw new FilterError(`empty key in field: ${field}`);
-    const term = toFieldFilterTerm(source, key, ops);
+    // A leaf may carry more than one operator (e.g. a two-bound range
+    // `{$gt, $lt}`); emit one term per operator and let queryFieldFilteredRunIds
+    // AND them together (implicit-AND, matching Mongo/wandb semantics).
+    const terms = toFieldFilterTerms(source, key, ops);
     const ids = await queryFieldFilteredRunIds(this.ctx.prisma, {
       organizationId: this.ctx.organizationId,
       ...(this.ctx.projectId != null ? { projectId: this.ctx.projectId } : {}),
-      fieldFilters: [term],
+      fieldFilters: terms,
     });
     return new Set(ids);
   }
@@ -248,11 +251,19 @@ class RunFilterCompiler {
     this.requireProject("summaryMetrics.*");
     const key = field.slice(field.indexOf(".") + 1);
     if (!key) throw new FilterError(`empty metric name in field: ${field}`);
-    const { operator, values } = toComparisonOp(ops, "summaryMetrics");
+    // One metric filter per operator so a two-bound range `{$gt, $lt}` INTERSECTs
+    // both bounds (queryMetricFilteredRunIds AND-s via INTERSECT) rather than
+    // honoring only the first.
+    const comparisons = toComparisonOps(ops, "summaryMetrics");
     const ids = await queryMetricFilteredRunIds(clickhouse, {
       organizationId: this.ctx.organizationId,
       projectName: this.ctx.projectName!,
-      metricFilters: [{ logName: key, aggregation: "LAST", operator, values }],
+      metricFilters: comparisons.map(({ operator, values }) => ({
+        logName: key,
+        aggregation: "LAST",
+        operator,
+        values,
+      })),
     });
     return new Set(ids.map((n) => BigInt(n)));
   }
@@ -341,40 +352,54 @@ function union(sets: Set<bigint>[]): Set<bigint> {
   return out;
 }
 
-/** MongoDB op → run_field_values (source/key/dataType/operator/values) term. */
-function toFieldFilterTerm(
+/**
+ * MongoDB leaf ops → run_field_values term(s). Returns ONE term per operator
+ * present so a multi-operator leaf (e.g. a two-bound range `{$gt, $lt}`) AND-s
+ * every bound instead of silently honoring only the first — the callers
+ * combine the returned terms with AND. Exact `>`/`>=`/`<`/`<=` bounds are kept
+ * (a single inclusive `is between` would turn `$gt`/`$lt` into `>=`/`<=`).
+ */
+function toFieldFilterTerms(
   source: "config" | "systemMetadata",
   key: string,
   ops: LeafOps,
-): FieldFilter {
+): FieldFilter[] {
+  const terms: FieldFilter[] = [];
   // Explicit literal operators so they narrow to the FieldFilter operator enum.
-  if ("$gt" in ops) return { source, key, dataType: "number", operator: ">", values: [Number(ops.$gt)] };
-  if ("$gte" in ops) return { source, key, dataType: "number", operator: ">=", values: [Number(ops.$gte)] };
-  if ("$lt" in ops) return { source, key, dataType: "number", operator: "<", values: [Number(ops.$lt)] };
-  if ("$lte" in ops) return { source, key, dataType: "number", operator: "<=", values: [Number(ops.$lte)] };
-  if ("$regex" in ops) return { source, key, dataType: "text", operator: "regex", values: [String(ops.$regex)] };
-  if ("$in" in ops) return { source, key, dataType: "option", operator: "is any of", values: asArray(ops.$in) };
-  if ("$nin" in ops) return { source, key, dataType: "option", operator: "is none of", values: asArray(ops.$nin) };
-  if ("$ne" in ops) {
-    const v = ops.$ne;
-    return numberish(v)
-      ? { source, key, dataType: "number", operator: "is not", values: [Number(v)] }
-      : { source, key, dataType: "text", operator: "is not", values: [String(v)] };
+  if ("$gt" in ops) terms.push({ source, key, dataType: "number", operator: ">", values: [Number(ops.$gt)] });
+  if ("$gte" in ops) terms.push({ source, key, dataType: "number", operator: ">=", values: [Number(ops.$gte)] });
+  if ("$lt" in ops) terms.push({ source, key, dataType: "number", operator: "<", values: [Number(ops.$lt)] });
+  if ("$lte" in ops) terms.push({ source, key, dataType: "number", operator: "<=", values: [Number(ops.$lte)] });
+  if ("$regex" in ops) terms.push({ source, key, dataType: "text", operator: "regex", values: [String(ops.$regex)] });
+  if ("$in" in ops) terms.push({ source, key, dataType: "option", operator: "is any of", values: asArray(ops.$in) });
+  if ("$nin" in ops) terms.push({ source, key, dataType: "option", operator: "is none of", values: asArray(ops.$nin) });
+  // $eq/$ne share an equality shape that picks number-vs-text by the value.
+  const pushEquality = (mop: "$eq" | "$ne", operator: "is" | "is not") => {
+    if (!(mop in ops)) return;
+    const v = ops[mop];
+    terms.push(
+      numberish(v)
+        ? { source, key, dataType: "number", operator, values: [Number(v)] }
+        : { source, key, dataType: "text", operator, values: [String(v)] },
+    );
+  };
+  pushEquality("$ne", "is not");
+  pushEquality("$eq", "is");
+  if (terms.length === 0) {
+    throw new FilterError(`unsupported operator for ${source}.${key}: ${opName(ops)}`);
   }
-  if ("$eq" in ops) {
-    const v = ops.$eq;
-    return numberish(v)
-      ? { source, key, dataType: "number", operator: "is", values: [Number(v)] }
-      : { source, key, dataType: "text", operator: "is", values: [String(v)] };
-  }
-  throw new FilterError(`unsupported operator for ${source}.${key}: ${opName(ops)}`);
+  return terms;
 }
 
-/** MongoDB comparison op → run_field_values-style (operator, values) for metrics. */
-function toComparisonOp(
+/**
+ * MongoDB comparison ops → metric-summary (operator, values) pairs. Returns one
+ * pair per operator present so a multi-operator leaf (two-bound range) yields
+ * every bound; the caller AND-s them (INTERSECT).
+ */
+function toComparisonOps(
   ops: LeafOps,
   fieldLabel: string,
-): { operator: string; values: unknown[] } {
+): { operator: string; values: unknown[] }[] {
   const map: Record<string, string> = {
     $eq: "is",
     $ne: "is not",
@@ -383,10 +408,14 @@ function toComparisonOp(
     $lt: "<",
     $lte: "<=",
   };
+  const out: { operator: string; values: unknown[] }[] = [];
   for (const [mop, op] of Object.entries(map)) {
-    if (mop in ops) return { operator: op, values: [ops[mop]] };
+    if (mop in ops) out.push({ operator: op, values: [ops[mop]] });
   }
-  throw new FilterError(`unsupported operator for ${fieldLabel}: ${opName(ops)}`);
+  if (out.length === 0) {
+    throw new FilterError(`unsupported operator for ${fieldLabel}: ${opName(ops)}`);
+  }
+  return out;
 }
 
 function numberish(v: Json): boolean {

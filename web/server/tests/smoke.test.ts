@@ -10450,5 +10450,49 @@ describe('SDK API Endpoints (with API Key)', () => {
         ['config.', 'systemMetadata.', 'summaryMetrics.', 'summary_metrics.'].sort(),
       );
     });
+
+    it('Test 39.11: two-bound config.* range applies BOTH bounds (regression)', async () => {
+      // Regression for the run-filter compiler dropping the second bound of a
+      // single-field two-operator range (e.g. `{config.lr: {$gt, $lt}}`), which
+      // honored only the first operator and returned an over-broad superset.
+      // Both bounds must AND together.
+      //
+      // Uses config.lr, whose backfilled spread is {0.001 (bulk runs), 0.01
+      // (the needle run)}. The range keeps the 0.001 runs and must drop the
+      // 0.01 needle that the lower bound alone admits.
+      const authHeaders = { headers: { Authorization: `Bearer ${TEST_API_KEY}` } };
+      const lrCols = encodeURIComponent('[{"source":"config","key":"lr"}]');
+
+      const readLrs = async (filter: object): Promise<number[]> => {
+        const res = await makeRequest(
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&filter=${encodeURIComponent(
+            JSON.stringify(filter),
+          )}&includeFieldValues=true&visibleColumns=${lrCols}&limit=200`,
+          authHeaders,
+        );
+        expect(res.status).toBe(200);
+        const data = await res.json();
+        return (data.runs as { _flatConfig?: Record<string, unknown> }[])
+          .map((r) => r._flatConfig?.lr)
+          .filter((v: unknown): v is number => typeof v === 'number');
+      };
+
+      const LO = 0.0005;
+      const HI = 0.005;
+      const lowerOnly = await readLrs({ 'config.lr': { $gt: LO } });
+      const ranged = await readLrs({ 'config.lr': { $gt: LO, $lt: HI } });
+
+      // The lower bound alone admits runs at/above the upper bound (the 0.01
+      // needle), proving the fixture exercises the second bound; the range must
+      // exclude them.
+      expect(lowerOnly.some((v) => v >= HI)).toBe(true);
+      for (const v of ranged) {
+        expect(v).toBeGreaterThan(LO);
+        expect(v).toBeLessThan(HI);
+      }
+      // The range is a strict narrowing of the lower-bound-only result.
+      expect(ranged.length).toBeGreaterThan(0);
+      expect(ranged.length).toBeLessThan(lowerOnly.length);
+    });
   });
 });
