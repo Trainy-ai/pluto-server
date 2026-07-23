@@ -12,6 +12,7 @@ import {
   ImageStepSyncProvider,
   useImageStepSyncContext,
 } from "../../~context/image-step-sync-context";
+import { sortBySavedOrder } from "@/routes/o.$orgSlug._authed/(runComparison)/projects.$projectName/~lib/charts-layout";
 
 interface DataGroupProps {
   group: LogGroup;
@@ -21,6 +22,10 @@ interface DataGroupProps {
   boundsResetKey?: number;
   runCreatedAt?: string;
   runName?: string;
+  /** Saved chart order for this group from the shared project layout
+   *  overlay — listed names first, unlisted keep the default
+   *  (first-logged) order after. */
+  savedChartOrder?: string[];
 }
 
 // Log types whose widgets expose step navigation (and thus participate in
@@ -36,15 +41,19 @@ const DataGroupBase = ({
   boundsResetKey,
   runCreatedAt,
   runName,
+  savedChartOrder,
 }: DataGroupProps) => {
   const groupId = `metrics-${group.groupName}`;
 
-  // Memoize sorted logs to prevent unnecessary re-sorting
+  // Memoize sorted logs to prevent unnecessary re-sorting. Default order is
+  // first-logged-first; the shared layout overlay's saved chart order (if
+  // any) is applied on top so this view matches the project Charts view.
   const sortedLogs = useMemo(() => {
-    return [...group.logs].sort((a, b) => {
+    const byCreatedAt = [...group.logs].sort((a, b) => {
       return a.createdAt.getTime() - b.createdAt.getTime();
     });
-  }, [group.logs]);
+    return sortBySavedOrder(byCreatedAt, (log) => log.logName, savedChartOrder);
+  }, [group.logs, savedChartOrder]);
 
   // Return render functions instead of elements for lazy evaluation
   // Components are only created when DropdownRegion calls the render function

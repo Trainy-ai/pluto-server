@@ -7,6 +7,7 @@ import { onboardingRouter } from "./routers/onboarding/router";
 import { feedbackProcedure } from "./procs/feedback";
 import { dashboardViewsRouter } from "./routers/dashboard-views/router";
 import { runTableViewsRouter } from "./routers/run-table-views/router";
+import { chartsLayoutRouter } from "./routers/charts-layout/router";
 
 export const appRouter = router({
   // Procedures
@@ -20,6 +21,7 @@ export const appRouter = router({
   onboarding: onboardingRouter,
   dashboardViews: dashboardViewsRouter,
   runTableViews: runTableViewsRouter,
+  chartsLayout: chartsLayoutRouter,
 });
 
 export type AppRouter = typeof appRouter;

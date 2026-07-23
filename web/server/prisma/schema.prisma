@@ -55,6 +55,7 @@ model User {
   Runs               Runs[]
   DashboardView      DashboardView[]
   RunTableView       RunTableView[]
+  ChartsLayout       ChartsLayout[]
   Integration        Integration[]
   RunStatusEvent     RunStatusEvent[]
 
@@ -172,6 +173,7 @@ model Organization {
   OrganizationSubscription OrganizationSubscription?
   DashboardView            DashboardView[]
   RunTableView             RunTableView[]
+  ChartsLayout             ChartsLayout[]
   ProjectColumnKey         ProjectColumnKey[]
   RunFieldValue            RunFieldValue[]
   Integration              Integration[]
@@ -258,6 +260,7 @@ model Projects {
   updatedAt        DateTime           @updatedAt
   DashboardView    DashboardView[]
   RunTableView     RunTableView[]
+  ChartsLayout     ChartsLayout[]
   ProjectColumnKey ProjectColumnKey[]
   RunFieldValue    RunFieldValue[]
 
@@ -516,6 +519,28 @@ model RunTableView {
   @@unique([organizationId, projectId, name])
   @@index([organizationId, projectId])
   @@map("run_table_views")
+}
+
+// Persisted layout overlay for the default "Charts" (All Metrics) view.
+// One shared row per project storing the user-arranged metric-group order
+// plus hidden group keys and per-group chart order. Applied on top of the auto-computed
+// grouping so newly logged metrics still appear automatically.
+model ChartsLayout {
+  id             BigInt   @id @default(autoincrement())
+  organizationId String
+  projectId      BigInt
+  updatedById    String?
+  config         Json // { version, order[], hidden[], metricOrder{} } — see lib/charts-layout-types.ts
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project      Projects     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  updatedBy    User?        @relation(fields: [updatedById], references: [id], onDelete: SetNull)
+
+  // The unique index below already serves lookups by (organizationId, projectId).
+  @@unique([organizationId, projectId])
+  @@map("charts_layouts")
 }
 
 // Cached distinct column keys per project for fast search

@@ -10269,6 +10269,219 @@ describe('SDK API Endpoints (with API Key)', () => {
     });
   });
 
+  describe('Test Suite 40: Charts Layout (Unauthenticated)', () => {
+    it('Test 40.1: Get charts layout - Unauthorized (no session)', async () => {
+      const response = await makeTrpcRequest('chartsLayout.get', {
+        projectName: TEST_PROJECT_NAME,
+      }, {}, 'GET');
+
+      expect(response.status).toBe(401);
+    });
+
+    it('Test 40.2: Upsert charts layout - Unauthorized (no session)', async () => {
+      const response = await makeTrpcRequest('chartsLayout.upsert', {
+        projectName: TEST_PROJECT_NAME,
+        config: { version: 1, order: [], hidden: [] },
+      }, {}, 'POST');
+
+      expect(response.status).toBe(401);
+    });
+  });
+
+  describe('Test Suite 41: Charts Layout (Authenticated)', () => {
+    const TEST_EMAIL = process.env.TEST_USER_EMAIL || 'test-smoke@mlop.local';
+    const TEST_PASSWORD = 'TestPassword123!';
+    let sessionCookie: string | null = null;
+    let orgId: string | null = null;
+    let serverAvailable = false;
+
+    beforeAll(async () => {
+      try {
+        const healthCheck = await makeRequest('/api/health');
+        serverAvailable = healthCheck.status === 200;
+      } catch {
+        serverAvailable = false;
+      }
+
+      if (!serverAvailable) {
+        console.log('   Skipping authenticated charts-layout tests - server not available');
+        return;
+      }
+
+      try {
+        const signInResponse = await makeRequest('/api/auth/sign-in/email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: TEST_EMAIL, password: TEST_PASSWORD }),
+        });
+        const setCookie = signInResponse.headers.get('set-cookie');
+        if (setCookie) {
+          const match = setCookie.match(/better_auth\.session_token=([^;]+)/);
+          if (match) {
+            sessionCookie = `better_auth.session_token=${match[1]}`;
+          }
+        }
+        if (sessionCookie) {
+          // protectedOrgProcedure requires organizationId in the input.
+          const auth = await (
+            await makeTrpcRequest('auth', {}, { Cookie: sessionCookie }, 'GET')
+          ).json();
+          orgId = auth.result?.data?.activeOrganization?.id ?? null;
+        }
+      } catch (e) {
+        console.log('   Sign in failed:', e);
+      }
+    });
+
+    it('Test 41.1: Get returns a well-formed empty layout by default', async () => {
+      if (!sessionCookie || !orgId) {
+        console.log('   No session - skipping');
+        return;
+      }
+      const response = await makeTrpcRequest('chartsLayout.get', {
+        organizationId: orgId,
+        projectName: TEST_PROJECT_NAME,
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      const config = data.result?.data?.config;
+      expect(config).toBeDefined();
+      expect(config.version).toBe(1);
+      expect(Array.isArray(config.order)).toBe(true);
+      expect(Array.isArray(config.hidden)).toBe(true);
+    });
+
+    it('Test 41.2: Upsert then get round-trips the layout overlay', async () => {
+      if (!sessionCookie || !orgId) {
+        console.log('   No session - skipping');
+        return;
+      }
+      const config = {
+        version: 1,
+        order: ['loss', 'metrics', 'system'],
+        hidden: ['debug'],
+      };
+
+      const upsertRes = await makeTrpcRequest('chartsLayout.upsert', {
+        organizationId: orgId,
+        projectName: TEST_PROJECT_NAME,
+        config,
+      }, { 'Cookie': sessionCookie }, 'POST');
+
+      expect(upsertRes.status).toBe(200);
+      const upsertData = await upsertRes.json();
+      expect(upsertData.result?.data?.config?.order).toEqual(config.order);
+      expect(upsertData.result?.data?.config?.hidden).toEqual(config.hidden);
+
+      const getRes = await makeTrpcRequest('chartsLayout.get', {
+        organizationId: orgId,
+        projectName: TEST_PROJECT_NAME,
+      }, { 'Cookie': sessionCookie }, 'GET');
+      const getData = await getRes.json();
+      expect(getData.result?.data?.config?.order).toEqual(config.order);
+      expect(getData.result?.data?.config?.hidden).toEqual(config.hidden);
+    });
+
+    it('Test 41.3: Upsert is idempotent and overwrites the prior overlay', async () => {
+      if (!sessionCookie || !orgId) {
+        console.log('   No session - skipping');
+        return;
+      }
+      const config = {
+        version: 1,
+        order: ['metrics', 'loss'],
+        hidden: [],
+      };
+
+      const upsertRes = await makeTrpcRequest('chartsLayout.upsert', {
+        organizationId: orgId,
+        projectName: TEST_PROJECT_NAME,
+        config,
+      }, { 'Cookie': sessionCookie }, 'POST');
+      expect(upsertRes.status).toBe(200);
+
+      const getRes = await makeTrpcRequest('chartsLayout.get', {
+        organizationId: orgId,
+        projectName: TEST_PROJECT_NAME,
+      }, { 'Cookie': sessionCookie }, 'GET');
+      const getData = await getRes.json();
+      // Single shared row per project: order replaced, hidden cleared.
+      expect(getData.result?.data?.config?.order).toEqual(['metrics', 'loss']);
+      expect(getData.result?.data?.config?.hidden).toEqual([]);
+    });
+
+    it('Test 41.4: Upsert rejects an unknown project with NOT_FOUND', async () => {
+      if (!sessionCookie || !orgId) {
+        console.log('   No session - skipping');
+        return;
+      }
+      const response = await makeTrpcRequest('chartsLayout.upsert', {
+        organizationId: orgId,
+        projectName: `does-not-exist-${Date.now()}`,
+        config: { version: 1, order: [], hidden: [] },
+      }, { 'Cookie': sessionCookie }, 'POST');
+
+      expect(response.status).toBe(404);
+    });
+
+    it('Test 41.5: Upsert round-trips per-group metric order', async () => {
+      if (!sessionCookie || !orgId) {
+        console.log('   No session - skipping');
+        return;
+      }
+      const config = {
+        version: 1,
+        order: [],
+        hidden: [],
+        metricOrder: { metrics: ['val_loss', 'loss'], system: ['gpu', 'cpu'] },
+      };
+
+      const upsertRes = await makeTrpcRequest('chartsLayout.upsert', {
+        organizationId: orgId,
+        projectName: TEST_PROJECT_NAME,
+        config,
+      }, { 'Cookie': sessionCookie }, 'POST');
+      expect(upsertRes.status).toBe(200);
+      const upsertData = await upsertRes.json();
+      expect(upsertData.result?.data?.config?.metricOrder).toEqual(config.metricOrder);
+
+      const getRes = await makeTrpcRequest('chartsLayout.get', {
+        organizationId: orgId,
+        projectName: TEST_PROJECT_NAME,
+      }, { 'Cookie': sessionCookie }, 'GET');
+      const getData = await getRes.json();
+      expect(getData.result?.data?.config?.metricOrder).toEqual(config.metricOrder);
+    });
+
+    it('Test 41.6: Config without metricOrder still parses (legacy client/row compat)', async () => {
+      if (!sessionCookie || !orgId) {
+        console.log('   No session - skipping');
+        return;
+      }
+      // Older clients (and rows saved before metricOrder existed) omit the
+      // field entirely — the schema default must fill it in on both write and
+      // read paths. `collapsed` is a removed legacy key such clients still
+      // send; the schema must strip it rather than reject.
+      const upsertRes = await makeTrpcRequest('chartsLayout.upsert', {
+        organizationId: orgId,
+        projectName: TEST_PROJECT_NAME,
+        config: { version: 1, order: ['loss'], collapsed: [], hidden: [] },
+      }, { 'Cookie': sessionCookie }, 'POST');
+      expect(upsertRes.status).toBe(200);
+      const upsertData = await upsertRes.json();
+      expect(upsertData.result?.data?.config?.metricOrder).toEqual({});
+
+      const getRes = await makeTrpcRequest('chartsLayout.get', {
+        organizationId: orgId,
+        projectName: TEST_PROJECT_NAME,
+      }, { 'Cookie': sessionCookie }, 'GET');
+      const getData = await getRes.json();
+      expect(getData.result?.data?.config?.metricOrder).toEqual({});
+      expect(getData.result?.data?.config?.order).toEqual(['loss']);
+    });
+  });
+
   // Test Suite 39: OpenAPI input schema exposure.
   //
   // The pluto client SDK consumes /api/openapi.json for contract testing in CI.

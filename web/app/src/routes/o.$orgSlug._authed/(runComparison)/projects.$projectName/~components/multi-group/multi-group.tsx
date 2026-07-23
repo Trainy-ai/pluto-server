@@ -253,8 +253,17 @@ export const MultiGroup = ({
     ],
   );
 
+  // Stable per-card identity: lets DropdownRegion key cards by metric name so
+  // layout reorders move mounted charts instead of remounting them.
+  const itemKeys = useMemo(() => metrics.map((m) => m.name), [metrics]);
+
   return (
-    <DropdownRegion title={title} components={components} groupId={groupId} />
+    <DropdownRegion
+      title={title}
+      components={components}
+      groupId={groupId}
+      itemKeys={itemKeys}
+    />
   );
 };
 

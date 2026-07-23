@@ -23,6 +23,11 @@ import {
 import { ChartSyncProvider } from "@/components/charts/context/chart-sync-context";
 import { ImageStepSyncProvider } from "./~context/image-step-sync-context";
 import { searchUtils, type SearchState } from "../../(runComparison)/projects.$projectName/~lib/search-utils";
+import { useChartsLayout } from "../../(runComparison)/projects.$projectName/~queries/charts-layout";
+import {
+  applyChartsLayout,
+  EMPTY_CHARTS_LAYOUT,
+} from "../../(runComparison)/projects.$projectName/~lib/charts-layout";
 import { useRunDashboardData } from "./~hooks/use-run-dashboard";
 
 import { useMemo, useState, useEffect, useRef, useCallback } from "react";
@@ -168,20 +173,36 @@ function RouteComponent() {
       : String(runData.createdAt);
   }, [runData?.createdAt]);
 
+  // Shared project layout overlay (arranged in the all-runs Charts view):
+  // this view applies it read-only so a single run shows the same section
+  // order, hidden sections, and per-section chart order as the Charts view.
+  const { data: chartsLayoutData } = useChartsLayout(organizationId, projectName);
+  const chartsLayout = chartsLayoutData?.config ?? EMPTY_CHARTS_LAYOUT;
+
   // Memoize the rendered DataGroups for "All Metrics" view
   const dataGroups = useMemo(() => {
-    return filteredLogGroups.map((group: LogGroup) => (
-      <DataGroup
-        key={group.groupName}
-        group={group}
-        tenantId={organizationId}
-        projectName={projectName}
-        runId={runId}
-        runCreatedAt={runCreatedAtStr}
-        runName={runData?.name}
-      />
-    ));
-  }, [filteredLogGroups, organizationId, projectName, runId, runCreatedAtStr, runData?.name]);
+    const laidOut = applyChartsLayout(
+      filteredLogGroups.map((group: LogGroup): [string, LogGroup] => [
+        group.groupName,
+        group,
+      ]),
+      chartsLayout,
+    );
+    return laidOut
+      .filter((g) => !g.hidden)
+      .map(({ key, data: group }) => (
+        <DataGroup
+          key={key}
+          group={group}
+          tenantId={organizationId}
+          projectName={projectName}
+          runId={runId}
+          runCreatedAt={runCreatedAtStr}
+          runName={runData?.name}
+          savedChartOrder={chartsLayout.metricOrder?.[key]}
+        />
+      ));
+  }, [filteredLogGroups, chartsLayout, organizationId, projectName, runId, runCreatedAtStr, runData?.name]);
 
   if (isLoading || !runData) {
     return (

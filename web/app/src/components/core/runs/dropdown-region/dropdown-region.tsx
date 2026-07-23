@@ -9,6 +9,14 @@ import {
   ChevronRight,
   MoveDiagonal2,
 } from "lucide-react";
+import { useChartsLayoutEdit } from "@/components/charts/context/charts-layout-edit-context";
+import {
+  SectionDragHandle,
+  SectionHideToggle,
+  ChartDragHandle,
+  getSectionDropProps,
+  getChartDropProps,
+} from "./layout-edit-chrome";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -72,6 +80,13 @@ interface DropdownRegionProps {
    * adjustments persist via local-storage and override this.
    */
   defaultColumns?: number;
+  /**
+   * Optional stable identity per component (parallel to `components`), e.g.
+   * metric names. When provided, cards are keyed by it instead of array
+   * index, so reorders (live layout-edit previews, saved-order changes) move
+   * the mounted chart's DOM node instead of remounting every shifted cell.
+   */
+  itemKeys?: string[];
 }
 
 interface GridSelectorProps {
@@ -212,6 +227,7 @@ export function DropdownRegion({
   components,
   groupId,
   defaultColumns,
+  itemKeys,
 }: DropdownRegionProps) {
   // Initialize settings with saved values or defaults
   const [settings, setSettings] = useState<DropdownSettings>(() => {
@@ -235,6 +251,11 @@ export function DropdownRegion({
   );
   const [ghostDimensions, setGhostDimensions] =
     useState<GhostDimensions | null>(null);
+
+  // WYSIWYG layout-edit chrome — non-null only while the Charts view's layout
+  // editor is active (metrics-display provides the context). All edit chrome
+  // lives in ./layout-edit-chrome.tsx.
+  const layoutEdit = useChartsLayoutEdit();
 
   const gridContainerRef = useRef<HTMLDivElement>(null);
   const cardRefs = useRef<Record<number, HTMLDivElement | null>>({});
@@ -476,10 +497,22 @@ export function DropdownRegion({
     height: `${settings.globalCardHeight ?? DEFAULT_CARD_HEIGHT}px`,
   };
 
+  const isSectionHidden = layoutEdit?.isSectionHidden(groupId) ?? false;
+
   return (
-    <div className="w-full rounded-lg border shadow-sm">
+    <div
+      className={cn(
+        "w-full rounded-lg border shadow-sm",
+        isSectionHidden && "opacity-50",
+        layoutEdit?.draggedSectionId === groupId && "opacity-60",
+      )}
+      data-testid={layoutEdit ? "charts-layout-section" : undefined}
+      data-group-key={layoutEdit?.getSectionKey(groupId)}
+      {...getSectionDropProps(layoutEdit, groupId)}
+    >
       <div className="flex items-center justify-between p-4">
         <div className="flex items-center space-x-2">
+          <SectionDragHandle groupId={groupId} />
           <button
             onClick={() =>
               setSettings((prev) => ({ ...prev, isOpen: !prev.isOpen }))
@@ -500,6 +533,7 @@ export function DropdownRegion({
           </h2>
         </div>
         <div className="flex items-center space-x-2">
+          <SectionHideToggle groupId={groupId} />
           {totalPages > 1 && (
             <>
               <Button
@@ -659,18 +693,49 @@ export function DropdownRegion({
             {displayIndices.map((originalIndex) => {
               const isPinned = settings.pinnedIndices.includes(originalIndex);
               const renderComponent = components[originalIndex];
+              const metricName =
+                itemKeys?.[originalIndex] ??
+                layoutEdit?.getItemName(groupId, originalIndex);
+              const isDraggedItem =
+                layoutEdit?.draggedItem?.groupId === groupId &&
+                layoutEdit.draggedItem.name === metricName;
 
               return (
                 <div
-                  key={originalIndex}
+                  // Keyed by stable item identity when the caller provides
+                  // one, so reorders (live layout-edit previews, saved-order
+                  // changes) move the mounted chart's DOM node instead of
+                  // remounting every shifted cell.
+                  key={metricName ?? originalIndex}
                   ref={(el) => {
                     if (cardRefs.current) {
                       cardRefs.current[originalIndex] = el;
                     }
                   }}
-                  className={cn(styles.card, "group", "w-full")}
+                  className={cn(
+                    styles.card,
+                    "group",
+                    "w-full",
+                    isDraggedItem && "opacity-50",
+                  )}
                   style={cardStyle}
+                  data-metric-name={metricName}
+                  data-testid={layoutEdit ? "charts-layout-chart-card" : undefined}
+                  {...getChartDropProps(
+                    layoutEdit,
+                    groupId,
+                    originalIndex,
+                    !!isDraggedItem,
+                  )}
                 >
+                  {layoutEdit && (
+                    <ChartDragHandle
+                      groupId={groupId}
+                      index={originalIndex}
+                      metricName={metricName}
+                      isDragged={!!isDraggedItem}
+                    />
+                  )}
                   <VirtualizedChart minHeight={cardStyle.height?.toString() || "384px"} loadMargin="600px">
                     {renderComponent()}
                   </VirtualizedChart>
