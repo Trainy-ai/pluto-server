@@ -13,6 +13,14 @@ interface VirtualizedGroupProps {
   loadMargin?: string;
   /** Distance beyond loadMargin before unmounting (default "1200px") */
   unloadMargin?: string;
+  /**
+   * Force the group to stay mounted, bypassing virtualization. Used while the
+   * layout editor is active: every section must remain a live drop target and
+   * expose its edit chrome (drag handles, move menus, rename/delete controls)
+   * regardless of scroll position — an off-screen placeholder can neither be
+   * dragged into nor reveal a newly-added section.
+   */
+  disabled?: boolean;
 }
 
 // Module-level cache for measured group heights — survives re-renders and
@@ -37,6 +45,7 @@ export function VirtualizedGroup({
   children,
   loadMargin = "600px",
   unloadMargin = "1200px",
+  disabled = false,
 }: VirtualizedGroupProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   // Start visible so charts render immediately on first paint.
@@ -54,6 +63,12 @@ export function VirtualizedGroup({
 
   // IntersectionObserver with hysteresis: mount at loadMargin, unmount at unloadMargin.
   useEffect(() => {
+    // While virtualization is disabled (layout edit mode) keep every group
+    // mounted — force visible and skip the observers entirely.
+    if (disabled) {
+      setIsVisible(true);
+      return;
+    }
     const el = containerRef.current;
     if (!el) return;
 
@@ -84,7 +99,7 @@ export function VirtualizedGroup({
       mountObserver.disconnect();
       unmountObserver.disconnect();
     };
-  }, [loadMargin, unloadMargin]);
+  }, [loadMargin, unloadMargin, disabled]);
 
   // Measure the actual height whenever visible content changes.
   useEffect(() => {
@@ -102,7 +117,7 @@ export function VirtualizedGroup({
     return () => ro.disconnect();
   }, [isVisible, groupId]);
 
-  if (!isVisible) {
+  if (!isVisible && !disabled) {
     return (
       <div
         ref={containerRef}

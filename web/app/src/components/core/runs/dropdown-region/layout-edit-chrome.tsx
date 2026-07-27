@@ -1,5 +1,12 @@
-import { Eye, EyeOff, GripVertical } from "lucide-react";
+import { useState } from "react";
+import { Eye, EyeOff, GripVertical, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import {
   useChartsLayoutEdit,
@@ -92,7 +99,6 @@ export function ChartDragHandle({
         isDragged && "!opacity-100",
       )}
       data-testid="charts-layout-chart-handle"
-      data-metric-name={metricName}
       aria-label="Drag to reorder chart"
     >
       <GripVertical className="h-full w-full" />
@@ -117,24 +123,43 @@ export function getSectionDropProps(
   layoutEdit: ChartsLayoutEditApi | null,
   groupId: string,
 ): DropProps {
-  if (!layoutEdit?.draggedSectionId || layoutEdit.draggedSectionId === groupId) {
+  if (!layoutEdit) {
     return NO_DROP_PROPS;
   }
-  return {
-    onDragOver: (e) => {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = "move";
-      const rect = e.currentTarget.getBoundingClientRect();
-      layoutEdit.moveSectionOver(
-        groupId,
-        e.clientY < rect.top + rect.height / 2 ? "before" : "after",
-      );
-    },
-    onDrop: (e) => {
-      e.preventDefault();
-      layoutEdit.endSectionDrag();
-    },
-  };
+  if (layoutEdit.draggedSectionId && layoutEdit.draggedSectionId !== groupId) {
+    return {
+      onDragOver: (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        const rect = e.currentTarget.getBoundingClientRect();
+        layoutEdit.moveSectionOver(
+          groupId,
+          e.clientY < rect.top + rect.height / 2 ? "before" : "after",
+        );
+      },
+      onDrop: (e) => {
+        e.preventDefault();
+        layoutEdit.endSectionDrag();
+      },
+    };
+  }
+  const dragged = layoutEdit.draggedItem;
+  if (dragged && dragged.groupId !== groupId) {
+    // A chart dragged over this section's body (not over a specific card)
+    // drops in at the end.
+    return {
+      onDragOver: (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+      },
+      onDrop: (e) => {
+        e.preventDefault();
+        layoutEdit.moveItemToSection(dragged.groupId, dragged.name, groupId);
+        layoutEdit.endItemDrag();
+      },
+    };
+  }
+  return NO_DROP_PROPS;
 }
 
 /**
@@ -148,9 +173,15 @@ export function getChartDropProps(
   index: number,
   isDragged: boolean,
 ): DropProps {
-  if (layoutEdit?.draggedItem?.groupId !== groupId) {
+  const dragged = layoutEdit?.draggedItem;
+  if (!dragged) {
     return NO_DROP_PROPS;
   }
+  // Dragging a chart from another section onto this card: the card stops
+  // propagation to the section body, so it must itself perform the
+  // cross-section move (drop lands the chart in this section). Within-section
+  // hovers keep live-previewing the reorder.
+  const isCrossSection = dragged.groupId !== groupId;
   return {
     onDragOver: isDragged
       ? undefined
@@ -158,6 +189,9 @@ export function getChartDropProps(
           e.preventDefault();
           e.stopPropagation();
           e.dataTransfer.dropEffect = "move";
+          if (isCrossSection) {
+            return;
+          }
           const rect = e.currentTarget.getBoundingClientRect();
           layoutEdit.moveItemOver(
             groupId,
@@ -168,7 +202,86 @@ export function getChartDropProps(
     onDrop: (e) => {
       e.preventDefault();
       e.stopPropagation();
+      if (isCrossSection) {
+        layoutEdit.moveItemToSection(dragged.groupId, dragged.name, groupId);
+      }
       layoutEdit.endItemDrag();
     },
   };
+}
+
+/** Rename control for custom sections (derived sections keep their computed name). */
+export function SectionRenameControl({ groupId }: { groupId: string }) {
+  const layoutEdit = useChartsLayoutEdit();
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  if (!layoutEdit?.isSectionCustom(groupId)) {
+    return null;
+  }
+  const submit = () => {
+    const trimmed = name.trim();
+    if (trimmed) {
+      layoutEdit.renameSection(groupId, trimmed);
+    }
+    setName("");
+    setOpen(false);
+  };
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Rename section"
+          title="Rename section"
+          data-testid="charts-layout-section-rename"
+        >
+          <Pencil className="h-4 w-4" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-64 space-y-2" align="end">
+        <Input
+          autoFocus
+          placeholder="Section name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              submit();
+            }
+          }}
+          data-testid="charts-layout-section-rename-name"
+        />
+        <Button
+          size="sm"
+          className="w-full"
+          onClick={submit}
+          disabled={!name.trim()}
+          data-testid="charts-layout-section-rename-confirm"
+        >
+          Rename
+        </Button>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** Delete control for custom sections — charts return to their derived homes. */
+export function SectionDeleteButton({ groupId }: { groupId: string }) {
+  const layoutEdit = useChartsLayoutEdit();
+  if (!layoutEdit?.isSectionCustom(groupId)) {
+    return null;
+  }
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      onClick={() => layoutEdit.removeSection(groupId)}
+      aria-label="Delete section"
+      title="Delete section — its charts return to their original sections"
+      data-testid="charts-layout-section-delete"
+    >
+      <Trash2 className="h-4 w-4" />
+    </Button>
+  );
 }

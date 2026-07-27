@@ -16,29 +16,12 @@ import { SmoothingSlider } from "@/components/charts/smoothing-slider";
 import { useLineSettings } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/use-line-settings";
 import { DashboardViewSelector, DashboardBuilder } from "./dashboard-builder";
 import { useDashboardView, type DashboardView } from "../~queries/dashboard-views";
-import {
-  useChartsLayout,
-  useUpsertChartsLayout,
-} from "../~queries/charts-layout";
-import {
-  applyChartsLayout,
-  orderGroupMetrics,
-  EMPTY_CHARTS_LAYOUT,
-} from "../~lib/charts-layout";
-import {
-  useChartsLayoutDraft,
-  type DraftGroup,
-} from "./charts-layout-edit/use-charts-layout-draft";
+import { useChartsLayoutEditor } from "./charts-layout-edit/use-charts-layout-editor";
 import { ChartsLayoutEditBanner } from "./charts-layout-edit/charts-layout-edit-banner";
-import {
-  ChartsLayoutEditProvider,
-  type ChartsLayoutEditApi,
-} from "@/components/charts/context/charts-layout-edit-context";
+import { ChartsLayoutEditProvider } from "@/components/charts/context/charts-layout-edit-context";
 import { Button } from "@/components/ui/button";
 import { SlidersHorizontal } from "lucide-react";
 import type { SelectedRunWithColor } from "../~hooks/use-selected-runs";
-
-const EMPTY_DRAFT_GROUPS: DraftGroup[] = [];
 import { ChartSyncProvider } from "@/components/charts/context/chart-sync-context";
 import { FullscreenProvider } from "@/components/charts/context/fullscreen-context";
 
@@ -194,174 +177,23 @@ export const MetricsDisplay = memo(function MetricsDisplay({
     return metricsMap;
   }, [filteredGroups, searchState]);
 
-  // Persisted project-level layout overlay for the default Charts view.
-  const { data: chartsLayoutData } = useChartsLayout(organizationId, projectName);
-  const chartsLayout = chartsLayoutData?.config ?? EMPTY_CHARTS_LAYOUT;
-  // Only allow editing once the saved overlay has loaded, so the editor's
-  // initial draft reflects the persisted order rather than the default one.
-  const isLayoutLoaded = chartsLayoutData !== undefined;
-  const upsertChartsLayout = useUpsertChartsLayout(organizationId, projectName);
-  const [isEditingLayout, setIsEditingLayout] = useState(false);
-
-  // The layout editor only belongs to the default All Metrics view. Reset edit
-  // mode whenever the selected view changes (e.g. switching to a custom
-  // dashboard and back) so it never reopens unexpectedly on return.
-  useEffect(() => {
-    setIsEditingLayout(false);
-  }, [selectedViewId]);
-
-  // Saved-overlay-applied arrangement — what the view shows outside edit mode
-  // and the base the edit draft snapshots from.
-  const savedLaidOutGroups = useMemo(
-    () => applyChartsLayout(sortedGroups, chartsLayout),
-    [sortedGroups, chartsLayout],
-  );
-
-  // Draft base — only worth computing while the editor is open (it snapshots
-  // and reconciles from this), so the non-edit render path skips the
-  // per-metric mapping entirely.
-  const baseGroups = useMemo<DraftGroup[]>(() => {
-    if (!isEditingLayout) {
-      return EMPTY_DRAFT_GROUPS;
-    }
-    return savedLaidOutGroups.map(({ key, data, hidden }) => ({
-      key,
-      hidden,
-      metricNames: orderGroupMetrics(
-        data.metrics,
-        chartsLayout.metricOrder?.[key],
-      ).map((m) => m.name),
-      defaultMetricNames: data.metrics.map((m) => m.name),
-    }));
-  }, [isEditingLayout, savedLaidOutGroups, chartsLayout]);
-
-  const { draftConfig, dirty, toggleHidden, moveSection, moveMetric } =
-    useChartsLayoutDraft(baseGroups, isEditingLayout);
-
-  // WYSIWYG: while editing, the draft overlay drives the actual charts view.
-  const effectiveLayout = isEditingLayout ? draftConfig : chartsLayout;
-
-  // Apply the overlay (reorder + hidden flags) over ALL sorted groups,
-  // regardless of the current search — the search filter is layered on top at
-  // render time so reordering/hiding affects every group. Outside edit mode
-  // the saved arrangement is reused as-is instead of re-sorting.
-  const draftLaidOutGroups = useMemo(
-    () =>
-      isEditingLayout ? applyChartsLayout(sortedGroups, draftConfig) : null,
-    [isEditingLayout, sortedGroups, draftConfig],
-  );
-  const laidOutGroups = draftLaidOutGroups ?? savedLaidOutGroups;
-
-  // Keys that survive the current search, used to gate rendering while keeping
-  // the saved order from `laidOutGroups`.
-  const visibleSearchKeys = useMemo(
-    () => new Set(filteredGroups.map(([group]) => group)),
-    [filteredGroups],
-  );
-
-  // Per-group metric lists with the per-group chart order applied on top
-  // of the search filter. `orderGroupMetrics` returns the input array by
-  // reference when the overlay is a no-op, so MemoizedMultiGroup keeps stable
-  // props and charts aren't recreated needlessly.
-  const orderedMetricsPerGroup = useMemo(() => {
-    const map = new Map<string, GroupedMetrics[string]["metrics"]>();
-    laidOutGroups.forEach(({ key, data }) => {
-      const metrics = filteredMetricsPerGroup.get(key) ?? data.metrics;
-      map.set(key, orderGroupMetrics(metrics, effectiveLayout.metricOrder?.[key]));
-    });
-    return map;
-  }, [laidOutGroups, filteredMetricsPerGroup, effectiveLayout]);
-
-  // DropdownRegion sections are addressed by `${projectName}-${key}`.
-  const groupIdToKey = useMemo(() => {
-    const map = new Map<string, string>();
-    laidOutGroups.forEach(({ key }) => map.set(`${projectName}-${key}`, key));
-    return map;
-  }, [laidOutGroups, projectName]);
-
-  const [draggedSectionId, setDraggedSectionId] = useState<string | null>(null);
-  const [draggedItem, setDraggedItem] = useState<{
-    groupId: string;
-    name: string;
-  } | null>(null);
-
-  // Context DropdownRegion consumes to grow drag/hide chrome while editing.
-  // Null outside edit mode so the chrome (and these re-renders) cost nothing.
-  const layoutEditApi = useMemo<ChartsLayoutEditApi | null>(() => {
-    if (!isEditingLayout) {
-      return null;
-    }
-    const hiddenSet = new Set(draftConfig.hidden);
-    const itemName = (groupId: string, index: number) => {
-      const key = groupIdToKey.get(groupId);
-      return key ? orderedMetricsPerGroup.get(key)?.[index]?.name : undefined;
-    };
-    return {
-      getSectionKey: (groupId) => groupIdToKey.get(groupId),
-      isSectionHidden: (groupId) => {
-        const key = groupIdToKey.get(groupId);
-        return key ? hiddenSet.has(key) : false;
-      },
-      toggleSectionHidden: (groupId) => {
-        const key = groupIdToKey.get(groupId);
-        if (key) {
-          toggleHidden(key);
-        }
-      },
-      draggedSectionId,
-      startSectionDrag: setDraggedSectionId,
-      endSectionDrag: () => setDraggedSectionId(null),
-      moveSectionOver: (targetGroupId, position) => {
-        const fromKey = draggedSectionId
-          ? groupIdToKey.get(draggedSectionId)
-          : undefined;
-        const targetKey = groupIdToKey.get(targetGroupId);
-        if (fromKey && targetKey) {
-          moveSection(fromKey, targetKey, position);
-        }
-      },
-      getItemName: itemName,
-      draggedItem,
-      startItemDrag: (groupId, index) => {
-        const name = itemName(groupId, index);
-        if (name) {
-          setDraggedItem({ groupId, name });
-        }
-      },
-      endItemDrag: () => setDraggedItem(null),
-      moveItemOver: (groupId, targetIndex, position) => {
-        const key = groupIdToKey.get(groupId);
-        const targetName = itemName(groupId, targetIndex);
-        if (key && targetName && draggedItem?.groupId === groupId) {
-          moveMetric(key, draggedItem.name, targetName, position);
-        }
-      },
-    };
-  }, [
+  const {
     isEditingLayout,
-    draftConfig.hidden,
-    groupIdToKey,
+    startEditing,
+    isLayoutLoaded,
+    hasSections,
+    visibleSections,
     orderedMetricsPerGroup,
-    toggleHidden,
-    draggedSectionId,
-    moveSection,
-    draggedItem,
-    moveMetric,
-  ]);
-
-  const handleSaveLayout = () => {
-    upsertChartsLayout.mutate(
-      { organizationId, projectName, config: draftConfig },
-      { onSuccess: () => setIsEditingLayout(false) },
-    );
-  };
-
-  const handleResetLayout = () => {
-    upsertChartsLayout.mutate(
-      { organizationId, projectName, config: EMPTY_CHARTS_LAYOUT },
-      { onSuccess: () => setIsEditingLayout(false) },
-    );
-  };
+    layoutEditApi,
+    bannerProps,
+  } = useChartsLayoutEditor({
+    organizationId,
+    projectName,
+    sortedGroups,
+    filteredMetricsPerGroup,
+    searchActive: searchState.query.length > 0,
+    selectedViewId,
+  });
 
   // If a custom view is selected, render the DashboardBuilder
   if (selectedViewId && selectedView) {
@@ -424,88 +256,76 @@ export const MetricsDisplay = memo(function MetricsDisplay({
     <ChartSyncProvider syncKey={`all-metrics-${projectName}`} experimentRunIdsMap={experimentRunIdsMap} hiddenRunIds={hiddenRunIds}>
       <FullscreenProvider>
       <div className="flex-1 space-y-4">
-        <div className="sticky top-0 z-20 flex items-center gap-4 bg-background pb-2">
-          <DashboardViewSelector
-            organizationId={organizationId}
-            projectName={projectName}
-            selectedViewId={selectedViewId}
-            onViewChange={setSelectedViewId}
-          />
-          <div className="flex-1 max-w-[320px]">
-            <LogSearch
-              onSearch={handleSearch}
-              placeholder="Search groups and metrics..."
-            />
-          </div>
-          <div className="ml-auto flex items-center gap-3">
-            {!isEditingLayout && isLayoutLoaded && laidOutGroups.length > 0 && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setIsEditingLayout(true)}
-                data-testid="charts-layout-edit"
-              >
-                <SlidersHorizontal className="mr-1.5 h-3.5 w-3.5" />
-                Edit layout
-              </Button>
-            )}
-            <SmoothingSlider
-              settings={settings}
-              updateSmoothingSettings={updateSmoothingSettings}
-              updateSettings={updateSettings}
-              getSmoothingConfig={getSmoothingConfig}
-            />
-            <RefreshButton
-              onRefresh={onRefresh}
-              lastRefreshed={lastRefreshed}
-              storageKey={`refresh-interval:metrics:${projectName}`}
-            />
-            <LineSettings
+        <div className="sticky top-0 z-20 space-y-3 bg-background pb-2">
+          <div className="flex items-center gap-4">
+            <DashboardViewSelector
               organizationId={organizationId}
               projectName={projectName}
-              logNames={uniqueLogNames}
+              selectedViewId={selectedViewId}
+              onViewChange={setSelectedViewId}
             />
-          </div>
-        </div>
-        {isEditingLayout && (
-          <ChartsLayoutEditBanner
-            isSaving={upsertChartsLayout.isPending}
-            isDirty={dirty}
-            onSave={handleSaveLayout}
-            onCancel={() => setIsEditingLayout(false)}
-            onReset={handleResetLayout}
-          />
-        )}
-        <ChartsLayoutEditProvider value={layoutEditApi}>
-          {laidOutGroups
-            // While editing, hidden sections stay visible (dimmed by their
-            // section chrome) so they can be re-shown and rearranged.
-            .filter(
-              (g) =>
-                (isEditingLayout || !g.hidden) && visibleSearchKeys.has(g.key),
-            )
-            .map(({ key, data }) => {
-              const metrics = orderedMetricsPerGroup.get(key) ?? data.metrics;
-              return (
-                <VirtualizedGroup
-                  key={key}
-                  groupId={`${projectName}-${key}`}
-                  groupTitle={data.groupName}
-                  metricCount={metrics.length}
+            <div className="flex-1 max-w-[320px]">
+              <LogSearch
+                onSearch={handleSearch}
+                placeholder="Search groups and metrics..."
+              />
+            </div>
+            <div className="ml-auto flex items-center gap-3">
+              {!isEditingLayout && isLayoutLoaded && hasSections && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={startEditing}
+                  data-testid="charts-layout-edit"
                 >
-                  <MemoizedMultiGroup
-                    title={data.groupName}
-                    groupId={`${projectName}-${key}`}
-                    metrics={metrics}
-                    organizationId={organizationId}
-                    projectName={projectName}
-                    globalLogXAxis={settings.xAxisLogScale}
-                    globalLogYAxis={settings.yAxisLogScale}
-                    groupBy={groupBy}
-                  />
-                </VirtualizedGroup>
-              );
-            })}
+                  <SlidersHorizontal className="mr-1.5 h-3.5 w-3.5" />
+                  Edit layout
+                </Button>
+              )}
+              <SmoothingSlider
+                settings={settings}
+                updateSmoothingSettings={updateSmoothingSettings}
+                updateSettings={updateSettings}
+                getSmoothingConfig={getSmoothingConfig}
+              />
+              <RefreshButton
+                onRefresh={onRefresh}
+                lastRefreshed={lastRefreshed}
+                storageKey={`refresh-interval:metrics:${projectName}`}
+              />
+              <LineSettings
+                organizationId={organizationId}
+                projectName={projectName}
+                logNames={uniqueLogNames}
+              />
+            </div>
+          </div>
+          {bannerProps && <ChartsLayoutEditBanner {...bannerProps} />}
+        </div>
+        <ChartsLayoutEditProvider value={layoutEditApi}>
+          {visibleSections.map(({ key, groupName }) => {
+            const metrics = orderedMetricsPerGroup.get(key) ?? [];
+            return (
+              <VirtualizedGroup
+                key={key}
+                groupId={`${projectName}-${key}`}
+                groupTitle={groupName}
+                metricCount={metrics.length}
+                disabled={isEditingLayout}
+              >
+                <MemoizedMultiGroup
+                  title={groupName}
+                  groupId={`${projectName}-${key}`}
+                  metrics={metrics}
+                  organizationId={organizationId}
+                  projectName={projectName}
+                  globalLogXAxis={settings.xAxisLogScale}
+                  globalLogYAxis={settings.yAxisLogScale}
+                  groupBy={groupBy}
+                />
+              </VirtualizedGroup>
+            );
+          })}
         </ChartsLayoutEditProvider>
       </div>
       </FullscreenProvider>

@@ -7,8 +7,9 @@ import { createContext, useContext } from "react";
  * every DropdownRegion section consumes it to grow drag/hide chrome in place:
  * section headers become draggable (reorder sections) with an eye toggle
  * (hide/show), and each chart card gets a hover drag handle to reorder charts
- * within its section. All mutations land in a draft that is only persisted
- * when the user saves.
+ * within its section or move them across sections. The editor can also create,
+ * rename, and delete custom sections. All mutations land in a draft that is
+ * only persisted when the user saves.
  *
  * Sections are addressed by DropdownRegion's `groupId`; charts by their
  * absolute index into the section's rendered metric list. The provider owns
@@ -20,6 +21,21 @@ export interface ChartsLayoutEditApi {
   getSectionKey(groupId: string): string | undefined;
   isSectionHidden(groupId: string): boolean;
   toggleSectionHidden(groupId: string): void;
+
+  /** True when the section is a user-created custom section (rename/delete allowed). */
+  isSectionCustom(groupId: string): boolean;
+  renameSection(groupId: string, name: string): void;
+  removeSection(groupId: string): void;
+  /** All sections as move targets, in draft order. */
+  listSections(): Array<{ groupId: string; name: string }>;
+  /** Move a chart (by name) from one section to the end of another. */
+  moveItemToSection(
+    fromGroupId: string,
+    metricName: string,
+    targetGroupId: string,
+  ): void;
+  /** Create a "New section" and move the chart into it. */
+  moveItemToNewSection(fromGroupId: string, metricName: string): void;
 
   /** groupId of the section being dragged, null when none. */
   draggedSectionId: string | null;

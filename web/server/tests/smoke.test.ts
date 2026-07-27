@@ -10291,6 +10291,13 @@ describe('SDK API Endpoints (with API Key)', () => {
   describe('Test Suite 41: Charts Layout (Authenticated)', () => {
     const TEST_EMAIL = process.env.TEST_USER_EMAIL || 'test-smoke@mlop.local';
     const TEST_PASSWORD = 'TestPassword123!';
+    // better-auth's CSRF middleware forces Origin validation whenever Fetch-Metadata
+    // (Sec-Fetch-*) headers are present, which undici's global fetch always sends.
+    // The Origin must match one of the server's configured trustedOrigins
+    // (see web/server/lib/origins.ts), which is PUBLIC_URL/BETTER_AUTH_URL - not
+    // necessarily the same host:port the test client uses to reach the server
+    // (TEST_BASE_URL/BASE_URL), so derive it from PUBLIC_URL with a BASE_URL fallback.
+    const SIGN_IN_ORIGIN = process.env.PUBLIC_URL || BASE_URL;
     let sessionCookie: string | null = null;
     let orgId: string | null = null;
     let serverAvailable = false;
@@ -10311,14 +10318,14 @@ describe('SDK API Endpoints (with API Key)', () => {
       try {
         const signInResponse = await makeRequest('/api/auth/sign-in/email', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'Origin': SIGN_IN_ORIGIN },
           body: JSON.stringify({ email: TEST_EMAIL, password: TEST_PASSWORD }),
         });
         const setCookie = signInResponse.headers.get('set-cookie');
         if (setCookie) {
-          const match = setCookie.match(/better_auth\.session_token=([^;]+)/);
+          const match = setCookie.match(/better-auth\.session_token=([^;]+)/);
           if (match) {
-            sessionCookie = `better_auth.session_token=${match[1]}`;
+            sessionCookie = `better-auth.session_token=${match[1]}`;
           }
         }
         if (sessionCookie) {
@@ -10326,30 +10333,100 @@ describe('SDK API Endpoints (with API Key)', () => {
           const auth = await (
             await makeTrpcRequest('auth', {}, { Cookie: sessionCookie }, 'GET')
           ).json();
-          orgId = auth.result?.data?.activeOrganization?.id ?? null;
+          // The tRPC response is superjson-wrapped (payload lives under
+          // result.data.json, per the tRPC v11 batch format), so both
+          // activeOrganization and allOrgs must be read through .json.
+          const authData = auth.result?.data?.json;
+          const allOrgs = authData?.allOrgs ?? [];
+          // Fresh sessions have activeOrganizationId null (better-auth doesn't
+          // auto-select one on sign-in), so fall back to the org tests/setup.ts
+          // actually seeds the smoke-test-project into (TEST_ORG_SLUG), or the
+          // first membership if that slug isn't present.
+          orgId =
+            authData?.activeOrganization?.id ??
+            allOrgs.find((o: { slug?: string }) => o.slug === TEST_ORG_SLUG)?.id ??
+            allOrgs[0]?.id ??
+            null;
         }
       } catch (e) {
         console.log('   Sign in failed:', e);
       }
     });
 
-    it('Test 41.1: Get returns a well-formed empty layout by default', async () => {
+    // The shared makeTrpcRequest() helper (used by every other suite in this
+    // file) sends `input` as a raw JSON object. That is fine for procedures
+    // whose auth/context short-circuits before input validation (e.g. the
+    // 401 checks in Suite 40), but once a session genuinely reaches this
+    // procedure, the server's superjson transformer rejects it with
+    // "input: Required" (the whole input parses as undefined). tRPC v11 with
+    // a superjson transformer expects the batch envelope
+    // `{ "0": { json: <input> } }` and returns an array response shaped
+    // `[{ result: { data: { json: <output> } } }]` or
+    // `[{ error: { json: { data: { httpStatus, code } } } } }]` on failure —
+    // the same pattern web/e2e/utils/test-helpers.ts's makeTrpcMutation /
+    // getOrganizationId use. Verified against the live stack: HTTP status
+    // (200/404) is already correct on the raw fetch Response; only the JSON
+    // body needs unwrapping through `[0].result.data.json.<field>`.
+    async function makeChartsLayoutTrpcRequest(
+      procedure: 'chartsLayout.get' | 'chartsLayout.upsert',
+      input: Record<string, unknown>,
+      method: 'GET' | 'POST'
+    ): Promise<{ status: number; body: any }> {
+      let response: Response;
+      if (method === 'GET') {
+        const encoded = encodeURIComponent(JSON.stringify({ '0': { json: input } }));
+        response = await makeRequest(`/trpc/${procedure}?batch=1&input=${encoded}`, {
+          headers: { Cookie: sessionCookie! },
+        });
+      } else {
+        response = await makeRequest(`/trpc/${procedure}?batch=1`, {
+          method: 'POST',
+          headers: { Cookie: sessionCookie!, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ '0': { json: input } }),
+        });
+      }
+      const raw = await response.json();
+      const body = Array.isArray(raw) ? raw[0] : raw;
+      return { status: response.status, body };
+    }
+
+    it('Test 41.1: Empty v2 overlay round-trips as the well-formed default shape', async () => {
       if (!sessionCookie || !orgId) {
         console.log('   No session - skipping');
         return;
       }
-      const response = await makeTrpcRequest('chartsLayout.get', {
+      // TEST_PROJECT_NAME's charts-layout row is shared across this suite's own
+      // tests (and other smoke runs against a long-lived shared stack), so reset
+      // it to the empty v2 shape first rather than assuming a virgin project.
+      const emptyV2Config = {
+        version: 2,
+        order: [],
+        hidden: [],
+        metricOrder: {},
+        customSections: [],
+        membership: {},
+      };
+      const upsertRes = await makeChartsLayoutTrpcRequest('chartsLayout.upsert', {
         organizationId: orgId,
         projectName: TEST_PROJECT_NAME,
-      }, { 'Cookie': sessionCookie }, 'GET');
+        config: emptyV2Config,
+      }, 'POST');
+      expect(upsertRes.status).toBe(200);
 
-      expect(response.status).toBe(200);
-      const data = await response.json();
-      const config = data.result?.data?.config;
+      const { status, body } = await makeChartsLayoutTrpcRequest('chartsLayout.get', {
+        organizationId: orgId,
+        projectName: TEST_PROJECT_NAME,
+      }, 'GET');
+
+      expect(status).toBe(200);
+      const config = body.result?.data?.json?.config;
       expect(config).toBeDefined();
-      expect(config.version).toBe(1);
-      expect(Array.isArray(config.order)).toBe(true);
-      expect(Array.isArray(config.hidden)).toBe(true);
+      expect(config.version).toBe(2);
+      expect(config.order).toEqual([]);
+      expect(config.hidden).toEqual([]);
+      expect(config.metricOrder).toEqual({});
+      expect(config.customSections).toEqual([]);
+      expect(config.membership).toEqual({});
     });
 
     it('Test 41.2: Upsert then get round-trips the layout overlay', async () => {
@@ -10363,24 +10440,22 @@ describe('SDK API Endpoints (with API Key)', () => {
         hidden: ['debug'],
       };
 
-      const upsertRes = await makeTrpcRequest('chartsLayout.upsert', {
+      const upsertRes = await makeChartsLayoutTrpcRequest('chartsLayout.upsert', {
         organizationId: orgId,
         projectName: TEST_PROJECT_NAME,
         config,
-      }, { 'Cookie': sessionCookie }, 'POST');
+      }, 'POST');
 
       expect(upsertRes.status).toBe(200);
-      const upsertData = await upsertRes.json();
-      expect(upsertData.result?.data?.config?.order).toEqual(config.order);
-      expect(upsertData.result?.data?.config?.hidden).toEqual(config.hidden);
+      expect(upsertRes.body.result?.data?.json?.config?.order).toEqual(config.order);
+      expect(upsertRes.body.result?.data?.json?.config?.hidden).toEqual(config.hidden);
 
-      const getRes = await makeTrpcRequest('chartsLayout.get', {
+      const getRes = await makeChartsLayoutTrpcRequest('chartsLayout.get', {
         organizationId: orgId,
         projectName: TEST_PROJECT_NAME,
-      }, { 'Cookie': sessionCookie }, 'GET');
-      const getData = await getRes.json();
-      expect(getData.result?.data?.config?.order).toEqual(config.order);
-      expect(getData.result?.data?.config?.hidden).toEqual(config.hidden);
+      }, 'GET');
+      expect(getRes.body.result?.data?.json?.config?.order).toEqual(config.order);
+      expect(getRes.body.result?.data?.json?.config?.hidden).toEqual(config.hidden);
     });
 
     it('Test 41.3: Upsert is idempotent and overwrites the prior overlay', async () => {
@@ -10394,21 +10469,20 @@ describe('SDK API Endpoints (with API Key)', () => {
         hidden: [],
       };
 
-      const upsertRes = await makeTrpcRequest('chartsLayout.upsert', {
+      const upsertRes = await makeChartsLayoutTrpcRequest('chartsLayout.upsert', {
         organizationId: orgId,
         projectName: TEST_PROJECT_NAME,
         config,
-      }, { 'Cookie': sessionCookie }, 'POST');
+      }, 'POST');
       expect(upsertRes.status).toBe(200);
 
-      const getRes = await makeTrpcRequest('chartsLayout.get', {
+      const getRes = await makeChartsLayoutTrpcRequest('chartsLayout.get', {
         organizationId: orgId,
         projectName: TEST_PROJECT_NAME,
-      }, { 'Cookie': sessionCookie }, 'GET');
-      const getData = await getRes.json();
+      }, 'GET');
       // Single shared row per project: order replaced, hidden cleared.
-      expect(getData.result?.data?.config?.order).toEqual(['metrics', 'loss']);
-      expect(getData.result?.data?.config?.hidden).toEqual([]);
+      expect(getRes.body.result?.data?.json?.config?.order).toEqual(['metrics', 'loss']);
+      expect(getRes.body.result?.data?.json?.config?.hidden).toEqual([]);
     });
 
     it('Test 41.4: Upsert rejects an unknown project with NOT_FOUND', async () => {
@@ -10416,13 +10490,13 @@ describe('SDK API Endpoints (with API Key)', () => {
         console.log('   No session - skipping');
         return;
       }
-      const response = await makeTrpcRequest('chartsLayout.upsert', {
+      const { status } = await makeChartsLayoutTrpcRequest('chartsLayout.upsert', {
         organizationId: orgId,
         projectName: `does-not-exist-${Date.now()}`,
         config: { version: 1, order: [], hidden: [] },
-      }, { 'Cookie': sessionCookie }, 'POST');
+      }, 'POST');
 
-      expect(response.status).toBe(404);
+      expect(status).toBe(404);
     });
 
     it('Test 41.5: Upsert round-trips per-group metric order', async () => {
@@ -10437,21 +10511,19 @@ describe('SDK API Endpoints (with API Key)', () => {
         metricOrder: { metrics: ['val_loss', 'loss'], system: ['gpu', 'cpu'] },
       };
 
-      const upsertRes = await makeTrpcRequest('chartsLayout.upsert', {
+      const upsertRes = await makeChartsLayoutTrpcRequest('chartsLayout.upsert', {
         organizationId: orgId,
         projectName: TEST_PROJECT_NAME,
         config,
-      }, { 'Cookie': sessionCookie }, 'POST');
+      }, 'POST');
       expect(upsertRes.status).toBe(200);
-      const upsertData = await upsertRes.json();
-      expect(upsertData.result?.data?.config?.metricOrder).toEqual(config.metricOrder);
+      expect(upsertRes.body.result?.data?.json?.config?.metricOrder).toEqual(config.metricOrder);
 
-      const getRes = await makeTrpcRequest('chartsLayout.get', {
+      const getRes = await makeChartsLayoutTrpcRequest('chartsLayout.get', {
         organizationId: orgId,
         projectName: TEST_PROJECT_NAME,
-      }, { 'Cookie': sessionCookie }, 'GET');
-      const getData = await getRes.json();
-      expect(getData.result?.data?.config?.metricOrder).toEqual(config.metricOrder);
+      }, 'GET');
+      expect(getRes.body.result?.data?.json?.config?.metricOrder).toEqual(config.metricOrder);
     });
 
     it('Test 41.6: Config without metricOrder still parses (legacy client/row compat)', async () => {
@@ -10463,22 +10535,67 @@ describe('SDK API Endpoints (with API Key)', () => {
       // field entirely — the schema default must fill it in on both write and
       // read paths. `collapsed` is a removed legacy key such clients still
       // send; the schema must strip it rather than reject.
-      const upsertRes = await makeTrpcRequest('chartsLayout.upsert', {
+      const upsertRes = await makeChartsLayoutTrpcRequest('chartsLayout.upsert', {
         organizationId: orgId,
         projectName: TEST_PROJECT_NAME,
         config: { version: 1, order: ['loss'], collapsed: [], hidden: [] },
-      }, { 'Cookie': sessionCookie }, 'POST');
+      }, 'POST');
       expect(upsertRes.status).toBe(200);
-      const upsertData = await upsertRes.json();
-      expect(upsertData.result?.data?.config?.metricOrder).toEqual({});
+      expect(upsertRes.body.result?.data?.json?.config?.metricOrder).toEqual({});
 
-      const getRes = await makeTrpcRequest('chartsLayout.get', {
+      const getRes = await makeChartsLayoutTrpcRequest('chartsLayout.get', {
         organizationId: orgId,
         projectName: TEST_PROJECT_NAME,
-      }, { 'Cookie': sessionCookie }, 'GET');
-      const getData = await getRes.json();
-      expect(getData.result?.data?.config?.metricOrder).toEqual({});
-      expect(getData.result?.data?.config?.order).toEqual(['loss']);
+      }, 'GET');
+      expect(getRes.body.result?.data?.json?.config?.metricOrder).toEqual({});
+      expect(getRes.body.result?.data?.json?.config?.order).toEqual(['loss']);
+    });
+
+    it('Test 41.7: v2 config round-trips customSections and membership', async () => {
+      if (!sessionCookie || !orgId) {
+        console.log('   No session - skipping');
+        return;
+      }
+      const config = {
+        version: 2,
+        order: ['custom:abc123', 'metrics'],
+        hidden: [],
+        metricOrder: { 'custom:abc123': ['loss', 'val_loss'] },
+        customSections: [{ key: 'custom:abc123', name: 'My Section' }],
+        membership: { loss: 'custom:abc123', val_loss: 'custom:abc123' },
+      };
+
+      const upsertRes = await makeChartsLayoutTrpcRequest('chartsLayout.upsert', {
+        organizationId: orgId,
+        projectName: TEST_PROJECT_NAME,
+        config,
+      }, 'POST');
+      expect(upsertRes.status).toBe(200);
+      expect(upsertRes.body.result?.data?.json?.config?.customSections).toEqual(config.customSections);
+      expect(upsertRes.body.result?.data?.json?.config?.membership).toEqual(config.membership);
+
+      const getRes = await makeChartsLayoutTrpcRequest('chartsLayout.get', {
+        organizationId: orgId,
+        projectName: TEST_PROJECT_NAME,
+      }, 'GET');
+      expect(getRes.body.result?.data?.json?.config?.customSections).toEqual(config.customSections);
+      expect(getRes.body.result?.data?.json?.config?.membership).toEqual(config.membership);
+    });
+
+    it('Test 41.8: v1 config (no new fields) still parses with empty defaults', async () => {
+      if (!sessionCookie || !orgId) {
+        console.log('   No session - skipping');
+        return;
+      }
+      const { status, body } = await makeChartsLayoutTrpcRequest('chartsLayout.upsert', {
+        organizationId: orgId,
+        projectName: TEST_PROJECT_NAME,
+        config: { version: 1, order: ['loss'], hidden: [] },
+      }, 'POST');
+      expect(status).toBe(200);
+      expect(body.result?.data?.json?.config?.version).toBe(1);
+      expect(body.result?.data?.json?.config?.customSections).toEqual([]);
+      expect(body.result?.data?.json?.config?.membership).toEqual({});
     });
   });
 

@@ -13,6 +13,11 @@ import { z } from "zod";
  * - `metricOrder`— per-group metric (chart) names in the user's preferred
  *                  order, keyed by group key. Metrics not listed keep their
  *                  default position after the ordered ones.
+ * - `customSections` — user-created sections layered on top of the derived
+ *                      grouping. Keys are prefixed "custom:".
+ * - `membership`     — per-chart section overrides (metricName → sectionKey).
+ *                      Entries pointing at a section that no longer exists are
+ *                      ignored at render time and pruned on the next save.
  *
  * Collapse is intentionally NOT part of this shared overlay: sections always
  * start expanded so users can confirm ingestion at a glance, and per-user
@@ -22,16 +27,35 @@ import { z } from "zod";
  * render time, so the overlay degrades gracefully as metrics come and go.
  * `metricOrder` defaults to `{}`, so rows saved before it existed still parse.
  */
+export const ChartsCustomSectionSchema = z.object({
+  /** Stable key, prefixed "custom:" so it can never collide with a derived group key. */
+  key: z.string(),
+  /** User-visible, renamable label. */
+  name: z.string(),
+});
+
 export const ChartsLayoutConfigSchema = z.object({
-  // Only v1 exists today; pin it until a versioned migration path is added.
-  version: z.literal(1).default(1),
+  // v1 rows predate customSections/membership; both versions parse, defaults
+  // fill the gaps, and the first save after an edit writes v2.
+  version: z.union([z.literal(1), z.literal(2)]).default(2),
   order: z.array(z.string()).default([]),
   hidden: z.array(z.string()).default([]),
   metricOrder: z.record(z.string(), z.array(z.string())).default({}),
+  /** User-created sections, materialized on top of the derived grouping. */
+  customSections: z.array(ChartsCustomSectionSchema).default([]),
+  /** metricName → sectionKey overrides for charts moved out of their derived home. */
+  membership: z.record(z.string(), z.string()).default({}),
 });
 
 export type ChartsLayoutConfig = z.infer<typeof ChartsLayoutConfigSchema>;
 
 export function createEmptyChartsLayoutConfig(): ChartsLayoutConfig {
-  return { version: 1, order: [], hidden: [], metricOrder: {} };
+  return {
+    version: 2,
+    order: [],
+    hidden: [],
+    metricOrder: {},
+    customSections: [],
+    membership: {},
+  };
 }

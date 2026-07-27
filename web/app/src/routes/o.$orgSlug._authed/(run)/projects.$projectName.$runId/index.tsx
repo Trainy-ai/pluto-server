@@ -25,7 +25,7 @@ import { ImageStepSyncProvider } from "./~context/image-step-sync-context";
 import { searchUtils, type SearchState } from "../../(runComparison)/projects.$projectName/~lib/search-utils";
 import { useChartsLayout } from "../../(runComparison)/projects.$projectName/~queries/charts-layout";
 import {
-  applyChartsLayout,
+  applyChartsSections,
   EMPTY_CHARTS_LAYOUT,
 } from "../../(runComparison)/projects.$projectName/~lib/charts-layout";
 import { useRunDashboardData } from "./~hooks/use-run-dashboard";
@@ -181,19 +181,21 @@ function RouteComponent() {
 
   // Memoize the rendered DataGroups for "All Metrics" view
   const dataGroups = useMemo(() => {
-    const laidOut = applyChartsLayout(
-      filteredLogGroups.map((group: LogGroup): [string, LogGroup] => [
-        group.groupName,
-        group,
-      ]),
+    const laidOut = applyChartsSections(
+      filteredLogGroups.map((group: LogGroup) => ({
+        key: group.groupName,
+        groupName: group.groupName,
+        items: group.logs,
+      })),
+      (log) => log.logName,
       chartsLayout,
     );
     return laidOut
       .filter((g) => !g.hidden)
-      .map(({ key, data: group }) => (
+      .map(({ key, groupName, items }) => (
         <DataGroup
           key={key}
-          group={group}
+          group={{ groupName, logs: items }}
           tenantId={organizationId}
           projectName={projectName}
           runId={runId}

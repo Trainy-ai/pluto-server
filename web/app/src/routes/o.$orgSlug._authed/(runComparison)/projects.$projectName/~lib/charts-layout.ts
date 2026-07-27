@@ -18,21 +18,16 @@ import type { GetChartsLayoutResponse } from "../~queries/charts-layout";
  */
 export type ChartsLayoutConfig = GetChartsLayoutResponse["config"];
 
+export const CUSTOM_SECTION_KEY_PREFIX = "custom:";
+
 export const EMPTY_CHARTS_LAYOUT: ChartsLayoutConfig = {
-  version: 1,
+  version: 2,
   order: [],
   hidden: [],
   metricOrder: {},
+  customSections: [],
+  membership: {},
 };
-
-export interface LaidOutGroup<T> {
-  /** Stable group key (used for ordering/hidden lookups). */
-  key: string;
-  /** The group payload, untouched. */
-  data: T;
-  /** Whether the user has hidden this group from the view. */
-  hidden: boolean;
-}
 
 /**
  * Stable-sort `items` by a saved key order: keys listed in `savedOrder` come
@@ -75,27 +70,6 @@ export function sortBySavedOrder<T>(
 }
 
 /**
- * Apply a saved layout overlay to the default-sorted groups.
- *
- * The hidden flag is attached per group but the groups themselves are always
- * returned, so callers can choose to show hidden groups (e.g. while editing)
- * or filter them out (normal view).
- */
-export function applyChartsLayout<T>(
-  sortedGroups: Array<[string, T]>,
-  layout: ChartsLayoutConfig | null | undefined,
-): Array<LaidOutGroup<T>> {
-  const hidden = new Set(layout?.hidden ?? []);
-  return sortBySavedOrder(sortedGroups, ([key]) => key, layout?.order).map(
-    ([key, data]) => ({
-      key,
-      data,
-      hidden: hidden.has(key),
-    }),
-  );
-}
-
-/**
  * Apply a saved per-group chart order to a group's metric list. Same
  * semantics (and same reference-preserving fast path) as group ordering.
  */
@@ -104,4 +78,97 @@ export function orderGroupMetrics<T extends { name: string }>(
   savedOrder: string[] | null | undefined,
 ): T[] {
   return sortBySavedOrder(metrics, (m) => m.name, savedOrder);
+}
+
+export interface SectionSource<TItem> {
+  key: string;
+  groupName: string;
+  items: TItem[];
+}
+
+export interface LaidOutSection<TItem> {
+  key: string;
+  groupName: string;
+  /** Items after membership re-homing, pre-`metricOrder` — apply orderGroupMetrics on top. */
+  items: TItem[];
+  hidden: boolean;
+  isCustom: boolean;
+}
+
+function sameItems<T>(a: T[], b: T[]): boolean {
+  return a.length === b.length && a.every((item, i) => item === b[i]);
+}
+
+/**
+ * Membership-and-sections layer of the layout overlay: re-homes items whose
+ * `membership` entry points at another (still existing) section, materializes
+ * the user's custom sections, then applies the saved order and hidden flags.
+ * Invalid membership targets fall back to the derived home, so the overlay
+ * degrades gracefully as sections come and go. Untouched sections reuse the
+ * source `items` array by reference for memoized consumers.
+ */
+export function applyChartsSections<TItem>(
+  sources: Array<SectionSource<TItem>>,
+  nameOf: (item: TItem) => string,
+  layout: ChartsLayoutConfig | null | undefined,
+  opts?: { keepEmpty?: boolean },
+): Array<LaidOutSection<TItem>> {
+  const membership = layout?.membership ?? {};
+  const hiddenSet = new Set(layout?.hidden ?? []);
+  const keepEmpty = opts?.keepEmpty ?? false;
+
+  const sourceKeys = new Set(sources.map((s) => s.key));
+  // Colliding custom sections (same key as a derived section) are ignored; their items
+  // won't be collected and membership entries targeting them degrade to the derived section.
+  const customSections = (layout?.customSections ?? []).filter(
+    (s) => !sourceKeys.has(s.key),
+  );
+
+  const validKeys = new Set(sourceKeys);
+  customSections.forEach((s) => validKeys.add(s.key));
+
+  const itemsByKey = new Map<string, TItem[]>();
+  validKeys.forEach((key) => itemsByKey.set(key, []));
+
+  // First pass: add items that stay in their original section
+  sources.forEach((s) => {
+    s.items.forEach((item) => {
+      const target = membership[nameOf(item)];
+      if (!target || target === s.key || !validKeys.has(target)) {
+        itemsByKey.get(s.key)!.push(item);
+      }
+    });
+  });
+
+  // Second pass: add items that are being re-homed
+  sources.forEach((s) => {
+    s.items.forEach((item) => {
+      const target = membership[nameOf(item)];
+      if (target && target !== s.key && validKeys.has(target)) {
+        itemsByKey.get(target)!.push(item);
+      }
+    });
+  });
+
+  const derived: Array<LaidOutSection<TItem>> = sources.map((s) => {
+    const collected = itemsByKey.get(s.key)!;
+    return {
+      key: s.key,
+      groupName: s.groupName,
+      items: sameItems(collected, s.items) ? s.items : collected,
+      hidden: hiddenSet.has(s.key),
+      isCustom: false,
+    };
+  });
+  const custom: Array<LaidOutSection<TItem>> = customSections.map((s) => ({
+    key: s.key,
+    groupName: s.name,
+    items: itemsByKey.get(s.key)!,
+    hidden: hiddenSet.has(s.key),
+    isCustom: true,
+  }));
+
+  return sortBySavedOrder([...derived, ...custom], (s) => s.key, layout?.order).filter(
+    (s) => keepEmpty || s.items.length > 0,
+  );
 }

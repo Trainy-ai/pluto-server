@@ -1,85 +1,25 @@
 import { describe, it, expect } from "vitest";
 import {
-  applyChartsLayout,
   orderGroupMetrics,
+  applyChartsSections,
   type ChartsLayoutConfig,
 } from "./charts-layout";
 import { moveRelative, reorder } from "@/lib/array";
 
-// Minimal stand-in for the grouped-metrics payload.
-function groups(...keys: string[]): Array<[string, { groupName: string }]> {
-  return keys.map((k) => [k, { groupName: k }]);
-}
 function metrics(...names: string[]): Array<{ name: string }> {
   return names.map((name) => ({ name }));
 }
-function keysOf<T>(laid: Array<{ key: string } & T>): string[] {
-  return laid.map((g) => g.key);
+function layout(partial: Partial<ChartsLayoutConfig>): ChartsLayoutConfig {
+  return {
+    version: 2,
+    order: [],
+    hidden: [],
+    metricOrder: {},
+    customSections: [],
+    membership: {},
+    ...partial,
+  };
 }
-
-describe("applyChartsLayout", () => {
-  it("returns groups in default order when no layout is saved", () => {
-    const result = applyChartsLayout(groups("loss", "metrics", "system"), null);
-    expect(keysOf(result)).toEqual(["loss", "metrics", "system"]);
-    expect(result.every((g) => !g.hidden)).toBe(true);
-  });
-
-  it("reorders groups listed in layout.order first, in saved order", () => {
-    const layout: ChartsLayoutConfig = {
-      version: 1,
-      order: ["system", "loss"],
-      hidden: [],
-      metricOrder: {},
-    };
-    const result = applyChartsLayout(groups("loss", "metrics", "system"), layout);
-    // Ordered keys come first; unordered ("metrics") keeps default position after.
-    expect(keysOf(result)).toEqual(["system", "loss", "metrics"]);
-  });
-
-  it("appends newly-seen groups (not in order) after ordered ones, preserving default order", () => {
-    const layout: ChartsLayoutConfig = {
-      version: 1,
-      order: ["metrics"],
-      hidden: [],
-      metricOrder: {},
-    };
-    // "loss" and "newgroup" are not in order — keep their incoming relative order.
-    const result = applyChartsLayout(
-      groups("loss", "metrics", "newgroup"),
-      layout,
-    );
-    expect(keysOf(result)).toEqual(["metrics", "loss", "newgroup"]);
-  });
-
-  it("ignores unknown keys in order (removed groups) without breaking", () => {
-    const layout: ChartsLayoutConfig = {
-      version: 1,
-      order: ["ghost", "metrics", "loss"],
-      hidden: [],
-      metricOrder: {},
-    };
-    const result = applyChartsLayout(groups("loss", "metrics"), layout);
-    expect(keysOf(result)).toEqual(["metrics", "loss"]);
-  });
-
-  it("flags hidden groups but still returns them", () => {
-    const layout: ChartsLayoutConfig = {
-      version: 1,
-      order: [],
-      hidden: ["debug"],
-      metricOrder: {},
-    };
-    const result = applyChartsLayout(
-      groups("loss", "system", "debug"),
-      layout,
-    );
-    const byKey = Object.fromEntries(result.map((g) => [g.key, g]));
-    expect(byKey.debug.hidden).toBe(true);
-    expect(byKey.system.hidden).toBe(false);
-    expect(byKey.loss.hidden).toBe(false);
-    expect(result).toHaveLength(3);
-  });
-});
 
 describe("orderGroupMetrics", () => {
   it("returns the same array reference when no order is saved", () => {
@@ -165,5 +105,136 @@ describe("reorder", () => {
     expect(reorder(list, 1, 1)).toBe(list);
     expect(reorder(list, -1, 0)).toBe(list);
     expect(reorder(list, 0, 5)).toBe(list);
+  });
+});
+
+describe("applyChartsSections", () => {
+  function sources(spec: Record<string, string[]>) {
+    return Object.entries(spec).map(([key, names]) => ({
+      key,
+      groupName: key,
+      items: names.map((name) => ({ name })),
+    }));
+  }
+  const nameOf = (m: { name: string }) => m.name;
+  function namesBySection(result: Array<{ key: string; items: Array<{ name: string }> }>) {
+    return Object.fromEntries(result.map((s) => [s.key, s.items.map(nameOf)]));
+  }
+
+  it("is a pass-through with no layout", () => {
+    const src = sources({ loss: ["a", "b"], system: ["gpu"] });
+    const result = applyChartsSections(src, nameOf, null);
+    expect(result.map((s) => s.key)).toEqual(["loss", "system"]);
+    expect(result.every((s) => !s.hidden && !s.isCustom)).toBe(true);
+    // Reference-stable: untouched sections reuse the source items array.
+    expect(result[0].items).toBe(src[0].items);
+  });
+
+  it("re-homes a metric to another derived section per membership", () => {
+    const src = sources({ loss: ["a", "b"], system: ["gpu"] });
+    const result = applyChartsSections(src, nameOf, layout({ membership: { a: "system" } }));
+    expect(namesBySection(result)).toEqual({ loss: ["b"], system: ["gpu", "a"] });
+  });
+
+  it("materializes a custom section holding its members, named from customSections", () => {
+    const result = applyChartsSections(
+      sources({ loss: ["a", "b"] }),
+      nameOf,
+      layout({
+        customSections: [{ key: "custom:x", name: "Mine" }],
+        membership: { b: "custom:x" },
+      }),
+    );
+    expect(namesBySection(result)).toEqual({ loss: ["a"], "custom:x": ["b"] });
+    const custom = result.find((s) => s.key === "custom:x")!;
+    expect(custom.groupName).toBe("Mine");
+    expect(custom.isCustom).toBe(true);
+  });
+
+  it("ignores membership pointing at a deleted/unknown section (fallback to derived home)", () => {
+    const src = sources({ loss: ["a", "b"] });
+    const result = applyChartsSections(src, nameOf, layout({ membership: { a: "custom:gone" } }));
+    expect(namesBySection(result)).toEqual({ loss: ["a", "b"] });
+    // Full fallback keeps the source array reference.
+    expect(result[0].items).toBe(src[0].items);
+  });
+
+  it("drops empty sections by default, keeps them with keepEmpty (edit mode)", () => {
+    const cfg = layout({
+      customSections: [{ key: "custom:empty", name: "Empty" }],
+      membership: { a: "system" },
+    });
+    const src = sources({ loss: ["a"], system: ["gpu"] });
+    const normal = applyChartsSections(src, nameOf, cfg);
+    expect(normal.map((s) => s.key)).toEqual(["system"]); // loss emptied, custom empty
+    const editing = applyChartsSections(src, nameOf, cfg, { keepEmpty: true });
+    expect(editing.map((s) => s.key)).toEqual(["loss", "system", "custom:empty"]);
+  });
+
+  it("applies saved order and hidden flags across derived + custom sections", () => {
+    const result = applyChartsSections(
+      sources({ loss: ["a"], system: ["gpu"] }),
+      nameOf,
+      layout({
+        customSections: [{ key: "custom:x", name: "Mine" }],
+        membership: { a: "custom:x" },
+        order: ["custom:x", "system"],
+        hidden: ["system"],
+      }),
+    );
+    expect(result.map((s) => s.key)).toEqual(["custom:x", "system"]);
+    expect(result.find((s) => s.key === "system")!.hidden).toBe(true);
+  });
+
+  it("appends re-homed items at end even when target section comes before source in sources array", () => {
+    const src = sources({ system: ["gpu"], loss: ["a"] });
+    const result = applyChartsSections(src, nameOf, layout({ membership: { a: "system" } }));
+    // "system" is first in sources, "loss" is second. But "a" from loss is re-homed to system.
+    // It should still append after "gpu" (original items first). Loss becomes empty so filtered out.
+    expect(namesBySection(result)).toEqual({ system: ["gpu", "a"] });
+  });
+
+  it("preserves order when multiple items from different sources move into the same custom section", () => {
+    const src = sources({ loss: ["a", "b"], system: ["c"] });
+    const result = applyChartsSections(
+      src,
+      nameOf,
+      layout({
+        customSections: [{ key: "custom:mixed", name: "Mixed" }],
+        membership: { b: "custom:mixed", c: "custom:mixed" },
+      }),
+    );
+    // Items go to custom:mixed in source-array order: first "b" (from loss),
+    // then "c" (from system), preserving their relative order. System becomes empty so filtered out.
+    expect(namesBySection(result)).toEqual({
+      loss: ["a"],
+      "custom:mixed": ["b", "c"],
+    });
+  });
+
+  it("ignores custom sections with keys colliding with derived sections, degrades gracefully", () => {
+    const src = sources({ loss: ["a"] });
+    // Collision: custom section with key "loss" which is already a derived source.
+    const result = applyChartsSections(
+      src,
+      nameOf,
+      layout({
+        customSections: [
+          { key: "loss", name: "Colliding" },
+          { key: "custom:valid", name: "Valid" },
+        ],
+        membership: { a: "loss" }, // membership targets the colliding key
+      }),
+    );
+    // The colliding custom section is filtered out; result has exactly one "loss" (derived).
+    // Membership entry targeting "loss" resolves to the derived section key (graceful degradation).
+    // custom:valid is empty so also filtered out by default.
+    const laidOut = result.map((s) => s.key);
+    expect(laidOut).toEqual(["loss"]);
+    // Exactly one section with key "loss" (the derived one), not two.
+    const lossSections = result.filter((s) => s.key === "loss");
+    expect(lossSections).toHaveLength(1);
+    expect(lossSections[0].isCustom).toBe(false);
+    expect(lossSections[0].items.map(nameOf)).toEqual(["a"]);
   });
 });

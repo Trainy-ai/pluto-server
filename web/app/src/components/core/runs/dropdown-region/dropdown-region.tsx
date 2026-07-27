@@ -13,10 +13,13 @@ import { useChartsLayoutEdit } from "@/components/charts/context/charts-layout-e
 import {
   SectionDragHandle,
   SectionHideToggle,
+  SectionRenameControl,
+  SectionDeleteButton,
   ChartDragHandle,
   getSectionDropProps,
   getChartDropProps,
 } from "./layout-edit-chrome";
+import { ChartMoveMenu } from "./chart-move-menu";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -257,6 +260,19 @@ export function DropdownRegion({
   // lives in ./layout-edit-chrome.tsx.
   const layoutEdit = useChartsLayoutEdit();
 
+  // While a chart is being dragged from another section, this section is a
+  // valid cross-section drop target — surface that with a ring, and a stronger
+  // highlight while the drag is directly over it (tracked locally via
+  // enter/leave). Cleared automatically when the drag ends.
+  const draggedChart = layoutEdit?.draggedItem ?? null;
+  const isChartDropTarget = !!draggedChart && draggedChart.groupId !== groupId;
+  const [isDropHover, setIsDropHover] = useState(false);
+  useEffect(() => {
+    if (!draggedChart) {
+      setIsDropHover(false);
+    }
+  }, [draggedChart]);
+
   const gridContainerRef = useRef<HTMLDivElement>(null);
   const cardRefs = useRef<Record<number, HTMLDivElement | null>>({});
 
@@ -475,20 +491,25 @@ export function DropdownRegion({
     currentPageStart + itemsPerPage,
   );
 
-  const currentPageIndices = unpinnedIndices.slice(
-    currentPageStart,
-    currentPageEnd,
-  );
+  // In layout-edit mode, render every chart (no pagination): a WYSIWYG editor
+  // must expose all cards so they can be reordered or moved between sections —
+  // a chart hidden on a later page can neither be dragged nor land visibly in
+  // its new section after a move.
+  const currentPageIndices = layoutEdit
+    ? unpinnedIndices
+    : unpinnedIndices.slice(currentPageStart, currentPageEnd);
 
   // Display indices: pinned first, then current page
   const displayIndices = [...pinnedIndices, ...currentPageIndices];
 
-  const totalPages = Math.max(
-    1,
-    Math.ceil(
-      (components.length - settings.pinnedIndices.length) / itemsPerPage,
-    ),
-  );
+  const totalPages = layoutEdit
+    ? 1
+    : Math.max(
+        1,
+        Math.ceil(
+          (components.length - settings.pinnedIndices.length) / itemsPerPage,
+        ),
+      );
 
   // Explicit height is required for children using height: 100% to work.
   // Without an explicit height, min-height alone doesn't establish a height for percentage calculations.
@@ -502,13 +523,28 @@ export function DropdownRegion({
   return (
     <div
       className={cn(
-        "w-full rounded-lg border shadow-sm",
+        "w-full rounded-lg border shadow-sm transition-[box-shadow,background-color]",
         isSectionHidden && "opacity-50",
         layoutEdit?.draggedSectionId === groupId && "opacity-60",
+        isChartDropTarget && "ring-1 ring-inset ring-primary/40",
+        isChartDropTarget && isDropHover && "bg-primary/[0.04] ring-2 ring-primary",
       )}
       data-testid={layoutEdit ? "charts-layout-section" : undefined}
       data-group-key={layoutEdit?.getSectionKey(groupId)}
+      data-drop-target={isChartDropTarget ? "true" : undefined}
       {...getSectionDropProps(layoutEdit, groupId)}
+      onDragEnter={
+        isChartDropTarget ? () => setIsDropHover(true) : undefined
+      }
+      onDragLeave={
+        isChartDropTarget
+          ? (e) => {
+              if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+                setIsDropHover(false);
+              }
+            }
+          : undefined
+      }
     >
       <div className="flex items-center justify-between p-4">
         <div className="flex items-center space-x-2">
@@ -533,6 +569,8 @@ export function DropdownRegion({
           </h2>
         </div>
         <div className="flex items-center space-x-2">
+          <SectionRenameControl groupId={groupId} />
+          <SectionDeleteButton groupId={groupId} />
           <SectionHideToggle groupId={groupId} />
           {totalPages > 1 && (
             <>
@@ -678,6 +716,29 @@ export function DropdownRegion({
       </div>
       {settings.isOpen && (
         <div className="p-4" ref={gridContainerRef}>
+          {layoutEdit && components.length === 0 ? (
+            // Empty section in edit mode: an obvious drop zone so it reads as a
+            // target, not a broken/empty group. Highlights while a chart drag
+            // hovers it.
+            <div
+              data-testid="charts-layout-empty-drop"
+              className={cn(
+                "flex min-h-[160px] flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed p-6 text-center transition-colors",
+                isChartDropTarget
+                  ? "border-primary/50 text-foreground"
+                  : "border-muted-foreground/30 text-muted-foreground",
+                isChartDropTarget &&
+                  isDropHover &&
+                  "border-primary bg-primary/[0.04]",
+              )}
+            >
+              <span className="text-sm font-medium">No panels here yet</span>
+              <span className="text-xs">
+                Drag a chart here, or use a chart&rsquo;s &ldquo;Move to
+                section&hellip;&rdquo; menu
+              </span>
+            </div>
+          ) : (
           <div
             className={cn(
               styles.grid,
@@ -736,6 +797,9 @@ export function DropdownRegion({
                       isDragged={!!isDraggedItem}
                     />
                   )}
+                  {layoutEdit && (
+                    <ChartMoveMenu groupId={groupId} metricName={metricName} />
+                  )}
                   <VirtualizedChart minHeight={cardStyle.height?.toString() || "384px"} loadMargin="600px">
                     {renderComponent()}
                   </VirtualizedChart>
@@ -757,6 +821,7 @@ export function DropdownRegion({
               );
             })}
           </div>
+          )}
           {ghostDimensions && (
             <div
               className="pointer-events-none fixed z-40 border-2 border-dashed border-blue-500 bg-blue-100/30"

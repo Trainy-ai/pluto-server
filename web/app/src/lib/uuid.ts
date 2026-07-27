@@ -2,7 +2,11 @@
 // localhost). In CI we hit the app over an IP address, which is *not*
 // a secure context, so the global is undefined and calling it throws.
 // Fall back to a Math.random()-based v4 UUID in that case — it's not
-// cryptographically strong but these IDs are only local React keys.
+// cryptographically strong. Most callers only use these as local React
+// keys; `addSection` in use-charts-layout-draft.ts also persists the
+// first 8 chars (as `custom:<8 chars>`) into the shared project layout
+// config as a section key, but at that length collision odds stay low
+// enough for a per-project set of hand-created sections.
 export function generateUuid(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
