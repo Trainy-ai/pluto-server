@@ -36,6 +36,7 @@ import {
   computeGlobalXDomain as computeHeatmapXDomain,
 } from "./heatmap-canvas";
 import type { HistogramStep } from "./histogram-canvas-utils";
+import { computeStepXRange, computeStepMaxFreq } from "./histogram-step-axes";
 import { AxisOverlayLabels } from "@/routes/o.$orgSlug._authed/(runComparison)/projects.$projectName/~components/multi-group/components/axis-overlay-labels";
 import { ColorLegendOverlay } from "@/routes/o.$orgSlug._authed/(runComparison)/projects.$projectName/~components/multi-group/components/color-legend-overlay";
 
@@ -280,6 +281,8 @@ interface StepHistogramViewProps {
   color?: string;
   /** Optional X/Y overrides set via the histogram settings popover. */
   axisBounds?: AxisBounds;
+  /** Locked = share one axis across all steps; unlocked (default) = per-step. */
+  lockAxes?: boolean;
 }
 
 function StepHistogramView({
@@ -288,6 +291,7 @@ function StepHistogramView({
   theme,
   color = DEFAULT_HISTOGRAM_COLOR,
   axisBounds,
+  lockAxes = false,
 }: StepHistogramViewProps) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
@@ -300,12 +304,12 @@ function StepHistogramView({
   const animationFrameRef = useRef<number>(0);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  const { globalMaxFreq, xAxisRange, normalizedData } = useMemo(() => {
+  const { globalMaxFreq, xAxisRange, stepData } = useMemo(() => {
     if (!sortedData.length) {
       return {
         globalMaxFreq: 0,
         xAxisRange: { min: 0, max: 1, globalMin: 0, globalMax: 1 },
-        normalizedData: [],
+        stepData: [],
       };
     }
     const globalMin = Math.min(
@@ -314,85 +318,38 @@ function StepHistogramView({
     const globalMax = Math.max(
       ...sortedData.map((step) => step.histogramData.bins.max),
     );
-    const optimalBinCount = Math.max(
-      ...sortedData.map((step) => step.histogramData.bins.num),
-    );
-    const globalBinWidth = (globalMax - globalMin) / optimalBinCount;
 
-    const normalized = sortedData.map((stepData) => {
-      const { freq, bins } = stepData.histogramData;
-      const oldBinWidth = (bins.max - bins.min) / bins.num;
-      const newFreq = new Array(optimalBinCount).fill(0);
-      freq.forEach((frequency, i) => {
-        if (frequency <= 0) return;
-        const oldBinStart = bins.min + i * oldBinWidth;
-        const oldBinEnd = oldBinStart + oldBinWidth;
-        const startBin = Math.max(
-          0,
-          Math.floor((oldBinStart - globalMin) / globalBinWidth),
-        );
-        const endBin = Math.min(
-          optimalBinCount - 1,
-          Math.ceil((oldBinEnd - globalMin) / globalBinWidth),
-        );
-        if (startBin === endBin) {
-          newFreq[startBin] += frequency;
-        } else {
-          for (let newBin = startBin; newBin <= endBin; newBin++) {
-            const binStart = globalMin + newBin * globalBinWidth;
-            const binEnd = binStart + globalBinWidth;
-            const overlapStart = Math.max(oldBinStart, binStart);
-            const overlapEnd = Math.min(oldBinEnd, binEnd);
-            const overlapWidth = Math.max(0, overlapEnd - overlapStart);
-            if (overlapWidth > 0) {
-              const proportion = overlapWidth / oldBinWidth;
-              newFreq[newBin] += frequency * proportion;
-            }
-          }
-        }
-      });
-      const cleanedFreq = newFreq.map((f) =>
-        Math.max(0, Math.round(f * 1e6) / 1e6),
-      );
-      return {
-        ...stepData,
-        histogramData: {
-          ...stepData.histogramData,
-          freq: cleanedFreq,
-          bins: { min: globalMin, max: globalMax, num: optimalBinCount },
-          maxFreq: Math.max(...cleanedFreq),
-        },
-      };
-    });
-
-    const maxFreq = Math.max(
-      ...normalized.map((step) => Math.max(...step.histogramData.freq)),
+    // Draw each step's NATIVE bins, positioned by value on the shared X axis.
+    // We deliberately do NOT resample every step onto one union grid: that
+    // grid's width is fixed by the WIDEST step, so a single wide-range step
+    // (e.g. a uniform [0, 100] step logged alongside [-4, 4] bell steps) makes
+    // the shared bins coarse, and every narrow step then piles many source bins
+    // into one display bin. That produced a huge FALSE spike (bar height and
+    // tooltip disagreed) and inflated globalMaxFreq — the shared Y axis — with
+    // the artifact, flattening every other step. drawSingleHistogram already
+    // maps native bin positions onto xAxisRange, so no resampling is needed;
+    // this matches the multi-group histogram view, which never rebins. For the
+    // common case where every step shares one grid this is a no-op.
+    const globalMaxFreq = Math.max(
+      1,
+      ...sortedData.map((step) => step.histogramData.maxFreq),
     );
     const rangeBuffer = (globalMax - globalMin) * 0.1;
 
     return {
-      globalMaxFreq: maxFreq,
+      globalMaxFreq,
       xAxisRange: {
         min: globalMin - rangeBuffer,
         max: globalMax + rangeBuffer,
         globalMin,
         globalMax,
       },
-      normalizedData: normalized,
+      stepData: sortedData,
     };
   }, [sortedData]);
 
-  // Apply the settings-popover clamp (X min / X max / Y max). Falls
-  // back to the data-derived values when the user hasn't set a clamp.
-  const effectiveXAxisRange = useMemo(() => ({
-    ...xAxisRange,
-    min: axisBounds?.xMin ?? xAxisRange.min,
-    max: axisBounds?.xMax ?? xAxisRange.max,
-  }), [xAxisRange, axisBounds?.xMin, axisBounds?.xMax]);
-  const effectiveGlobalMaxFreq = useMemo(
-    () => axisBounds?.yMax ?? globalMaxFreq,
-    [axisBounds?.yMax, globalMaxFreq],
-  );
+  // Step-view axes are scaled to the CURRENT step, computed below once
+  // currentStepIndex is known (see effectiveXAxisRange / effectiveGlobalMaxFreq).
 
   const {
     currentStepIndex,
@@ -402,10 +359,51 @@ function StepHistogramView({
     isLocked,
     setIsLocked,
     hasSyncContext,
-  } = useSyncedStepNavigation(normalizedData);
+  } = useSyncedStepNavigation(stepData);
 
   const maxStepIndex = Math.max(0, stepValues.length - 1);
-  const maxStep = normalizedData[maxStepIndex]?.step ?? 0;
+  const maxStep = stepData[maxStepIndex]?.step ?? 0;
+
+  // Scale the Step view to the CURRENT step's OWN bin range (X) and peak (Y) —
+  // like W&B — not the union/max across all steps. A single wide-range step
+  // (e.g. weights spanning 0–2000 at one step) would otherwise stretch the
+  // shared X axis and squish every narrow step into an unreadable sliver at the
+  // origin; a single tall step would likewise flatten the rest on Y. Manual
+  // clamps from the settings popover still win. (The cross-step `xAxisRange` /
+  // `globalMaxFreq` are kept for the GIF export's stable animation axis.)
+  const effectiveXAxisRange = useMemo(() => {
+    // Locked: share the cross-step union range (pre-per-step behavior).
+    // Unlocked (default): each step scaled to its own bin range. Shared
+    // locked-vs-per-step-vs-override logic lives in computeStepXRange.
+    const b = stepData[currentStepIndex]?.histogramData.bins;
+    const { min, max } = computeStepXRange({
+      lockAxes,
+      currentBins: b,
+      lockedRange: xAxisRange,
+      xMinOverride: axisBounds?.xMin,
+      xMaxOverride: axisBounds?.xMax,
+    });
+    // globalMin/globalMax are retained for the GIF export's stable animation
+    // axis: they track the per-step bins when unlocked, else the cross-step
+    // union carried on xAxisRange.
+    const usingPerStep = !lockAxes && b !== undefined && b.max > b.min;
+    return {
+      min,
+      max,
+      globalMin: usingPerStep ? b.min : xAxisRange.globalMin,
+      globalMax: usingPerStep ? b.max : xAxisRange.globalMax,
+    };
+  }, [lockAxes, stepData, currentStepIndex, xAxisRange, axisBounds?.xMin, axisBounds?.xMax]);
+  const effectiveGlobalMaxFreq = useMemo(
+    () =>
+      computeStepMaxFreq({
+        lockAxes,
+        currentMaxFreq: stepData[currentStepIndex]?.histogramData.maxFreq,
+        lockedMaxFreq: globalMaxFreq,
+        yMaxOverride: axisBounds?.yMax,
+      }),
+    [lockAxes, stepData, currentStepIndex, axisBounds?.yMax, globalMaxFreq],
+  );
 
   const setCurrentStepIndex = useCallback(
     (valueOrUpdater: number | ((prev: number) => number)) => {
@@ -457,7 +455,7 @@ function StepHistogramView({
           setExportProgress(0);
           const gifBlob = await createHistogramGif(
             canvasRef.current,
-            normalizedData,
+            stepData,
             theme,
             globalMaxFreq,
             xAxisRange,
@@ -483,16 +481,16 @@ function StepHistogramView({
         setExportProgress(0);
       }
     },
-    [currentStep, logName, normalizedData, theme, globalMaxFreq, xAxisRange, drawSingleHistogram, color],
+    [currentStep, logName, stepData, theme, globalMaxFreq, xAxisRange, drawSingleHistogram, color],
   );
 
   return (
     <div className="flex h-full w-full flex-col space-y-4">
       <div className="min-h-0 flex-1">
         <div className="relative h-full">
-          {normalizedData[currentStepIndex] && (
+          {stepData[currentStepIndex] && (
             <HistogramCanvas
-              data={normalizedData[currentStepIndex]}
+              data={stepData[currentStepIndex]}
               theme={theme}
               globalMaxFreq={effectiveGlobalMaxFreq}
               xAxisRange={effectiveXAxisRange}
@@ -512,7 +510,7 @@ function StepHistogramView({
           )}
         </div>
       </div>
-      {normalizedData.length > 1 && (
+      {stepData.length > 1 && (
         <div className="sticky bottom-0 space-y-2 border-t border-border bg-background pt-1.5 pb-0.5">
           <StepNavigator
             currentStepIndex={currentStepIndex}
@@ -957,15 +955,14 @@ interface HistogramViewProps {
   runId: string;
 }
 
-// NOTE: The single-run page re-bins per-step data onto a uniform
-// `[globalMin, globalMax]` grid (see normalization block below). That
-// means applying outlier-fences here would pile the outlier step's
-// out-of-fence frequency onto the edge bins (visual artifact, NOT a
-// clipped-off-edge). The multi-run comparison view doesn't re-bin and
-// is where the "Ignore outliers" feature actually fixes the screenshot
-// problem — so this view stays on raw min/max for now. The settings
-// popover still surfaces X min / X max here so power users can clamp
-// manually.
+// NOTE: The single-run Step view draws each step's NATIVE bins — it does NOT
+// re-bin onto a shared `[globalMin, globalMax]` grid (see the block below,
+// which now just passes steps through). It previously resampled, which made a
+// wide-range step coarsen the grid and pile narrow steps' frequency onto edge
+// bins — a false spike. With native bins, an outlier-fenced X/Y clamp simply
+// clips the outlier step at the edges, so the fence behaves like the multi-run
+// view's "Ignore outliers". The settings popover surfaces X min / X max / Y max
+// here for manual clamping.
 export const HistogramView = ({
   logName,
   tenantId,
@@ -980,6 +977,8 @@ export const HistogramView = ({
   // three modes. Hoist above any early returns so React's hook order
   // stays stable across loading → loaded transitions.
   const [axisBounds, setAxisBounds] = useState<AxisBounds>({});
+  // Lock axes across steps (Step mode). Default unlocked = per-step scaling.
+  const [lockAxes, setLockAxes] = useState(false);
   // Steps-on-X transpose (Ridgeline + Heatmap only). Local-only state on
   // this view — the IR Charts tab auto-discovers metrics and has no
   // dashboard config to persist the flag against, unlike the
@@ -1063,6 +1062,8 @@ export const HistogramView = ({
           axisBounds={axisBounds}
           onAxisBoundsChange={setAxisBounds}
           showYMax={isStepMode}
+          lockAxes={lockAxes}
+          onLockAxesChange={setLockAxes}
           stepsOnX={stepsOnX}
           onStepsOnXChange={setStepsOnXLocal}
           stepsOnXDisabled={stepsOnXDisabled}
@@ -1101,6 +1102,7 @@ export const HistogramView = ({
               sortedData={sortedData}
               theme={theme}
               axisBounds={axisBounds}
+              lockAxes={lockAxes}
             />
           ) : mode === "ridgeline" ? (
             <RidgelineHistogramView

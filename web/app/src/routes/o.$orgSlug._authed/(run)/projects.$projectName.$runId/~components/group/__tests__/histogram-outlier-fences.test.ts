@@ -128,9 +128,10 @@ describe("computeHistogramFences — realistic varying data", () => {
 
 describe("computeHistogramFences — guards", () => {
   it("requires at least 20 samples (silently passes through with fewer)", () => {
-    // 19 narrow + 1 wide outlier: too few samples for fences to fire.
+    // 18 narrow + 1 wide outlier = 19 steps: below the 20-sample
+    // minimum, so tukeyFences returns null and nothing clamps.
     const steps = [];
-    for (let i = 0; i < 19; i++) steps.push(step(-0.2, 0.2, 1500));
+    for (let i = 0; i < 18; i++) steps.push(step(-0.2, 0.2, 1500));
     steps.push(step(-90, 90, 50));
     const result = computeHistogramFences(steps, { ignoreOutliers: true });
     expect(result.xClamped).toBe(false);
@@ -144,14 +145,31 @@ describe("computeHistogramFences — guards", () => {
     expect(result.xClamped).toBe(false);
   });
 
-  it("handles bimodal data — does NOT clamp when outlier ratio exceeds 5%", () => {
-    // 50 narrow + 50 wide: this is bimodal, not "rare outlier". Don't
-    // hide half the data behind a fence.
+  it("handles bimodal data — does NOT clamp when outlier ratio exceeds the threshold", () => {
+    // 50 narrow + 50 wide (50% outliers, well past the 10% ceiling):
+    // this is bimodal, not "rare outlier". Don't hide half the data
+    // behind a fence.
     const steps = [];
     for (let i = 0; i < 50; i++) steps.push(step(-1, 1, 100));
     for (let i = 0; i < 50; i++) steps.push(step(-50, 50, 100));
     const result = computeHistogramFences(steps, { ignoreOutliers: true });
     expect(result.xClamped).toBe(false);
+  });
+
+  it("clamps with a couple of spike steps out of a few dozen (union-grid-spike-demo: 2/40)", () => {
+    // Regression: the seeded `union-grid-spike-demo` run is 38 normal
+    // steps in ±1.3 plus 2 runaway steps spanning ~[0, 2000]. That is
+    // 2/40 = exactly 5% outliers — it sat right on the old strict
+    // `< 0.05` boundary and silently did NOT clamp, so the ridgeline
+    // stretched to ~2000 and every real step collapsed to a sliver.
+    const steps = [];
+    for (let i = 0; i < 38; i++) steps.push(step(-1.1, 1.1, 1800));
+    steps.push(step(0.37, 1999, 8)); // spike step 5
+    steps.push(step(8.1, 1996, 9)); // spike step 25
+    const result = computeHistogramFences(steps, { ignoreOutliers: true });
+    expect(result.rawXDomain[1]).toBeGreaterThan(1900); // raw union is huge
+    expect(result.xClamped).toBe(true);
+    expect(result.xDomain[1]).toBeLessThan(5); // clamped back to the bulk
   });
 
   it("does NOT clamp when full range is only modestly wider than fenced range (< 3×)", () => {

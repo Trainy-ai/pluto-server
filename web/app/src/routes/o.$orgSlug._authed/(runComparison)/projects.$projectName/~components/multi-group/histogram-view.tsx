@@ -12,6 +12,10 @@ import { cn } from "@/lib/utils";
 import { useNormalizedHistogramData } from "./hooks/use-normalized-histogram";
 import { computeHistogramFences } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/group/histogram-outlier-fences";
 import {
+  computeStepXRange,
+  computeStepMaxFreq,
+} from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/group/histogram-step-axes";
+import {
   useHistogramCanvas,
   type HistogramStep,
 } from "./hooks/use-histogram-canvas";
@@ -749,6 +753,21 @@ export const MultiHistogramView: React.FC<MultiHistogramViewProps> = ({
 
   const [axisBounds, setAxisBounds] = useState<AxisBounds>({});
 
+  // Ignore-outliers: controlled by the parent when a change handler is provided
+  // (dashboard widgets persist it via config); otherwise fall back to internal
+  // state so the toggle also works on the all-runs Charts tab (which passes no
+  // handler). Same controlled/uncontrolled pattern as `mode` above.
+  const [internalIgnoreOutliers, setInternalIgnoreOutliers] =
+    useState(ignoreOutliers);
+  const effectiveIgnoreOutliers = onIgnoreOutliersChange
+    ? ignoreOutliers
+    : internalIgnoreOutliers;
+  const handleIgnoreOutliersChange =
+    onIgnoreOutliersChange ?? setInternalIgnoreOutliers;
+
+  // Lock axes across steps (Step mode). Default unlocked = per-step scaling.
+  const [lockAxes, setLockAxes] = useState(false);
+
   // Experimental Steps-on-X for numeric histograms. Disabled in Step
   // mode (snapshot view). Naive — bins are indexed positionally across
   // steps rather than rebinned onto a shared numeric grid. Looks
@@ -846,27 +865,15 @@ export const MultiHistogramView: React.FC<MultiHistogramViewProps> = ({
     () =>
       computeHistogramFences(
         (currentRun?.data as HistogramStep[] | undefined) ?? [],
-        { ignoreOutliers },
+        { ignoreOutliers: effectiveIgnoreOutliers },
       ),
-    [currentRun, ignoreOutliers],
+    [currentRun, effectiveIgnoreOutliers],
   );
 
-  // Step mode renders the current run's distribution at the current
-  // step via SingleRunHistogramCanvas — ONE run at a time, just like
-  // Ridgeline/Heatmap. So all three modes share the same per-
-  // rendered-run fenced domain. (The runStepData map is computed but
-  // never reaches Step mode's render — kept around for legacy
-  // overlay paths the dashboard isn't using anymore.)
-  const effectiveXAxisRange = useMemo(() => ({
-    min: axisBounds.xMin ?? currentRunFences.xDomain[0],
-    max: axisBounds.xMax ?? currentRunFences.xDomain[1],
-  }), [axisBounds.xMin, axisBounds.xMax, currentRunFences.xDomain]);
-
-  const effectiveGlobalMaxFreq = useMemo(
-    () => axisBounds.yMax ?? currentRunFences.maxFreq,
-    [axisBounds.yMax, currentRunFences.maxFreq],
-  );
-
+  // Step mode renders ONE run's ONE step via SingleRunHistogramCanvas (one run
+  // at a time via the run slider, like Ridgeline/Heatmap). Its axes are scaled
+  // to that step's OWN data below — see effectiveXAxisRange /
+  // effectiveGlobalMaxFreq, defined once currentStepData is known.
   const sharedGlobalXDomain = currentRunFences.xDomain;
 
   // Apply the settings-popover X clamp to Ridgeline/Heatmap. When the
@@ -898,6 +905,39 @@ export const MultiHistogramView: React.FC<MultiHistogramViewProps> = ({
       (d) => d.step === currentStep,
     );
   }, [currentRun, currentStep]);
+
+  // Step-mode axes: scale to the CURRENT step's own bin range (X) and peak (Y),
+  // not the run's whole-step union (currentRunFences). A single wide-range step
+  // (e.g. weights spanning 0–2000 at one step) would otherwise stretch the axis
+  // and squish every narrow step into a sliver at the origin. Manual clamps from
+  // the settings popover still win; falls back to the fenced run domain when the
+  // current step has no data. (Ridgeline/Heatmap keep the per-run domain since
+  // they stack all steps.)
+  const effectiveXAxisRange = useMemo(
+    () =>
+      computeStepXRange({
+        lockAxes,
+        currentBins: currentStepData?.histogramData.bins,
+        lockedRange: {
+          min: currentRunFences.xDomain[0],
+          max: currentRunFences.xDomain[1],
+        },
+        xMinOverride: axisBounds.xMin,
+        xMaxOverride: axisBounds.xMax,
+      }),
+    [lockAxes, currentStepData, currentRunFences.xDomain, axisBounds.xMin, axisBounds.xMax],
+  );
+
+  const effectiveGlobalMaxFreq = useMemo(
+    () =>
+      computeStepMaxFreq({
+        lockAxes,
+        currentMaxFreq: currentStepData?.histogramData.maxFreq,
+        lockedMaxFreq: currentRunFences.maxFreq,
+        yMaxOverride: axisBounds.yMax,
+      }),
+    [lockAxes, axisBounds.yMax, currentStepData, currentRunFences.maxFreq],
+  );
 
   // Mapping for the run-slider row (color + name only).
   const runSliderRefs = useMemo(
@@ -1018,8 +1058,10 @@ export const MultiHistogramView: React.FC<MultiHistogramViewProps> = ({
       axisBounds={axisBounds}
       onAxisBoundsChange={setAxisBounds}
       showYMax={isStepMode}
-      ignoreOutliers={ignoreOutliers}
-      onIgnoreOutliersChange={onIgnoreOutliersChange}
+      lockAxes={lockAxes}
+      onLockAxesChange={setLockAxes}
+      ignoreOutliers={effectiveIgnoreOutliers}
+      onIgnoreOutliersChange={handleIgnoreOutliersChange}
       stepsOnX={stepsOnX}
       onStepsOnXChange={handleStepsOnXChange}
       stepsOnXDisabled={stepsOnXDisabled}

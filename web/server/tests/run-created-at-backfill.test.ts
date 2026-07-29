@@ -50,6 +50,35 @@ async function getRunDetails(runId: number) {
   return response.json();
 }
 
+async function updateStatus(body: Record<string, unknown>) {
+  const response = await fetch(`${BASE_URL}/api/runs/status/update`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${TEST_API_KEY}`,
+    },
+    body: JSON.stringify(body),
+  });
+  expect(response.status).toBe(200);
+  return response.json();
+}
+
+/**
+ * Terminal-run Duration = end − createdAt, where end = statusUpdated ?? updatedAt
+ * (see list-runs.ts getSystemSortExpr("duration") and columns-utils.ts — both
+ * MUST agree). This mirrors that formula so the assertion pins the value the UI
+ * actually shows for a finished run.
+ */
+function terminalDurationMs(details: {
+  createdAt: string;
+  updatedAt: string;
+  statusUpdated: string | null;
+}): number {
+  const start = new Date(details.createdAt).getTime();
+  const end = new Date(details.statusUpdated ?? details.updatedAt).getTime();
+  return Math.max(0, end - start);
+}
+
 describe.skipIf(!hasApiKey)('Run createdAt/updatedAt backfill', () => {
   it('honors client-supplied createdAt/updatedAt on the run row', async () => {
     const { runId } = await createRun({
@@ -133,6 +162,78 @@ describe.skipIf(!hasApiKey)('Run createdAt/updatedAt backfill', () => {
       }),
     });
     expect(response.status).toBe(400);
+  });
+
+  it('finishing a backfilled run with a historical statusUpdated yields a bounded historical Duration', async () => {
+    // Replay a run that ran for 2h, ~5.9 years ago, then imported (finished) now.
+    const { runId } = await createRun({
+      runName: `backfill-duration-${Date.now()}`,
+      createdAt: HISTORIC_CREATED_MS,
+    });
+
+    await updateStatus({
+      runId,
+      status: 'COMPLETED',
+      // The run's ORIGINAL finish time — not import time.
+      statusUpdated: HISTORIC_UPDATED_MS,
+    });
+
+    const details = await getRunDetails(runId);
+    expect(details.status).toBe('COMPLETED');
+    // statusUpdated must be the supplied historical finish time, never now().
+    expect(new Date(details.statusUpdated).getTime()).toBe(HISTORIC_UPDATED_MS);
+
+    // Duration reflects the real 2h run length (≈ statusUpdated − createdAt),
+    // NOT now − createdAt (which would be years). This is the bug this fix closes.
+    const duration = terminalDurationMs(details);
+    expect(duration).toBe(HISTORIC_UPDATED_MS - HISTORIC_CREATED_MS); // exactly 2h
+    // Guard against regression to the now()-anchored value: a real years-long
+    // gap would be orders of magnitude larger than one day.
+    expect(duration).toBeLessThan(24 * 60 * 60 * 1000);
+
+    // The other persistence path: the terminal RunStatusEvent.createdAt is
+    // stamped with the same historical finish time, not import time.
+    const histResp = await fetch(`${BASE_URL}/api/runs/status/history?runId=${runId}`, {
+      headers: { Authorization: `Bearer ${TEST_API_KEY}` },
+    });
+    expect(histResp.status).toBe(200);
+    const { events } = await histResp.json();
+    const completedEvent = events.find(
+      (e: { toStatus: string }) => e.toStatus === 'COMPLETED',
+    );
+    expect(completedEvent).toBeDefined();
+    expect(new Date(completedEvent.createdAt).getTime()).toBe(HISTORIC_UPDATED_MS);
+  });
+
+  it('a no-op re-finish without statusUpdated preserves the historical finish time', async () => {
+    // Regression for the "no-op wipes historical finish" bug: a duplicate finish
+    // (same terminal status, no statusUpdated) must NOT refresh statusUpdated to
+    // now() and snap Duration back to ~now − createdAt.
+    const { runId } = await createRun({
+      runName: `backfill-noop-refinish-${Date.now()}`,
+      createdAt: HISTORIC_CREATED_MS,
+    });
+    await updateStatus({ runId, status: 'COMPLETED', statusUpdated: HISTORIC_UPDATED_MS });
+    // Re-send the SAME terminal status with NO statusUpdated (the no-op path).
+    await updateStatus({ runId, status: 'COMPLETED' });
+
+    const details = await getRunDetails(runId);
+    expect(new Date(details.statusUpdated).getTime()).toBe(HISTORIC_UPDATED_MS);
+    expect(terminalDurationMs(details)).toBe(HISTORIC_UPDATED_MS - HISTORIC_CREATED_MS);
+  });
+
+  it('finishing without a statusUpdated stamps now() (non-migration runs unaffected)', async () => {
+    const before = Date.now() - 1000; // small clock-skew allowance
+    const { runId } = await createRun({
+      runName: `finish-default-time-${Date.now()}`,
+    });
+
+    await updateStatus({ runId, status: 'COMPLETED' });
+
+    const details = await getRunDetails(runId);
+    const statusUpdatedMs = new Date(details.statusUpdated).getTime();
+    expect(statusUpdatedMs).toBeGreaterThanOrEqual(before);
+    expect(statusUpdatedMs).toBeLessThanOrEqual(Date.now() + 60_000);
   });
 
   it('resuming via externalId does not rewrite the original createdAt', async () => {

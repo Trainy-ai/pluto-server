@@ -62,6 +62,12 @@ export function HistogramAxisControlsInline({
   // Ridgeline/Heatmap put step rows on Y, so Y-max would be
   // meaningless — caller hides it via showYMax=false.
   showYMax = true,
+  // "Lock axes across steps" — Step-mode only. Unlocked (default) scales each
+  // step to its own X range + peak (readable); locked shares one axis across all
+  // steps (the pre-per-step-scaling behavior). Shown only when a handler is
+  // provided AND showYMax (Step mode).
+  lockAxes,
+  onLockAxesChange,
   ignoreOutliers,
   onIgnoreOutliersChange,
   // "Steps on X" transpose. Only valid for Ridgeline + Heatmap modes
@@ -81,6 +87,8 @@ export function HistogramAxisControlsInline({
    * alongside the X/Y inputs. Omitted from callers that don't have
    * a persistence path yet (the toggle's value would be ignored).
    */
+  lockAxes?: boolean;
+  onLockAxesChange?: (next: boolean) => void;
   ignoreOutliers?: boolean;
   onIgnoreOutliersChange?: (next: boolean) => void;
   stepsOnX?: boolean;
@@ -115,6 +123,22 @@ export function HistogramAxisControlsInline({
           onChange={(v) => onAxisBoundsChange({ ...axisBounds, yMax: v })}
           ariaLabel="Y axis max"
         />
+      )}
+      {showYMax && onLockAxesChange !== undefined && (
+        <label
+          className="inline-flex cursor-pointer items-center gap-1 text-[11px] text-muted-foreground"
+          title="Locked: all steps share one X range and Y peak (compare across steps). Unlocked (default): each step is scaled to its own data so it fills the frame."
+        >
+          <input
+            type="checkbox"
+            checked={lockAxes ?? false}
+            onChange={(e) => onLockAxesChange(e.target.checked)}
+            className="h-3.5 w-3.5"
+            aria-label="Lock axes across steps"
+            data-testid="histogram-lock-axes"
+          />
+          <span className="font-medium">Lock axes across steps</span>
+        </label>
       )}
       {onIgnoreOutliersChange !== undefined && (
         <label

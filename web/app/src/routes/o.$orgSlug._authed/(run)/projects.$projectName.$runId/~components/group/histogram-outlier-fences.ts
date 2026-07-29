@@ -23,8 +23,13 @@
 //
 //   * require at least 20 samples
 //   * full range > 3× the fenced range (spike is dominating)
-//   * < 5% of samples land outside the fenced range (truly rare,
-//     not bimodal)
+//   * ≤ 10% of samples land outside the fenced range (a small
+//     minority of runaway steps, not bimodal). The `> 3×` range-
+//     dominance gate is what actually keeps genuine gradients/spread
+//     from clamping; this ratio only rejects the bimodal case (where
+//     a large fraction of steps share the wide range). 5% was too
+//     tight — a couple of spike steps out of a few dozen (e.g. 2/40)
+//     lands right on the boundary and was silently not clamping.
 
 interface BinsLike {
   min: number;
@@ -69,7 +74,7 @@ const MIN_SAMPLES_FOR_FENCES = 20;
 // steps (the σ=30 step in the seed demo) count.
 const TUKEY_K = 3.0;
 const RANGE_DOMINANCE_RATIO = 3; // full > 3× fenced → spike dominates.
-const MAX_OUTLIER_RATIO = 0.05; // < 5% → truly rare.
+const MAX_OUTLIER_RATIO = 0.1; // ≤ 10% of steps → runaway minority, not bimodal.
 
 function percentile(sortedAsc: number[], p: number): number {
   if (sortedAsc.length === 0) return 0;
@@ -107,8 +112,8 @@ function tukeyFences(
  *   - the user toggle is ON (`ignoreOutliers === true`)
  *   - we have ≥ 20 steps to compute fences from
  *   - the full range is > 3× the fenced range (truly dominated)
- *   - < 5% of step `bins.min/max` lie outside the fenced range
- *     (truly rare, not bimodal data)
+ *   - ≤ 10% of step `bins.min/max` lie outside the fenced range
+ *     (a runaway minority, not bimodal data)
  *
  * The maxFreq clamp activates with the same thresholds applied
  * independently to the per-step `maxFreq` array.
@@ -194,7 +199,7 @@ export function computeHistogramFences(
         }
       }
       const outlierRatio = outlierCount / steps.length;
-      if (rangeDominates && outlierRatio < MAX_OUTLIER_RATIO) {
+      if (rangeDominates && outlierRatio <= MAX_OUTLIER_RATIO) {
         xDomain = [proposedMin, proposedMax];
         xClamped = true;
       }
@@ -218,7 +223,7 @@ export function computeHistogramFences(
         if (v > proposedMaxFreq) upperOutliers++;
       }
       const outlierRatio = upperOutliers / stepMaxFreqs.length;
-      if (rangeDominates && outlierRatio < MAX_OUTLIER_RATIO) {
+      if (rangeDominates && outlierRatio <= MAX_OUTLIER_RATIO) {
         maxFreq = proposedMaxFreq;
         freqClamped = true;
       }

@@ -662,6 +662,7 @@ const updateStatusRoute = createRoute({
             status: z.nativeEnum(RunStatus).openapi({ description: "New status", example: "COMPLETED" }),
             statusMetadata: z.string().optional().nullable().openapi({ description: "Status metadata as JSON string" }),
             loggerSettings: z.string().optional().nullable().openapi({ description: "Logger settings to merge" }),
+            statusUpdated: z.number().int().min(0).max(8640000000000000).optional().nullable().openapi({ description: "Status-change timestamp in epoch milliseconds (backfill/migration). When omitted, the server stamps now(). Migration tooling replaying a finished run should pass the run's original finish time so its Duration reflects the historical run length, not time-since-import." }),
           }).openapi("UpdateStatusRequest"),
         },
       },
@@ -686,7 +687,7 @@ const updateStatusRoute = createRoute({
 router.use(updateStatusRoute.path, withApiKey);
 router.openapi(updateStatusRoute, async (c) => {
   const apiKey = c.get("apiKey");
-  const { runId, status, statusMetadata, loggerSettings } = c.req.valid("json");
+  const { runId, status, statusMetadata, loggerSettings, statusUpdated } = c.req.valid("json");
 
   const run = await c.get("prisma").runs.findUnique({
     where: { id: runId, organizationId: apiKey.organization.id },
@@ -726,6 +727,8 @@ router.openapi(updateStatusRoute, async (c) => {
     source: "api",
     metadata: parsedStatusMetadata,
     loggerSettingsPatch: loggerSettingsChanged ? updatedLoggerSettings : undefined,
+    // Historical finish time for migrated runs; undefined → transitionRunStatus stamps now().
+    statusUpdated: statusUpdated != null ? new Date(statusUpdated) : undefined,
     organizationId: apiKey.organization.id,
     apiKeyId: apiKey.id,
     actorId: apiKey.user.id,
@@ -797,7 +800,11 @@ router.openapi(statusHistoryRoute, async (c) => {
 
   const events = await prisma.runStatusEvent.findMany({
     where: { runId: run.id },
-    orderBy: { createdAt: "asc" },
+    // id is a deterministic tiebreaker: backfilled/replayed events can share a
+    // createdAt (a migrated run stamps the creation and terminal events with
+    // historical times), so createdAt alone leaves equal-timestamp events in an
+    // arbitrary order.
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   });
 
   return c.json({

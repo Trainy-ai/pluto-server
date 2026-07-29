@@ -34,6 +34,16 @@ export interface TransitionArgs {
   source: RunStatusTransitionSource;
   /** Optional JSON blob to snapshot into RunStatusEvent.metadata (also mirrored to Runs.statusMetadata when undefined is not passed). */
   metadata?: Prisma.InputJsonValue | null;
+  /**
+   * Historical status-change time for backfilled/migrated runs; defaults to
+   * now(). `pluto migrate` replays a run recorded elsewhere and finishes it long
+   * after the fact — without this, `Runs.statusUpdated` gets import-time now()
+   * while `createdAt` is historical, so the Duration column (end = statusUpdated
+   * ?? updatedAt, minus createdAt) reads ~now − createdAt = years. Mirrors the
+   * historical `createdAt` the create path already honors (#528). Also stamps the
+   * emitted RunStatusEvent.createdAt so the status timeline stays coherent.
+   */
+  statusUpdated?: Date;
   /** If provided, merged with loggerSettings on the Runs row. */
   loggerSettingsPatch?: Record<string, unknown>;
   /** Organization scope enforced by callers that already have an api-key / session; optional defence-in-depth. */
@@ -127,12 +137,25 @@ export async function transitionRunStatus(
       };
     }
 
-    // Build update payload. We always refresh statusUpdated so clients can
-    // see recent liveness even when the state didn't change.
-    const data: Prisma.RunsUpdateInput = {
-      status: args.toStatus,
-      statusUpdated: new Date(),
-    };
+    // Build update payload.
+    //
+    // statusUpdated policy:
+    //   - an explicit args.statusUpdated (backfill/migration) always wins — it's
+    //     the run's real historical finish time;
+    //   - otherwise stamp now() on a real transition, and on a RUNNING → RUNNING
+    //     no-op (a liveness ping);
+    //   - but a no-op on a TERMINAL run must NOT refresh statusUpdated to now().
+    //     A migrated run finished with a historical statusUpdated, then re-sent
+    //     the same terminal status with no timestamp (duplicate finish, resume
+    //     probe, etc.), would otherwise have its finish time clobbered by now()
+    //     — snapping Duration back to ~now − createdAt (the exact bug this fixes).
+    const isNoOp = fromStatus === args.toStatus;
+    const data: Prisma.RunsUpdateInput = { status: args.toStatus };
+    if (args.statusUpdated != null) {
+      data.statusUpdated = args.statusUpdated;
+    } else if (!isNoOp || fromStatus === "RUNNING") {
+      data.statusUpdated = new Date();
+    }
 
     if (args.metadata !== undefined) {
       data.statusMetadata = args.metadata === null ? Prisma.DbNull : args.metadata;
@@ -149,7 +172,8 @@ export async function transitionRunStatus(
       data,
     });
 
-    // No-op transitions: refresh the row but skip the event (keeps the
+    // No-op transitions: write the row (status + any metadata/loggerSettings,
+    // and statusUpdated only per the policy above) but skip the event (keeps the
     // timeline free of DDP duplicates).
     if (fromStatus === args.toStatus) {
       return {
@@ -173,6 +197,9 @@ export async function transitionRunStatus(
             : args.metadata,
         actorId: args.actorId ?? null,
         apiKeyId: args.apiKeyId ?? null,
+        // Keep the status timeline consistent with a backfilled run row — the
+        // terminal event carries the same historical moment as Runs.statusUpdated.
+        ...(args.statusUpdated != null ? { createdAt: args.statusUpdated } : {}),
       },
       select: { id: true },
     });
