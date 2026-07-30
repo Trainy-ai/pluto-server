@@ -13,14 +13,26 @@ import pytest
 from python.models import NotificationType
 
 
-def make_run(run_id, updated_minutes_ago=5, logger_settings=None, has_project=True):
-    """Create a mock Run object."""
+def make_run(
+    run_id,
+    updated_minutes_ago=5,
+    logger_settings=None,
+    has_project=True,
+    status_updated=None,
+):
+    """Create a mock Run object.
+
+    `status_updated` mirrors Runs.statusUpdated (nullable): pass an aware
+    datetime to model a run whose status was changed at that instant — e.g. a
+    resume flipping it back to RUNNING.
+    """
     run = MagicMock()
     run.id = run_id
     run.name = f"run-{run_id}"
     run.status = "RUNNING"
     run.organizationId = "org-1"
     run.updatedAt = datetime.now(timezone.utc) - timedelta(minutes=updated_minutes_ago)
+    run.statusUpdated = status_updated
     run.loggerSettings = logger_settings
 
     if has_project:
@@ -435,6 +447,250 @@ class TestProcessRunsWarmUp:
 
         assert run.status == "FAILED"
         assert 100 in result
+
+
+class TestProcessRunsResumeRace:
+    """Regression tests: a just-resumed run must not be reaped.
+
+    A resume (POST /runs/create with an existing externalId, or /runs/resume)
+    flips a run back to RUNNING without emitting any data heartbeat. Judging
+    liveness on the data signals alone therefore sees `status=RUNNING` plus a
+    last heartbeat from whenever the run previously died, and reaps the run
+    milliseconds after the resume — beating the client's own finish(). Observed
+    on run 217983 (COMPLETED -> RUNNING source=resume at 08:37:22.772Z,
+    RUNNING -> FAILED source=stale-monitor at 08:37:22.954Z, 182 ms later,
+    stale_for_seconds=24191 against grace_seconds=150).
+
+    statusUpdated is the fix: a status transition is itself proof a live client
+    reached the server, so it counts as activity.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _past_warm_up(self, monkeypatch):
+        """Past the boot-race guard, so these assertions exercise the
+        heartbeat path rather than being masked by warm-up."""
+        import time
+
+        import python.server as ps
+
+        monkeypatch.setattr(ps, "_PROCESS_STARTED_AT", time.monotonic() - 10_000)
+
+    @patch("python.server.transition_run_status")
+    @patch("python.server.send_alert")
+    def test_just_resumed_run_survives_stale_heartbeat(
+        self, mock_send_alert, mock_transition
+    ):
+        """The reported bug, reproduced: heartbeat 6.7 h old (the run's previous
+        life), statusUpdated 182 ms ago (the resume). Must stay RUNNING."""
+        from python.server import process_runs
+
+        now = datetime.now(timezone.utc)
+        run = make_run(
+            217983,
+            updated_minutes_ago=0,
+            status_updated=now - timedelta(milliseconds=182),
+        )
+        old_hb = now - timedelta(seconds=24191)
+        session = make_session([run], heartbeat_rows=[(217983, old_hb)])
+
+        # No data has arrived since the resume — that is the whole point.
+        ch_client = MagicMock()
+        ch_client.query.return_value = make_ch_result([])
+
+        result = process_runs(
+            session, ch_client, smtp_config={}, grace=1800, heartbeat_grace=150
+        )
+
+        assert run.status == "RUNNING"
+        mock_transition.assert_not_called()
+        mock_send_alert.assert_not_called()
+        assert result == []
+
+    @patch("python.server.transition_run_status")
+    @patch("python.server.send_alert")
+    def test_resumed_run_gets_grace_window_then_is_reaped(
+        self, mock_send_alert, mock_transition
+    ):
+        """The shield is a grace window, not immortality: a run resumed longer
+        ago than heartbeat_grace that never started heartbeating is still
+        FAILED."""
+        from python.server import process_runs
+
+        now = datetime.now(timezone.utc)
+        run = make_run(
+            100, updated_minutes_ago=60, status_updated=now - timedelta(seconds=600)
+        )
+        old_hb = now - timedelta(seconds=24191)
+        session = make_session([run], heartbeat_rows=[(100, old_hb)])
+
+        ch_client = MagicMock()
+        ch_client.query.return_value = make_ch_result([])
+
+        result = process_runs(
+            session, ch_client, smtp_config={}, grace=1800, heartbeat_grace=150
+        )
+
+        assert run.status == "FAILED"
+        assert 100 in result
+        meta = mock_transition.call_args.kwargs["metadata"]
+        assert meta["reason"] == "heartbeat-timeout"
+        # Staleness is measured from the resume (600s), not the ancient
+        # heartbeat (24191s) — the most recent signal wins.
+        assert 595 <= meta["stale_for_seconds"] <= 605
+
+    @patch("python.server.transition_run_status")
+    @patch("python.server.send_alert")
+    def test_resume_liveness_applies_to_fallback_path(
+        self, mock_send_alert, mock_transition
+    ):
+        """A resumed run with no heartbeat row at all (older SDK / noop mode)
+        must also be shielded — the fallback signals (last metric, updatedAt)
+        both predate the resume."""
+        from python.server import process_runs
+
+        now = datetime.now(timezone.utc)
+        run = make_run(
+            300, updated_minutes_ago=60, status_updated=now - timedelta(seconds=2)
+        )
+        session = make_session([run], heartbeat_rows=[])  # no heartbeat row
+
+        ch_client = MagicMock()
+        ch_client.query.return_value = make_ch_result([])
+
+        result = process_runs(
+            session, ch_client, smtp_config={}, grace=600, heartbeat_grace=150
+        )
+
+        assert run.status == "RUNNING"
+        mock_transition.assert_not_called()
+        assert result == []
+
+    @patch("python.server.transition_run_status")
+    @patch("python.server.send_alert")
+    def test_historical_status_updated_does_not_shield(
+        self, mock_send_alert, mock_transition
+    ):
+        """A migrated run carries a *historical* statusUpdated (the run's real
+        finish time, months ago). That must not shield anything — only a recent
+        transition counts as liveness."""
+        from python.server import process_runs
+
+        now = datetime.now(timezone.utc)
+        run = make_run(
+            400, updated_minutes_ago=60, status_updated=now - timedelta(days=90)
+        )
+        old_hb = now - timedelta(seconds=24191)
+        session = make_session([run], heartbeat_rows=[(400, old_hb)])
+
+        ch_client = MagicMock()
+        ch_client.query.return_value = make_ch_result([])
+
+        result = process_runs(
+            session, ch_client, smtp_config={}, grace=1800, heartbeat_grace=150
+        )
+
+        assert run.status == "FAILED"
+        assert 400 in result
+
+    @patch("python.server.transition_run_status")
+    @patch("python.server.send_alert")
+    def test_null_status_updated_still_reaps(self, mock_send_alert, mock_transition):
+        """statusUpdated is nullable (runs predating the column). A null must
+        not crash and must not shield a genuinely dead run."""
+        from python.server import process_runs
+
+        run = make_run(500, updated_minutes_ago=60, status_updated=None)
+        old_hb = datetime.now(timezone.utc) - timedelta(seconds=24191)
+        session = make_session([run], heartbeat_rows=[(500, old_hb)])
+
+        ch_client = MagicMock()
+        ch_client.query.return_value = make_ch_result([])
+
+        result = process_runs(
+            session, ch_client, smtp_config={}, grace=1800, heartbeat_grace=150
+        )
+
+        assert run.status == "FAILED"
+        assert 500 in result
+
+    @patch("python.server.transition_run_status")
+    @patch("python.server.send_alert")
+    def test_naive_status_updated_is_treated_as_utc(
+        self, mock_send_alert, mock_transition
+    ):
+        """A naive statusUpdated (pysqlite locally, or a driver handing back a
+        bare TIMESTAMP) must be read as UTC rather than raising TypeError on
+        the aware/naive comparison."""
+        from python.server import process_runs
+
+        naive_recent = datetime.now(timezone.utc).replace(tzinfo=None)
+        run = make_run(600, updated_minutes_ago=60, status_updated=naive_recent)
+        old_hb = datetime.now(timezone.utc) - timedelta(seconds=24191)
+        session = make_session([run], heartbeat_rows=[(600, old_hb)])
+
+        ch_client = MagicMock()
+        ch_client.query.return_value = make_ch_result([])
+
+        result = process_runs(
+            session, ch_client, smtp_config={}, grace=1800, heartbeat_grace=150
+        )
+
+        assert run.status == "RUNNING"
+        mock_transition.assert_not_called()
+        assert result == []
+
+    @patch("python.server.transition_run_status")
+    @patch("python.server.send_alert")
+    def test_iso_string_status_updated_is_parsed(
+        self, mock_send_alert, mock_transition
+    ):
+        """pysqlite (local/test) returns an ISO string for a TIMESTAMP column;
+        parse it like the heartbeat and ClickHouse readers do."""
+        from python.server import process_runs
+
+        recent_iso = datetime.now(timezone.utc).isoformat()
+        run = make_run(700, updated_minutes_ago=60, status_updated=recent_iso)
+        old_hb = datetime.now(timezone.utc) - timedelta(seconds=24191)
+        session = make_session([run], heartbeat_rows=[(700, old_hb)])
+
+        ch_client = MagicMock()
+        ch_client.query.return_value = make_ch_result([])
+
+        result = process_runs(
+            session, ch_client, smtp_config={}, grace=1800, heartbeat_grace=150
+        )
+
+        assert run.status == "RUNNING"
+        mock_transition.assert_not_called()
+        assert result == []
+
+    @patch("python.server.transition_run_status")
+    @patch("python.server.send_alert")
+    def test_fresh_heartbeat_still_wins_over_old_resume(
+        self, mock_send_alert, mock_transition
+    ):
+        """Sanity: adding statusUpdated to the signal set must not regress the
+        existing heartbeat behaviour — a live run whose resume is long past is
+        kept alive by its heartbeat alone."""
+        from python.server import process_runs
+
+        now = datetime.now(timezone.utc)
+        run = make_run(
+            800, updated_minutes_ago=60, status_updated=now - timedelta(hours=5)
+        )
+        fresh_hb = now - timedelta(seconds=5)
+        session = make_session([run], heartbeat_rows=[(800, fresh_hb)])
+
+        ch_client = MagicMock()
+        ch_client.query.return_value = make_ch_result([])
+
+        result = process_runs(
+            session, ch_client, smtp_config={}, grace=1800, heartbeat_grace=150
+        )
+
+        assert run.status == "RUNNING"
+        mock_transition.assert_not_called()
+        assert result == []
 
 
 class TestProcessRunsAdvisoryLock:

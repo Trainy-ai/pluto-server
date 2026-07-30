@@ -26,6 +26,30 @@ from python.utils import get_run_url
 logger = logging.getLogger("stale-run-job")
 
 
+def as_aware_utc(value):
+    """Normalise a timestamp from any of our data sources to aware UTC, or None.
+
+    The drivers disagree: psycopg2 and clickhouse-connect hand back a datetime,
+    pysqlite (local/test) an ISO string for a TIMESTAMP column, and a column
+    read as naive must be interpreted as UTC before it can be compared against
+    datetime.now(timezone.utc) — otherwise the comparison raises TypeError.
+    Anything null or unparseable becomes None, which every caller treats as
+    "no signal".
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value
+
+
 def get_last_update_times(ch_client, run_ids):
     """Get last update times for all runs in a single batch query."""
     if not run_ids:
@@ -43,15 +67,9 @@ def get_last_update_times(ch_client, run_ids):
         result = ch_client.query(ch_query, parameters={"run_ids": tuple(run_ids)})
         last_updates = {}
         for row in result.result_rows:
-            run_id, last_update_time = row[0], row[1]
+            run_id = row[0]
+            last_update_time = as_aware_utc(row[1])
             if last_update_time is not None:
-                if isinstance(last_update_time, str):
-                    try:
-                        last_update_time = datetime.fromisoformat(last_update_time)
-                    except ValueError:
-                        continue
-                if last_update_time.tzinfo is None:
-                    last_update_time = last_update_time.replace(tzinfo=timezone.utc)
                 last_updates[run_id] = last_update_time
         return last_updates
     except Exception as e:
@@ -87,17 +105,9 @@ def get_last_heartbeats(session, run_ids):
 
     heartbeats = {}
     for run_id, last_seen in rows:
+        last_seen = as_aware_utc(last_seen)
         if last_seen is None:
             continue
-        # psycopg2 returns a datetime; pysqlite (local/test) returns an ISO
-        # string for a TIMESTAMP column, so parse it like get_last_update_times.
-        if isinstance(last_seen, str):
-            try:
-                last_seen = datetime.fromisoformat(last_seen)
-            except ValueError:
-                continue
-        if last_seen.tzinfo is None:
-            last_seen = last_seen.replace(tzinfo=timezone.utc)
         heartbeats[run_id] = last_seen
     return heartbeats
 
@@ -274,6 +284,19 @@ def process_runs(session, ch_client, smtp_config, grace=1800, heartbeat_grace=15
     for run in valid_runs:
         last_seen = heartbeats.get(run.id)
         last_metric = last_updates.get(run.id)
+        # Third liveness signal: the status transition itself. A resume — POST
+        # /runs/create with an existing externalId (the Neptune-style path DDP
+        # multi-node restarts take) or /runs/resume — flips a run back to
+        # RUNNING without emitting any data heartbeat. Judged on the data
+        # signals alone, such a run looks like status=RUNNING with a heartbeat
+        # from whenever it previously died, and gets reaped milliseconds after
+        # the resume, racing (and beating) the client's own finish(). A
+        # transition is proof a live client reached the server, so it counts as
+        # activity and buys the run its full grace window to start heartbeating.
+        # Only a *recent* statusUpdated shields anything: a migrated run's
+        # historical finish time is older than the data signals and so loses the
+        # max() below, exactly as it should.
+        status_updated = as_aware_utc(run.statusUpdated)
         if last_seen is not None and warming_up:
             # Cannot trust heartbeat staleness yet — leave this run un-judged
             # for this cycle. The threshold checks at the bottom of the loop
@@ -300,6 +323,10 @@ def process_runs(session, ch_client, smtp_config, grace=1800, heartbeat_grace=15
                     signal_time = run.updatedAt.replace(tzinfo=timezone.utc)
                 threshold = grace
                 reason = "stale"
+
+            # Applies to both paths: a run is only quiet if *every* signal is.
+            if status_updated is not None and status_updated > signal_time:
+                signal_time = status_updated
 
             time_diff = now_utc - signal_time
             if timedelta(seconds=threshold) < time_diff < timedelta(days=16384):
@@ -463,83 +490,6 @@ def check_threshold(
         email=True,
     )
 
-    return True
-
-
-def check_run_time(session, ch_client, smtp_config, run, grace):
-    now_utc = datetime.now(timezone.utc)
-    project_name = run.project.name
-
-    ch_query = """
-        SELECT MAX(time) AS last_update_time
-        FROM mlop_metrics
-        WHERE projectName = %(projectName)s
-            AND runId = %(runId)s
-            AND tenantId = %(tenantId)s
-    """
-    ch_params = {
-        "projectName": project_name,
-        "runId": run.id,
-        "tenantId": run.organizationId,
-    }
-    try:
-        result = ch_client.query(ch_query, parameters=ch_params)
-    except Exception as e:
-        logger.error(f"Error querying ClickHouse for run {run.id}: {e}")
-        return None
-
-    if not result.result_rows or result.result_rows[0][0] is None:
-        logger.debug(f"No metric data for run {run.id}")
-        return None
-
-    last_update_time = result.result_rows[0][0]
-    if isinstance(last_update_time, str):
-        try:
-            last_update_time = datetime.fromisoformat(last_update_time)
-        except ValueError as e:
-            logger.error(f"Error parsing update time for run {run.id}: {e}")
-            return None
-    if last_update_time.tzinfo is None:
-        last_update_time = last_update_time.replace(tzinfo=timezone.utc)
-
-    # for runs with no metrics, use updatedAt time
-    if last_update_time == datetime.fromtimestamp(0, timezone.utc) and timedelta(
-        seconds=grace
-    ) < now_utc - run.updatedAt.replace(tzinfo=timezone.utc):
-        last_update_time = run.updatedAt.replace(tzinfo=timezone.utc)
-
-    time_diff = now_utc - last_update_time
-    if timedelta(seconds=grace) < time_diff < timedelta(days=16384):
-        logger.info(
-            f"Run {run.id} (Project: {project_name}) last update at {last_update_time} is older than {grace} seconds"
-        )
-        transition_run_status(
-            session,
-            run_id=run.id,
-            to_status="FAILED",
-            source="stale-monitor",
-            metadata={
-                "reason": "stale",
-                "grace_seconds": grace,
-                "stale_for_seconds": int(time_diff.total_seconds()),
-                "last_update_time": last_update_time.isoformat(),
-            },
-        )
-        run.status = "FAILED"
-        send_alert(
-            session,
-            run,
-            smtp_config,
-            last_update_time,
-            title="Status Update",
-            body=f"The run may have stalled and requires attention - last update exceeded {grace} seconds",
-            level=NotificationType.RUN_FAILED,
-            email=False,
-        )
-    else:
-        logger.debug(
-            f"Run {run.id} (Project: {project_name}) is active. Last update at {last_update_time}"
-        )
     return True
 
 
