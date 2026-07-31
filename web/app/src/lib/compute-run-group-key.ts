@@ -14,7 +14,7 @@
  *  per-kind branches of `web/server/lib/group-run-assignment.ts`
  *  `valueForRun`. Keep in lockstep when adding new field kinds. */
 
-interface RunForGrouping {
+export interface RunForGrouping {
   name: string;
   status: string;
   tags: string[];

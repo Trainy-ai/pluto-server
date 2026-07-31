@@ -76,7 +76,6 @@ interface GroupedBucketTreeProps {
   /** Push a per-run color override into the page's color state so
    *  charts auto-pick up the bucket color. Mirrors what the manual
    *  color picker on the name column does. */
-  onColorChange: (runId: string, color: string) => void;
   /** Fan-out target for the bucket-header eye + X actions. Same
    *  shape as the per-run handler in columns.tsx: takes a third
    *  optional `runFallback` so adding runs that aren't in the flat
@@ -969,8 +968,6 @@ function BucketLevel({
                   hiddenRunIds={rest.hiddenRunIds}
                   tableBodyRef={rest.tableBodyRef}
                   projectName={rest.projectName}
-                  bucketColor={bucketColorFor(key)}
-                  onColorChange={rest.onColorChange}
                   showOnlySelected={showOnlySelected}
                   pinSelectedToTop={pinSelectedToTop}
                   runFirstCellPaddingLeft={rest.runFirstCellPaddingLeft}
@@ -1602,8 +1599,6 @@ interface BucketRunsProps {
   selectedRunsWithColors: Record<string, { run: Run; color: string }>;
   hiddenRunIds: Set<string>;
   tableBodyRef: React.RefObject<HTMLTableSectionElement | null>;
-  bucketColor: string;
-  onColorChange: (runId: string, color: string) => void;
   runFirstCellPaddingLeft?: number;
   /** When true, only selected runs render — non-selected leaf rows
    *  are filtered out client-side after the server fetch. The
@@ -1648,8 +1643,6 @@ function BucketRuns({
   selectedRunsWithColors,
   hiddenRunIds,
   tableBodyRef,
-  bucketColor,
-  onColorChange,
   runFirstCellPaddingLeft,
   showOnlySelected,
   pinSelectedToTop,
@@ -1793,46 +1786,16 @@ function BucketRuns({
     setRunsPageIndex(0);
   }, [sortField, sortSource, sortDirection, sortAggregation]);
 
-  // Push the bucket color through the page-level color state for every
-  // run in this bucket that's ALREADY in the selection. Re-fires only
-  // when the runs list or the bucket color changes, and skips runs
-  // whose current page-level color is already the bucket color (avoids
-  // an infinite re-render bounce through selectedRunsWithColors →
-  // runs list).
+  // NOTE: this used to push `bucketColor` onto every selected run in the bucket
+  // via the page-level `onColorChange`. That wrote a derived, mode-dependent
+  // value into the persisted per-run colour state — the same state the colour
+  // picker owns — so a run's own colour was destroyed the moment it was grouped.
+  // Ungrouping had nothing to restore and every run that shared a bucket stayed
+  // one colour, permanently once the debounced IndexedDB save landed.
   //
-  // The `entry` guard is load-bearing: without it, `current` is
-  // `undefined` for deselected runs, `undefined !== bucketColor`
-  // passes, and `onColorChange` re-adds the run to the selection.
-  // That bug manifested as "deselect a run on page 1, paginate, come
-  // back to page 1, deselected runs are silently re-selected."
-  const onColorChangeRef = useRef(onColorChange);
-  useEffect(() => {
-    onColorChangeRef.current = onColorChange;
-  }, [onColorChange]);
-  // Push the bucket's color onto every currently-selected leaf run.
-  // Reads `selectedRunsWithColors` DIRECTLY (not through a ref) and
-  // depends on it so the effect actually re-fires when the user
-  // selects a run that's already in this bucket's visible page.
-  // Previously we held a ref + effect keeping it in sync and read
-  // `.current` here — but `runs` doesn't depend on
-  // `selectedRunsWithColors`, so a newly-selected run in the same
-  // bucket kept its default random color and the color dot in the
-  // table diverged from the chart line. The `entry.color !==
-  // bucketColor` guard below prevents an infinite loop: once
-  // onColorChange has run for every selected run in this bucket
-  // and updated their colors to bucketColor, the guard falls
-  // through on the next fire and nothing happens.
-  useEffect(() => {
-    for (const r of runs) {
-      const entry = selectedRunsWithColors[r.id];
-      // Only push the colour for runs already in the selection.
-      // Deselected runs MUST stay deselected, even on page-change
-      // re-render of this bucket.
-      if (entry && entry.color !== bucketColor) {
-        onColorChangeRef.current(r.id, bucketColor);
-      }
-    }
-  }, [runs, bucketColor, selectedRunsWithColors]);
+  // The bucket colour is now derived where it's consumed
+  // (`bucketColorForRun` in the page's `effectiveRunsWithColors`), so grouping
+  // reads and never writes, and ungrouping simply stops overriding.
 
   // Derived row-selection state — keeps the eye/visibility toggle in
   // each bucket honest about which runs the user has selected from

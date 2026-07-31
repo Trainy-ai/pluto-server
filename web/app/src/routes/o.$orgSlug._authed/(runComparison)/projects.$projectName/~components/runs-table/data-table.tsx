@@ -1206,7 +1206,6 @@ export function DataTable({
                   selectedRunsWithColors={selectedRunsWithColors}
                   hiddenRunIds={hiddenRunIds}
                   tableBodyRef={tableBodyRef}
-                  onColorChange={onColorChange}
                   onSelectionChange={onSelectionChange}
                   onSetRunsHidden={onSetRunsHidden}
                   runFirstCellPaddingLeft={groupedIndentPx}

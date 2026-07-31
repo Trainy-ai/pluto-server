@@ -23,6 +23,7 @@ import { useDistinctMetricNames, useSearchMetricNames, useMetricSummaries } from
 import { groupMetrics } from "./~lib/metrics-utils";
 import { MetricsDisplay } from "./~components/metrics-display";
 import { SideBySideView } from "./~components/side-by-side/side-by-side-view";
+import { bucketColorForRun } from "./~components/runs-table/bucket-color";
 import { DataTable } from "./~components/runs-table/data-table";
 import { useRefresh } from "./~hooks/use-refresh";
 import { useRunCount } from "./~queries/run-count";
@@ -1351,6 +1352,18 @@ function RouteComponent() {
   // (same name) share one color. Keep ALL runs for chart data — the table
   // handles collapsing to one row per experiment, but charts show all branches.
   const effectiveRunsWithColors = useMemo(() => {
+    // Grouping: every run in a bucket takes the bucket's colour. DERIVED, not
+    // stored — the bucket tree used to push this through `onColorChange`, which
+    // overwrote each run's own colour in the persisted state, so ungrouping
+    // left every run in the bucket stuck on one colour (and a reload kept it).
+    // Computing it here means ungrouping just stops applying the override.
+    if (groupBy.length > 0) {
+      const result: typeof selectedRunsWithColors = {};
+      for (const [id, entry] of Object.entries(selectedRunsWithColors)) {
+        result[id] = { ...entry, color: bucketColorForRun(entry.run, groupBy) };
+      }
+      return result;
+    }
     if (listMode !== "experiments") return selectedRunsWithColors;
     const nameToColor = new Map<string, string>();
     const result: typeof selectedRunsWithColors = {};
@@ -1362,7 +1375,7 @@ function RouteComponent() {
       result[id] = { ...entry, color: nameToColor.get(name)! };
     }
     return result;
-  }, [selectedRunsWithColors, listMode]);
+  }, [selectedRunsWithColors, listMode, groupBy]);
 
   // Process metrics data from ALL selected runs (including hidden)
   // Hidden runs are toggled via imperative uPlot setSeries() in chart-sync-context,

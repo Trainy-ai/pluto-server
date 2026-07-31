@@ -1,3 +1,4 @@
+import { computeRunGroupTrail, type RunForGrouping } from "@/lib/compute-run-group-key";
 import { COLORS_KELLY_DARK } from "@/components/ui/color-picker";
 
 /** Stable color for a bucket trail. Same trail → same color across
@@ -24,4 +25,23 @@ const PALETTE = COLORS_KELLY_DARK;
  *  Pure function; same input → same output. */
 export function bucketColorFor(pathKey: string): string {
   return PALETTE[fnv1a(pathKey) % PALETTE.length];
+}
+
+/** The color of the leaf bucket a run falls into, derived from the run itself.
+ *
+ *  Lets any consumer render grouped colors without a bucket in scope, so
+ *  grouping never has to *write* a color anywhere. It previously did: the
+ *  bucket tree pushed its color onto every selected run through the page-level
+ *  `onColorChange`, which is the same persisted state the color picker writes.
+ *  That overwrote each run's own color permanently — ungrouping had nothing to
+ *  restore, so every run that shared a bucket stayed one color, and the
+ *  IndexedDB save made it survive a reload.
+ *
+ *  Uses the same trail → JSON key the tree builds for a leaf, so a run and its
+ *  bucket header always agree. */
+export function bucketColorForRun(
+  run: RunForGrouping,
+  groupBy: readonly string[],
+): string {
+  return bucketColorFor(JSON.stringify(computeRunGroupTrail(run, groupBy)));
 }
