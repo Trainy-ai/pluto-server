@@ -2168,7 +2168,13 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
         row.addEventListener("click", (e) => {
           e.stopPropagation();
           const currentlyShown = u.series[s.seriesIdx].show !== false;
-          u.setSeries(s.seriesIdx, { show: !currentlyShown }, false);
+          // Fire hooks (3rd arg) so LineUplot's setSeries hook records this in
+          // the chart-local hidden set — otherwise the toggle is invisible to
+          // chart recreation and to the fullscreen render, and the series
+          // silently comes back. Deliberately NOT published to the cursor-sync
+          // group (4th arg omitted): this is a chart-local hide, unlike the
+          // runs-table eye which hides a run across every chart.
+          u.setSeries(s.seriesIdx, { show: !currentlyShown }, true);
           u.redraw();
           // Full rebuild so toggled row gets correct hover/click handlers
           tooltipStructureDirty = true;

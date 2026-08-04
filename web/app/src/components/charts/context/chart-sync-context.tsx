@@ -8,6 +8,7 @@ import React, {
   useState,
 } from "react";
 import type uPlot from "uplot";
+import { setRunLegendRowHidden } from "../lib/legend-visibility";
 
 // ============================
 // Helpers
@@ -331,12 +332,20 @@ export function ChartSyncProvider({
 
         let anyChanged = false;
         try {
+          // Run-level change: the setSeries hook must not file this under the
+          // chart-local hidden store (see use-chart-lifecycle for the same
+          // marker). Hooks still fire so companions follow.
+          (chart as any)._applyingRunVisibility = true;
           chart.batch(() => {
             for (let i = 1; i < chart.series.length; i++) {
               const seriesId = (chart.series[i] as any)?._seriesId as string | undefined;
               if (!seriesId) continue;
               const runId = seriesId.includes(':') ? seriesId.split(':')[0] : seriesId;
               const shouldShow = !hiddenIds.has(runId);
+              // Keep the legend row in step with the eye toggle. Applied
+              // unconditionally so a row left over from a previous state is
+              // corrected even when `show` itself is already right.
+              setRunLegendRowHidden(chart, i, !shouldShow);
               if (chart.series[i].show !== shouldShow) {
                 chart.setSeries(i, { show: shouldShow });
                 anyChanged = true;
@@ -345,6 +354,8 @@ export function ChartSyncProvider({
           });
         } catch {
           // Chart may have been destroyed during iteration — skip silently
+        } finally {
+          (chart as any)._applyingRunVisibility = false;
         }
 
         // Force X+Y auto-range recalculation when series visibility changed.

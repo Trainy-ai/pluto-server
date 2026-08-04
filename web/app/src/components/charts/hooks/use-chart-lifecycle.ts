@@ -3,6 +3,11 @@ import uPlot from "uplot";
 import { arrayMin, arrayMax } from "../lib/data-processing";
 import { zoomOverlapsData } from "../lib/scales";
 import type { LineData } from "../lib/types";
+import {
+  cacheLegendElement,
+  markLegendCompanionRow,
+  setRunLegendRowHidden,
+} from "../lib/legend-visibility";
 
 /**
  * Detach the drag-finalize listeners registered alongside `chart._leaveHandler`
@@ -268,12 +273,15 @@ export function useChartLifecycle({
     // name). Inline + fullscreen-sidebar rendering of the marker is left to
     // uPlot — we don't touch the visible legend, only the data attributes
     // the export reads from.
+    cacheLegendElement(chart);
     const legendRows = chart.root.querySelectorAll(".u-series");
     processedLines.forEach((line, idx) => {
       const row = legendRows[idx + 1] as HTMLElement | undefined;
       if (!row) return;
       if (line.hideFromLegend) {
         row.style.display = "none";
+        // Flagged so un-hiding a run never brings a companion row back.
+        markLegendCompanionRow(row);
       }
       if (line.dash && line.dash.length > 0) {
         row.setAttribute("data-dash", line.dash.join(","));
@@ -292,16 +300,27 @@ export function useChartLifecycle({
     const hiddenIds = chartSyncContextRef.current?.hiddenRunIdsRef?.current;
     const legendHidden = legendHiddenSeriesRef.current;
     if ((hiddenIds && hiddenIds.size > 0) || legendHidden.size > 0) {
+      // Mark these as run-level so the setSeries hook doesn't record them in
+      // the CHART-LOCAL hidden store — a runs-table hide is a different
+      // mechanism. Hooks still fire, so companion series stay in step.
+      (chart as any)._applyingRunVisibility = true;
       chart.batch(() => {
         for (let i = 1; i < chart.series.length; i++) {
           const seriesId = (chart.series[i] as any)?._seriesId as string | undefined;
           if (!seriesId) continue;
           const runId = seriesId.includes(':') ? seriesId.split(':')[0] : seriesId;
-          if ((hiddenIds && hiddenIds.has(runId)) || legendHidden.has(seriesId)) {
+          const runHidden = !!hiddenIds && hiddenIds.has(runId);
+          if (runHidden || legendHidden.has(seriesId)) {
             chart.setSeries(i, { show: false });
+          }
+          // Only the eye toggle takes a row out of the legend. Legend-click
+          // hidden series keep their row so they can be clicked back on.
+          if (runHidden) {
+            setRunLegendRowHidden(chart, i, true);
           }
         }
       });
+      (chart as any)._applyingRunVisibility = false;
       // Correct X scale after hiding series — uPlot's auto-range used the full
       // data extent (including hidden runs) during chart creation.
       if (!logXAxis && !isDateTime) {

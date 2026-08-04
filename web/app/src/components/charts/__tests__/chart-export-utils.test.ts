@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   extractCaptionFromDOM,
+  extractLegendEntries,
   parseDashAttr,
 } from "../chart-export-utils";
 
@@ -129,5 +130,62 @@ describe("parseDashAttr", () => {
   it("returns undefined when no positive values remain", () => {
     expect(parseDashAttr("")).toBeUndefined();
     expect(parseDashAttr("0,-1")).toBeUndefined();
+  });
+});
+
+describe("extractLegendEntries", () => {
+  /** One legend row per series, preceded by uPlot's x-axis row. */
+  function makeLegend(
+    rows: { label: string; style?: string; className?: string }[],
+  ): HTMLDivElement {
+    return makeDiv(`
+      <table class="u-legend">
+        <tr class="u-series"><th>step</th></tr>
+        ${rows
+          .map(
+            (r) =>
+              `<tr class="u-series ${r.className ?? ""}" style="${r.style ?? ""}">
+                 <th class="u-marker" style="border-color: rgb(1,2,3)"></th>
+                 <th class="u-label">${r.label}</th>
+               </tr>`,
+          )
+          .join("")}
+      </table>`);
+  }
+
+  it("skips rows hidden with display:none", () => {
+    // This is what makes hiding a run drop it from the exported PNG.
+    const el = makeLegend([
+      { label: "PDE-5", style: "display: none" },
+      { label: "PDE-6" },
+    ]);
+    expect(extractLegendEntries(el).map((e) => e.label)).toEqual(["PDE-6"]);
+  });
+
+  it("skips rows switched off via the tooltip or legend row (.u-off)", () => {
+    // Such a row stays in the ON-SCREEN legend so it can be clicked back on,
+    // but the export must show only what is actually drawn — a PNG can't be
+    // clicked, so a greyed entry there just misrepresents the chart.
+    const el = makeLegend([
+      { label: "PDE-5", className: "u-off" },
+      { label: "PDE-6" },
+    ]);
+    expect(extractLegendEntries(el).map((e) => e.label)).toEqual(["PDE-6"]);
+  });
+
+  it("skips a row hidden by both mechanisms at once", () => {
+    const el = makeLegend([
+      { label: "PDE-5", className: "u-off", style: "display: none" },
+      { label: "PDE-6" },
+    ]);
+    expect(extractLegendEntries(el).map((e) => e.label)).toEqual(["PDE-6"]);
+  });
+
+  it("returns nothing when every run is hidden", () => {
+    const el = makeLegend([
+      { label: "PDE-5", style: "display: none" },
+      { label: "PDE-6", style: "display: none" },
+    ]);
+    expect(extractLegendEntries(el)).toEqual([]);
   });
 });

@@ -35,6 +35,15 @@ import { useYRange } from "./hooks/use-y-range";
 // Re-export types from lib/types
 export type { LineData, LineChartUPlotRef } from "./lib/types";
 import type { LineChartUPlotRef, LineChartProps } from "./lib/types";
+import {
+  getLegendHiddenStore,
+  legendHiddenKey,
+  subscribeLegendHidden,
+  notifyLegendHidden,
+  applyLegendHidden,
+  retainLegendHiddenStore,
+  releaseLegendHiddenStore,
+} from "./lib/legend-hidden-store";
 import { DEFAULT_SYNC_KEY } from "./lib/types";
 
 
@@ -119,6 +128,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       forkSteps,
       extraLeftPadding,
       extraRightPadding,
+      legendStateKey,
       className,
       ...rest
     },
@@ -161,8 +171,6 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
     const spanGapsRef = useRef(spanGaps);
     spanGapsRef.current = spanGaps;
 
-    // Legend-hidden series persistence across chart recreations
-    const legendHiddenSeriesRef = useRef<Set<string>>(new Set());
     const processedLinesRef = useRef<typeof lines>([]);
     const chartInstanceRef = useRef<uPlot | null>(null);
 
@@ -172,6 +180,53 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
 
     const effectiveSyncKey = chartSyncContext?.syncKey ?? syncKey ?? DEFAULT_SYNC_KEY;
 
+    // Chart-local hidden series (tooltip / legend-row toggles), persisted
+    // across chart recreations AND across the inline ⇄ fullscreen boundary.
+    // Fullscreen mounts a SEPARATE LineUplot, so a per-component ref would
+    // start empty there and the series would reappear. Assigned during render
+    // so the store is correct before any effect reads it.
+    const legendHiddenSeriesRef = useRef<Set<string>>(new Set());
+    const legendHiddenKeyRef = useRef<string>("");
+    legendHiddenKeyRef.current = legendHiddenKey(
+      effectiveSyncKey,
+      title,
+      legendStateKey,
+    );
+    legendHiddenSeriesRef.current = getLegendHiddenStore(
+      legendHiddenKeyRef.current,
+    );
+
+    // Hold the shared store while this chart is mounted so it can be dropped
+    // once nothing is using the key.
+    useEffect(() => {
+      const key = legendHiddenKeyRef.current;
+      retainLegendHiddenStore(key);
+      return () => releaseLegendHiddenStore(key);
+    }, [effectiveSyncKey, title, legendStateKey]);
+
+    // Re-apply the shared hidden set when the OTHER render of this chart
+    // (inline ⇄ fullscreen) toggles a series. Both share one Set, but the set
+    // is only read when a chart is created — entering fullscreen creates a
+    // chart so it picked changes up, while leaving fullscreen does not
+    // recreate the inline chart, so toggles made in fullscreen were lost.
+    useEffect(() => {
+      const key = legendHiddenKeyRef.current;
+      return subscribeLegendHidden(key, (origin) => {
+        if (origin === chartId) return;
+        const u = chartRef.current ?? chartInstanceRef.current;
+        if (!u) return;
+        let changed = false;
+        u.batch(() => {
+          changed = applyLegendHidden(
+            u as never,
+            processedLinesRef.current,
+            getLegendHiddenStore(key),
+          );
+        });
+        if (changed) u.redraw();
+      });
+    }, [effectiveSyncKey, title, legendStateKey, chartId]);
+
     // Process data for log scales
     const processedLines = useMemo(
       () => filterDataForLogScale(lines, logXAxis, logYAxis),
@@ -179,13 +234,13 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
     );
     processedLinesRef.current = processedLines;
 
-    // Prune stale entries from legend-hidden set
-    if (legendHiddenSeriesRef.current.size > 0) {
-      const validIds = new Set(processedLines.map((l) => l.seriesId ?? l.label));
-      legendHiddenSeriesRef.current.forEach((id) => {
-        if (!validIds.has(id)) legendHiddenSeriesRef.current.delete(id);
-      });
-    }
+    // No pruning of the hidden set here. It used to drop ids that were absent
+    // from this chart's lines, which was safe while the set was per-component
+    // but now reaches into the SHARED store: a chart rendering with briefly
+    // empty or different lines — a refetch, a sibling widget on the same key —
+    // would wipe its fullscreen twin's hides. Stale ids are harmless anyway,
+    // since applyLegendHidden walks the chart's own series and never consults
+    // an id it doesn't own.
 
     // Calculate time range for datetime formatting
     const timeRange = useMemo(() => {
@@ -487,19 +542,43 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             const shouldShow = u.series[seriesIdx].show;
             const seriesId = (u.series[seriesIdx] as any)?._seriesId as string | undefined;
             const originalLabel = toggled.label;
-            if (seriesId) {
-              if (shouldShow) legendHiddenSeriesRef.current.delete(seriesId);
-              else legendHiddenSeriesRef.current.add(seriesId);
+
+            // Record the toggle in the CHART-LOCAL store, unless this change
+            // came from the runs-table eye. That is a different mechanism —
+            // it hides a run on every chart — and writing it here conflated
+            // the two, leaving ids behind that no chart-local hide created.
+            // Companion syncing below still runs either way.
+            let storeChanged = false;
+            if (seriesId && !(u as any)._applyingRunVisibility) {
+              if (shouldShow) {
+                storeChanged = legendHiddenSeriesRef.current.delete(seriesId);
+              } else if (!legendHiddenSeriesRef.current.has(seriesId)) {
+                legendHiddenSeriesRef.current.add(seriesId);
+                storeChanged = true;
+              }
             }
             for (let i = 1; i < u.series.length; i++) {
               if (i === seriesIdx) continue;
               const companion = processedLinesRef.current[i - 1];
               if (!companion) continue;
+              // Match on the parent's LABEL, not its seriesId. The smoothing
+              // companion carries its own id ("val/mAP (original)" beside the
+              // parent's "val/mAP") on the individual-run page, so an id
+              // comparison silently missed it there and the faint original
+              // line kept drawing after its run was hidden.
               const isCompanion =
                 (companion.envelopeOf && companion.envelopeOf === originalLabel) ||
-                (companion.hideFromLegend && seriesId && (companion.seriesId === seriesId));
+                (companion.hideFromLegend &&
+                  (companion.label === `${originalLabel} (original)` ||
+                    (!!seriesId && companion.seriesId === seriesId)));
               if (isCompanion && u.series[i].show !== shouldShow) u.setSeries(i, { show: shouldShow }, false);
             }
+            // Tell the other render of this chart (inline ⇄ fullscreen) that
+            // the shared hidden set moved, so it re-applies instead of only
+            // picking the set up when it is next created. Only when it really
+            // moved: uPlot fires this hook for cursor focus as well, which
+            // leaves visibility untouched.
+            if (storeChanged) notifyLegendHidden(legendHiddenKeyRef.current, chartId);
           }],
           draw: [drawHook],
           setScale: [setScaleHook],

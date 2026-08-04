@@ -138,8 +138,19 @@ export function parseDashAttr(attr: string | null): number[] | undefined {
   return parts.length > 0 ? parts : undefined;
 }
 
-/** Extract visible legend entries (label + color) from the uPlot legend DOM */
-function extractLegendEntries(container: HTMLElement): LegendEntry[] {
+/** Extract visible legend entries (label + color) from the uPlot legend DOM.
+ *
+ *  Exported for tests. The export shows exactly what is DRAWN, so a series
+ *  is skipped when it is hidden by either mechanism:
+ *
+ *    - `display: none` — smoothing companions, and runs hidden via the
+ *      runs-table eye (which drops the row from the legend entirely);
+ *    - `.u-off` — uPlot's class for a series switched off from the tooltip or
+ *      by clicking its legend row. That row deliberately STAYS in the
+ *      on-screen legend, because clicking it is the only way to bring the
+ *      series back — but a PNG can't be clicked, so a greyed-out entry there
+ *      is just a run that isn't on the chart. */
+export function extractLegendEntries(container: HTMLElement): LegendEntry[] {
   const entries: LegendEntry[] = [];
   const legendTable = container.querySelector(".u-legend");
   if (!legendTable) {
@@ -150,7 +161,7 @@ function extractLegendEntries(container: HTMLElement): LegendEntry[] {
   // Row 0 is the X-axis; data series start at index 1
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i] as HTMLElement;
-    if (row.style.display === "none") {
+    if (row.style.display === "none" || row.classList.contains("u-off")) {
       continue;
     }
 

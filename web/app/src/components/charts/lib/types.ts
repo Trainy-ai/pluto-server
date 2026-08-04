@@ -75,6 +75,11 @@ export interface LineChartProps extends React.HTMLAttributes<HTMLDivElement> {
    *  using a fixed rightMargin can't predict that, so passing a matched
    *  value here pins both right edges to canvasWidth − N. */
   extraRightPadding?: number;
+  /** Stable identity for this chart's CHART-LOCAL hidden series (tooltip /
+   *  legend-row toggles). Defaults to sync key + title, which the inline and
+   *  fullscreen renders of the same chart share. Pass an explicit id (e.g. a
+   *  dashboard widget id) when two charts could carry the same title. */
+  legendStateKey?: string;
 }
 
 /** Ref handle exposed to parent components */
