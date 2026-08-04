@@ -355,6 +355,10 @@ model Runs {
   // Covering indexes for server-side sorting (avoids seq scans on sort queries)
   @@index([organizationId, projectId, createdAt(sort: Desc)])
   @@index([organizationId, projectId, name])
+  // Backs the "latest run per project" lateral used to sort the projects table
+  // by Last Run At / Last Run / Latest Run Status. Without it, picking each
+  // project's newest run by updatedAt scans that project's whole run history.
+  @@index([organizationId, projectId, updatedAt(sort: Desc)])
   @@map("runs")
 }
 

@@ -5,6 +5,7 @@ import type { inferOutput } from "@trpc/tanstack-react-query";
 import { ExternalLinkIcon, Clock } from "lucide-react";
 import { RunStatusBadge } from "@/components/core/runs/run-status-badge";
 import { DeleteProjectButton } from "../delete-project-button";
+import { SortableHeader } from "./sortable-header";
 
 type Project = inferOutput<typeof trpc.projects.list>["projects"][0];
 
@@ -19,8 +20,16 @@ export const columns = ({
   canDelete: boolean;
 }): ColumnDef<Project>[] => [
   {
-    header: "Name",
+    // Column ids are the sort keys the server understands — see
+    // PROJECT_SORT_FIELDS in web/server/lib/project-list-query.ts.
+    id: "name",
     accessorKey: "name",
+    // First click sorts A→Z for text, newest-first for dates. Set explicitly:
+    // TanStack otherwise infers the direction from the first row's value, which
+    // is undefined for the columns below that render from `runs` without an
+    // accessor — and undefined infers as descending.
+    sortDescFirst: false,
+    header: ({ column }) => <SortableHeader column={column} label="Name" />,
     cell: ({ row }) => {
       return (
         <Link
@@ -33,7 +42,10 @@ export const columns = ({
           }}
         >
           <div className="flex items-center gap-2">
-            <span className="max-w-[200px] truncate text-sm font-medium group-hover:underline sm:max-w-[300px]">
+            <span
+              data-testid="project-name"
+              className="max-w-[200px] truncate text-sm font-medium group-hover:underline sm:max-w-[300px]"
+            >
               {row.original.name}
             </span>
             <span className="text-xs text-muted-foreground">
@@ -45,22 +57,35 @@ export const columns = ({
     },
   },
   {
-    header: "Tags",
+    id: "tags",
     accessorKey: "tags",
+    sortDescFirst: false,
+    header: ({ column }) => <SortableHeader column={column} label="Tags" />,
     cell: ({ row }) => {
       return <div>{row.original.tags.join(", ")}</div>;
     },
   },
   {
-    header: "Created At",
+    id: "createdAt",
     accessorKey: "createdAt",
+    sortDescFirst: true,
+    header: ({ column }) => (
+      <SortableHeader column={column} label="Created At" />
+    ),
     cell: ({ row }) => {
       return <div>{row.original.createdAt.toLocaleString()}</div>;
     },
   },
   {
-    header: "Last Run At",
-    accessorKey: "lastRunAts",
+    id: "lastRunAt",
+    // TanStack only treats a column as sortable when it has an accessor, so
+    // these three read the latest run rather than rendering from `row.original`
+    // alone. The value itself isn't used for ordering — the server sorts.
+    accessorFn: (project) => project.runs[0]?.updatedAt ?? null,
+    sortDescFirst: true,
+    header: ({ column }) => (
+      <SortableHeader column={column} label="Last Run At" />
+    ),
     cell: ({ row }) => {
       const lastRun = row.original.runs[0];
       if (!lastRun) return null;
@@ -76,8 +101,10 @@ export const columns = ({
     },
   },
   {
-    header: "Last Run",
-    accessorKey: "runs",
+    id: "lastRunName",
+    accessorFn: (project) => project.runs[0]?.name ?? null,
+    sortDescFirst: false,
+    header: ({ column }) => <SortableHeader column={column} label="Last Run" />,
     cell: ({ row }) => {
       const lastRun = row.original.runs[0];
       if (!lastRun) return null;
@@ -102,8 +129,12 @@ export const columns = ({
     },
   },
   {
-    header: "Latest Run Status",
-    accessorKey: "status",
+    id: "lastRunStatus",
+    accessorFn: (project) => project.runs[0]?.status ?? null,
+    sortDescFirst: false,
+    header: ({ column }) => (
+      <SortableHeader column={column} label="Latest Run Status" />
+    ),
     cell: ({ row }) => {
       const lastRun = row.original.runs[0];
       if (!lastRun) return null;
@@ -116,6 +147,7 @@ export const columns = ({
         {
           id: "actions",
           header: "",
+          enableSorting: false,
           cell: ({ row }) => (
             <div className="flex justify-end">
               <DeleteProjectButton

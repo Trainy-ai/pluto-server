@@ -1,12 +1,14 @@
 "use client";
 
 import {
+  type Column,
   type ColumnDef,
   flexRender,
   getCoreRowModel,
   useReactTable,
   type PaginationState,
   type OnChangeFn,
+  type SortingState,
 } from "@tanstack/react-table";
 
 import {
@@ -33,10 +35,37 @@ interface DataTableProps<TData, TValue> {
   pageSize?: number;
   pageIndex?: number;
   isLoading?: boolean;
+  /**
+   * Total rows across every page. Pagination is server-side, so `data` only
+   * holds the current page and cannot be counted for the summary line.
+   */
+  totalCount?: number;
+  /** Shown when there are no rows — lets callers explain an empty search. */
+  emptyMessage?: string;
+  /** Active sort. Ordering is server-side, so this is state, not an instruction. */
+  sorting?: SortingState;
+  onSortingChange?: OnChangeFn<SortingState>;
   onPaginationChange?: (pagination: {
     pageIndex: number;
     pageSize: number;
   }) => void;
+}
+
+/**
+ * `aria-sort` for a header cell, or undefined when the column isn't sortable —
+ * the attribute is only meaningful on sortable columns.
+ */
+function getAriaSort<TData, TValue>(
+  column: Column<TData, TValue>,
+): "ascending" | "descending" | "none" | undefined {
+  if (!column.getCanSort()) {
+    return undefined;
+  }
+
+  const sorted = column.getIsSorted();
+  if (sorted === "asc") return "ascending";
+  if (sorted === "desc") return "descending";
+  return "none";
 }
 
 export function DataTable<TData, TValue>({
@@ -46,6 +75,10 @@ export function DataTable<TData, TValue>({
   pageSize = 10,
   pageIndex = 0,
   isLoading = false,
+  totalCount,
+  emptyMessage = "No projects found.",
+  sorting = [],
+  onSortingChange,
   onPaginationChange,
 }: DataTableProps<TData, TValue>) {
   const pagination: PaginationState = {
@@ -70,10 +103,15 @@ export function DataTable<TData, TValue>({
     pageCount: pageCount,
     state: {
       pagination,
+      sorting,
     },
     onPaginationChange: handlePaginationChange,
+    onSortingChange,
     getCoreRowModel: getCoreRowModel(),
     manualPagination: true,
+    // The server orders the rows. Sorting client-side would only reorder the
+    // current page, which for a 50-row page of a larger set is just wrong.
+    manualSorting: true,
   });
 
   return (
@@ -87,6 +125,7 @@ export function DataTable<TData, TValue>({
                   return (
                     <TableHead
                       key={header.id}
+                      aria-sort={getAriaSort(header.column)}
                       className="px-4 py-3 text-left text-sm font-medium whitespace-nowrap text-muted-foreground"
                     >
                       {header.isPlaceholder
@@ -106,6 +145,7 @@ export function DataTable<TData, TValue>({
               <TableRow>
                 <TableCell
                   colSpan={columns.length}
+                  data-testid="projects-table-loading"
                   className="h-24 text-center text-sm"
                 >
                   <div className="flex items-center justify-center">
@@ -136,7 +176,7 @@ export function DataTable<TData, TValue>({
                   colSpan={columns.length}
                   className="h-24 text-center text-sm text-muted-foreground"
                 >
-                  No projects found.
+                  {emptyMessage}
                 </TableCell>
               </TableRow>
             )}
@@ -146,7 +186,8 @@ export function DataTable<TData, TValue>({
 
       <div className="flex items-center justify-between px-2">
         <div className="flex-1 text-sm text-muted-foreground">
-          {table.getFilteredRowModel().rows.length} project(s) total
+          {totalCount ?? table.getFilteredRowModel().rows.length} project(s)
+          total
         </div>
         <div className="flex items-center space-x-6 lg:space-x-8">
           <div className="flex items-center space-x-2">
@@ -170,7 +211,9 @@ export function DataTable<TData, TValue>({
             </Button>
             <div className="flex items-center justify-center text-sm font-medium">
               Page {table.getState().pagination.pageIndex + 1} of{" "}
-              {table.getPageCount()}
+              {/* A search with no matches yields 0 pages; the user is still
+                  looking at page 1, so never render "Page 1 of 0". */}
+              {Math.max(table.getPageCount(), 1)}
             </div>
             <Button
               variant="outline"
