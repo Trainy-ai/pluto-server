@@ -42,7 +42,9 @@ import { Route as OOrgSlugAuthedSettingsOrgBillingImport } from './routes/o.$org
 import { Route as OOrgSlugAuthedSettingsAccountPreferencesImport } from './routes/o.$orgSlug._authed/settings/account/preferences'
 import { Route as OOrgSlugAuthedrunComparisonProjectsProjectNameIndexImport } from './routes/o.$orgSlug._authed/(runComparison)/projects.$projectName/index'
 import { Route as OOrgSlugAuthedrunComparisonProjectsProjectNameTableImport } from './routes/o.$orgSlug._authed/(runComparison)/projects.$projectName/table'
+import { Route as OOrgSlugAuthedrunComparisonProjectsProjectNameSweepsIndexImport } from './routes/o.$orgSlug._authed/(runComparison)/projects.$projectName/sweeps.index'
 import { Route as OOrgSlugAuthedrunProjectsProjectNameRunIdIndexImport } from './routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/index'
+import { Route as OOrgSlugAuthedrunComparisonProjectsProjectNameSweepsSweepIdImport } from './routes/o.$orgSlug._authed/(runComparison)/projects.$projectName/sweeps.$sweepId'
 import { Route as OOrgSlugAuthedrunProjectsProjectNameRunIdSystemImport } from './routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/system'
 import { Route as OOrgSlugAuthedrunProjectsProjectNameRunIdLogsImport } from './routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/logs'
 import { Route as OOrgSlugAuthedrunProjectsProjectNameRunIdGraphImport } from './routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/graph'
@@ -252,10 +254,24 @@ const OOrgSlugAuthedrunComparisonProjectsProjectNameTableRoute =
     getParentRoute: () => OOrgSlugAuthedRoute,
   } as any)
 
+const OOrgSlugAuthedrunComparisonProjectsProjectNameSweepsIndexRoute =
+  OOrgSlugAuthedrunComparisonProjectsProjectNameSweepsIndexImport.update({
+    id: '/(runComparison)/projects/$projectName/sweeps/',
+    path: '/projects/$projectName/sweeps/',
+    getParentRoute: () => OOrgSlugAuthedRoute,
+  } as any)
+
 const OOrgSlugAuthedrunProjectsProjectNameRunIdIndexRoute =
   OOrgSlugAuthedrunProjectsProjectNameRunIdIndexImport.update({
     id: '/(run)/projects/$projectName/$runId/',
     path: '/projects/$projectName/$runId/',
+    getParentRoute: () => OOrgSlugAuthedRoute,
+  } as any)
+
+const OOrgSlugAuthedrunComparisonProjectsProjectNameSweepsSweepIdRoute =
+  OOrgSlugAuthedrunComparisonProjectsProjectNameSweepsSweepIdImport.update({
+    id: '/(runComparison)/projects/$projectName/sweeps/$sweepId',
+    path: '/projects/$projectName/sweeps/$sweepId',
     getParentRoute: () => OOrgSlugAuthedRoute,
   } as any)
 
@@ -543,11 +559,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OOrgSlugAuthedrunProjectsProjectNameRunIdSystemImport
       parentRoute: typeof OOrgSlugAuthedImport
     }
+    '/o/$orgSlug/_authed/(runComparison)/projects/$projectName/sweeps/$sweepId': {
+      id: '/o/$orgSlug/_authed/(runComparison)/projects/$projectName/sweeps/$sweepId'
+      path: '/projects/$projectName/sweeps/$sweepId'
+      fullPath: '/o/$orgSlug/projects/$projectName/sweeps/$sweepId'
+      preLoaderRoute: typeof OOrgSlugAuthedrunComparisonProjectsProjectNameSweepsSweepIdImport
+      parentRoute: typeof OOrgSlugAuthedImport
+    }
     '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/': {
       id: '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/'
       path: '/projects/$projectName/$runId'
       fullPath: '/o/$orgSlug/projects/$projectName/$runId'
       preLoaderRoute: typeof OOrgSlugAuthedrunProjectsProjectNameRunIdIndexImport
+      parentRoute: typeof OOrgSlugAuthedImport
+    }
+    '/o/$orgSlug/_authed/(runComparison)/projects/$projectName/sweeps/': {
+      id: '/o/$orgSlug/_authed/(runComparison)/projects/$projectName/sweeps/'
+      path: '/projects/$projectName/sweeps'
+      fullPath: '/o/$orgSlug/projects/$projectName/sweeps'
+      preLoaderRoute: typeof OOrgSlugAuthedrunComparisonProjectsProjectNameSweepsIndexImport
       parentRoute: typeof OOrgSlugAuthedImport
     }
     '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/summary/': {
@@ -608,7 +638,9 @@ interface OOrgSlugAuthedRouteChildren {
   OOrgSlugAuthedrunProjectsProjectNameRunIdGraphRoute: typeof OOrgSlugAuthedrunProjectsProjectNameRunIdGraphRoute
   OOrgSlugAuthedrunProjectsProjectNameRunIdLogsRoute: typeof OOrgSlugAuthedrunProjectsProjectNameRunIdLogsRoute
   OOrgSlugAuthedrunProjectsProjectNameRunIdSystemRoute: typeof OOrgSlugAuthedrunProjectsProjectNameRunIdSystemRoute
+  OOrgSlugAuthedrunComparisonProjectsProjectNameSweepsSweepIdRoute: typeof OOrgSlugAuthedrunComparisonProjectsProjectNameSweepsSweepIdRoute
   OOrgSlugAuthedrunProjectsProjectNameRunIdIndexRoute: typeof OOrgSlugAuthedrunProjectsProjectNameRunIdIndexRoute
+  OOrgSlugAuthedrunComparisonProjectsProjectNameSweepsIndexRoute: typeof OOrgSlugAuthedrunComparisonProjectsProjectNameSweepsIndexRoute
   OOrgSlugAuthedrunProjectsProjectNameRunIdSummaryIndexRoute: typeof OOrgSlugAuthedrunProjectsProjectNameRunIdSummaryIndexRoute
 }
 
@@ -639,8 +671,12 @@ const OOrgSlugAuthedRouteChildren: OOrgSlugAuthedRouteChildren = {
     OOrgSlugAuthedrunProjectsProjectNameRunIdLogsRoute,
   OOrgSlugAuthedrunProjectsProjectNameRunIdSystemRoute:
     OOrgSlugAuthedrunProjectsProjectNameRunIdSystemRoute,
+  OOrgSlugAuthedrunComparisonProjectsProjectNameSweepsSweepIdRoute:
+    OOrgSlugAuthedrunComparisonProjectsProjectNameSweepsSweepIdRoute,
   OOrgSlugAuthedrunProjectsProjectNameRunIdIndexRoute:
     OOrgSlugAuthedrunProjectsProjectNameRunIdIndexRoute,
+  OOrgSlugAuthedrunComparisonProjectsProjectNameSweepsIndexRoute:
+    OOrgSlugAuthedrunComparisonProjectsProjectNameSweepsIndexRoute,
   OOrgSlugAuthedrunProjectsProjectNameRunIdSummaryIndexRoute:
     OOrgSlugAuthedrunProjectsProjectNameRunIdSummaryIndexRoute,
 }
@@ -694,7 +730,9 @@ export interface FileRoutesByFullPath {
   '/o/$orgSlug/projects/$projectName/$runId/graph': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdGraphRoute
   '/o/$orgSlug/projects/$projectName/$runId/logs': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdLogsRoute
   '/o/$orgSlug/projects/$projectName/$runId/system': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdSystemRoute
+  '/o/$orgSlug/projects/$projectName/sweeps/$sweepId': typeof OOrgSlugAuthedrunComparisonProjectsProjectNameSweepsSweepIdRoute
   '/o/$orgSlug/projects/$projectName/$runId': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdIndexRoute
+  '/o/$orgSlug/projects/$projectName/sweeps': typeof OOrgSlugAuthedrunComparisonProjectsProjectNameSweepsIndexRoute
   '/o/$orgSlug/projects/$projectName/$runId/summary': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdSummaryIndexRoute
 }
 
@@ -730,7 +768,9 @@ export interface FileRoutesByTo {
   '/o/$orgSlug/projects/$projectName/$runId/graph': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdGraphRoute
   '/o/$orgSlug/projects/$projectName/$runId/logs': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdLogsRoute
   '/o/$orgSlug/projects/$projectName/$runId/system': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdSystemRoute
+  '/o/$orgSlug/projects/$projectName/sweeps/$sweepId': typeof OOrgSlugAuthedrunComparisonProjectsProjectNameSweepsSweepIdRoute
   '/o/$orgSlug/projects/$projectName/$runId': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdIndexRoute
+  '/o/$orgSlug/projects/$projectName/sweeps': typeof OOrgSlugAuthedrunComparisonProjectsProjectNameSweepsIndexRoute
   '/o/$orgSlug/projects/$projectName/$runId/summary': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdSummaryIndexRoute
 }
 
@@ -771,7 +811,9 @@ export interface FileRoutesById {
   '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/graph': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdGraphRoute
   '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/logs': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdLogsRoute
   '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/system': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdSystemRoute
+  '/o/$orgSlug/_authed/(runComparison)/projects/$projectName/sweeps/$sweepId': typeof OOrgSlugAuthedrunComparisonProjectsProjectNameSweepsSweepIdRoute
   '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdIndexRoute
+  '/o/$orgSlug/_authed/(runComparison)/projects/$projectName/sweeps/': typeof OOrgSlugAuthedrunComparisonProjectsProjectNameSweepsIndexRoute
   '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/summary/': typeof OOrgSlugAuthedrunProjectsProjectNameRunIdSummaryIndexRoute
 }
 
@@ -810,7 +852,9 @@ export interface FileRouteTypes {
     | '/o/$orgSlug/projects/$projectName/$runId/graph'
     | '/o/$orgSlug/projects/$projectName/$runId/logs'
     | '/o/$orgSlug/projects/$projectName/$runId/system'
+    | '/o/$orgSlug/projects/$projectName/sweeps/$sweepId'
     | '/o/$orgSlug/projects/$projectName/$runId'
+    | '/o/$orgSlug/projects/$projectName/sweeps'
     | '/o/$orgSlug/projects/$projectName/$runId/summary'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -845,7 +889,9 @@ export interface FileRouteTypes {
     | '/o/$orgSlug/projects/$projectName/$runId/graph'
     | '/o/$orgSlug/projects/$projectName/$runId/logs'
     | '/o/$orgSlug/projects/$projectName/$runId/system'
+    | '/o/$orgSlug/projects/$projectName/sweeps/$sweepId'
     | '/o/$orgSlug/projects/$projectName/$runId'
+    | '/o/$orgSlug/projects/$projectName/sweeps'
     | '/o/$orgSlug/projects/$projectName/$runId/summary'
   id:
     | '__root__'
@@ -884,7 +930,9 @@ export interface FileRouteTypes {
     | '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/graph'
     | '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/logs'
     | '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/system'
+    | '/o/$orgSlug/_authed/(runComparison)/projects/$projectName/sweeps/$sweepId'
     | '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/'
+    | '/o/$orgSlug/_authed/(runComparison)/projects/$projectName/sweeps/'
     | '/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/summary/'
   fileRoutesById: FileRoutesById
 }
@@ -1019,7 +1067,9 @@ export const routeTree = rootRoute
         "/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/graph",
         "/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/logs",
         "/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/system",
+        "/o/$orgSlug/_authed/(runComparison)/projects/$projectName/sweeps/$sweepId",
         "/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/",
+        "/o/$orgSlug/_authed/(runComparison)/projects/$projectName/sweeps/",
         "/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/summary/"
       ]
     },
@@ -1105,8 +1155,16 @@ export const routeTree = rootRoute
       "filePath": "o.$orgSlug._authed/(run)/projects.$projectName.$runId/system.tsx",
       "parent": "/o/$orgSlug/_authed"
     },
+    "/o/$orgSlug/_authed/(runComparison)/projects/$projectName/sweeps/$sweepId": {
+      "filePath": "o.$orgSlug._authed/(runComparison)/projects.$projectName/sweeps.$sweepId.tsx",
+      "parent": "/o/$orgSlug/_authed"
+    },
     "/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/": {
       "filePath": "o.$orgSlug._authed/(run)/projects.$projectName.$runId/index.tsx",
+      "parent": "/o/$orgSlug/_authed"
+    },
+    "/o/$orgSlug/_authed/(runComparison)/projects/$projectName/sweeps/": {
+      "filePath": "o.$orgSlug._authed/(runComparison)/projects.$projectName/sweeps.index.tsx",
       "parent": "/o/$orgSlug/_authed"
     },
     "/o/$orgSlug/_authed/(run)/projects/$projectName/$runId/summary/": {

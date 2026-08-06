@@ -19,6 +19,7 @@ import {
   RiInformationFill,
   RiLineChartFill,
   RiNodeTree,
+  RiScales3Fill,
   RiTableFill,
   RiTerminalFill,
 } from "@remixicon/react";
@@ -43,6 +44,17 @@ const mainNavItems = [
     // TODO: Add link
     link: "https://docs.trainy.ai/pluto/visualizations",
     description: "Data logged during the training",
+  },
+  {
+    title: "Sweeps",
+    href: "/projects/$projectName/sweeps",
+    // Matches the list and any sweep's detail page, so the tab stays lit while
+    // you are inside a sweep.
+    matchPattern: /^projects\/[^/]+\/sweeps(\/|$)/,
+    icon: RiScales3Fill,
+    link: "https://docs.trainy.ai/pluto/visualizations",
+    description:
+      "Hyperparameter sweeps — compare the runs of a sweep and find the best configuration",
   },
 ];
 

@@ -7,6 +7,7 @@ import { onboardingRouter } from "./routers/onboarding/router";
 import { feedbackProcedure } from "./procs/feedback";
 import { dashboardViewsRouter } from "./routers/dashboard-views/router";
 import { runTableViewsRouter } from "./routers/run-table-views/router";
+import { sweepsRouter } from "./routers/sweeps/router";
 import { chartsLayoutRouter } from "./routers/charts-layout/router";
 
 export const appRouter = router({
@@ -21,6 +22,7 @@ export const appRouter = router({
   onboarding: onboardingRouter,
   dashboardViews: dashboardViewsRouter,
   runTableViews: runTableViewsRouter,
+  sweeps: sweepsRouter,
   chartsLayout: chartsLayoutRouter,
 });
 
