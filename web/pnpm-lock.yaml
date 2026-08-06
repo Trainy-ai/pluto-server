@@ -4154,8 +4154,8 @@ packages:
   '@types/plotly.js-dist-min@2.3.4':
     resolution: {integrity: sha512-ISwLFV6Zs/v3DkaRFLyk2rvYAfVdnYP2VVVy7h+fBDWw52sn7sMUzytkWiN4M75uxr1uz1uiBioePTDpAfoFIg==}
 
-  '@types/plotly.js@3.0.12':
-    resolution: {integrity: sha512-YQclG1zhAOyLX1XmaxErkqedLPDfOI5qak+eL5TrLdqDGfIYUKq6juR/5SZ6es+r+VVkTflxgUYdqRaKhojRvA==}
+  '@types/plotly.js@3.0.10':
+    resolution: {integrity: sha512-q+MgO4aajC2HrO7FllTYWzrpdfbTjboSMfjkz/aXKjg1v7HNo1zMEFfAW7quKfk6SL+bH74A5ThBEps/7hZxOA==}
 
   '@types/react-dom@19.1.2':
     resolution: {integrity: sha512-XGJkWF41Qq305SKWEILa1O8vzhb3aOo3ogBlSmiqNko/WmRb6QIaweuZCXjKygVDXpzXb5wyxKTSOsmkuqj+Qw==}
@@ -11531,9 +11531,9 @@ snapshots:
 
   '@types/plotly.js-dist-min@2.3.4':
     dependencies:
-      '@types/plotly.js': 3.0.12
+      '@types/plotly.js': 3.0.10
 
-  '@types/plotly.js@3.0.12': {}
+  '@types/plotly.js@3.0.10': {}
 
   '@types/react-dom@19.1.2(@types/react@19.2.7)':
     dependencies:

@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback, useEffect } from "react";
+import { useMemo, useState } from "react";
 import { trpc } from "@/utils/trpc";
 import { useQuery } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { StepNavigator } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/shared/step-navigator";
 import { useSyncedStepNavigation } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~hooks/use-synced-step-navigation";
 import { ImageCard } from "@/components/core/image-viewer";
+import { excludeMaskFiles, useMaskUrlByRun } from "@/hooks/use-mask-url";
 import { MediaCardWrapper } from "@/components/core/media-card-wrapper";
 import { MediaSettingsPopover } from "@/components/core/media-settings-popover";
 import { useSampleIndexSync } from "./use-sample-index-sync";
@@ -43,7 +44,9 @@ export const MultiGroupImage = ({
     ),
   );
 
-  const allImages = useMemo(
+  // Every file for this log, masks included — the mask rows have to stay in
+  // the response so `maskUrl` can resolve their presigned URLs.
+  const allFiles = useMemo(
     () =>
       runs.flatMap((run) =>
         (byRun?.[run.runId] ?? []).map((image) => ({
@@ -53,6 +56,18 @@ export const MultiGroupImage = ({
       ),
     [runs, byRun],
   );
+
+  // A mask is a segmentation layer belonging to another image, not a picture:
+  // its pixels are class ids, so shown as a tile it is near-black. Excluded
+  // from the grid, still resolvable by name above.
+  const allImages = useMemo(() => excludeMaskFiles(allFiles), [allFiles]);
+
+  // Scoped per run: `allFiles` spans every selected run, and the migration
+  // gives the same mask filename to every run exported together, so a
+  // name-only match would let another run's mask win. Resolvers are cached per
+  // run, so each card gets the same function on every render and the overlay's
+  // mask pipeline does not re-run.
+  const maskUrlForRun = useMaskUrlByRun(allFiles);
 
   const {
     currentStepIndex,
@@ -213,6 +228,8 @@ export const MultiGroupImage = ({
                 url={image?.url}
                 fileName={image?.fileName}
                 caption={image?.caption}
+                annotations={image?.annotations}
+                maskUrl={maskUrlForRun(run.runId)}
                 runLabel={{ name: run.runName, color: run.color }}
                 isPinned={isPinned}
                 pinnedStep={pinnedStep}

@@ -1,7 +1,22 @@
 import { useState, type ReactNode } from "react";
 import { Maximize2Icon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { createContext, useContext } from "react";
 import { MediaFullscreenDialog } from "@/components/charts/media-fullscreen-dialog";
+
+/**
+ * True for anything rendered inside the widget's fullscreen dialog.
+ *
+ * The dialog re-renders the very same children as the inline card, so a card
+ * cannot otherwise tell the two apart. Controls that would crowd a grid cell —
+ * annotation layer toggles, for one — use this to appear only where there is
+ * room for them.
+ */
+const MediaFullscreenContext = createContext(false);
+
+export function useInMediaFullscreen(): boolean {
+  return useContext(MediaFullscreenContext);
+}
 
 interface MediaCardWrapperProps {
   title: string;
@@ -57,7 +72,9 @@ export function MediaCardWrapper({
           title={title}
           headerExtra={fullscreenHeaderExtra}
         >
-          {fullscreenContent ?? children}
+          <MediaFullscreenContext.Provider value={true}>
+            {fullscreenContent ?? children}
+          </MediaFullscreenContext.Provider>
         </MediaFullscreenDialog>
       )}
     </>

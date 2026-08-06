@@ -1,5 +1,12 @@
-import { useState, useRef, useEffect } from "react";
+import { useMemo, useState, useRef, useEffect } from "react";
 import { cn } from "@/lib/utils";
+import { useInMediaFullscreen } from "@/components/core/media-card-wrapper";
+import {
+  AnnotatedImage,
+  compositeAnnotatedImage,
+} from "@/components/media/annotated-image";
+import { parseAnnotations } from "@/lib/image-annotations";
+import type { MaskUrlResolver } from "@/hooks/use-mask-url";
 import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import {
@@ -46,6 +53,18 @@ interface ImageCardProps {
    * present it is shown under the tile (and in the fullscreen footer) instead
    * of the raw UUID filename. Falls back to fileName when null/undefined. */
   caption?: string | null;
+  /**
+   * Raw annotations JSON for this image (boxes / masks). When present the
+   * thumbnail renders overlays on top; unparseable values fall back to the
+   * plain image rather than erroring.
+   */
+  annotations?: string | null;
+  /**
+   * Resolves a mask's fileName to a URL in the same log group. Build it with a
+   * hook from `@/hooks/use-mask-url` — an inline arrow re-runs the overlay's
+   * mask pipeline on every render of this card's parent.
+   */
+  maskUrl?: MaskUrlResolver;
   /** Optional run label with color dot. Shown above the image on the
    * card and again in the fullscreen footer (where there's otherwise no
    * indication of which run a maximised image came from). The name
@@ -152,6 +171,8 @@ export function ImageCard({
   url,
   fileName,
   caption,
+  annotations,
+  maskUrl,
   runLabel,
   stepNavigation,
   sharedScale,
@@ -168,6 +189,46 @@ export function ImageCard({
   currentImageIndex,
   onIndexChange,
 }: ImageCardProps) {
+  // Parsed once per render of this card. `parseAnnotations` swallows malformed
+  // JSON and returns null, so a bad blob degrades to a plain image.
+  const parsedAnnotations = useMemo(() => parseAnnotations(annotations), [annotations]);
+  // The rendered overlay, so a download can export what the user sees rather
+  // than re-fetching the bare file.
+  const thumbRef = useRef<HTMLDivElement | null>(null);
+  // The inline card and the widget's fullscreen render identical markup, so
+  // this is the only way to tell whether there is room for the toggles.
+  const inWidgetFullscreen = useInMediaFullscreen();
+
+  /**
+   * Download what is on screen. With annotations that is a flattened PNG of the
+   * image plus whichever layers are currently visible; otherwise the file URL.
+   * Takes the root to composite from, since the thumbnail and the fullscreen
+   * dialog render their own copies and either can be the one downloaded.
+   *
+   * Compositing can reject (the box SVG failing to rasterise, for one). Without
+   * the catch that surfaced as an unhandled rejection and a Download button
+   * that silently did nothing, so a failure falls back to the raw file instead.
+   */
+  const runDownload = async (root: HTMLElement | null): Promise<void> => {
+    let source = url ?? "";
+    if (parsedAnnotations) {
+      try {
+        source = (await compositeAnnotatedImage(root)) ?? url ?? "";
+      } catch (error) {
+        console.error("Failed to flatten annotations for download:", error);
+      }
+    }
+    if (!source) {
+      return;
+    }
+    await handleDownload(
+      source,
+      fileName ?? "image.png",
+      runLabel,
+      currentStepValue,
+      containerRef.current,
+    );
+  };
   // Prefer the user-supplied caption over the raw (usually UUID) filename
   // for the label shown under the tile and in the fullscreen footer.
   // Use `||` (not `??`) so an empty-string caption still falls back to the
@@ -281,29 +342,46 @@ export function ImageCard({
       )}
       <Dialog>
         <DialogTrigger asChild>
-          <div className={cn(
+          <div ref={thumbRef} className={cn(
               "group relative flex aspect-[16/9] cursor-zoom-in items-center justify-center overflow-hidden rounded-md bg-background/50",
               pinRingClassName,
               !url && "border border-dashed cursor-default",
             )}>
             {url ? (
               <>
-                <img
-                  src={url}
-                  alt={fileName}
-                  loading="lazy"
-                  decoding="async"
-                  width={256}
-                  height={256}
-                  className="h-full w-full object-contain"
-                />
+                {parsedAnnotations ? (
+                  <AnnotatedImage
+                    src={url}
+                    alt={fileName}
+                    annotations={parsedAnnotations}
+                    maskUrl={maskUrl}
+                    className="h-full w-full items-center justify-center"
+                    // The wrapper must hug the rendered image exactly, since the
+                    // overlays are positioned against it — `object-contain` in a
+                    // fixed box would letterbox the picture inside a larger
+                    // element and every box would shift. Constrain by both axes
+                    // and let the aspect ratio decide the rest.
+                    imgClassName="h-auto w-auto max-h-full max-w-full"
+                    showLayerToggles={inWidgetFullscreen}
+                  />
+                ) : (
+                  <img
+                    src={url}
+                    alt={fileName}
+                    loading="lazy"
+                    decoding="async"
+                    width={256}
+                    height={256}
+                    className="h-full w-full object-contain"
+                  />
+                )}
                 <Button
                   variant="secondary"
                   size="icon"
                   className="absolute top-1.5 right-1.5 h-6 w-6 opacity-0 transition-opacity group-hover:opacity-100"
                   onClick={(e) => {
                     e.stopPropagation();
-                    handleDownload(url, fileName ?? "image.png", runLabel, currentStepValue, containerRef.current);
+                    void runDownload(thumbRef.current);
                   }}
                 >
                   <Download className="h-3 w-3" />
@@ -324,24 +402,52 @@ export function ImageCard({
               onWheel={handleWheel}
             >
               {url ? (
-                <img
-                  src={url}
-                  alt={fileName}
-                  className="m-auto max-w-none shrink-0 select-none"
-                  draggable={false}
-                  onLoad={(e) => {
-                    const img = e.currentTarget;
-                    setNaturalSize({ w: img.naturalWidth, h: img.naturalHeight });
-                  }}
-                  style={
-                    naturalSize
-                      ? {
-                          width: Math.round(naturalSize.w * scale),
-                          height: Math.round(naturalSize.h * scale),
-                        }
-                      : undefined
-                  }
-                />
+                parsedAnnotations ? (
+                  // Overlays size themselves to the image, so they follow the
+                  // zoom scale without needing to know about it.
+                  <AnnotatedImage
+                    src={url}
+                    alt={fileName}
+                    annotations={parsedAnnotations}
+                    maskUrl={maskUrl}
+                    className="m-auto shrink-0"
+                    showLayerToggles
+                    imgClassName="max-w-none select-none"
+                    onImageLoad={(e) =>
+                      setNaturalSize({
+                        w: e.currentTarget.naturalWidth,
+                        h: e.currentTarget.naturalHeight,
+                      })
+                    }
+                    imgStyle={
+                      naturalSize
+                        ? {
+                            width: Math.round(naturalSize.w * scale),
+                            height: Math.round(naturalSize.h * scale),
+                          }
+                        : undefined
+                    }
+                  />
+                ) : (
+                  <img
+                    src={url}
+                    alt={fileName}
+                    className="m-auto max-w-none shrink-0 select-none"
+                    draggable={false}
+                    onLoad={(e) => {
+                      const img = e.currentTarget;
+                      setNaturalSize({ w: img.naturalWidth, h: img.naturalHeight });
+                    }}
+                    style={
+                      naturalSize
+                        ? {
+                            width: Math.round(naturalSize.w * scale),
+                            height: Math.round(naturalSize.h * scale),
+                          }
+                        : undefined
+                    }
+                  />
+                )
               ) : (
                 <div className="flex h-full items-center justify-center">
                   <span className="px-4 text-center text-lg text-muted-foreground">
@@ -518,7 +624,11 @@ export function ImageCard({
                   size="sm"
                   className="ml-auto gap-2"
                   disabled={!url}
-                  onClick={() => url && handleDownload(url, fileName ?? "image.png", runLabel, currentStepValue, containerRef.current)}
+                  onClick={() => {
+                    if (url) {
+                      void runDownload(containerRef.current);
+                    }
+                  }}
                 >
                   <Download className="h-4 w-4" />
                   Download

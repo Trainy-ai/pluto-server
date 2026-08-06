@@ -360,3 +360,16 @@ export function formatFileSize(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
+
+/**
+ * A segmentation mask that belongs to another image, not a picture in its own
+ * right. Its pixels encode class ids, so rendering it directly shows a
+ * near-black tile — it is referenced from that image's `annotations` and drawn
+ * as a recoloured overlay instead.
+ *
+ * Marked by `fileType` rather than a naming convention so the check is explicit
+ * and does not depend on how the SDK happens to name files.
+ */
+export function isMaskFile(fileType: string | null | undefined): boolean {
+  return (fileType ?? "").toLowerCase() === "mask";
+}

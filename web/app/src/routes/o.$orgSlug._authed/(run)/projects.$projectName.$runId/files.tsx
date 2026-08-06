@@ -3,7 +3,9 @@ import { createFileRoute } from "@tanstack/react-router";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RunNotFound } from "@/components/layout/run/not-found";
 import { RefreshButton } from "@/components/core/refresh-button";
-import { File, Search } from "lucide-react";
+import { ChevronLeft, ChevronRight, File, Search } from "lucide-react";
+import { excludeMaskFiles } from "@/hooks/use-mask-url";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { queryClient, trpc } from "@/utils/trpc";
 
@@ -70,16 +72,36 @@ function RouteComponent() {
 
   const stepNav = useStepNavigation(selectedLogFiles);
 
-  // When step changes, update selectedFile to the file at that step
+  // Which sample within the current step. List logging puts several files at
+  // one step (wandb-style), and picking the first silently hid the rest — a
+  // 3-frames-per-epoch run showed 3 of its 9 images with no sign the others
+  // existed.
+  const [sampleIdx, setSampleIdx] = useState(0);
+
+  // Every file at the selected step, in the order they were logged. The server
+  // orders by sampleIndex, so array position is sample position.
+  const filesAtStep = useMemo(
+    () => selectedLogFiles.filter((f) => f.step === stepNav.currentStepValue),
+    [selectedLogFiles, stepNav.currentStepValue],
+  );
+
+  // Clamp rather than reset: stepping through epochs should keep you on the
+  // same sample when the next step has one, which is how you compare a frame
+  // across epochs.
+  const safeSampleIdx = Math.min(sampleIdx, Math.max(0, filesAtStep.length - 1));
+
   const currentFile = useMemo(() => {
     if (selectedLogFiles.length <= 1) return selectedFile;
-    return selectedLogFiles.find((f) => f.step === stepNav.currentStepValue) ?? selectedFile;
-  }, [selectedLogFiles, stepNav.currentStepValue, selectedFile]);
+    return filesAtStep[safeSampleIdx] ?? filesAtStep[0] ?? selectedFile;
+  }, [selectedLogFiles, filesAtStep, safeSampleIdx, selectedFile]);
 
   const handleSelectFile = useCallback((file: FileEntry, allFiles?: FileEntry[]) => {
     setSelectedFile(file);
     setSelectedLogFiles(allFiles ?? [file]);
     setSelectedMetric(null);
+    // New log: start at sample 0. Clamp alone keeps a high index when the next
+    // log is long enough, so the preview and "n of m" count look wrong.
+    setSampleIdx(0);
   }, []);
 
   const handleMetricClick = useCallback((metric: MetricEntry) => {
@@ -158,9 +180,15 @@ function RouteComponent() {
 
   const filteredFiles = useMemo(() => {
     if (!files) return [];
-    if (!searchQuery) return files;
+    // Masks are part of the image they annotate, not files to browse: they
+    // share its logName and sort ahead of it by filename, so the tree was
+    // picking a `.mask.png` as the entry for the whole log. That is not an
+    // image type, so a segmentation log previewed as a binary blob while a
+    // detections log — which has no masks — looked fine.
+    const browsable = excludeMaskFiles(files);
+    if (!searchQuery) return browsable;
     const query = searchQuery.toLowerCase();
-    return files.filter(
+    return browsable.filter(
       (f) =>
         f.fileName.toLowerCase().includes(query) ||
         f.logName.toLowerCase().includes(query),
@@ -295,12 +323,40 @@ function RouteComponent() {
                 <>
                   <div className="min-h-0 flex-1">
                     <FilePreview
+                      run={currentRun}
                       file={currentFile}
                       organizationId={organizationId}
                       projectName={projectName}
                       runId={runId}
                     />
                   </div>
+                  {filesAtStep.length > 1 && (
+                    <div className="flex items-center justify-center gap-2 border-t px-4 py-1.5 text-xs">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6"
+                        disabled={safeSampleIdx === 0}
+                        onClick={() => setSampleIdx(safeSampleIdx - 1)}
+                        data-testid="file-sample-prev"
+                      >
+                        <ChevronLeft className="h-3.5 w-3.5" />
+                      </Button>
+                      <span className="tabular-nums text-muted-foreground" data-testid="file-sample-label">
+                        sample {safeSampleIdx + 1} / {filesAtStep.length}
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6"
+                        disabled={safeSampleIdx >= filesAtStep.length - 1}
+                        onClick={() => setSampleIdx(safeSampleIdx + 1)}
+                        data-testid="file-sample-next"
+                      >
+                        <ChevronRight className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  )}
                   {stepNav.hasMultipleSteps() && (
                     <div className="border-t px-4 py-2">
                       <StepNavigator

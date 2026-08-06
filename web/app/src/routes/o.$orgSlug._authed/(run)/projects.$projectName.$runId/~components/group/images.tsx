@@ -8,6 +8,7 @@ import { useSyncedStepNavigation } from "../../~hooks/use-synced-step-navigation
 import { StepNavigator } from "../shared/step-navigator";
 import { ImageCard } from "@/components/core/image-viewer";
 import { cn } from "@/lib/utils";
+import { excludeMaskFiles, useMaskUrl } from "@/hooks/use-mask-url";
 import { MediaCardWrapper } from "@/components/core/media-card-wrapper";
 import { MediaSettingsPopover } from "@/components/core/media-settings-popover";
 
@@ -84,10 +85,18 @@ export const ImagesView = ({
     hasSyncContext,
   } = useSyncedStepNavigation(data || []);
 
-  const currentStepImages = useMemo(() => {
-    if (!data) return [];
-    return data.filter((image) => image.step === currentStepValue);
-  }, [data, currentStepValue]);
+  // Masks stay in `data` so `resolveMaskUrl` can find them — presigned URLs are
+  // signed per object key, so one cannot be derived by editing another file's
+  // URL — they are only kept out of the grid.
+  const currentStepImages = useMemo(
+    () =>
+      excludeMaskFiles(data).filter((image) => image.step === currentStepValue),
+    [data, currentStepValue],
+  );
+
+  // Identity-stable, so the overlay's mask pipeline does not re-run (and the
+  // masks do not blink) every time this view re-renders.
+  const resolveMaskUrl = useMaskUrl(data);
 
   const totalPages = Math.ceil(currentStepImages.length / imagesPerPage);
 
@@ -152,12 +161,33 @@ export const ImagesView = ({
           paginatedImages.length === 1 ? "grid-cols-1" : "grid-cols-2",
         )}
       >
-        {paginatedImages.map((image: any, index: number) => (
+        {paginatedImages.map((image, index) => (
           <ImageCard
+            // MUST be positional, and must NOT encode the step.
+            //
+            // This grid is already filtered to the current step, so any key
+            // derived from the file identity changes on every step change —
+            // which unmounts the card and destroys the Radix <Dialog> inside
+            // it, portal and all. The fullscreen viewer then vanishes while the
+            // user is stepping through images in it. A slot in the grid is a
+            // sample position, and sample i of step N is the thing sample i of
+            // step N+1 replaces, so position is the right identity here.
+            //
+            // Per-image state inside the card is reset off the `src` prop
+            // instead — see the mask canvas and hidden-layer handling in
+            // AnnotatedImage. Regression guarded by the E2E
+            // "[IR-C] step navigator works in fullscreen and dialog persists on
+            // step change".
             key={index}
             url={image.url}
             fileName={image.fileName}
             caption={image.caption}
+            annotations={image.annotations}
+            // Masks resolve to a sibling file's presigned URL. Deriving one by
+            // swapping the filename in this image's URL does NOT work: the
+            // signature covers the object key, so an edited URL 403s. The mask
+            // must therefore come back from the query with its own URL.
+            maskUrl={resolveMaskUrl}
             stepNavigation={
               availableSteps.length > 1
                 ? {
