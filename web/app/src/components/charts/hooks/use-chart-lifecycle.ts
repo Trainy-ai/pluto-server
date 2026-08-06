@@ -2,12 +2,16 @@ import { useEffect, useRef } from "react";
 import uPlot from "uplot";
 import { arrayMin, arrayMax } from "../lib/data-processing";
 import { zoomOverlapsData } from "../lib/scales";
+import { resetXScale, withProgrammaticScale } from "../lib/x-scale";
 import type { LineData } from "../lib/types";
 import {
   cacheLegendElement,
   markLegendCompanionRow,
   setRunLegendRowHidden,
+  getLegendRowList,
+  setLegendRowRemovedAt,
 } from "../lib/legend-visibility";
+import { applyChartVisibility } from "../lib/legend-hidden-store";
 
 /**
  * Detach the drag-finalize listeners registered alongside `chart._leaveHandler`
@@ -25,53 +29,6 @@ function detachLeaveHandler(chart: uPlot | null): void {
   document.removeEventListener("pointerup", lh.docPointerUpFn);
 }
 
-
-/**
- * Compute the X-axis range considering only visible (non-hidden) series.
- * Returns null if no visible series have data — caller should fall back to full range.
- */
-function getVisibleXRange(chart: uPlot, data: uPlot.AlignedData): [number, number] | null {
-  const xVals = data[0] as number[];
-  if (!xVals || xVals.length === 0) return null;
-
-  let minIdx = -1;
-  let maxIdx = -1;
-
-  for (let xi = 0; xi < xVals.length; xi++) {
-    for (let si = 1; si < data.length; si++) {
-      if (!chart.series[si]?.show) continue;
-      const v = (data[si] as (number | null)[])[xi];
-      if (v !== null && v !== undefined) {
-        if (minIdx === -1) minIdx = xi;
-        maxIdx = xi;
-        break; // Found a visible value at this x, no need to check more series
-      }
-    }
-  }
-
-  if (minIdx === -1) return null;
-  return [xVals[minIdx], xVals[maxIdx]];
-}
-
-/**
- * Reset the X-axis scale, respecting globalXRange if set, otherwise
- * fitting to visible (non-hidden) series data with a full-range fallback.
- */
-function resetXScale(chart: uPlot, data: uPlot.AlignedData, globalRange: [number, number] | null): void {
-  if (globalRange) {
-    chart.setScale("x", { min: globalRange[0], max: globalRange[1] });
-  } else {
-    const visibleRange = getVisibleXRange(chart, data);
-    if (visibleRange) {
-      chart.setScale("x", { min: visibleRange[0], max: visibleRange[1] });
-    } else {
-      const xVals = data[0] as number[];
-      if (xVals && xVals.length > 0) {
-        chart.setScale("x", { min: xVals[0], max: xVals[xVals.length - 1] });
-      }
-    }
-  }
-}
 
 interface UseChartLifecycleParams {
   chartContainerRef: React.RefObject<HTMLDivElement | null>;
@@ -99,7 +56,8 @@ interface UseChartLifecycleParams {
   onResetBoundsRef: React.RefObject<(() => void) | undefined>;
   onZoomRangeChangeRef: React.RefObject<((range: [number, number] | null) => void) | undefined>;
   onYZoomRangeChangeRef: React.RefObject<((range: [number, number] | null) => void) | undefined>;
-  legendHiddenSeriesRef: React.MutableRefObject<Set<string>>;
+  legendHiddenSeriesRef: React.MutableRefObject<Map<string, boolean>>;
+  legendHiddenKeyRef?: React.MutableRefObject<string>;
 }
 
 /**
@@ -137,6 +95,7 @@ export function useChartLifecycle({
   onZoomRangeChangeRef,
   onYZoomRangeChangeRef,
   legendHiddenSeriesRef,
+  legendHiddenKeyRef,
 }: UseChartLifecycleParams) {
   const cleanupRef = useRef<(() => void) | null>(null);
   const chartCreatedRef = useRef(false);
@@ -274,6 +233,10 @@ export function useChartLifecycle({
     // uPlot — we don't touch the visible legend, only the data attributes
     // the export reads from.
     cacheLegendElement(chart);
+    (chart as any)._legendHiddenKey = legendHiddenKeyRef?.current;
+    // Lines metadata for the runs-table visibility handler — companions
+    // (envelopes / "(original)") resolve back to their owner via this.
+    (chart as any)._legendLines = processedLines;
     const legendRows = chart.root.querySelectorAll(".u-series");
     processedLines.forEach((line, idx) => {
       const row = legendRows[idx + 1] as HTMLElement | undefined;
@@ -295,36 +258,47 @@ export function useChartLifecycle({
       }
     });
 
-    // Apply hidden run state from context
-    // Apply legend-toggled visibility (series hidden via legend click, persists across recreations)
+    // Apply visibility: the runs-table eye, plus any chart-local overrides.
+    // Both the line and its legend row derive from one answer, so they cannot
+    // drift apart — the row used to track the eye alone, which left a locally
+    // un-hidden run drawing a line with no legend entry.
     const hiddenIds = chartSyncContextRef.current?.hiddenRunIdsRef?.current;
-    const legendHidden = legendHiddenSeriesRef.current;
-    if ((hiddenIds && hiddenIds.size > 0) || legendHidden.size > 0) {
-      // Mark these as run-level so the setSeries hook doesn't record them in
-      // the CHART-LOCAL hidden store — a runs-table hide is a different
-      // mechanism. Hooks still fire, so companion series stay in step.
+    const overrides = legendHiddenSeriesRef.current;
+    if ((hiddenIds && hiddenIds.size > 0) || overrides.size > 0) {
+      // Run-level marker: the setSeries hook must not file these as
+      // chart-local overrides (see the hook in line-uplot).
       (chart as any)._applyingRunVisibility = true;
+      let changed = false;
+      const rowList = getLegendRowList(chart);
       chart.batch(() => {
-        for (let i = 1; i < chart.series.length; i++) {
-          const seriesId = (chart.series[i] as any)?._seriesId as string | undefined;
-          if (!seriesId) continue;
-          const runId = seriesId.includes(':') ? seriesId.split(':')[0] : seriesId;
-          const runHidden = !!hiddenIds && hiddenIds.has(runId);
-          if (runHidden || legendHidden.has(seriesId)) {
-            chart.setSeries(i, { show: false });
-          }
-          // Only the eye toggle takes a row out of the legend. Legend-click
-          // hidden series keep their row so they can be clicked back on.
-          if (runHidden) {
-            setRunLegendRowHidden(chart, i, true);
-          }
-        }
+        changed = applyChartVisibility(
+          chart as never,
+          processedLines,
+          overrides,
+          hiddenIds,
+          (idx, removed) => setLegendRowRemovedAt(rowList, idx, removed),
+        );
       });
       (chart as any)._applyingRunVisibility = false;
+      void changed;
       // Correct X scale after hiding series — uPlot's auto-range used the full
       // data extent (including hidden runs) during chart creation.
+      //
+      // This MUST be flagged programmatic *and* batched. Without the flag the
+      // setScale hook reads it as a user zoom and fires onZoomRangeChange,
+      // which stores a new zoom range; that re-renders the chart component,
+      // `uplotData` gets a new identity, the chart is recreated, this block
+      // runs again on the new instance, and the cycle repeats for as long as
+      // anything is hidden. Measured at ~60 chart rebuilds/sec on a 5-run
+      // project — enough to make Chrome offer to kill the tab on a real one.
+      // Only runs holding an edge of the x range trigger it: hide a run in the
+      // middle and the refit computes the range the chart already had, which
+      // uPlot skips, so there is no commit and no loop.
+      // The batch is what makes the flag work at all: see withProgrammaticScale.
       if (!logXAxis && !isDateTime) {
-        resetXScale(chart, uplotData, chartSyncContextRef.current?.globalXRange ?? null);
+        withProgrammaticScale(chart, isProgrammaticScaleRef, () => {
+          resetXScale(chart, uplotData, chartSyncContextRef.current?.globalXRange ?? null);
+        });
       }
     }
 
@@ -553,9 +527,9 @@ export function useChartLifecycle({
         }
       }
 
-      try {
-        isProgrammaticScaleRef.current = true;
-
+      // Batched so uPlot commits (and fires its setScale hooks) synchronously,
+      // while the programmatic flag is still raised — see withProgrammaticScale.
+      withProgrammaticScale(chart, isProgrammaticScaleRef, () => {
         // Set X scale to visible data range
         chart.setScale("x", { min: newXMin, max: newXMax });
 
@@ -568,9 +542,7 @@ export function useChartLifecycle({
           const newYMax = visibleYMax + padding;
           chart.setScale("y", { min: newYMin, max: newYMax });
         }
-      } finally {
-        isProgrammaticScaleRef.current = false;
-      }
+      });
     };
 
     // Register reset callback

@@ -30,6 +30,28 @@ export function cacheLegendElement(chart: uPlot): void {
     chart.root.querySelector(".u-legend");
 }
 
+/** The legend's rows, fetched once. Callers touching many series must hoist
+ *  this: querying per series turns a redraw into an O(n^2) DOM crawl, which
+ *  hung the page on projects with a few hundred runs. */
+export function getLegendRowList(chart: uPlot): NodeListOf<HTMLElement> | null {
+  const cached = (chart as unknown as { _legendEl?: Element | null })._legendEl;
+  const legend = cached ?? chart.root.querySelector(".u-legend");
+  return legend
+    ? (legend.querySelectorAll("tr.u-series") as NodeListOf<HTMLElement>)
+    : null;
+}
+
+/** Show/hide one already-resolved row. */
+export function setLegendRowRemovedAt(
+  rows: NodeListOf<HTMLElement> | null,
+  seriesIdx: number,
+  removed: boolean,
+): void {
+  const row = rows?.[seriesIdx];
+  if (!row || row.dataset[COMPANION_FLAG] === "true") return;
+  row.style.display = removed ? "none" : "";
+}
+
 function getLegendRows(chart: uPlot): NodeListOf<HTMLElement> | null {
   const cached = (chart as unknown as { _legendEl?: Element | null })._legendEl;
   const legend = cached ?? chart.root.querySelector(".u-legend");

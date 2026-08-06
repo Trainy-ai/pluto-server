@@ -36,13 +36,19 @@ import { useYRange } from "./hooks/use-y-range";
 export type { LineData, LineChartUPlotRef } from "./lib/types";
 import type { LineChartUPlotRef, LineChartProps } from "./lib/types";
 import {
+  setRunLegendRowHidden,
+  getLegendRowList,
+  setLegendRowRemovedAt,
+} from "./lib/legend-visibility";
+import {
   getLegendHiddenStore,
   legendHiddenKey,
   subscribeLegendHidden,
   notifyLegendHidden,
-  applyLegendHidden,
+  applyChartVisibility,
   retainLegendHiddenStore,
   releaseLegendHiddenStore,
+  runIdOf,
 } from "./lib/legend-hidden-store";
 import { DEFAULT_SYNC_KEY } from "./lib/types";
 
@@ -185,7 +191,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
     // Fullscreen mounts a SEPARATE LineUplot, so a per-component ref would
     // start empty there and the series would reappear. Assigned during render
     // so the store is correct before any effect reads it.
-    const legendHiddenSeriesRef = useRef<Set<string>>(new Set());
+    const legendHiddenSeriesRef = useRef<Map<string, boolean>>(new Map());
     const legendHiddenKeyRef = useRef<string>("");
     legendHiddenKeyRef.current = legendHiddenKey(
       effectiveSyncKey,
@@ -195,6 +201,11 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
     legendHiddenSeriesRef.current = getLegendHiddenStore(
       legendHiddenKeyRef.current,
     );
+    // Expose the key on the instance so the sync context can read this chart's
+    // overrides when the runs-table eye changes.
+    if (chartRef.current) {
+      (chartRef.current as any)._legendHiddenKey = legendHiddenKeyRef.current;
+    }
 
     // Hold the shared store while this chart is mounted so it can be dropped
     // once nothing is using the key.
@@ -216,14 +227,23 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         const u = chartRef.current ?? chartInstanceRef.current;
         if (!u) return;
         let changed = false;
+        const rows = getLegendRowList(u);
         u.batch(() => {
-          changed = applyLegendHidden(
+          changed = applyChartVisibility(
             u as never,
             processedLinesRef.current,
             getLegendHiddenStore(key),
+            chartSyncContextRef.current?.hiddenRunIdsRef?.current,
+            (idx, removed) => setLegendRowRemovedAt(rows, idx, removed),
           );
         });
-        if (changed) u.redraw();
+        if (changed) {
+          // applyChartVisibility suppresses uPlot's setSeries hooks, so this
+          // render does not get the axis refit that the toggling render got
+          // from the hook. Do it here or the twin keeps the old range.
+          (u as any)._forceYRecalc?.();
+          u.redraw();
+        }
       });
     }, [effectiveSyncKey, title, legendStateKey, chartId]);
 
@@ -233,6 +253,11 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       [lines, logXAxis, logYAxis]
     );
     processedLinesRef.current = processedLines;
+    // Keep companion metadata on the instance so the runs-table eye handler
+    // can resolve envelope / "(original)" series back to their owner.
+    if (chartRef.current) {
+      (chartRef.current as any)._legendLines = processedLines;
+    }
 
     // No pruning of the hidden set here. It used to drop ids that were absent
     // from this chart's lines, which was safe while the set was per-component
@@ -535,13 +560,17 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             }
           }],
           setCursor: [interpolationDotsHook],
-          setSeries: [(u, seriesIdx) => {
+          setSeries: [(u, seriesIdx, opts) => {
             if (seriesIdx == null || seriesIdx < 1) return;
             const toggled = processedLinesRef.current[seriesIdx - 1];
             if (!toggled || toggled.envelopeOf || toggled.hideFromLegend) return;
             const shouldShow = u.series[seriesIdx].show;
             const seriesId = (u.series[seriesIdx] as any)?._seriesId as string | undefined;
             const originalLabel = toggled.label;
+            // Cursor focus also fires this hook with `{ focus }` only. A missing
+            // override is not the same as `true`, so treating every fire as a
+            // toggle wrote spurious `shown` entries and pinged the twin chart.
+            const showToggled = !!opts && Object.prototype.hasOwnProperty.call(opts, "show");
 
             // Record the toggle in the CHART-LOCAL store, unless this change
             // came from the runs-table eye. That is a different mechanism —
@@ -549,13 +578,23 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             // the two, leaving ids behind that no chart-local hide created.
             // Companion syncing below still runs either way.
             let storeChanged = false;
-            if (seriesId && !(u as any)._applyingRunVisibility) {
-              if (shouldShow) {
-                storeChanged = legendHiddenSeriesRef.current.delete(seriesId);
-              } else if (!legendHiddenSeriesRef.current.has(seriesId)) {
-                legendHiddenSeriesRef.current.add(seriesId);
+            if (seriesId && !(u as any)._applyingRunVisibility && showToggled) {
+              // Record BOTH directions. Storing only hides could not express
+              // "shown here although the runs table hid it", so a local
+              // un-hide vanished the moment the chart was recreated.
+              if (legendHiddenSeriesRef.current.get(seriesId) !== !!shouldShow) {
+                legendHiddenSeriesRef.current.set(seriesId, !!shouldShow);
                 storeChanged = true;
               }
+              // The row follows the line, by the same rule as
+              // applyChartVisibility: it leaves the legend only when the RUNS
+              // TABLE is what hides the run. Un-hiding an eye-hidden run here
+              // brings its row back; hiding it here again takes the row away
+              // again, since the table still hides it. A run the table shows
+              // keeps its greyed row, which is the way back to it.
+              const eyeHidden = !!chartSyncContextRef.current?.hiddenRunIdsRef
+                ?.current?.has(runIdOf(seriesId));
+              setRunLegendRowHidden(u, seriesIdx, !shouldShow && eyeHidden);
             }
             for (let i = 1; i < u.series.length; i++) {
               if (i === seriesIdx) continue;
@@ -572,6 +611,22 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
                   (companion.label === `${originalLabel} (original)` ||
                     (!!seriesId && companion.seriesId === seriesId)));
               if (isCompanion && u.series[i].show !== shouldShow) u.setSeries(i, { show: shouldShow }, false);
+            }
+            // Refit both axes to what is now visible — the same thing the
+            // runs-table eye does, via the same function, so a chart-local
+            // toggle and a table toggle leave the axes in the same state.
+            //
+            // Without this a local un-hide redrew the line but left the axes
+            // where the runs-table hide had shrunk them, so a run reaching
+            // past the others ran off the right edge and stopped. The hide
+            // direction was equally stale: switching off the run that owned
+            // an edge left dead space where its data had been.
+            //
+            // Skipped while the runs-table path is applying, because that
+            // path fires this hook once per series and calls _forceYRecalc
+            // itself once at the end.
+            if (storeChanged && !(u as any)._applyingRunVisibility) {
+              (u as any)._forceYRecalc?.();
             }
             // Tell the other render of this chart (inline ⇄ fullscreen) that
             // the shared hidden set moved, so it re-applies instead of only
@@ -651,7 +706,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       lastAppliedGlobalRangeRef,
       zoomRangeTimerRef,
       onResetBoundsRef, onZoomRangeChangeRef,
-      onYZoomRangeChangeRef, legendHiddenSeriesRef,
+      onYZoomRangeChangeRef, legendHiddenSeriesRef, legendHiddenKeyRef,
     });
 
     // Expose imperative handle

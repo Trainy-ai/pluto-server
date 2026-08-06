@@ -82,7 +82,20 @@ export function useZoomRefetch({
   buckets: zoomBuckets,
   algorithm,
 }: UseZoomRefetchOptions): UseZoomRefetchReturn {
-  const [localZoomRange, setLocalZoomRange] = useState<[number, number] | null>(null);
+  const [localZoomRange, setLocalZoomRangeRaw] = useState<[number, number] | null>(null);
+  // Bail out when the range is numerically unchanged. Callers hand us a fresh
+  // `[min, max]` tuple every time, so a plain `setState` never hits React's
+  // identity bail-out: re-applying the same zoom still re-renders the chart,
+  // which gives its data a new identity and rebuilds the uPlot instance. That
+  // turns any repeated `onZoomRangeChange` into a self-sustaining rebuild loop.
+  const setLocalZoomRange = useCallback((next: [number, number] | null) => {
+    setLocalZoomRangeRaw((prev) => {
+      if (prev === next) return prev;
+      if (prev === null || next === null) return next;
+      if (prev[0] === next[0] && prev[1] === next[1]) return prev;
+      return next;
+    });
+  }, []);
   const queryClient = useQueryClient();
 
   const isRelativeTime = selectedLog === "Relative Time";
@@ -309,7 +322,7 @@ export function useZoomRefetch({
         setLocalZoomRange(null);
       }
     },
-    [supportsZoom, isStep, selectedLog, timeStepMapping, logNames, runIds, zoomBuckets, organizationId, projectName, queryClient, staleTime],
+    [supportsZoom, isStep, selectedLog, timeStepMapping, logNames, runIds, zoomBuckets, organizationId, projectName, queryClient, staleTime, setLocalZoomRange],
   );
 
   const isZoomFetching = isZooming && (

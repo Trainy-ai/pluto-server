@@ -8,7 +8,16 @@ import React, {
   useState,
 } from "react";
 import type uPlot from "uplot";
-import { setRunLegendRowHidden } from "../lib/legend-visibility";
+import {
+  getLegendRowList,
+  setLegendRowRemovedAt,
+} from "../lib/legend-visibility";
+import {
+  applyChartVisibility,
+  clearOverridesForRun,
+  getLegendHiddenStore,
+  type LegendLine,
+} from "../lib/legend-hidden-store";
 
 // ============================
 // Helpers
@@ -311,6 +320,12 @@ export function ChartSyncProvider({
   // up-to-date value via chartSyncContextRef. The CustomEvent listener below
   // handles the imperative path for charts that are already registered.
   const hiddenRunIdsRef = useRef<Set<string>>(hiddenRunIdsProp ?? new Set());
+  /** Snapshot owned solely by the visibility-change handler, so it can tell
+   *  which runs the user just toggled. See the handler for why the shared ref
+   *  can't be used for that. */
+  const lastHiddenForOverridesRef = useRef<Set<string>>(
+    new Set(hiddenRunIdsProp ?? []),
+  );
   if (hiddenRunIdsProp && hiddenRunIdsProp !== hiddenRunIdsRef.current) {
     hiddenRunIdsRef.current = hiddenRunIdsProp;
   }
@@ -320,7 +335,22 @@ export function ChartSyncProvider({
   useEffect(() => {
     function handleVisibilityChange(e: Event) {
       const hiddenIds = (e as CustomEvent).detail as Set<string>;
+
+      // Diff against a set only this handler maintains. hiddenRunIdsRef is
+      // ALSO refreshed during render, so it can already hold the new value by
+      // the time this event arrives — diffing it against itself found nothing
+      // to clear and the stale override survived.
+      const previous = lastHiddenForOverridesRef.current;
+      lastHiddenForOverridesRef.current = new Set(hiddenIds);
       hiddenRunIdsRef.current = hiddenIds;
+
+      // The runs table is authoritative: toggling a run there drops any
+      // chart-local override for that run, so an earlier per-chart tweak
+      // doesn't outlive the change the user just made in the table.
+      const touched = new Set<string>();
+      hiddenIds.forEach((id) => { if (!previous.has(id)) touched.add(id); });
+      previous.forEach((id) => { if (!hiddenIds.has(id)) touched.add(id); });
+      touched.forEach(clearOverridesForRun);
 
       // Snapshot the map to avoid issues with mutation during iteration.
       // Processing Chart 0 can trigger React state updates (e.g. onYZoomRangeChange)
@@ -334,20 +364,40 @@ export function ChartSyncProvider({
         try {
           // Run-level change: the setSeries hook must not file this under the
           // chart-local hidden store (see use-chart-lifecycle for the same
-          // marker). Hooks still fire so companions follow.
+          // marker). applyChartVisibility resolves companions via
+          // ownerSeriesId so envelope bands follow a parent's local un-hide.
           (chart as any)._applyingRunVisibility = true;
+          const overrides = getLegendHiddenStore(
+            (chart as any)._legendHiddenKey ?? "",
+          );
+          const lines = (chart as any)._legendLines as LegendLine[] | undefined;
+          const rows = getLegendRowList(chart);
           chart.batch(() => {
+            if (lines) {
+              anyChanged = applyChartVisibility(
+                chart as never,
+                lines,
+                overrides,
+                hiddenIds,
+                (idx, removed) => setLegendRowRemovedAt(rows, idx, removed),
+              );
+              return;
+            }
+            // Fallback if a chart was registered before _legendLines existed.
             for (let i = 1; i < chart.series.length; i++) {
-              const seriesId = (chart.series[i] as any)?._seriesId as string | undefined;
+              const seriesId = (chart.series[i] as any)?._seriesId as
+                | string
+                | undefined;
               if (!seriesId) continue;
-              const runId = seriesId.includes(':') ? seriesId.split(':')[0] : seriesId;
+              const runId = seriesId.includes(":")
+                ? seriesId.split(":")[0]
+                : seriesId;
               const shouldShow = !hiddenIds.has(runId);
-              // Keep the legend row in step with the eye toggle. Applied
-              // unconditionally so a row left over from a previous state is
-              // corrected even when `show` itself is already right.
-              setRunLegendRowHidden(chart, i, !shouldShow);
+              // Same rule as applyChartVisibility: the row goes only when the
+              // runs table is what hides it.
+              setLegendRowRemovedAt(rows, i, !shouldShow && hiddenIds.has(runId));
               if (chart.series[i].show !== shouldShow) {
-                chart.setSeries(i, { show: shouldShow });
+                chart.setSeries(i, { show: shouldShow }, false);
                 anyChanged = true;
               }
             }
