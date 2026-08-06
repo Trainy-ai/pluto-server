@@ -29,6 +29,13 @@ import {
   EMPTY_CHARTS_LAYOUT,
 } from "../../(runComparison)/projects.$projectName/~lib/charts-layout";
 import { useRunDashboardData } from "./~hooks/use-run-dashboard";
+import { useGetFileLogTypes } from "./~queries/get-file-log-types";
+import {
+  FILE_LOG_TYPES,
+  isHiddenArtifactLog,
+  isRenderableInWidget,
+  keepVisibleFileLogs,
+} from "@/lib/file-types";
 
 import { useMemo, useState, useEffect, useRef, useCallback } from "react";
 import { useDocumentTitle } from "@/hooks/use-document-title";
@@ -91,16 +98,76 @@ function RouteComponent() {
     getSmoothingConfig,
   } = useLineSettings(organizationId, projectName, runId);
 
+  // Does this run log a file whose type could still change an answer below?
+  //
+  // Nothing to probe when the run logs no files at all (every project that
+  // isn't a wandb migration and doesn't log artifacts), and equally nothing to
+  // probe when its only file logs are wandb artifact dumps — those are hidden
+  // by NAME, whatever their files turn out to be. Either way the request is
+  // skipped rather than paid for on the run page's hot path.
+  const hasFileLogs = useMemo(
+    () =>
+      (runData?.logs ?? []).some(
+        (log) =>
+          FILE_LOG_TYPES.has(log.logType) &&
+          !isHiddenArtifactLog(log.logType, log.logName),
+      ),
+    [runData?.logs],
+  );
+
+  // `RunLogs` records only a log's TYPE, and the decision below needs its
+  // files' EXTENSIONS — so this asks for the run's distinct
+  // `(logName, fileType)` pairs and nothing else. Deliberately NOT `fileTree`:
+  // that returns a row per file (up to 10,000) with captions and per-image
+  // annotations, which for an image-heavy run is multi-MB fetched, superjson-
+  // traversed and cached to IndexedDB purely to learn a handful of extensions.
+  //
+  // The error is intentionally unhandled. A failed probe leaves
+  // `renderableFileLogNames` empty, which hides file-only groups — exactly the
+  // behaviour this page had before they could be rendered at all, and a strictly
+  // better failure than filling the page with widgets that cannot draw. The
+  // groups stay reachable on the Files tab, which surfaces its own error.
+  const { data: runFileTypes } = useGetFileLogTypes(
+    organizationId,
+    projectName,
+    runId,
+    { enabled: hasFileLogs },
+  );
+
+  // Log names carrying at least one file a widget can actually draw.
+  const renderableFileLogNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const file of runFileTypes ?? []) {
+      if (isRenderableInWidget(file.fileType)) names.add(file.logName);
+    }
+    return names;
+  }, [runFileTypes]);
+
+  // Is there anything left in this group once the hidden logs are removed?
+  //
+  // A file-only group used to be a Files/Summary concern outright, EXCEPT that
+  // since the wandb-migration work a logged file is no longer only "a thing you
+  // download": a `.json` may be an interactive Plotly figure, a converted
+  // matplotlib figure or a 3D point cloud, and an `.html` an interactive report
+  // — all of which render in a widget exactly like a metric does. The blanket
+  // rule predates those viewers and could not tell them apart from a parquet
+  // dump, which is why they showed on the all-runs comparison page but vanished
+  // on the run's own page.
+  //
+  // `keepVisibleFileLogs` is the shared decision (see `lib/file-types.ts`) and
+  // is applied again to build each group's contents, so what is shown and what
+  // the group was admitted for can never disagree. While the probe is still in
+  // flight `renderableFileLogNames` is empty, which reproduces the old
+  // behaviour — nothing flashes in and then out.
+  const groupFilter = useCallback(
+    (group: LogGroup) =>
+      keepVisibleFileLogs(group.logs, renderableFileLogNames).length > 0,
+    [renderableFileLogNames],
+  );
+
   const { filteredLogGroups, handleSearch: handleLogSearch } = useFilteredLogs({
     logs: runData?.logs || [],
-    groupFilter: (group) =>
-      // Exclude file-based logs from metrics view (they're shown on summary page)
-      !group.logs.every(
-        (log) =>
-          log.logType === "TEXT" ||
-          log.logType === "FILE" ||
-          log.logType === "ARTIFACT",
-      ),
+    groupFilter,
   });
 
   // Search state for dashboard widget filtering
@@ -182,11 +249,18 @@ function RouteComponent() {
   // Memoize the rendered DataGroups for "All Metrics" view
   const dataGroups = useMemo(() => {
     const laidOut = applyChartsSections(
-      filteredLogGroups.map((group: LogGroup) => ({
-        key: group.groupName,
-        groupName: group.groupName,
-        items: group.logs,
-      })),
+      filteredLogGroups
+        .map((group: LogGroup) => ({
+          key: group.groupName,
+          groupName: group.groupName,
+          items: keepVisibleFileLogs(group.logs, renderableFileLogNames),
+        }))
+        // CAN empty a group, which is why this filter is here: `groupFilter`
+        // runs BEFORE the search filter (`use-filtered-logs.ts`), so a search
+        // that matches only the hidden logs of an admitted group leaves nothing
+        // to draw — and a section header over an empty grid is worse than no
+        // section.
+        .filter((group) => group.items.length > 0),
       (log) => log.logName,
       chartsLayout,
     );
@@ -204,7 +278,7 @@ function RouteComponent() {
           savedChartOrder={chartsLayout.metricOrder?.[key]}
         />
       ));
-  }, [filteredLogGroups, chartsLayout, organizationId, projectName, runId, runCreatedAtStr, runData?.name]);
+  }, [filteredLogGroups, renderableFileLogNames, chartsLayout, organizationId, projectName, runId, runCreatedAtStr, runData?.name]);
 
   if (isLoading || !runData) {
     return (
@@ -274,7 +348,9 @@ function RouteComponent() {
               {/* One shared step-sync provider so media steppers sync across
                   every section in the All-Metrics view (each DataGroup reuses
                   this instead of creating its own per-section provider). */}
-              <ImageStepSyncProvider>{dataGroups}</ImageStepSyncProvider>
+              <ImageStepSyncProvider>
+                {dataGroups}
+              </ImageStepSyncProvider>
             </ChartSyncProvider>
           )}
         </div>

@@ -8,6 +8,8 @@ import { HistogramView } from "./histogram-view";
 import { VideoView } from "./video";
 import { TableView } from "./table";
 import { TextView } from "./text-view";
+import { RendererErrorBoundary } from "@/components/shared/renderer-error-boundary";
+import { getLogGroupLabel } from "@/lib/grouping/consts";
 import {
   ImageStepSyncProvider,
   useImageStepSyncContext,
@@ -59,16 +61,20 @@ const DataGroupBase = ({
   // Components are only created when DropdownRegion calls the render function
   const children = useMemo(() => {
     return sortedLogs.map((log) => () => (
-      <LogView
-        key={log.id}
-        log={log}
-        tenantId={tenantId}
-        projectName={projectName}
-        runId={runId}
-        boundsResetKey={boundsResetKey}
-        runCreatedAt={runCreatedAt}
-        runName={runName}
-      />
+      // One boundary per tile: an artifact this app cannot render degrades to
+      // "preview unavailable" instead of throwing past every other panel and
+      // white-screening the run page.
+      <RendererErrorBoundary key={log.id} label={log.logName}>
+        <LogView
+          log={log}
+          tenantId={tenantId}
+          projectName={projectName}
+          runId={runId}
+          boundsResetKey={boundsResetKey}
+          runCreatedAt={runCreatedAt}
+          runName={runName}
+        />
+      </RendererErrorBoundary>
     ));
   }, [sortedLogs, tenantId, projectName, runId, boundsResetKey, runCreatedAt, runName]);
 
@@ -93,7 +99,7 @@ const DataGroupBase = ({
 
   const content = (
     <DropdownRegion
-      title={group.groupName}
+      title={getLogGroupLabel(group.groupName)}
       components={children}
       groupId={groupId}
       defaultColumns={histogramOnly ? 1 : undefined}

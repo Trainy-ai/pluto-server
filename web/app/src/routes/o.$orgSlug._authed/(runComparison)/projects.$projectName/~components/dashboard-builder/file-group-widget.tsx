@@ -10,6 +10,7 @@ import type { SelectedRunWithColor } from "../../~hooks/use-selected-runs";
 import { MultiGroupImage } from "../multi-group/image";
 import { MultiGroupVideo } from "../multi-group/video";
 import { MultiGroupAudio } from "../multi-group/audio";
+import { MultiGroupFile } from "../multi-group/file";
 import { MultiHistogramView } from "../multi-group/histogram-view";
 import {
   resolveMetrics,
@@ -334,6 +335,21 @@ function FileGroupEntry({
           organizationId={organizationId}
           projectName={projectName}
           runs={runs}
+        />
+      );
+    case "ARTIFACT":
+    case "FILE":
+    case "TEXT":
+      // Same widget the all-runs Charts tab uses, so a Plotly/matplotlib
+      // figure or a 3D point cloud pinned to a dashboard renders rather than
+      // reporting itself unsupported.
+      return (
+        <MultiGroupFile
+          logName={logName}
+          organizationId={organizationId}
+          projectName={projectName}
+          runs={runs}
+          className="h-full p-0"
         />
       );
     default:

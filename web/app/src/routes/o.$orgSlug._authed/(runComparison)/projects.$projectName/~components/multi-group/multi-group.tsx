@@ -6,7 +6,10 @@ import { GroupedLineChart } from "./grouped-line-chart";
 import { MultiGroupAudio } from "./audio";
 import { MultiGroupImage } from "./image";
 import { MultiGroupVideo } from "./video";
+import { MultiGroupTable } from "./table";
+import { MultiGroupFile } from "./file";
 import { MultiHistogramView } from "./histogram-view";
+import { RendererErrorBoundary } from "@/components/shared/renderer-error-boundary";
 import { ChartCardWrapper } from "./chart-card-wrapper";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -220,6 +223,34 @@ export const MultiGroup = ({
           );
         }
 
+        if (metric.type === "TABLE") {
+          return () => (
+            <MultiGroupTable
+              logName={metric.name}
+              organizationId={organizationId}
+              projectName={projectName}
+              runs={formattedRuns}
+              className="h-full pb-2.5"
+            />
+          );
+        }
+
+        if (
+          metric.type === "FILE" ||
+          metric.type === "TEXT" ||
+          metric.type === "ARTIFACT"
+        ) {
+          return () => (
+            <MultiGroupFile
+              logName={metric.name}
+              organizationId={organizationId}
+              projectName={projectName}
+              runs={formattedRuns}
+              className="h-full pb-2.5"
+            />
+          );
+        }
+
         if (metric.type === "VIDEO") {
           return () => (
             <MultiGroupVideo
@@ -253,6 +284,28 @@ export const MultiGroup = ({
     ],
   );
 
+  // One boundary per card, so a widget that cannot render degrades to "preview
+  // unavailable" in its own tile instead of throwing past every other card and
+  // taking the whole compare section down. The run page has had this per-tile
+  // (see group.tsx); this is the same guarantee for the all-runs page.
+  //
+  // Wrapped here rather than inside each of the eight type branches above: one
+  // place to hold the invariant, and a branch added later is covered without
+  // anyone remembering to do it.
+  //
+  // `render()` only CONSTRUCTS the element — the widget's own render runs
+  // inside the boundary — so a throw from the widget is caught, which is the
+  // case that matters.
+  const guarded = useMemo(
+    () =>
+      components.map((render, index) => () => (
+        <RendererErrorBoundary label={metrics[index]?.name}>
+          {render()}
+        </RendererErrorBoundary>
+      )),
+    [components, metrics],
+  );
+
   // Stable per-card identity: lets DropdownRegion key cards by metric name so
   // layout reorders move mounted charts instead of remounting them.
   const itemKeys = useMemo(() => metrics.map((m) => m.name), [metrics]);
@@ -260,7 +313,7 @@ export const MultiGroup = ({
   return (
     <DropdownRegion
       title={title}
-      components={components}
+      components={guarded}
       groupId={groupId}
       itemKeys={itemKeys}
     />

@@ -24,6 +24,65 @@ import { SlidersHorizontal } from "lucide-react";
 import type { SelectedRunWithColor } from "../~hooks/use-selected-runs";
 import { ChartSyncProvider } from "@/components/charts/context/chart-sync-context";
 import { FullscreenProvider } from "@/components/charts/context/fullscreen-context";
+import { getLogGroupLabel, MEDIA_GROUP } from "@/lib/grouping/consts";
+import { useQueries } from "@tanstack/react-query";
+import { trpc } from "@/utils/trpc";
+import {
+  FILE_LOG_TYPES,
+  isFileLogWidgetVisible,
+  isHiddenArtifactLog,
+  isRenderableInWidget,
+} from "@/lib/file-types";
+
+/**
+ * Reduces the per-run file-type probes to the log names a widget can render.
+ *
+ * Module scope on purpose. `useQueries` recomputes its combined result whenever
+ * the `combine` function's identity changes, so an inline arrow would re-run
+ * this every render. Hoisted, it re-runs only when the queries themselves do.
+ *
+ * `combineFileTreeProbes` before it: the probe now asks `fileLogTypes` for the
+ * run's distinct `(logName, fileType)` pairs instead of `fileTree`'s row per
+ * file, which is the same information for this purpose and orders of magnitude
+ * less of it. The reducer is unchanged because those are the only two fields it
+ * ever read.
+ *
+ * Returns plain sorted primitives rather than a Set because query-core passes
+ * the combined result through `replaceEqualDeep`, which compares arrays and
+ * objects structurally but treats a Set as an opaque value. A stable identity
+ * here is the whole point: without it everything memoised downstream — and
+ * ultimately the `metrics` array each MemoizedMultiGroup is memoised on —
+ * recomputes on every render.
+ *
+ * Two name lists, not one. The probe covers only a SAMPLE of the selected runs
+ * (see `probeRunIds`), so "absent from `renderableNames`" conflates two very
+ * different states: a log the probe saw and rejected, and a log the probe never
+ * saw at all. `probedNames` separates them — see `isFileLogWidgetVisible`.
+ */
+function combineFileTypeProbes(results: readonly { data: unknown }[]): {
+  renderableNames: string[];
+  probedNames: string[];
+} {
+  const names = new Set<string>();
+  const probed = new Set<string>();
+  for (const q of results) {
+    if (q.data == null) continue;
+    for (const file of q.data as { logName: string; fileType: string }[]) {
+      probed.add(file.logName);
+      if (isRenderableInWidget(file.fileType)) names.add(file.logName);
+    }
+  }
+  return {
+    // Sorted so two probes returning the same names in a different order still
+    // deep-compare equal.
+    renderableNames: [...names].sort(),
+    // Empty until a probe lands, which makes every log "unseen" and therefore
+    // visible — nothing flashes out and then back in mid-load. This replaces
+    // the old `fileTypesKnown` flag, which had to exist only because a single
+    // list could not express "not looked at yet".
+    probedNames: [...probed].sort(),
+  };
+}
 
 interface MetricsDisplayProps {
   groupedMetrics: GroupedMetrics;
@@ -120,16 +179,54 @@ export const MetricsDisplay = memo(function MetricsDisplay({
     .flat();
 
   // Memoize the sorted base groups
+  // Migrated wandb runs push two unrelated things through FILE/TEXT/ARTIFACT:
+  //
+  //   1. Media the run actually logged — a wandb.Html page, an Object3D point
+  //      cloud. These belong beside images/video in "media".
+  //   2. wandb's own artifact dumps, one per source run, named
+  //      `run-<wandbRunId>-<name>:v<n>` (65 of them in mega-unsupported, all
+  //      raw JSON). Plumbing, not content — each rendered a widget whose only
+  //      payload was a link, burying (1).
+  //
+  // Re-home before grouping so sections, counts and the search index all agree;
+  // doing it downstream only moved the widgets and left a stale "files" header.
+  const adjustedGroupedMetrics = useMemo(() => {
+    const out: GroupedMetrics = {};
+    const rehomed: GroupedMetrics[string]["metrics"] = [];
+
+    for (const [group, data] of Object.entries(groupedMetrics)) {
+      const kept: GroupedMetrics[string]["metrics"] = [];
+      for (const m of data.metrics) {
+        if (!FILE_LOG_TYPES.has(m.type)) kept.push(m);
+        else if (isHiddenArtifactLog(m.type, m.name)) continue;
+        else rehomed.push(m);
+      }
+      if (kept.length > 0) out[group] = { ...data, metrics: kept };
+    }
+
+    if (rehomed.length > 0) {
+      const existing = out[MEDIA_GROUP]?.metrics ?? [];
+      const seen = new Set(existing.map((m) => m.name));
+      out[MEDIA_GROUP] = {
+        // groupName is required by every consumer of a group entry — omitting
+        // it when synthesising this group is what crashed the route before.
+        groupName: MEDIA_GROUP,
+        metrics: [...existing, ...rehomed.filter((m) => !seen.has(m.name))],
+      };
+    }
+    return out;
+  }, [groupedMetrics]);
+
   const sortedGroups = useMemo(() => {
     const time = performance.now();
-    const sorted = sortGroups(groupedMetrics);
+    const sorted = sortGroups(adjustedGroupedMetrics);
     return sorted;
-  }, [groupedMetrics]);
+  }, [adjustedGroupedMetrics]);
 
   // Update search index only when metrics actually change
   useEffect(() => {
     const time = performance.now();
-    const newIndex = searchUtils.createSearchIndex(groupedMetrics);
+    const newIndex = searchUtils.createSearchIndex(adjustedGroupedMetrics);
     const currentEntries = [...searchIndexRef.current.entries()].map(
       ([k, v]) => [k, [...v.terms], [...v.metrics]],
     );
@@ -159,23 +256,78 @@ export const MetricsDisplay = memo(function MetricsDisplay({
     return filtered;
   }, [sortedGroups, searchState]);
 
+  // Which file/artifact logs this view can actually render inline. A migrated
+  // wandb project carries one artifact per source run (65 of them in
+  // mega-unsupported: run-<wandbId>-bar_table:v0 and friends), all raw JSON —
+  // a wall of widgets whose only content is a link. Only what a widget can
+  // actually draw is worth one here; the rest stay reachable on the run's
+  // Files tab.
+  //
+  // Probes a few selected runs rather than all of them: file *types* per
+  // logName do not vary by run, so a handful is enough to classify, and
+  // `fileLogTypes` is one small cached query per run — distinct
+  // `(logName, fileType)` pairs, not the run's whole file list.
+  //
+  // Skipped entirely when the selection has no FILE/TEXT/ARTIFACT logs at all,
+  // which is every project that wasn't migrated from wandb — the probe could
+  // not change any answer there, so it is three requests for nothing on the
+  // hot path.
+  const hasFileLogs = useMemo(
+    () =>
+      Object.values(adjustedGroupedMetrics).some((g) =>
+        g.metrics.some((m) => FILE_LOG_TYPES.has(m.type)),
+      ),
+    [adjustedGroupedMetrics],
+  );
+  const probeRunIds = useMemo(
+    () => (hasFileLogs ? Object.keys(selectedRuns ?? {}).slice(0, 3) : []),
+    [selectedRuns, hasFileLogs],
+  );
+  // `combine` is not a nicety here — see `combineFileTypeProbes`. Without it
+  // `useQueries` hands back a fresh array every render, and every memo built on
+  // it recomputes forever.
+  const { renderableNames, probedNames } = useQueries({
+    queries: probeRunIds.map((runId) =>
+      trpc.runs.data.fileLogTypes.queryOptions({ runId, projectName, organizationId }),
+    ),
+    combine: combineFileTypeProbes,
+  });
+  const renderableFileLogNames = useMemo(
+    () => new Set(renderableNames),
+    [renderableNames],
+  );
+  const probedFileLogNames = useMemo(() => new Set(probedNames), [probedNames]);
+
   // Pre-compute filtered metrics for each group to avoid inline computation
   // This ensures MemoizedMultiGroup receives stable references when metrics haven't changed
   const filteredMetricsPerGroup = useMemo(() => {
     const metricsMap = new Map<string, typeof filteredGroups[0][1]["metrics"]>();
     filteredGroups.forEach(([group, data]) => {
+      const searched = searchUtils.filterMetrics(
+        group,
+        data.metrics,
+        searchIndexRef.current,
+        searchState,
+      );
       metricsMap.set(
         group,
-        searchUtils.filterMetrics(
-          group,
-          data.metrics,
-          searchIndexRef.current,
-          searchState,
+        searched.filter((m) =>
+          isFileLogWidgetVisible(
+            m.type,
+            m.name,
+            renderableFileLogNames,
+            probedFileLogNames,
+          ),
         ),
       );
     });
     return metricsMap;
-  }, [filteredGroups, searchState]);
+  }, [
+    filteredGroups,
+    searchState,
+    renderableFileLogNames,
+    probedFileLogNames,
+  ]);
 
   const {
     isEditingLayout,
@@ -309,12 +461,12 @@ export const MetricsDisplay = memo(function MetricsDisplay({
               <VirtualizedGroup
                 key={key}
                 groupId={`${projectName}-${key}`}
-                groupTitle={groupName}
+                groupTitle={getLogGroupLabel(groupName)}
                 metricCount={metrics.length}
                 disabled={isEditingLayout}
               >
                 <MemoizedMultiGroup
-                  title={groupName}
+                  title={getLogGroupLabel(groupName)}
                   groupId={`${projectName}-${key}`}
                   metrics={metrics}
                   organizationId={organizationId}

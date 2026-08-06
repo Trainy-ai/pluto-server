@@ -1,4 +1,12 @@
 import React, { useState, useMemo } from "react";
+import {
+  detectMediaJsonText,
+  MAX_MEDIA_JSON_SIZE,
+  type PlotlyFigure,
+} from "@/lib/media-json";
+import { PlotlyView } from "@/components/media/plotly-view";
+import { SandboxedHtmlView } from "@/components/media/sandboxed-html-view";
+import { PointCloudView } from "@/components/media/point-cloud-view";
 import { useQuery } from "@tanstack/react-query";
 import type { LogGroup } from "../../~hooks/use-filtered-logs";
 import { useGetTextFiles } from "../../~queries/get-text-files";
@@ -15,8 +23,11 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { useShikiHtml } from "@/lib/hooks/use-shiki";
+import { TruncatedLabel } from "@/components/shared/truncated-label";
 import {
   isPlaintextFile,
+  isImageFile,
+  isHtmlFile,
   getLanguageForExtension,
   formatFileSize,
 } from "@/lib/file-types";
@@ -26,6 +37,23 @@ interface TextViewProps {
   tenantId: string;
   projectName: string;
   runId: string;
+  /**
+   * Suppress the internal logName heading when the embedder already renders
+   * one (the all-runs file widget does), which otherwise shows the name twice.
+   */
+  hideTitle?: boolean;
+  /**
+   * Rendered instead of the syntax-highlighted source when the file turns out
+   * to be ordinary text/JSON (i.e. not an image, HTML, Plotly figure or point
+   * cloud).
+   *
+   * Only the content can say which a `.json` is — the filename is a UUID. The
+   * all-runs widget wants figures and clouds rendered but not a raw blob dumped
+   * into a small card, and it cannot know which it has without fetching. So it
+   * passes its "View in Files" link down and this decides, off the single fetch
+   * already happening here.
+   */
+  plainTextFallback?: React.ReactNode;
 }
 
 interface TextFile {
@@ -38,6 +66,10 @@ interface TextFile {
 
 const MAX_DISPLAY_SIZE = 500 * 1024; // 500KB
 const MAX_DISPLAY_LINES = 5000;
+
+// The media-JSON sniff cap lives with the sniffer (MAX_MEDIA_JSON_SIZE in
+// lib/media-json). This viewer used to carry its own 4MB copy against the Files
+// tab's 8MB, so a 6MB figure charted there and dumped as text here.
 
 interface TextContentProps {
   content: string;
@@ -104,14 +136,14 @@ function TextContent({
           )}
         </Button>
       </div>
-      <div className="max-h-[400px] overflow-auto">
+      <div className="min-w-0 max-h-[400px] overflow-auto">
         {highlightedHtml ? (
           <div
-            className="shiki-wrapper line-numbers p-4 text-sm"
+            className="shiki-wrapper wrap-long-lines line-numbers p-4 text-sm"
             dangerouslySetInnerHTML={{ __html: highlightedHtml }}
           />
         ) : (
-          <pre className="p-4 text-sm">
+          <pre className="whitespace-pre-wrap break-words p-4 text-sm">
             <code>{displayContent}</code>
           </pre>
         )}
@@ -135,11 +167,13 @@ function TextViewHeader({
 }: TextViewHeaderProps) {
   return (
     <div className="flex items-center justify-between border-b bg-muted/30 px-4 py-2">
-      <div className="flex items-center gap-2 overflow-hidden">
+      <div className="flex min-w-0 items-center gap-2 overflow-hidden">
         <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
-        <span className="truncate font-mono text-sm">{fileName}</span>
+        {/* Truncates with a hover tooltip carrying the full name — these are
+            long uuid-suffixed filenames that never fit the widget. */}
+        <TruncatedLabel text={fileName} className="font-mono text-sm" />
         {contentLength !== undefined && (
-          <span className="shrink-0 text-xs text-muted-foreground">
+          <span className="shrink-0 pl-2 text-xs text-muted-foreground">
             {formatFileSize(contentLength)}
           </span>
         )}
@@ -147,12 +181,51 @@ function TextViewHeader({
       <Button
         variant="ghost"
         size="icon"
-        className="h-7 w-7"
+        className="ml-2 h-7 w-7 shrink-0"
         onClick={onDownload}
         title="Download"
       >
         <Download className="h-4 w-4" />
       </Button>
+    </div>
+  );
+}
+
+interface ImageFileViewProps {
+  url: string;
+  fileName: string;
+  onDownload: () => void;
+}
+
+/**
+ * Inline image preview. Covers migrated matplotlib figures, which are ordinary
+ * raster artifacts and previously hit the binary branch ("Preview not
+ * available") purely because nothing routed them here.
+ */
+function ImageFileView({ url, fileName, onDownload }: ImageFileViewProps) {
+  const [failed, setFailed] = useState(false);
+
+  if (failed) {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-4 p-8 text-muted-foreground">
+        <FileText className="h-16 w-16" />
+        <p className="text-sm">Could not display this image.</p>
+        <Button onClick={onDownload}>
+          <Download className="mr-2 h-4 w-4" />
+          Download File
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-muted/20 p-4">
+      <img
+        src={url}
+        alt={fileName}
+        className="max-h-full max-w-full object-contain"
+        onError={() => setFailed(true)}
+      />
     </div>
   );
 }
@@ -220,6 +293,8 @@ export function TextView({
   tenantId,
   projectName,
   runId,
+  hideTitle = false,
+  plainTextFallback,
 }: TextViewProps) {
   const { data: files, isLoading: filesLoading } = useGetTextFiles(
     tenantId,
@@ -262,13 +337,16 @@ export function TextView({
     queryKey: ["file-content", selectedFile?.url],
     queryFn: async () => {
       if (!selectedFile?.url) return null;
-      const response = await fetch(selectedFile.url);
+      const response = await fetch(selectedFile.url, {
+        signal: AbortSignal.timeout(20000),
+      });
       if (!response.ok) {
         throw new Error(`Failed to fetch file: ${response.statusText}`);
       }
       return response.text();
     },
     enabled: !!selectedFile?.url && isPlaintextFile(selectedFile?.fileType || ""),
+    retry: 1,
     staleTime: 1000 * 60 * 5, // 5 minutes
   });
 
@@ -292,6 +370,16 @@ export function TextView({
       window.open(selectedFile.url, "_blank");
     }
   };
+
+  // Plotly / matplotlib figures and 3D point clouds all arrive as plain
+  // `.json` under a UUID filename, so the shape identifies them, not the name.
+  const media = useMemo(
+    () =>
+      content && content.length <= MAX_MEDIA_JSON_SIZE
+        ? detectMediaJsonText(content)
+        : { kind: null, parsed: null },
+    [content],
+  );
 
   // Loading state
   if (filesLoading || !files) {
@@ -330,7 +418,13 @@ export function TextView({
     );
   }
 
-  const isPlaintext = selectedFile && isPlaintextFile(selectedFile.fileType);
+  // Viewer selection. Images short-circuit the plaintext path entirely (they
+  // are never fetched as text); HTML stays on the plaintext path because it
+  // needs its source for srcDoc, but renders as a page rather than as markup.
+  const isImage = Boolean(selectedFile && isImageFile(selectedFile.fileType));
+  const isHtml = Boolean(selectedFile && isHtmlFile(selectedFile.fileType));
+  const isPlaintext =
+    !isImage && selectedFile && isPlaintextFile(selectedFile.fileType);
   const isLargeFile = Boolean(content && content.length > MAX_DISPLAY_SIZE);
   const language = selectedFile
     ? getLanguageForExtension(selectedFile.fileType)
@@ -338,9 +432,11 @@ export function TextView({
 
   return (
     <div className="flex h-full flex-col space-y-4 p-4">
-      <h3 className="text-center font-mono text-lg font-medium">
-        {log.logName}
-      </h3>
+      {!hideTitle && (
+        <h3 className="text-center font-mono text-lg font-medium">
+          {log.logName}
+        </h3>
+      )}
 
       {/* Step Navigator */}
       {availableSteps.length > 1 && (
@@ -363,7 +459,13 @@ export function TextView({
               onDownload={handleDownload}
             />
 
-            {isPlaintext ? (
+            {isImage ? (
+              <ImageFileView
+                url={selectedFile.url}
+                fileName={selectedFile.fileName}
+                onDownload={handleDownload}
+              />
+            ) : isPlaintext ? (
               contentLoading ? (
                 <div className="flex-1 p-4">
                   <Skeleton className="mb-2 h-4 w-full" />
@@ -376,12 +478,25 @@ export function TextView({
                   Failed to load file content
                 </div>
               ) : content ? (
-                <TextContent
-                  content={content}
-                  language={language}
-                  isLarge={isLargeFile}
-                  onDownload={handleDownload}
-                />
+                isHtml ? (
+                  <SandboxedHtmlView
+                    content={content}
+                    fileName={selectedFile.fileName}
+                  />
+                ) : media.kind === "plotly" ? (
+                  <PlotlyView figure={media.parsed as PlotlyFigure} />
+                ) : media.kind === "point-cloud" ? (
+                  <PointCloudView points={media.parsed as number[][]} />
+                ) : plainTextFallback ? (
+                  <>{plainTextFallback}</>
+                ) : (
+                  <TextContent
+                    content={content}
+                    language={language}
+                    isLarge={isLargeFile}
+                    onDownload={handleDownload}
+                  />
+                )
               ) : (
                 <div className="flex flex-1 items-center justify-center text-muted-foreground">
                   No content
