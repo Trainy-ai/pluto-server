@@ -25,6 +25,7 @@ import type { SelectedRunWithColor } from "../~hooks/use-selected-runs";
 import { ChartSyncProvider } from "@/components/charts/context/chart-sync-context";
 import { FullscreenProvider } from "@/components/charts/context/fullscreen-context";
 import { getLogGroupLabel, MEDIA_GROUP } from "@/lib/grouping/consts";
+import { CustomChartsSection } from "./custom-charts-section";
 import { useQueries } from "@tanstack/react-query";
 import { trpc } from "@/utils/trpc";
 import {
@@ -455,6 +456,16 @@ export const MetricsDisplay = memo(function MetricsDisplay({
           {bannerProps && <ChartsLayoutEditBanner {...bannerProps} />}
         </div>
         <ChartsLayoutEditProvider value={layoutEditApi}>
+          {/* Ahead of the metric sections, mirroring where wandb's workspace
+              puts custom charts. Renders nothing unless the selection carries
+              migrated `wandb.plot.*` panels. */}
+          <CustomChartsSection
+            organizationId={organizationId}
+            projectName={projectName}
+            selectedRuns={selectedRuns}
+            hiddenRunIds={hiddenRunIds}
+            disabled={isEditingLayout}
+          />
           {visibleSections.map(({ key, groupName }) => {
             const metrics = orderedMetricsPerGroup.get(key) ?? [];
             return (

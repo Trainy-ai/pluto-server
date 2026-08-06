@@ -20,6 +20,11 @@ import {
   useDashboardViews,
   useDashboardView,
 } from "../../(runComparison)/projects.$projectName/~queries/dashboard-views";
+import {
+  CustomChartView,
+  type CustomChartPanel,
+} from "./~components/group/custom-chart-view";
+import { DropdownRegion } from "@/components/core/runs/dropdown-region/dropdown-region";
 import { ChartSyncProvider } from "@/components/charts/context/chart-sync-context";
 import { ImageStepSyncProvider } from "./~context/image-step-sync-context";
 import { searchUtils, type SearchState } from "../../(runComparison)/projects.$projectName/~lib/search-utils";
@@ -247,6 +252,48 @@ function RouteComponent() {
   const chartsLayout = chartsLayoutData?.config ?? EMPTY_CHARTS_LAYOUT;
 
   // Memoize the rendered DataGroups for "All Metrics" view
+  // Migrated wandb custom charts (`wandb.plot.*`). The exporter recovers each
+  // panel spec from wandb's raw config.yaml and parks it here; the backing data
+  // is an ordinary TABLE log that already migrated, so nothing extra is fetched
+  // until a widget mounts.
+  const customCharts = useMemo<CustomChartPanel[]>(() => {
+    const cfg = runData?.config as
+      | { wandb?: { custom_charts?: unknown } }
+      | null
+      | undefined;
+    const panels = cfg?.wandb?.custom_charts;
+    if (!Array.isArray(panels)) return [];
+    return panels.filter(
+      (p): p is CustomChartPanel =>
+        !!p && typeof p === "object" && typeof (p as CustomChartPanel).tableKey === "string",
+    );
+  }, [runData?.config]);
+
+  // Render functions, not elements — DropdownRegion only calls the ones it
+  // actually shows, so a collapsed section costs no table queries. Memoized so
+  // the array identity survives unrelated re-renders of this route, matching
+  // how the all-runs CustomChartsSection builds the same list.
+  const customChartComponents = useMemo(
+    () =>
+      customCharts.map((panel) => () => (
+        <CustomChartView
+          panel={panel}
+          tenantId={organizationId}
+          projectName={projectName}
+          runId={runId}
+          runName={runData?.name}
+        />
+      )),
+    [customCharts, organizationId, projectName, runId, runData?.name],
+  );
+
+  // Stable identity per card, so a reorder moves the mounted chart's DOM node
+  // instead of remounting (and re-embedding Vega in) every shifted cell.
+  const customChartKeys = useMemo(
+    () => customCharts.map((p) => p.key),
+    [customCharts],
+  );
+
   const dataGroups = useMemo(() => {
     const laidOut = applyChartsSections(
       filteredLogGroups
@@ -349,6 +396,14 @@ function RouteComponent() {
                   every section in the All-Metrics view (each DataGroup reuses
                   this instead of creating its own per-section provider). */}
               <ImageStepSyncProvider>
+                {customCharts.length > 0 && (
+                  <DropdownRegion
+                    title="custom charts"
+                    groupId={`${projectName}-custom-charts`}
+                    components={customChartComponents}
+                    itemKeys={customChartKeys}
+                  />
+                )}
                 {dataGroups}
               </ImageStepSyncProvider>
             </ChartSyncProvider>
