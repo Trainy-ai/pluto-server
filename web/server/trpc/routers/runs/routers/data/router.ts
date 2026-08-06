@@ -2,6 +2,7 @@ import { router } from "../../../../../lib/trpc";
 import { filesProcedure } from "./procs/files";
 import { filesBatchProcedure } from "./procs/files-batch";
 import { fileTreeProcedure } from "./procs/file-tree";
+import { fileLogTypesProcedure } from "./procs/file-log-types";
 import { fileUrlProcedure } from "./procs/file-url";
 import { histogramProcedure } from "./procs/histogram";
 import { histogramBatchProcedure } from "./procs/histogram-batch";
@@ -22,6 +23,7 @@ export const dataRouter = router({
   files: filesProcedure,
   filesBatch: filesBatchProcedure,
   fileTree: fileTreeProcedure,
+  fileLogTypes: fileLogTypesProcedure,
   fileUrl: fileUrlProcedure,
   histogram: histogramProcedure,
   histogramBatch: histogramBatchProcedure,

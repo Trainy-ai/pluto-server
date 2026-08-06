@@ -11,6 +11,14 @@ const getFileTreeCache = new LocalCache<GetFileTreeData>(
   1000 * 30,
 );
 
+/**
+ * Every file row of a run, with captions and annotations — the Files tab's
+ * data source.
+ *
+ * A caller that only needs to know which log names hold which file TYPES wants
+ * `runs.data.fileLogTypes` instead: this response is a row per file (up to
+ * 10,000) and is a multi-MB fetch for an image-heavy run.
+ */
 export const useGetFileTree = (
   orgId: string,
   projectName: string,

@@ -1,0 +1,11 @@
+-- Idempotent migration for long-lived ClickHouse volumes that predate the
+-- `annotations` column. Same reasoning as zz_alter_files_add_sample_index.sql:
+-- there is no CH migration runner, create_tables.sh replays every *.sql on
+-- startup, and files.sql's CREATE TABLE IF NOT EXISTS is a no-op once the table
+-- exists — so an existing volume never gains the column without this ALTER.
+--
+-- Holds bounding boxes and segmentation-mask references for an image, as a JSON
+-- blob in wandb's own shape (see the frontend's annotation types). Boxes are
+-- small enough to sit inline; a mask is a PNG, so the JSON references it by
+-- fileName and the pixels ride in MinIO like any other file.
+ALTER TABLE mlop_files ADD COLUMN IF NOT EXISTS annotations Nullable(String) CODEC(ZSTD(1));

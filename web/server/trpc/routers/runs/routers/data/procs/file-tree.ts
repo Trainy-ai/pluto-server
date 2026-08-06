@@ -19,7 +19,12 @@ export const fileTreeProcedure = protectedOrgProcedure
 
     return withCache<RunFileMetadata[]>(
       ctx,
-      "fileTree",
+      // v2: the row shape gained `caption` and `annotations`. The namespace is
+      // part of the cache key, so bumping it retires entries written by the
+      // previous shape — without it, L2 (Redis) survives the deploy and serves
+      // annotation-less rows, and every annotated image renders bare until the
+      // TTL expires.
+      "fileTree:v2",
       { runId, organizationId, projectName },
       async () => {
         return queryRunFileTree(ctx.clickhouse, {

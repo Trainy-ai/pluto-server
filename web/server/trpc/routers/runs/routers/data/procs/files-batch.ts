@@ -14,7 +14,7 @@ const S3_URL_MAX_TTL_MS = 15 * 60 * 1000;
 // keyed by encoded runId. Replaces the per-run runs.data.files fan-out in the
 // media widgets (one query per run) that bloated batched GET URLs into 414s.
 //
-// Reuses the single-run per-run withCache (namespace "files" + same key), so
+// Reuses the single-run per-run withCache (namespace "files:v2" + same key), so
 // entries are shared with runs.data.files. NOTE: callers must NOT accumulate
 // this client-side — presigned URLs expire (~15min), so the media widgets keep
 // a normal staleTime and refetch on selection change to refresh URLs (unlike
@@ -50,7 +50,9 @@ export const filesBatchProcedure = protectedOrgProcedure
         }
         const data = await withCache<FileData>(
           ctx,
-          "files",
+          // Must stay in step with files.ts — the shared namespace is what
+          // lets the batch and single-run paths hit each other's entries.
+          "files:v2",
           { runId, organizationId, projectName, logName, logGroup },
           () =>
             queryRunFilesByLogName(ctx.clickhouse, {

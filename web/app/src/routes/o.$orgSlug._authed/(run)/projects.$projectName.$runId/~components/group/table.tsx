@@ -64,18 +64,38 @@ interface TableViewProps {
   tenantId: string;
   projectName: string;
   runId: string;
+  /**
+   * Dense layout for small containers (the all-runs table widget). Drops the
+   * large heading and the search/filter bar — roughly 130px of chrome that, in
+   * a ~380px widget, left no room for actual rows. Sorting, pagination and the
+   * cell modal are unaffected, and the widget's fullscreen view renders the
+   * full (non-compact) table.
+   */
+  compact?: boolean;
+}
+
+/**
+ * A table cell. Pluto logs numbers and strings; migrated wandb tables also
+ * carry booleans, nulls (missing values) and object cells (media). Cells are
+ * stringified for display, so the wider type costs nothing at render time.
+ */
+type TableCell = unknown;
+
+/**
+ * Column/row descriptor. `dtype` is an open string rather than pluto's three
+ * literals — wandb emits "bool" and media types — and is optional because a
+ * migrated descriptor may omit it. Only "int"/"float" are special-cased (they
+ * enable numeric filtering); anything else displays verbatim.
+ */
+interface TableAxisDescriptor {
+  name: string;
+  dtype?: string;
 }
 
 interface TableData {
-  table: Array<Array<string | number>>;
-  row?: Array<{
-    name: string;
-    dtype: "int" | "float" | "str";
-  }>;
-  col?: Array<{
-    name: string;
-    dtype: "int" | "float" | "str";
-  }>;
+  table: Array<Array<TableCell>>;
+  row?: Array<TableAxisDescriptor>;
+  col?: Array<TableAxisDescriptor>;
 }
 
 interface TableResponse {
@@ -99,7 +119,8 @@ interface FilterState {
 
 interface CellModalState {
   isOpen: boolean;
-  content: string | number | null;
+  /** Always a String()-formatted value — the handler stringifies before storing. */
+  content: string;
   title: string;
   isJson: boolean;
 }
@@ -124,6 +145,36 @@ const NUMERIC_OPERATORS = ["=", ">", ">=", "<", "<=", "!="];
  */
 const generateFilterId = () =>
   `filter_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+/**
+ * Renders a cell value as display text.
+ *
+ * Pluto's own tables hold numbers and strings, for which this is just
+ * `String(cell)`. A migrated wandb table also carries nulls (missing values)
+ * and object cells (media entries, e.g. `{_type: "image-file", path: "..."}`),
+ * and a bare `String()` turns every one of those into the useless literal
+ * "[object Object]".
+ *
+ * Media cells still render as text — in-cell media rendering is a separate
+ * piece of work — but as the file path, which at least says which image the
+ * row refers to. `null` renders empty rather than as the word "null", since
+ * here it means "no value for this row".
+ */
+const formatTableCell = (cell: unknown): string => {
+  if (cell === null || cell === undefined) return "";
+  if (typeof cell !== "object") return String(cell);
+
+  // wandb media cells carry the interesting part in `path`.
+  const path = (cell as { path?: unknown }).path;
+  if (typeof path === "string") return path;
+
+  try {
+    return JSON.stringify(cell);
+  } catch {
+    // Circular or otherwise unserialisable — better than "[object Object]".
+    return "[unserialisable value]";
+  }
+};
 
 /**
  * Creates a preview of JSON content
@@ -427,19 +478,19 @@ function usePagination(totalItems: number) {
 function useCellModal() {
   const [cellModal, setCellModal] = useState<CellModalState>({
     isOpen: false,
-    content: null,
+    content: "",
     title: "",
     isJson: false,
   });
 
   // Handle cell double click
   const handleCellDoubleClick = useCallback(
-    (content: string | number, columnName: string) => {
+    (content: unknown, columnName: string) => {
       let isJson = false;
-      let formattedContent = String(content);
+      let formattedContent = formatTableCell(content);
 
       // Check if content is long enough to warrant a modal
-      const stringContent = String(content);
+      const stringContent = formattedContent;
       if (stringContent.length < 50 && !isJsonString(stringContent)) {
         return; // Don't open modal for short content
       }
@@ -491,13 +542,13 @@ const TableCellRenderer = ({
   columnName,
   onDoubleClick,
 }: {
-  cell: string | number;
+  cell: unknown;
   cellIndex: number;
   columnWidths: number[];
   columnName: string;
-  onDoubleClick: (content: string | number, columnName: string) => void;
+  onDoubleClick: (content: unknown, columnName: string) => void;
 }) => {
-  const cellContent = String(cell);
+  const cellContent = formatTableCell(cell);
   const isLongText = cellContent.length > 100;
   const isJson = typeof cell === "string" && isJsonString(cell);
 
@@ -1022,6 +1073,7 @@ const FilterConditionsView = ({
 // ==============================
 
 export const TableView = ({
+  compact = false,
   log,
   tenantId,
   projectName,
@@ -1114,8 +1166,10 @@ export const TableView = ({
             // For numbers, width depends on digits
             estimatedWidth = Math.max(80, String(cell).length * 9 + 32);
           } else {
-            // For strings, cap at reasonable display width
-            const str = String(cell);
+            // For strings, cap at reasonable display width. Sized off the
+            // rendered text so an object cell gets a column wide enough for the
+            // path that is actually displayed.
+            const str = formatTableCell(cell);
             estimatedWidth = Math.min(
               300,
               Math.max(80, Math.min(str.length, 30) * 9 + 32),
@@ -1229,8 +1283,9 @@ export const TableView = ({
                     return numValue === filterValue;
                 }
               } else {
-                // For strings, use contains
-                return String(cellValue)
+                // Match displayed text (paths for media/object cells), not
+                // String(object) → "[object Object]".
+                return formatTableCell(cellValue)
                   .toLowerCase()
                   .includes(filter.value.toLowerCase());
               }
@@ -1247,7 +1302,10 @@ export const TableView = ({
         const search = searchValue.toLowerCase();
         filteredData = filteredData.filter((row) => {
           for (const cell of row) {
-            if (String(cell).toLowerCase().includes(search)) {
+            // Search what the user can see — every object cell stringifies to
+            // the same "[object Object]" otherwise, so searching for an image
+            // path matched nothing.
+            if (formatTableCell(cell).toLowerCase().includes(search)) {
               return true;
             }
           }
@@ -1270,8 +1328,10 @@ export const TableView = ({
         });
       } else {
         filteredData.sort((a, b) => {
-          const strA = String(a[column]).toLowerCase();
-          const strB = String(b[column]).toLowerCase();
+          // Sort by displayed text, so object cells order by path rather than
+          // all comparing equal as "[object Object]".
+          const strA = formatTableCell(a[column]).toLowerCase();
+          const strB = formatTableCell(b[column]).toLowerCase();
           return direction === "asc"
             ? strA.localeCompare(strB)
             : strB.localeCompare(strA);
@@ -1338,10 +1398,12 @@ export const TableView = ({
   // Loading state
   if (isLoading) {
     return (
-      <div className="h-full space-y-6 p-4">
-        <h3 className="text-center font-mono text-lg font-medium text-muted-foreground">
-          {log.logName}
-        </h3>
+      <div className={compact ? "h-full space-y-2 p-2" : "h-full space-y-6 p-4"}>
+        {!compact && (
+          <h3 className="text-center font-mono text-lg font-medium text-muted-foreground">
+            {log.logName}
+          </h3>
+        )}
         <div className="flex h-[calc(100%-60px)] flex-col items-center justify-center">
           <div className="h-full w-full max-w-4xl">
             <div className="group relative flex h-full items-center justify-center">
@@ -1359,10 +1421,12 @@ export const TableView = ({
   // No data state
   if (!latestTableData) {
     return (
-      <div className="space-y-4">
-        <h3 className="text-center font-mono text-lg font-medium text-muted-foreground">
-          {log.logName}
-        </h3>
+      <div className={compact ? "space-y-2" : "space-y-4"}>
+        {!compact && (
+          <h3 className="text-center font-mono text-lg font-medium text-muted-foreground">
+            {log.logName}
+          </h3>
+        )}
         <div className="flex h-40 items-center justify-center text-muted-foreground">
           <div className="flex flex-col items-center gap-2">
             <FileSpreadsheet className="h-10 w-10 text-muted-foreground/40" />
@@ -1375,13 +1439,22 @@ export const TableView = ({
 
   // Render table with data
   return (
-    <div className="flex h-full flex-col space-y-6 p-4">
-      <h3 className="text-center font-mono text-lg font-medium">
-        {log.logName}
-      </h3>
+    <div
+      className={
+        compact
+          ? "flex h-full flex-col space-y-2 p-2"
+          : "flex h-full flex-col space-y-6 p-4"
+      }
+    >
+      {!compact && (
+        <h3 className="text-center font-mono text-lg font-medium">
+          {log.logName}
+        </h3>
+      )}
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-card shadow-sm">
         {/* Header with search and filters */}
+        {!compact && (
         <div className="flex flex-wrap items-center justify-between gap-4 border-b bg-muted/40 p-4">
           <div className="relative min-w-[200px] flex-1">
             <Search className="absolute top-2.5 left-2 h-4 w-4 text-muted-foreground" />
@@ -1472,7 +1545,7 @@ export const TableView = ({
             )}
           </div>
         </div>
-
+        )}
         {/* Table container with overflow handling */}
         <div className="flex-1 overflow-auto p-3">
           <div ref={tableRef} className="w-full">

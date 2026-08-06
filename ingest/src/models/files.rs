@@ -46,6 +46,13 @@ pub struct FilesRow {
     // keeps older SDKs / pre-existing DLQ envelopes (which omit it) at 0.
     #[serde(rename = "sampleIndex", default)]
     pub sample_index: u32,
+    // Bounding boxes / segmentation-mask references for an image, as a JSON
+    // string in wandb's shape. Opaque here: the ingest neither parses nor
+    // validates it, exactly as it treats `dataType` for string series — the
+    // shape is a contract between the SDK and the frontend. Appended last to
+    // match the column order in files.sql and the ADD COLUMN migration.
+    #[serde(rename = "annotations", default)]
+    pub annotations: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -92,6 +99,9 @@ pub struct FileInput {
     // `#[serde(default)]` keeps older SDKs (which omit it) at 0.
     #[serde(rename = "sampleIndex", default)]
     pub sample_index: u32,
+    // JSON blob of boxes / mask references; see FilesRow.
+    #[serde(rename = "annotations", default)]
+    pub annotations: Option<String>,
 }
 
 impl InputData for FileInput {
@@ -121,6 +131,7 @@ impl DatabaseRow<FileInput, FilesEnrichment> for FilesRow {
             file_size: input.file_size,
             caption: input.caption,
             sample_index: input.sample_index,
+            annotations: input.annotations,
         })
     }
 
@@ -183,6 +194,7 @@ mod tests {
             step: 1,
             file_size: 2048,
             caption: Some("a cute cat".to_string()),
+            annotations: None,
             sample_index: 2,
         };
         let row =
@@ -210,6 +222,7 @@ mod tests {
             step: 1,
             file_size: 2048,
             caption: None,
+            annotations: None,
             sample_index: 0,
         };
         let row =
@@ -228,6 +241,7 @@ mod tests {
             step: 1,
             file_size: 1024,
             caption: None,
+            annotations: None,
             sample_index: 0,
         };
         let row =
@@ -253,6 +267,7 @@ mod tests {
             step: 0,
             file_size: 0,
             caption: None,
+            annotations: None,
             sample_index: 0,
         };
         assert!(input.validate().is_ok());

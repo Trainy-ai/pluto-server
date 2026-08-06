@@ -41,7 +41,34 @@ export const tableProcedure = protectedOrgProcedure
           })
           .then((result) => result.json())) as unknown[];
 
-        return result.map((row) => tableDataRow.parse(row));
+        // Parse per row and drop only the rows that genuinely cannot be read
+        // (corrupt JSON, missing logName/step/table). A single `.map(parse)`
+        // threw on the first bad row and took every other step's table with it,
+        // which the UI shows as "No table data available" — one damaged step
+        // hiding 99 intact ones. Anything unreadable is logged rather than
+        // silently swallowed.
+        const rows: TableData = [];
+        let dropped = 0;
+        for (const row of result) {
+          const parsed = tableDataRow.safeParse(row);
+          if (parsed.success) {
+            rows.push(parsed.data);
+          } else {
+            dropped++;
+            if (dropped === 1) {
+              console.warn(
+                `[runs.data.table] dropping unparseable table row for run=${runId} logName=${logName}:`,
+                parsed.error.issues.slice(0, 3)
+              );
+            }
+          }
+        }
+        if (dropped > 0) {
+          console.warn(
+            `[runs.data.table] dropped ${dropped}/${result.length} unparseable rows for run=${runId} logName=${logName}`
+          );
+        }
+        return rows;
       }
     );
   });

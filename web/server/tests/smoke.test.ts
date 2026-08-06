@@ -6206,6 +6206,17 @@ describe('SDK API Endpoints (with API Key)', () => {
 
       expect(response.status).toBe(401);
     });
+
+    // The metrics views' file probe. Same guard as every other data proc — it
+    // reads mlop_files for a run, so it must not answer without a session.
+    it('Test 24.7: fileLogTypes - Unauthorized without session', async () => {
+      const response = await makeTrpcRequest('runs.data.fileLogTypes', {
+        runId: 'test',
+        projectName: 'test-project',
+      });
+
+      expect(response.status).toBe(401);
+    });
   });
 
   // ============================================================================

@@ -15,6 +15,10 @@ CREATE TABLE IF NOT EXISTS mlop_files (
     -- Lets the read path restore the user's sample order instead of
     -- falling back to fileName sort. DEFAULT 0 keeps pre-existing rows
     -- and older-SDK writes (which omit it) back-compatible.
-    sampleIndex UInt32 DEFAULT 0 CODEC(ZSTD(1))
+    sampleIndex UInt32 DEFAULT 0 CODEC(ZSTD(1)),
+    -- Bounding boxes / segmentation-mask references for an image, as JSON in
+    -- wandb's own shape so the migration forwards rather than translates.
+    -- Masks are PNGs and are referenced by fileName, not inlined.
+    annotations Nullable(String) CODEC(ZSTD(1))
 ) ENGINE = MergeTree
 ORDER BY (tenantId, projectName, runId, logGroup, logName, time, step);

@@ -24,6 +24,8 @@ export interface FileEntry {
   logGroup: string;
   time: string;
   step: number;
+  caption?: string | null;
+  annotations?: string | null;
 }
 
 export interface MetricEntry {

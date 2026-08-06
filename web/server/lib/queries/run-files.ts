@@ -26,6 +26,13 @@ export interface RunFileEntry {
   step: number;
   url: string;
   caption: string | null;
+  /**
+   * Bounding boxes / mask references, JSON in wandb's shape. Declared because
+   * the query selects it and the spread below returns it — this type backs the
+   * public HTTP file endpoints, so an undeclared field here is a response body
+   * that does not match its own contract.
+   */
+  annotations: string | null;
 }
 
 /**
@@ -69,7 +76,7 @@ export async function queryRunFiles(
   }
 
   const query = `
-    SELECT fileName, fileType, fileSize, logName, logGroup, time, step, caption
+    SELECT fileName, fileType, fileSize, logName, logGroup, time, step, caption, annotations
     FROM mlop_files
     WHERE ${whereClause}
     ORDER BY step ASC, sampleIndex ASC, fileName ASC
@@ -87,6 +94,8 @@ export async function queryRunFiles(
     time: string;
     step: number;
     caption: string | null;
+    // JSON in wandb's shape; parsed by the frontend, opaque here.
+    annotations: string | null;
   }[];
 
   // Generate presigned URLs for all files in parallel
@@ -103,6 +112,7 @@ export async function queryRunFiles(
         ...file,
         fileSize: file.fileSize ?? 0, // Ensure fileSize is always a number
         caption: file.caption ?? null,
+        annotations: file.annotations ?? null,
         url,
       };
     })
@@ -132,6 +142,7 @@ export async function queryRunFilesByLogName(
     fileType: string;
     url: string;
     caption: string | null;
+    annotations: string | null;
   }[]
 > {
   const { organizationId, projectName, runId, logName } = params;
@@ -141,7 +152,7 @@ export async function queryRunFilesByLogName(
   const MAX_FILES = 10000;
 
   const query = `
-    SELECT time, step, fileName, fileType, caption
+    SELECT time, step, fileName, fileType, caption, annotations
     FROM mlop_files
     WHERE tenantId = {tenantId: String}
     AND projectName = {projectName: String}
@@ -174,6 +185,7 @@ export async function queryRunFilesByLogName(
     fileName: string;
     fileType: string;
     caption: string | null;
+    annotations: string | null;
   }[];
 
   // Generate presigned URLs for all files in parallel
@@ -186,7 +198,7 @@ export async function queryRunFilesByLogName(
         logName,
         file.fileName
       );
-      return { ...file, caption: file.caption ?? null, url };
+      return { ...file, caption: file.caption ?? null, annotations: file.annotations ?? null, url };
     })
   );
 
@@ -205,6 +217,10 @@ export interface RunFileMetadata {
   logGroup: string;
   time: string;
   step: number;
+  /** Present so the Files tab can show the same caption the run page does. */
+  caption: string | null;
+  /** Boxes / mask references, so the browser preview matches the run page. */
+  annotations: string | null;
 }
 
 export async function queryRunFileTree(
@@ -219,7 +235,7 @@ export async function queryRunFileTree(
   const { organizationId, projectName, runId, limit = 10000 } = params;
 
   const query = `
-    SELECT fileName, fileType, fileSize, logName, logGroup, time, step
+    SELECT fileName, fileType, fileSize, logName, logGroup, time, step, caption, annotations
     FROM mlop_files
     WHERE tenantId = {tenantId: String}
     AND projectName = {projectName: String}
@@ -240,6 +256,56 @@ export async function queryRunFileTree(
   );
 
   return (await result.json()) as RunFileMetadata[];
+}
+
+/** One distinct `(logName, fileType)` pair a run logged. */
+export interface RunFileLogType {
+  logName: string;
+  fileType: string;
+}
+
+/**
+ * The distinct `(logName, fileType)` pairs of a run.
+ *
+ * The metrics views classify a file log by its files' EXTENSION (a `.json` may
+ * be a Plotly figure, an `.html` an interactive report), and that is all they
+ * need — not the file names, sizes, captions or per-image annotations
+ * `queryRunFileTree` returns for up to 10,000 rows. A run with 3,000 annotated
+ * images and one `training.log` has three distinct pairs at most.
+ *
+ * No `LIMIT`: the result is bounded by the number of distinct pairs, and
+ * `DISTINCT` is evaluated in ClickHouse, so the full rows never cross the wire.
+ */
+export async function queryRunFileLogTypes(
+  ch: typeof clickhouse,
+  params: {
+    organizationId: string;
+    projectName: string;
+    runId: number;
+  }
+): Promise<RunFileLogType[]> {
+  const { organizationId, projectName, runId } = params;
+
+  const query = `
+    SELECT DISTINCT logName, fileType
+    FROM mlop_files
+    WHERE tenantId = {tenantId: String}
+    AND projectName = {projectName: String}
+    AND runId = {runId: UInt64}
+    ORDER BY logName ASC, fileType ASC
+  `;
+
+  const result = await ch.query(
+    query,
+    {
+      tenantId: organizationId,
+      projectName,
+      runId,
+    },
+    { label: "queryRunFileLogTypes" }
+  );
+
+  return (await result.json()) as RunFileLogType[];
 }
 
 /**

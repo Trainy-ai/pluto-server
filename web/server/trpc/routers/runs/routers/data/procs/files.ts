@@ -16,6 +16,12 @@ export type FileData = {
   fileType: string;
   url: string;
   caption: string | null;
+  /**
+   * Bounding boxes / mask references for an image, JSON in wandb's shape.
+   * Passed through untouched — the frontend parses it, so a new annotation
+   * kind needs no server change.
+   */
+  annotations: string | null;
 }[];
 
 export const filesProcedure = protectedOrgProcedure
@@ -34,7 +40,12 @@ export const filesProcedure = protectedOrgProcedure
 
     return withCache<FileData>(
       ctx,
-      "files",
+      // v2: the row shape gained `annotations`. The namespace is part of the
+      // cache key, so bumping it retires entries written by the previous shape
+      // — without it, L2 (Redis) survives the deploy and serves annotation-less
+      // rows, and every annotated image renders bare until the TTL expires.
+      // Must stay in step with files-batch.ts, which shares this namespace.
+      "files:v2",
       { runId, organizationId, projectName, logName, logGroup },
       async () => {
         return queryRunFilesByLogName(ctx.clickhouse, {

@@ -236,6 +236,12 @@ pub struct FileUploadInfo {
     // newer SDK talking to an older server is also harmless (field ignored).
     #[serde(rename = "sampleIndex", default)]
     pub sample_index: u32,
+    // Bounding boxes / segmentation-mask references, JSON in wandb's shape.
+    // Opaque to the ingest — it stores the string and never parses it, the
+    // same way `dataType` is handled for string series. `#[serde(default)]`
+    // keeps older SDKs, which never send it, working unchanged.
+    #[serde(default)]
+    pub annotations: Option<String>,
 }
 
 /// Response containing presigned URLs for requested files
@@ -290,6 +296,7 @@ pub async fn generate_presigned_urls(
             step: file.step,
             caption: file.caption.clone(),
             sample_index: file.sample_index,
+            annotations: file.annotations.clone(),
         };
 
         // Create the full database row structure

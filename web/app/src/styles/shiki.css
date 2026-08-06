@@ -25,3 +25,18 @@
   user-select: none;
   font-size: 0.75rem;
 }
+
+/*
+ * Opt-in soft wrapping for file previews.
+ *
+ * Shiki emits `white-space: pre` and each `.line` is an inline-block, so a
+ * minified-JSON artifact (one enormous line) ran off the right edge of the
+ * panel where it could not be read or scrolled to. Applied via
+ * `.wrap-long-lines` rather than globally so ordinary source viewing keeps its
+ * exact horizontal layout.
+ */
+.shiki-wrapper.wrap-long-lines pre,
+.shiki-wrapper.wrap-long-lines code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

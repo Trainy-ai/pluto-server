@@ -86,6 +86,43 @@ function createSimplePNG(
 }
 
 /**
+ * A segmentation mask PNG: each pixel's value IS a class id, not a colour.
+ *
+ * `annotated-image.tsx` reads the id out of the RED channel (as wandb's own
+ * reader does), so red is the only channel that matters — but all three are
+ * written to the same value so the file reads as plain greyscale if anything
+ * ever opens it directly, and so a viewer that guessed a different channel
+ * would still get the right answer.
+ *
+ * 8-bit RGB, so ids are 0-255 — exactly the range `buildLayerLut` covers.
+ * `classAt` is evaluated per pixel, which is fine at fixture sizes.
+ */
+function createClassMaskPNG(
+  width: number,
+  height: number,
+  classAt: (x: number, y: number) => number,
+): Buffer {
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const ihdrData = Buffer.alloc(13);
+  ihdrData.writeUInt32BE(width, 0);
+  ihdrData.writeUInt32BE(height, 4);
+  ihdrData[8] = 8;
+  ihdrData[9] = 2; // 8-bit RGB
+  const ihdrChunk = createPNGChunk('IHDR', ihdrData);
+  const rawData: number[] = [];
+  for (let y = 0; y < height; y++) {
+    rawData.push(0); // filter: none
+    for (let x = 0; x < width; x++) {
+      const id = classAt(x, y) & 0xff;
+      rawData.push(id, id, id);
+    }
+  }
+  const idatChunk = createPNGChunk('IDAT', zlib.deflateSync(Buffer.from(rawData)));
+  const iendChunk = createPNGChunk('IEND', Buffer.alloc(0));
+  return Buffer.concat([signature, ihdrChunk, idatChunk, iendChunk]);
+}
+
+/**
  * Trigger an unscheduled refresh of mlop_metric_summaries_v2_refresh_mv and
  * wait for it to complete.
  *
@@ -641,6 +678,1157 @@ async function ensureTestOrg(
 
   return { org };
 }
+
+// ───────────────────────────────────────────────────────────────────────────
+// Native rich-media / rich-data fixtures (setup step 5j).
+//
+// Everything in the NM_* block below is the shape the pluto SDK itself
+// produces — `pluto.log`, `pluto.Image(boxes=..., masks=...)`, `pluto.Table`,
+// `pluto.Html`. These are hand-written, and deliberately cover the cases the
+// captured wandb exports in the WM_* block below do NOT reach: fractional box
+// coordinates (every migrated box carries `domain: "pixel"`), a mask layer
+// that actually declares `class_labels` (no exported one does), and a mask
+// holding a class id absent from those labels.
+//
+// Values are exact and unambiguous — round fractions, small integers,
+// distinct strings — so an E2E assertion can name a number, not a tolerance.
+// ───────────────────────────────────────────────────────────────────────────
+
+/** Project holding every native media/data fixture. */
+const NM_PROJECT = 'native-media-test';
+
+/** Edge of every fixture image and mask, in pixels. */
+const NM_IMAGE_SIZE = 64;
+
+const NM_SEG_LOG = 'media/segmentation';
+const NM_CAPTION_LOG = 'media/captioned';
+
+/**
+ * Class ids in the step-0 mask of `nm-annotated-1`, by quadrant.
+ *
+ *   top-left  = 1 (labelled "cat")   top-right    = 2 (labelled "dog")
+ *   bottom-left = 9 (NOT labelled)   bottom-right = 0 (NOT labelled)
+ *
+ * The two unlabelled quadrants are the point: `labelledClassIds` builds the
+ * tint LUT from `class_labels` alone, so ids missing from it get alpha 0 and
+ * the photo shows through. 9 and 0 cover both halves of that rule — an
+ * ordinary unlabelled class, and the id people assume is special-cased as
+ * "background" but is not.
+ */
+const NM_MASK_STEP0 = (x: number, y: number): number =>
+  y < NM_IMAGE_SIZE / 2 ? (x < NM_IMAGE_SIZE / 2 ? 1 : 2) : x < NM_IMAGE_SIZE / 2 ? 9 : 0;
+
+/**
+ * Class ids in the step-2 mask of `nm-annotated-1`: left half 0, right half 1.
+ *
+ * Its layer DOES label 0, so both halves tint — the converse of the step-0
+ * mask, and the reason there is no "id 0 means background" shortcut anywhere.
+ */
+const NM_MASK_STEP2 = (x: number): number => (x < NM_IMAGE_SIZE / 2 ? 0 : 1);
+
+/**
+ * Class ids in `nm-annotated-2`'s mask — top-left quadrant 3, rest 0.
+ *
+ * Deliberately shares its FILENAME with run 1's step-0 mask while holding
+ * different ids and different labels. The all-runs grid resolves masks by
+ * file name, so a lookup that is not scoped to its own run silently draws run
+ * 1's cat/dog quadrants here instead of run 2's single "tree" corner.
+ */
+const NM_MASK_RUN2 = (x: number, y: number): number =>
+  x < NM_IMAGE_SIZE / 2 && y < NM_IMAGE_SIZE / 2 ? 3 : 0;
+
+/**
+ * Step 0 of `nm-annotated-1` — the full-fat annotation: two box layers and a
+ * mask layer, so `layerNames()` is exactly
+ * ["ground_truth", "predictions", "segmentation"].
+ *
+ * `ground_truth` is fractional (no `domain`), which is the default and what
+ * most data looks like. `predictions` mixes one PIXEL-domain box in with two
+ * fractional ones, because that mix is the silent-failure trap: 8..24 read as
+ * fractions lands 8 image-widths off-canvas and simply vanishes, with no
+ * error anywhere. Both interpretations of the same box therefore have to be
+ * on screen at once for a test to catch a regression in `resolveBox`.
+ */
+const NM_SEG_ANNOTATIONS_STEP0 = {
+  boxes: {
+    ground_truth: {
+      box_data: [
+        {
+          position: { minX: 0.1, minY: 0.1, maxX: 0.4, maxY: 0.4 },
+          class_id: 1,
+          box_caption: 'cat',
+        },
+        {
+          position: { minX: 0.55, minY: 0.55, maxX: 0.9, maxY: 0.9 },
+          class_id: 2,
+          box_caption: 'dog',
+        },
+      ],
+      class_labels: { '1': 'cat', '2': 'dog' },
+    },
+    predictions: {
+      box_data: [
+        {
+          position: { minX: 8, minY: 8, maxX: 24, maxY: 24 },
+          domain: 'pixel',
+          class_id: 1,
+          box_caption: 'cat 0.91',
+          scores: { confidence: 0.91 },
+        },
+        {
+          position: { minX: 0.5, minY: 0.5, maxX: 0.95, maxY: 0.95 },
+          class_id: 2,
+          box_caption: 'dog 0.77',
+          scores: { confidence: 0.77 },
+        },
+        {
+          position: { minX: 0.05, minY: 0.6, maxX: 0.3, maxY: 0.95 },
+          class_id: 3,
+          box_caption: 'car 0.42',
+          scores: { confidence: 0.42 },
+        },
+      ],
+      class_labels: { '1': 'cat', '2': 'dog', '3': 'car' },
+    },
+  },
+  masks: {
+    segmentation: {
+      fileName: 'seg_step_0_mask.png',
+      class_labels: { '1': 'cat', '2': 'dog' },
+    },
+  },
+};
+
+/** Step 2 — mask only, one layer, and the layer labels class 0. */
+const NM_SEG_ANNOTATIONS_STEP2 = {
+  masks: {
+    segmentation: {
+      fileName: 'seg_step_2_mask.png',
+      class_labels: { '0': 'background', '1': 'cat' },
+    },
+  },
+};
+
+/**
+ * Step 3 — boxes only, one layer, one box, pixel domain covering the whole
+ * frame. No mask, so this is the overlay path with no canvas involved at all.
+ */
+const NM_SEG_ANNOTATIONS_STEP3 = {
+  boxes: {
+    predictions: {
+      box_data: [
+        {
+          position: { minX: 0, minY: 0, maxX: NM_IMAGE_SIZE, maxY: NM_IMAGE_SIZE },
+          domain: 'pixel',
+          class_id: 5,
+          box_caption: 'full frame',
+        },
+      ],
+      class_labels: { '5': 'frame' },
+    },
+  },
+};
+
+/** `nm-annotated-2`'s only annotated step: one box, one mask, two layers. */
+const NM_SEG_ANNOTATIONS_RUN2 = {
+  boxes: {
+    predictions: {
+      box_data: [
+        {
+          position: { minX: 0.2, minY: 0.2, maxX: 0.6, maxY: 0.6 },
+          class_id: 3,
+          box_caption: 'tree 0.65',
+          scores: { confidence: 0.65 },
+        },
+      ],
+      class_labels: { '3': 'tree' },
+    },
+  },
+  masks: {
+    segmentation: {
+      fileName: 'seg_step_0_mask.png',
+      class_labels: { '3': 'tree' },
+    },
+  },
+};
+
+/**
+ * Multi-sample media at one step, with the file names in the REVERSE of the
+ * logged order.
+ *
+ * `queryRunFiles` orders by `(step, sampleIndex, fileName)`, so the only way
+ * this list can come back z, y, x is if `sampleIndex` is doing the work — a
+ * fileName sort would produce exactly the opposite.
+ */
+const NM_CAPTION_SAMPLES = [
+  { sampleIndex: 0, fileName: 'cap_z.png', caption: 'sample zero' },
+  { sampleIndex: 1, fileName: 'cap_y.png', caption: 'sample one' },
+  { sampleIndex: 2, fileName: 'cap_x.png', caption: 'sample two' },
+];
+
+/**
+ * Files that arrive as plain `.json` and can only be told apart by content.
+ *
+ * The names are UUIDs on purpose. `detectMediaJson` sniffs the parsed body,
+ * and a fixture named `plotly.json` would let a filename-based shortcut pass
+ * the test — which is precisely the bug the sniffing replaced.
+ */
+const NM_PLOTLY_FILE = '4f8a1c62-0d3b-4a91-9f2e-7c5b1d0e6a34.json';
+const NM_MPL_FILE = '9b2d7e14-5a63-4c08-8e7f-2d91a6c3b05f.json';
+const NM_CLOUD_FILE = 'c1e05a37-6b48-4d2a-b93c-8f4e7a205d61.json';
+const NM_CLOUD_RGB_FILE = 'a7d3f019-8c26-4b57-91ea-3f60d8b47c2e.json';
+const NM_BLOB_FILE = 'e2c94b60-71fa-4d38-85b7-0a6c39e1f4d5.json';
+
+/** A genuine Plotly figure: traces plus a layout. Two named series. */
+const NM_PLOTLY_FIGURE = {
+  data: [
+    {
+      type: 'scatter',
+      mode: 'lines+markers',
+      name: 'train',
+      x: [1, 2, 3, 4, 5],
+      y: [0.9, 0.6, 0.4, 0.3, 0.25],
+    },
+    {
+      type: 'scatter',
+      mode: 'lines',
+      name: 'val',
+      x: [1, 2, 3, 4, 5],
+      y: [1, 0.7, 0.55, 0.5, 0.48],
+    },
+  ],
+  // 640x480 is matplotlib's default canvas, and PlotlyView deletes both before
+  // plotting. Kept here so that deletion is exercised: left in place the figure
+  // renders at a fixed 640x480 and overflows any widget smaller than that.
+  layout: {
+    title: 'Native Plotly Figure',
+    width: 640,
+    height: 480,
+    xaxis: { title: 'epoch' },
+    yaxis: { title: 'loss' },
+  },
+};
+
+/**
+ * A matplotlib figure — which is to say, another Plotly figure.
+ *
+ * There is no second format to seed: an mpl figure is converted to Plotly at
+ * log time, so "render matplotlib" and "render Plotly" are one code path. A
+ * distinct trace type and title keep the two fixtures individually assertable.
+ */
+const NM_MPL_FIGURE = {
+  data: [{ type: 'bar', name: 'counts', x: ['a', 'b', 'c'], y: [3, 7, 5] }],
+  layout: { title: 'Matplotlib Bar Figure', width: 640, height: 480 },
+};
+
+/** A 4x4x4 lattice: 64 bare `[x, y, z]` triples, each axis spanning 0..3. */
+const NM_POINT_CLOUD: number[][] = (() => {
+  const points: number[][] = [];
+  for (let z = 0; z < 4; z++) {
+    for (let y = 0; y < 4; y++) {
+      for (let x = 0; x < 4; x++) {
+        points.push([x, y, z]);
+      }
+    }
+  }
+  return points;
+})();
+
+/**
+ * The 8 corners of a unit cube as `[x, y, z, r, g, b]`.
+ *
+ * The 6-column form is a separate branch in the viewer (colour per point from
+ * 0-255 channels) from the 3-column one above, and `detectMediaJson` accepts
+ * 3 to 6 columns, so both widths need a fixture or half the classifier is
+ * untested.
+ */
+const NM_POINT_CLOUD_RGB: number[][] = [
+  [0, 0, 0, 255, 0, 0],
+  [1, 0, 0, 0, 255, 0],
+  [0, 1, 0, 0, 0, 255],
+  [1, 1, 0, 255, 255, 0],
+  [0, 0, 1, 255, 0, 255],
+  [1, 0, 1, 0, 255, 255],
+  [0, 1, 1, 255, 255, 255],
+  [1, 1, 1, 128, 128, 128],
+];
+
+/**
+ * A `.json` that is NEITHER a figure nor a cloud — `data` is present but its
+ * first entry is an array, not a trace object.
+ *
+ * Pins the documented degradation: `detectMediaJson` returns null and the
+ * widget falls back to a "View in Files" link rather than guessing.
+ */
+const NM_JSON_BLOB = {
+  columns: ['a', 'b'],
+  data: [
+    [1, 2],
+    [3, 4],
+  ],
+};
+
+/** A `pluto.Html` artifact, rendered in a sandboxed iframe (no same-origin). */
+const NM_HTML = `<!doctype html>
+<html>
+  <head><title>Native HTML artifact</title></head>
+  <body>
+    <h1 id="native-html-heading">Native HTML artifact</h1>
+    <p>Rendered inside a sandboxed iframe.</p>
+  </body>
+</html>
+`;
+
+/**
+ * `status/phase` on `nm-annotated-1`: 12 steps over 4 values.
+ *
+ * First-appearance order (warmup, train, eval, done) is also chronological
+ * order, which is the ordering `canonicalLabels` is specified to produce and
+ * is distinguishable from alphabetical (done, eval, train, warmup) — so a
+ * regression to sorting shows up immediately.
+ */
+const NM_PHASE_RUN1 = [
+  'warmup', 'warmup', 'warmup',
+  'train', 'train', 'train', 'train', 'train',
+  'eval', 'eval', 'eval',
+  'done',
+];
+
+/** `status/phase` on `nm-annotated-2`: same 12 steps, only 3 distinct values. */
+const NM_PHASE_RUN2 = [
+  'warmup', 'warmup',
+  'train', 'train', 'train', 'train', 'train', 'train', 'train', 'train',
+  'eval', 'eval',
+];
+
+/**
+ * A string series with a distinct value at every step.
+ *
+ * High cardinality is intended behaviour, not a defect, so there has to be a
+ * fixture that shows what it looks like: 6 steps, 6 categories, 6 rows on the
+ * Y axis.
+ */
+const NM_CHECKPOINT = [
+  'ckpt-000', 'ckpt-001', 'ckpt-002', 'ckpt-003', 'ckpt-004', 'ckpt-005',
+];
+
+/**
+ * `tables/eval_results` — a table with a bool column and a unicode column.
+ *
+ * Both were rejected by the old row schema, and one bad cell failed the whole
+ * `result.map(parse)`, so the UI showed "No table data available" and lost
+ * every intact row with it. Unicode appears in a column NAME as well as in
+ * cells, since those are encoded and measured separately.
+ */
+const NM_TABLE_EVAL_STEPS = [
+  {
+    step: 0,
+    rows: [
+      ['resnet50', 0.912, 30, true, '精度良好'],
+      ['vit-b16', 0.874, 30, false, '需要更多训练'],
+      ['mobilenet', 0.803, 15, true, '軽量モデル ✅'],
+    ],
+  },
+  {
+    step: 5,
+    rows: [
+      ['resnet50', 0.934, 60, true, '精度良好'],
+      ['vit-b16', 0.901, 60, true, '需要更多训练'],
+      ['mobilenet', 0.821, 30, false, '軽量モデル ✅'],
+    ],
+  },
+];
+
+const NM_TABLE_EVAL_COLS = [
+  { name: 'model', dtype: 'str' },
+  { name: 'accuracy', dtype: 'float' },
+  { name: 'epochs', dtype: 'int' },
+  { name: 'passed', dtype: 'bool' },
+  { name: '注释', dtype: 'str' },
+];
+
+/**
+ * `tables/predictions` — media cells and a null cell.
+ *
+ * A media cell renders as its `path` string today. That is a documented
+ * degradation rather than a bug, so it gets a fixture: if in-cell media
+ * rendering ever lands, this test is what says so.
+ */
+const NM_TABLE_PREDICTIONS = {
+  col: [
+    { name: 'id', dtype: 'int' },
+    { name: 'image', dtype: 'image-file' },
+    { name: 'label', dtype: 'str' },
+  ],
+  table: [
+    [0, { _type: 'image-file', path: 'media/images/pred_0_1a2b3c.png' }, 'cat'],
+    [1, { _type: 'image-file', path: 'media/images/pred_1_4d5e6f.png' }, 'dog'],
+    [2, null, 'missing'],
+  ],
+};
+
+// ───────────────────────────────────────────────────────────────────────────
+// RECORDED wandb-migration fixtures (setup steps 5k and 5l).
+//
+// PROVENANCE: every WM_* value below was captured on 2026-08-03 from a local
+// developer dev stack holding runs imported by the real wandb exporter — the
+// run ids and project names below identify them there. Nothing here was
+// invented, and nothing here talks to wandb:
+// once the rows are in the database Pluto cannot tell whether they arrived
+// from a live import or from this file, so a recording exercises exactly the
+// same code path with no credential and no network in CI. The one thing a
+// recording cannot tell us — that wandb has not changed its export format
+// since capture — belongs to the exporter's own tests, not to these.
+//
+// Source runs, by fixture:
+//   WM_DET_* / WM_SEG_* / WM_MASK_PNG_BASE64
+//                    run 4208, project `detection-demo`, run `fasterrcnn-r50-fpn`
+//   WM_PLOTLY_FIGURE / WM_MPL_FIGURE / WM_POINT_CLOUD / WM_HTML
+//                    run 4093, project `render-recheck`, run `plotly-html-3d`
+//   WM_GALLERY_*     run 2205, project `migrate-edge-ordertest`,
+//                    run `images_multi_index-00024`
+//   WM_PHASE         run 4086, project `migrate-stringseries-test`,
+//                    run `string_metric-00002`
+//   WM_RESULTS_TABLE run 2204, project `migrate-edge-test`, run `tables-00039`
+//   WM_MEDIA_TABLE   run 4223, project `media-table-probe`, run `media-in-table`
+//   WM_PANELS / WM_CHART_TABLES
+//                    run 4094, project `cc-render-check`, run `custom-charts`
+//
+// REDACTION: the developer's wandb entity, run URLs, run notes and the
+// exporter's `wandb.summary` blocks (which carry content digests and
+// `wandb-client-artifact://` handles) were stripped or replaced with obvious
+// placeholders — `test-entity`, `wandb-run-0000`. What remains is structure
+// and values.
+//
+// TRUNCATION: long series were cut to a handful of entries; each constant says
+// what was cut. These are shape fixtures, not volume fixtures.
+// ───────────────────────────────────────────────────────────────────────────
+
+/** Captured migrated media, string metrics and tables. */
+const WM_MEDIA_PROJECT = 'wandb-migrate-media';
+/** Captured migrated custom-chart panels. */
+const WM_CHARTS_PROJECT = 'wandb-migrate-charts';
+
+/**
+ * A migrated run's config, minus the exporter's `summary` block.
+ *
+ * The `wandb` key is what the migration adds; everything beside it is the
+ * user's own config, kept because the mix is what the config table and the
+ * side-by-side view render — nested objects, a null, a list, a bool, and
+ * unicode.
+ */
+const WM_CONFIG_BASE = {
+  lr: 0.005,
+  model: 'faster-rcnn-r50-fpn',
+  dataset: 'cityscapes-mini',
+  batch_size: 8,
+  bool_param: false,
+  list_param: [0.0718887916216121, 0.941317015446328],
+  null_param: null,
+  nested: { a: { b: { c: { d: 0.4593246053204499, flag: false } } } },
+  notes_unicode: '配置 ünïcode λ 🚀 café',
+  wandb: {
+    // Entity and run id replaced; that it is a URL at all is the readable part.
+    url: 'https://wandb.ai/test-entity/detection-demo/runs/wandb-run-0000',
+    state: 'finished',
+  },
+};
+
+/**
+ * `val/detections` step 0 — 6 predicted boxes and 6 ground-truth boxes.
+ *
+ * Every box carries `domain: "pixel"`, which is what the exporter emits, and
+ * is why the fractional path needs the hand-written NM_* fixture: no recording
+ * can cover it. The image is 480x320, so these coordinates only land on screen
+ * if `resolveBox` honours the domain.
+ */
+const WM_DET_ANNOTATIONS_STEP0 = {
+  "boxes": {
+    "predictions": {
+      "box_data": [
+        {
+          "position": {"minX": 70, "minY": 174, "maxX": 190, "maxY": 243},
+          "class_id": 3,
+          "box_caption": "car 0.62",
+          "scores": {"confidence": 0.62},
+          "domain": "pixel"
+        },
+        {
+          "position": {"minX": 238, "minY": 144, "maxX": 331, "maxY": 223},
+          "class_id": 3,
+          "box_caption": "car 0.69",
+          "scores": {"confidence": 0.69},
+          "domain": "pixel"
+        },
+        {
+          "position": {"minX": 352, "minY": 153, "maxX": 418, "maxY": 197},
+          "class_id": 3,
+          "box_caption": "car 0.66",
+          "scores": {"confidence": 0.66},
+          "domain": "pixel"
+        },
+        {
+          "position": {"minX": 36, "minY": 189, "maxX": 48, "maxY": 249},
+          "class_id": 4,
+          "box_caption": "person 0.48",
+          "scores": {"confidence": 0.48},
+          "domain": "pixel"
+        },
+        {
+          "position": {"minX": 196, "minY": 236, "maxX": 250, "maxY": 262},
+          "class_id": 3,
+          "box_caption": "car 0.41",
+          "scores": {"confidence": 0.41},
+          "domain": "pixel"
+        },
+        {
+          "position": {"minX": 300, "minY": 60, "maxX": 318, "maxY": 108},
+          "class_id": 5,
+          "box_caption": "traffic light 0.7",
+          "scores": {"confidence": 0.7},
+          "domain": "pixel"
+        }
+      ],
+      "class_labels": {"1": "road", "2": "sidewalk", "3": "car", "4": "person", "5": "traffic_light"}
+    },
+    "ground_truth": {
+      "box_data": [
+        {
+          "position": {"minX": 60, "minY": 170, "maxX": 190, "maxY": 250},
+          "class_id": 3,
+          "box_caption": "car",
+          "domain": "pixel"
+        },
+        {
+          "position": {"minX": 250, "minY": 158, "maxX": 340, "maxY": 214},
+          "class_id": 3,
+          "box_caption": "car",
+          "domain": "pixel"
+        },
+        {
+          "position": {"minX": 352, "minY": 150, "maxX": 404, "maxY": 190},
+          "class_id": 3,
+          "box_caption": "car",
+          "domain": "pixel"
+        },
+        {
+          "position": {"minX": 420, "minY": 168, "maxX": 442, "maxY": 236},
+          "class_id": 4,
+          "box_caption": "person",
+          "domain": "pixel"
+        },
+        {
+          "position": {"minX": 34, "minY": 176, "maxX": 54, "maxY": 240},
+          "class_id": 4,
+          "box_caption": "person",
+          "domain": "pixel"
+        },
+        {
+          "position": {"minX": 300, "minY": 60, "maxX": 318, "maxY": 108},
+          "class_id": 5,
+          "box_caption": "traffic light",
+          "domain": "pixel"
+        }
+      ],
+      "class_labels": {"1": "road", "2": "sidewalk", "3": "car", "4": "person", "5": "traffic_light"}
+    }
+  }
+};
+
+/** `val/detections` step 1 — 7 predictions (one more than step 0), same 6 GT. */
+const WM_DET_ANNOTATIONS_STEP1 = {
+  "boxes": {
+    "ground_truth": {
+      "box_data": [
+        {
+          "position": {"minX": 60, "minY": 170, "maxX": 190, "maxY": 250},
+          "class_id": 3,
+          "box_caption": "car",
+          "domain": "pixel"
+        },
+        {
+          "position": {"minX": 250, "minY": 158, "maxX": 340, "maxY": 214},
+          "class_id": 3,
+          "box_caption": "car",
+          "domain": "pixel"
+        },
+        {
+          "position": {"minX": 352, "minY": 150, "maxX": 404, "maxY": 190},
+          "class_id": 3,
+          "box_caption": "car",
+          "domain": "pixel"
+        },
+        {
+          "position": {"minX": 420, "minY": 168, "maxX": 442, "maxY": 236},
+          "class_id": 4,
+          "box_caption": "person",
+          "domain": "pixel"
+        },
+        {
+          "position": {"minX": 34, "minY": 176, "maxX": 54, "maxY": 240},
+          "class_id": 4,
+          "box_caption": "person",
+          "domain": "pixel"
+        },
+        {
+          "position": {"minX": 300, "minY": 60, "maxX": 318, "maxY": 108},
+          "class_id": 5,
+          "box_caption": "traffic light",
+          "domain": "pixel"
+        }
+      ],
+      "class_labels": {"1": "road", "2": "sidewalk", "3": "car", "4": "person", "5": "traffic_light"}
+    },
+    "predictions": {
+      "box_data": [
+        {
+          "position": {"minX": 59, "minY": 170, "maxX": 195, "maxY": 259},
+          "class_id": 3,
+          "box_caption": "car 0.74",
+          "scores": {"confidence": 0.74},
+          "domain": "pixel"
+        },
+        {
+          "position": {"minX": 256, "minY": 167, "maxX": 335, "maxY": 210},
+          "class_id": 3,
+          "box_caption": "car 0.76",
+          "scores": {"confidence": 0.76},
+          "domain": "pixel"
+        },
+        {
+          "position": {"minX": 348, "minY": 156, "maxX": 399, "maxY": 188},
+          "class_id": 3,
+          "box_caption": "car 0.77",
+          "scores": {"confidence": 0.77},
+          "domain": "pixel"
+        },
+        {
+          "position": {"minX": 412, "minY": 159, "maxX": 449, "maxY": 241},
+          "class_id": 4,
+          "box_caption": "person 0.64",
+          "scores": {"confidence": 0.64},
+          "domain": "pixel"
+        },
+        {
+          "position": {"minX": 40, "minY": 173, "maxX": 53, "maxY": 245},
+          "class_id": 4,
+          "box_caption": "person 0.62",
+          "scores": {"confidence": 0.62},
+          "domain": "pixel"
+        },
+        {
+          "position": {"minX": 196, "minY": 236, "maxX": 250, "maxY": 262},
+          "class_id": 3,
+          "box_caption": "car 0.41",
+          "scores": {"confidence": 0.41},
+          "domain": "pixel"
+        },
+        {
+          "position": {"minX": 300, "minY": 60, "maxX": 318, "maxY": 108},
+          "class_id": 5,
+          "box_caption": "traffic light 0.81",
+          "scores": {"confidence": 0.81},
+          "domain": "pixel"
+        }
+      ],
+      "class_labels": {"1": "road", "2": "sidewalk", "3": "car", "4": "person", "5": "traffic_light"}
+    }
+  }
+};
+
+/**
+ * `val/segmentation` — a mask reference and nothing else.
+ *
+ * `class_labels` is ASSEMBLED FROM VERIFIED PARTS rather than copied off one
+ * export, and the distinction matters.
+ *
+ * The capture predates Trainy-ai/pluto#131. wandb keeps a mask's id→name key in
+ * the RUN CONFIG rather than on the mask layer, so the exporter never carried
+ * it and every migrated mask tinted nothing — which this fixture recorded
+ * faithfully at the time. #131 now recovers it, so the shape below is what a
+ * migration actually produces today.
+ *
+ * Verbatim: the layer name, the mask filenames, the PNG itself.
+ *
+ * The `{fileName, class_labels}` layer shape with STRING id keys is verified
+ * against real post-#131 migrations on the dev stack — `mask-demo-fixed2`
+ * (`{"0": "bg", "1": "thing-A", "2": "thing-B"}`) and `fixture-bm`.
+ *
+ * The label strings are verified for THIS scene from two independent places,
+ * neither of which is a post-#131 migration of this run:
+ *
+ *   * `WM_DET`'s box layer below, which is verbatim from the same run and
+ *     carries this exact id→name set. Box labels survived the original capture
+ *     because wandb puts those in the `.boxes2D.json` sidecar, which the loader
+ *     already inlined — only the MASK labels were hidden in the run config.
+ *   * the `detection-native` project on the dev stack, the natively-logged twin
+ *     of this scene, whose mask layers carry the same set.
+ *
+ * So the shape is confirmed and the names are confirmed, but assembled here
+ * rather than copied off one post-fix export: `detection-demo` (runId 4208, the
+ * migrated source of these very files) has NOT been re-migrated since #131 and
+ * still shows a bare `{fileName}`. Re-migrate it and copy the result in when
+ * convenient — that would make this fully verbatim again.
+ *
+ * Ids 1-5 are labelled and 0 is not, deliberately: the PNG holds 87,772 class-0
+ * pixels against 65,828 of ids 1-5, so the tint is selective rather than
+ * whole-canvas, and a test can prove BOTH that migrated masks now paint and
+ * that unlabelled ids still stay clear. Re-record end to end when a real
+ * post-#131 export is to hand.
+ */
+const WM_SEG_ANNOTATIONS_STEP0 = {
+  "masks": {"predictions": {
+    "fileName": "91f6e810-1a4e-4c49-89a4-bb3becdebfa5.mask.png",
+    "class_labels": {"1": "road", "2": "sidewalk", "3": "car", "4": "person", "5": "traffic_light"}
+  }}
+};
+
+const WM_SEG_ANNOTATIONS_STEP1 = {
+  "masks": {"predictions": {
+    "fileName": "81cc6e2e-1af4-4729-b71f-5e86461f05c4.mask.png",
+    "class_labels": {"1": "road", "2": "sidewalk", "3": "car", "4": "person", "5": "traffic_light"}
+  }}
+};
+
+/**
+ * The real mask PNG both annotations above point at, base64.
+ *
+ * 480x320, 8-bit GREYSCALE (PNG colour type 0) rather than RGB, holding class
+ * ids 0-5 in these proportions: 0 x87772, 1 x40042, 2 x7240, 3 x14906,
+ * 4 x2776, 5 x864. Embedded as bytes rather than regenerated because the
+ * greyscale encoding is itself part of what the reader has to cope with, and a
+ * synthesised RGB mask would quietly stop testing it. 1688 bytes — the only
+ * binary recording here.
+ */
+const WM_MASK_PNG_BASE64 = [
+  'iVBORw0KGgoAAAANSUhEUgAAAeAAAAFACAAAAABBo/CnAAAGX0lEQVR4nO3d23riNhSAUYe27//AbUMv5lACPkhGkrd2',
+  '1rqYbyYTjKPfAmKMvSwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAZh9Xr8BM/nr5yt8XrEWd29UrQF8CJydwcgIn',
+  'J3ByAicncHICJydwcgInJ3ByAicncHICJydwcgInJ3ByAicncHICJydwcgInJ3ByAicncHICJydwcgInJ3ByAicncHIC',
+  'JydwcgInJ3ByAicncHICJydwcgInJ3ByAicncHICJydwcgInJzAAAAAAAAAAAAAAAAAAAAAAAAAAUOHj6hX4Nv44+oZ/',
+  'u9ytc1UmJ3ByAicncHICJydwcgIn9+fVK1Do94Z4738Xtfr8AtvIHIH/H/t+fZOa4iFa3/MmmMEP26C+1eLPYH3fEn0G',
+  'P26A+p4QfAbr+67QM/jL1qfvKZEDp+h7+Dbwyne2/MU67kP0bZq+ccdwCTyDv45a5L7Lcvvsu/z1SP+8cdvLPU2K2H2X',
+  '5bZ0Tnxej8DlTzulPsKO3y+9J/FpoZ8/ZnILOpJBV2tGMYcy5lrNKeQkjrhO8wo4mgFXaWbxJnHBq+i1byn7Hew7ivZy',
+  'OtwWN71gkzjW2uQQakxDrcykXvazRZrEgVZlXq97UuMMa9B90SM0i/CyoHugvdNxNrVsgoxskNXIKMYzcYiVyCrC4EZY',
+  'h7wCjO43fpE1wvWFr18DuhI4OYGT8xzc2Y+9XNft9TCDh7humAUe47K9HgKPctFIC9zB+nH610xigXvY+CTGFYMtcBdb',
+  'hccPt8B9bH2aavh4C9zJZuHBIy5wL5ufiBw75AJ3s1145KAL3M/2p5oHjrrAHe0UHjbub73Z0P6T3lu2xiPIoYtb7tsX',
+  'PRn1ERczuK/LJ7HAne2cXmTI2Avc217hAaMvcHd7pwjqP/wC97dbuHcAgQfYPc1X5wICj7BfuGsDgYfYP1VfzwgCj3G/',
+  '6mFa4FEuepj+xsdFj97Ned+9VnOvXZdm8DgHT8R9Ugg80MFZkbu0EHiko8Idagg81NGZzdvnEHisw8Ktgwg82OHVCRoX',
+  'EXi0/V0eS+tJLPB4QyexwBc4Ltwui8BXOL5MUL/zLDJCQeFGZQS+RsGlvtqkEfgiJYVbxBH4KiWX62tQR+DLFBV+u4/A',
+  '1znc5bEs7wcS+EoDJvE7t7ZxvK3ourlvjfP5Q3bkbWH/OJ4GTmfSt43e174+OYPlbabzHP7GR1VGcVz48+HPWqbi9Qof',
+  'pc+9nBY4gNLn4TOxBI6gaJfHcqpW7TP8l7vo/RL/WPCTsFQoHcvan7hymzDhe+n1MF01CZ8Xbga3VDyaVT90zQZh+nZV',
+  'vMujqkP5JFxZrBncVvl4lv/cxVuD6dtf+W7L8hqFG836As3g1ipGtPBHL9sUTN9BKt56KGxSsslsLsoM7qDxJC7YDkzf',
+  'oRpP4sPtpSpv7zc3v4eaB8bDSXy0sJq+8jbSsvDBsvS9RNWLm/3E+6f2qbkffRtqV3hvSfpep+4XlJ3E2wuqe/Gsb2Ot',
+  'Cm9fNKLqDvRtrnInw1bijcVU/u6rbw9NJvH6QvQNocUkXltG7a4rfXtpUHhlEfrGUbu3/zXxyxKq9zzr29PbhZ8XoG8w',
+  '1e/YPSV+ur2H53DeLPzl5qZvRPXvuj8mvm38vYi+I9SP8mPIj9Wv9rpnznnjYfr3TfWN7PzD9M9bnjgsR9+RThf+cUN9',
+  'wztxgOPnr9udOapO39FOFv7QdxZnDlL+XD5OHRSr7xVOFdZ3HmeG/cyJPUrPN0BrpwoPuRfaODG37J6cS/Xwe/toMrUB',
+  'HH01m8oEjo6dTl0En16YT1UGny6bUE2IisD6htH+TA91C6W3Dufj0TeU4l0epYH1jabpCWrtfg6orElRYHlDanZNHn2D',
+  'anTlNH3DanKRWn0Da3ApcX1DO8xzFFjf4I4CHQTWN7yDX2H3A+s7g91Ku4H1ncNep73A+s5ip9R2YLsnJ7LdajOwvFPZ',
+  'zLUVWN/JbAXbCKzvdDaSrQfWd0Lr0VYD6zul1ZfFa4H1ndVKuZXA+s7rtd1rYH1n9lLvJbC+c3vu9xxY39k9Fbzt/i8T',
+  '+trwS2C7n1P4UvG29R/M6zHkbf3LTO3hofj/wPpm8rvm7eUrpPCr5+3p32Txs+jty79I5EfT28PfyeW+LD8D65vTffkR',
+  'WN+s7sty0zez+/IfpVD6+gU10pcAAAAASUVORK5CYII=',
+].join('');
+
+/**
+ * The `plotly` artifact body — a one-trace bar figure.
+ *
+ * TRUNCATED: `layout` held nothing but Plotly's stock 6KB `template`, which no
+ * code path here reads, so it was emptied. `data` is verbatim.
+ */
+const WM_PLOTLY_FIGURE = {"data": [{"y": [2, 1, 3], "type": "bar"}], "layout": {}};
+
+/**
+ * The `mpl` artifact body — a matplotlib figure, already converted to Plotly by
+ * wandb at log time. This is why matplotlib needs no second viewer.
+ *
+ * Kept for `width: 640` / `height: 480` in its layout: matplotlib's default
+ * canvas travelling through the conversion, and exactly what `PlotlyView` has
+ * to delete or the figure renders at a fixed 640x480 and overflows its widget.
+ *
+ * TRUNCATED: `layout.template` removed; everything else verbatim.
+ */
+const WM_MPL_FIGURE = {
+  "data": [
+    {
+      "line": {"color": "rgba (31, 119, 180, 1)", "dash": "solid", "width": 1.5},
+      "mode": "lines",
+      "name": "_child0",
+      "x": [0.0, 1.0, 2.0, 3.0],
+      "xaxis": "x",
+      "y": [1.0, 3.0, 2.0, 4.0],
+      "yaxis": "y",
+      "type": "scatter"
+    }
+  ],
+  "layout": {
+    "autosize": false,
+    "height": 480,
+    "hovermode": "closest",
+    "width": 640,
+    "margin": {"b": 52, "l": 80, "pad": 0, "r": 63, "t": 57},
+    "xaxis": {
+      "anchor": "y",
+      "domain": [0.0, 1.0],
+      "mirror": "ticks",
+      "nticks": 9,
+      "range": [-0.15000000000000002, 3.15],
+      "showgrid": false,
+      "showline": true,
+      "side": "bottom",
+      "tickfont": {"size": 10.0},
+      "ticks": "inside",
+      "type": "linear",
+      "zeroline": false
+    },
+    "yaxis": {
+      "anchor": "x",
+      "domain": [0.0, 1.0],
+      "mirror": "ticks",
+      "nticks": 9,
+      "range": [0.85, 4.15],
+      "showgrid": false,
+      "showline": true,
+      "side": "left",
+      "tickfont": {"size": 10.0},
+      "ticks": "inside",
+      "type": "linear",
+      "zeroline": false
+    },
+    "title": {"text": "mpl", "font": {"color": "#000000", "size": 12.0}}
+  }
+};
+
+/**
+ * The `cloud` artifact body — a `wandb.Object3D` point cloud: a bare array of
+ * `[x, y, z]` triples, with no wrapper object to identify it by.
+ *
+ * TRUNCATED: 200 points to the first 12, each rounded to 6 decimals.
+ */
+const WM_POINT_CLOUD = [
+  [0.18027, 0.019475, 0.463219],
+  [0.724934, 0.420204, 0.485427],
+  [0.012781, 0.487372, 0.941807],
+  [0.850795, 0.729964, 0.108736],
+  [0.893904, 0.857154, 0.165087],
+  [0.632334, 0.020484, 0.116737],
+  [0.316367, 0.157912, 0.75898],
+  [0.818275, 0.344624, 0.318799],
+  [0.111661, 0.083953, 0.712726],
+  [0.599543, 0.055674, 0.479797],
+  [0.401676, 0.847979, 0.717849],
+  [0.602064, 0.552384, 0.949102]
+];
+
+/**
+ * The `html` artifact body, verbatim (136 bytes).
+ *
+ * The stylesheet link is wandb's own boilerplate and names no user; it is left
+ * in because a blocked external stylesheet inside the sandboxed iframe is
+ * precisely what production shows.
+ */
+const WM_HTML = "<base target=\"_blank\"><link rel=\"stylesheet\" type=\"text/css\" href=\"https://app.wandb.ai/normalize.css\" /><h1>edge</h1><p>unsupported</p>";
+
+/**
+ * `gallery` — one `log()` call passing a list of images, so every file shares a
+ * step and is separated only by `sampleIndex`.
+ *
+ * The naming is the exporter's: file `idx<N>.<uuid>.png`, caption `idx<N>`.
+ * Twelve samples matter — at 12, lexical file-name order (idx0, idx1, idx10,
+ * idx11, idx2, ...) diverges from logged order, so an ordering assertion can
+ * only pass if `sampleIndex` is doing the work.
+ *
+ * TRUNCATED: 16 samples at step 0 down to 12, and the run's 5 steps down to 2.
+ */
+const WM_GALLERY_UUIDS = [
+  '739222cc-93a1-4093-a965-aee3cdac1a9d',
+  'cc0ae04f-a934-49e1-b264-2d4db6fff180',
+  '51904189-d037-47b8-8406-12b1b146ec1a',
+  'e9486798-ccd3-43e0-8627-d345940c4fd4',
+  '5e59e6e4-48e0-4637-a4bf-0d322907ca87',
+  'e99e3d6d-fbdd-40ac-bb35-aaad74e756c7',
+  '0ccacac1-ada9-4311-9d65-e42aff7dcdf1',
+  '5003f6bb-018c-4a15-badc-af535e0584a6',
+  '393648ae-97a0-4a7c-a0e6-5f2d69d9c549',
+  'c69af029-3158-43f1-b712-6f6fb5ec4630',
+  'b3ea44dd-39df-4107-a2ba-ff30297d05d4',
+  '2558e5c7-0deb-4031-bd93-f137b3cc1fcd',
+];
+
+/** Step 1 of the same log: only two samples, as in the source run. */
+const WM_GALLERY_UUIDS_STEP1 = [
+  '6519de0b-7bf4-4b41-b3f6-9546e3923b40',
+  'd54a0e50-7697-4d1a-86a5-86b63408e88b',
+];
+
+/**
+ * `phase` — a migrated non-numeric per-step series, verbatim (all 5 steps).
+ *
+ * The `data` column holds the raw value. wandb itself kept only the final one,
+ * in the run summary, which is the loss this feature exists to undo.
+ */
+const WM_PHASE = ['warmup', 'train', 'train', 'eval', 'done'];
+
+/**
+ * `results` — a migrated `wandb.Table` with a BOOL column and unicode cells.
+ *
+ * Both used to fail the row schema, and one bad cell failed the whole parse, so
+ * the UI reported "No table data available" and lost every intact row with it.
+ * Note `dtype: "bool"`, outside pluto's own int/float/str set, and the
+ * `type`/`v` envelope the exporter wraps every table in.
+ *
+ * TRUNCATED: 13 rows to 5.
+ */
+const WM_RESULTS_TABLE = {
+  "table": [
+    [0, "row-0 ünï", -2.311708612409621, false],
+    [1, "row-1 ünï", -1.041355883982314, true],
+    [2, "row-2 ünï", -0.12389254211896152, false],
+    [3, "row-3 ünï", 1.9313200098043388, true],
+    [4, "row-4 ünï", -2.330581628849119, false]
+  ],
+  "col": [
+    {"name": "idx", "dtype": "int"},
+    {"name": "text", "dtype": "str"},
+    {"name": "score", "dtype": "float"},
+    {"name": "flag", "dtype": "bool"}
+  ],
+  "type": "Table",
+  "v": 1
+};
+
+/**
+ * `media_table` — a migrated table whose image column survived export as the
+ * literal string "Image", with `dtype: "str"`.
+ *
+ * Verbatim, and worth pinning: the renderer also handles an object media cell
+ * (`{_type, path}`) and shows its `path`, but this exporter does not produce
+ * one, so the degradation users actually see is this. The object form is
+ * covered by the hand-written `tables/predictions` fixture.
+ */
+const WM_MEDIA_TABLE = {
+  "table": [[0, "Image", 0.0], [1, "Image", 0.25], [2, "Image", 0.5], [3, "Image", 0.75]],
+  "col": [
+    {"name": "idx", "dtype": "int"},
+    {"name": "img", "dtype": "str"},
+    {"name": "score", "dtype": "float"}
+  ],
+  "type": "Table",
+  "v": 1
+};
+
+/**
+ * `config.wandb.custom_charts` — six real `wandb.plot.*` panels, verbatim.
+ *
+ * Between them they cover every dispatch route the viewer has: `bar`, `line`
+ * and `scatter` reach a preset through the `preset` name; `confusion_matrix`
+ * is raw Vega with bound signals (the "Normalized" toggle); and the two
+ * `area-under-curve` panels are the only ones carrying `x-axis-title` /
+ * `y-axis-title` in `strings`.
+ *
+ * This is the one fixture with no native counterpart: both read sites
+ * (`~hooks/use-custom-chart-panels.ts` and the run page's `index.tsx`) look at
+ * `config.wandb.custom_charts` and nowhere else, and no SDK call writes panels
+ * anywhere — a "native custom chart" does not exist.
+ */
+const WM_PANELS = [
+  {
+    "key": "bar",
+    "title": "bar",
+    "fields": {"label": "label", "value": "value"},
+    "preset": "bar",
+    "strings": {"title": "bar"},
+    "specLang": "vega-lite",
+    "tableKey": "bar_table",
+    "panelDefId": "wandb/bar/v0"
+  },
+  {
+    "key": "confmat",
+    "title": "Confusion Matrix Curve",
+    "fields": {"Actual": "Actual", "Predicted": "Predicted", "nPredictions": "nPredictions"},
+    "preset": "confusion_matrix",
+    "strings": {"title": "Confusion Matrix Curve"},
+    "specLang": "vega-lite",
+    "tableKey": "confmat_table",
+    "panelDefId": "wandb/confusion_matrix/v1"
+  },
+  {
+    "key": "line",
+    "title": "line",
+    "fields": {"x": "x", "y": "y"},
+    "preset": "line",
+    "strings": {"title": "line"},
+    "specLang": "vega-lite",
+    "tableKey": "line_table",
+    "panelDefId": "wandb/line/v0"
+  },
+  {
+    "key": "pr",
+    "title": "Precision-Recall Curve",
+    "fields": {"x": "recall", "y": "precision", "class": "class"},
+    "preset": "area-under-curve",
+    "strings": {
+      "title": "Precision-Recall Curve",
+      "x-axis-title": "Recall",
+      "y-axis-title": "Precision"
+    },
+    "specLang": "vega-lite",
+    "tableKey": "pr_table",
+    "panelDefId": "wandb/area-under-curve/v0"
+  },
+  {
+    "key": "roc",
+    "title": "ROC Curve",
+    "fields": {"x": "fpr", "y": "tpr", "class": "class"},
+    "preset": "area-under-curve",
+    "strings": {
+      "title": "ROC Curve",
+      "x-axis-title": "False positive rate",
+      "y-axis-title": "True positive rate"
+    },
+    "specLang": "vega-lite",
+    "tableKey": "roc_table",
+    "panelDefId": "wandb/area-under-curve/v0"
+  },
+  {
+    "key": "scatter",
+    "title": "scatter",
+    "fields": {"x": "x", "y": "y"},
+    "preset": "scatter",
+    "strings": {"title": "scatter"},
+    "specLang": "vega-lite",
+    "tableKey": "scatter_table",
+    "panelDefId": "wandb/scatter/v0"
+  }
+];
+
+/**
+ * The tables those panels read, keyed by `tableKey`.
+ *
+ * Verbatim, each at the step the source run logged it at (0..5) — a detail
+ * worth keeping, since `latestTable` picks the newest step and would draw the
+ * wrong body if these were flattened onto one shared step.
+ *
+ * TRUNCATED: `pr_table` from 63 rows (21 thresholds x 3 classes) to 9 (3 x 3).
+ */
+const WM_CHART_TABLES: Record<string, { step: number; data: Record<string, unknown> }> = {
+  "bar_table": {
+    "step": 0,
+    "data": {
+      "table": [["c0", 0.0], ["c1", 0.2], ["c2", 0.4], ["c3", 0.6], ["c4", 0.8]],
+      "col": [{"name": "label", "dtype": "str"}, {"name": "value", "dtype": "float"}],
+      "type": "Table",
+      "v": 1
+    }
+  },
+  "line_table": {
+    "step": 1,
+    "data": {
+      "table": [
+        [0, 0],
+        [1, 1],
+        [2, 4],
+        [3, 9],
+        [4, 16],
+        [5, 25],
+        [6, 36],
+        [7, 49],
+        [8, 64],
+        [9, 81]
+      ],
+      "col": [{"name": "x", "dtype": "int"}, {"name": "y", "dtype": "int"}],
+      "type": "Table",
+      "v": 1
+    }
+  },
+  "scatter_table": {
+    "step": 2,
+    "data": {
+      "table": [
+        [0, 0],
+        [1, 1],
+        [2, 4],
+        [3, 9],
+        [4, 16],
+        [5, 25],
+        [6, 36],
+        [7, 49],
+        [8, 64],
+        [9, 81]
+      ],
+      "col": [{"name": "x", "dtype": "int"}, {"name": "y", "dtype": "int"}],
+      "type": "Table",
+      "v": 1
+    }
+  },
+  "confmat_table": {
+    "step": 3,
+    "data": {
+      "table": [
+        ["a", "a", 3.0],
+        ["a", "b", 0.0],
+        ["a", "c", 0.0],
+        ["b", "a", 0.0],
+        ["b", "b", 2.0],
+        ["b", "c", 1.0],
+        ["c", "a", 0.0],
+        ["c", "b", 1.0],
+        ["c", "c", 2.0]
+      ],
+      "col": [
+        {"name": "Actual", "dtype": "str"},
+        {"name": "Predicted", "dtype": "str"},
+        {"name": "nPredictions", "dtype": "float"}
+      ],
+      "type": "Table",
+      "v": 1
+    }
+  },
+  "roc_table": {
+    "step": 4,
+    "data": {
+      "table": [
+        ["a", 0.0, 0.0],
+        ["a", 0.0, 1.0],
+        ["a", 1.0, 1.0],
+        ["b", 0.0, 0.0],
+        ["b", 0.0, 1.0],
+        ["b", 1.0, 1.0],
+        ["c", 0.0, 0.0],
+        ["c", 0.0, 1.0],
+        ["c", 1.0, 1.0]
+      ],
+      "col": [
+        {"name": "class", "dtype": "str"},
+        {"name": "fpr", "dtype": "float"},
+        {"name": "tpr", "dtype": "float"}
+      ],
+      "type": "Table",
+      "v": 1
+    }
+  },
+  "pr_table": {
+    "step": 5,
+    "data": {
+      "table": [
+        ["a", 1.0, 1.0],
+        ["a", 1.0, 0.5],
+        ["a", 1.0, 0.0],
+        ["b", 1.0, 1.0],
+        ["b", 1.0, 0.5],
+        ["b", 1.0, 0.0],
+        ["c", 1.0, 1.0],
+        ["c", 1.0, 0.5],
+        ["c", 1.0, 0.0]
+      ],
+      "col": [
+        {"name": "class", "dtype": "str"},
+        {"name": "precision", "dtype": "float"},
+        {"name": "recall", "dtype": "float"}
+      ],
+      "type": "Table",
+      "v": 1
+    }
+  }
+};
 
 async function setupTestData(): Promise<TestData> {
   console.log('🔧 Setting up test database...\n');
@@ -2973,6 +4161,1311 @@ async function setupTestData(): Promise<TestData> {
   console.log(
     `   ✓ Ensured run-groups-test with ${runGroupsSeed.length} runs (+ config:optimizer backfill)`,
   );
+
+  // 5i. Sweeps fixtures — the two projects e2e/specs/sweeps/sweeps.spec.ts
+  //     reads. No SDK is involved and none is needed: there is no sweep entity,
+  //     a sweep is exactly the set of runs carrying a `sweep:<id>` tag
+  //     (list-sweeps.ts groups on `unnest(tags) ... LIKE 'sweep:%'`). So this
+  //     seeds ordinary runs whose config carries the spec and whose objective
+  //     lands in ClickHouse, which is all the feature ever sees.
+  //
+  //     Two projects, because the two kinds of sweep are two data paths rather
+  //     than two rows of the same one (see sweep-config.ts):
+  //
+  //     - NATIVE `pluto.sweep()` — `sweep-e2e-test`, sweep 9u7xvjjs, 4 runs.
+  //       The block is FLAT at `config.sweep` and carries the id and nothing
+  //       else, because the SDK keeps the search space client-side in
+  //       ~/.pluto/sweeps and injects only the sampled combination. The server
+  //       therefore knows no method and no objective: the list renders a dash
+  //       for both, the chart axes come from `inferSweptKeys` (lr and
+  //       batch_size each take two values, so both are inferred as swept), and
+  //       the objective is inferred as the first non-`sys/` metric — which is
+  //       why `val_loss` is the only non-system metric these runs log.
+  //     - MIGRATED from wandb — `sweep-migrate-check`, sweep cvxvtpim, 1 run.
+  //       The block is NESTED at `config.wandb.sweep = {id, name, config:
+  //       {method, metric, parameters}}` and the run carries `import:wandb`,
+  //       which is what badges the row and what makes method/objective known
+  //       server-side. Exactly one run on purpose: a single line is the
+  //       degenerate case for the parallel-coordinates chart (every axis has
+  //       zero span), and it must still draw rather than fall back to its
+  //       "nothing to plot" state.
+  //
+  //     The native objective is `val_loss = lr * 10 + 1 / batch_size`, exact in
+  //     binary for all four combinations, so the extremes are unambiguous and
+  //     the best-run assertions are deterministic under either goal: minimum
+  //     0.13125 (lr 0.01 / bs 32), maximum 1.0625 (lr 0.1 / bs 16).
+  console.log('\n5️⃣i Creating sweeps fixtures...');
+
+  /** Steps per metric — enough that `argMax(value, step)` is a real pick. */
+  const SWEEP_STEPS = 12;
+  /** Value at `step`, converging to `final` at the last step exactly. */
+  const sweepCurve = (final: number, step: number) =>
+    final + (SWEEP_STEPS - 1 - step) * 0.05;
+
+  const sweepChUrl = process.env.CLICKHOUSE_URL;
+  const sweepMetricRows: Record<string, unknown>[] = [];
+
+  /** One metric series for a run, appended to the pending ClickHouse batch. */
+  const pushSweepMetric = (
+    projectName: string,
+    runId: bigint,
+    createdAt: Date,
+    logName: string,
+    logGroup: string,
+    final: number,
+  ) => {
+    for (let step = 0; step < SWEEP_STEPS; step++) {
+      sweepMetricRows.push({
+        tenantId: org.id,
+        projectName,
+        runId: Number(runId),
+        logGroup,
+        logName,
+        time: new Date(createdAt.getTime() + step * 1000)
+          .toISOString()
+          .replace('T', ' ')
+          .replace('Z', ''),
+        step,
+        value: sweepCurve(final, step),
+      });
+    }
+  };
+
+  const NATIVE_SWEEP_ID = '9u7xvjjs';
+  const MIGRATED_SWEEP_ID = 'cvxvtpim';
+
+  const nativeSweepProject = await prisma.projects.upsert({
+    where: {
+      organizationId_name: { organizationId: org.id, name: 'sweep-e2e-test' },
+    },
+    create: { name: 'sweep-e2e-test', organizationId: org.id },
+    update: {},
+  });
+
+  const nativeSweepExisting = await prisma.runs.findFirst({
+    where: {
+      projectId: nativeSweepProject.id,
+      organizationId: org.id,
+      tags: { has: `sweep:${NATIVE_SWEEP_ID}` },
+    },
+    select: { id: true },
+  });
+
+  if (!nativeSweepExisting) {
+    // The full lr x batch_size grid, one run per combination.
+    const nativeSweepSeed = [
+      { lr: 0.1, batchSize: 16 },
+      { lr: 0.1, batchSize: 32 },
+      { lr: 0.01, batchSize: 16 },
+      { lr: 0.01, batchSize: 32 },
+    ];
+    // ~359 days back, in line with the other fixture projects, so these runs
+    // are never what the run table auto-selects.
+    const nativeSweepBase = new Date(Date.now() - 359 * 24 * 60 * 60 * 1000);
+
+    const nativeSweepRuns: { id: bigint; createdAt: Date; valLoss: number }[] = [];
+    for (let i = 0; i < nativeSweepSeed.length; i++) {
+      const s = nativeSweepSeed[i];
+      const createdAt = new Date(nativeSweepBase.getTime() + i * 1000);
+      const config = {
+        lr: s.lr,
+        batch_size: s.batchSize,
+        // Flat block, id only — everything else stayed on the agent's disk.
+        // Declaring a method or a metric here would make both known to the
+        // server and silently retire the inference paths this fixture exists
+        // to cover.
+        sweep: { id: NATIVE_SWEEP_ID },
+      };
+      const run = await prisma.runs.create({
+        data: {
+          name: `sw-lr${s.lr}-bs${s.batchSize}`,
+          organizationId: org.id,
+          projectId: nativeSweepProject.id,
+          createdById: user.id,
+          creatorApiKeyId: apiKey.id,
+          status: 'COMPLETED',
+          tags: [`sweep:${NATIVE_SWEEP_ID}`],
+          config,
+          systemMetadata: { hostname: 'sweep-agent', python: '3.11' },
+          createdAt,
+          updatedAt: createdAt,
+        },
+      });
+      nativeSweepRuns.push({
+        id: run.id,
+        createdAt,
+        valLoss: s.lr * 10 + 1 / s.batchSize,
+      });
+      await extractAndUpsertColumnKeys(
+        prisma,
+        org.id,
+        nativeSweepProject.id,
+        config,
+        { hostname: 'sweep-agent', python: '3.11' },
+        run.id,
+      );
+    }
+
+    // `sys/*` is registered as well as the objective: get-sweep drops those
+    // from `availableMetrics`, and with them present the inferred objective is
+    // a real choice rather than the only row in the table.
+    await prisma.runLogs.createMany({
+      data: nativeSweepRuns.flatMap((r) => [
+        { runId: r.id, logName: 'val_loss', logGroup: '', logType: 'METRIC' as const },
+        {
+          runId: r.id,
+          logName: 'sys/cpu.percentage.0',
+          logGroup: 'sys',
+          logType: 'METRIC' as const,
+        },
+      ]),
+      skipDuplicates: true,
+    });
+
+    for (const r of nativeSweepRuns) {
+      pushSweepMetric(nativeSweepProject.name, r.id, r.createdAt, 'val_loss', '', r.valLoss);
+      pushSweepMetric(
+        nativeSweepProject.name,
+        r.id,
+        r.createdAt,
+        'sys/cpu.percentage.0',
+        'sys',
+        42,
+      );
+    }
+    console.log(
+      `   ✓ Created sweep-e2e-test with ${nativeSweepRuns.length} native runs (sweep:${NATIVE_SWEEP_ID})`,
+    );
+  } else {
+    console.log('   ✓ sweep-e2e-test runs already exist');
+  }
+
+  const migratedSweepProject = await prisma.projects.upsert({
+    where: {
+      organizationId_name: {
+        organizationId: org.id,
+        name: 'sweep-migrate-check',
+      },
+    },
+    create: { name: 'sweep-migrate-check', organizationId: org.id },
+    update: {},
+  });
+
+  const migratedSweepExisting = await prisma.runs.findFirst({
+    where: {
+      projectId: migratedSweepProject.id,
+      organizationId: org.id,
+      tags: { has: `sweep:${MIGRATED_SWEEP_ID}` },
+    },
+    select: { id: true },
+  });
+
+  if (!migratedSweepExisting) {
+    const migratedCreatedAt = new Date(Date.now() - 358 * 24 * 60 * 60 * 1000);
+    /** Final `loss`, and the value the wandb summary block reports. */
+    const migratedLoss = 0.1;
+    // Shape produced by the wandb migration: the run's own sampled value at the
+    // top level, everything the importer knows nested under `wandb`. The nested
+    // block is dropped from the flattened config by get-sweep (a swept
+    // hyperparameter is a scalar by construction), so only `lr` reaches the
+    // chart — which is exactly the declared search space below.
+    const migratedConfig = {
+      lr: 0.1,
+      wandb: {
+        url: 'https://wandb.ai/acme/migrate-check/runs/u0d4j7me',
+        state: 'finished',
+        sweep: {
+          id: MIGRATED_SWEEP_ID,
+          name: MIGRATED_SWEEP_ID,
+          config: {
+            method: 'grid',
+            metric: { goal: 'minimize', name: 'loss' },
+            parameters: { lr: { values: [0.1, 0.01, 0.001] } },
+          },
+        },
+        summary: { loss: migratedLoss },
+      },
+    };
+
+    const migratedRun = await prisma.runs.create({
+      data: {
+        name: 'flowing-sweep-1',
+        organizationId: org.id,
+        projectId: migratedSweepProject.id,
+        createdById: user.id,
+        creatorApiKeyId: apiKey.id,
+        status: 'COMPLETED',
+        // `import:wandb` is what `fromWandb` is derived from — the wandb badge
+        // marks imports only, since native is the default.
+        tags: ['import:wandb', `sweep:${MIGRATED_SWEEP_ID}`],
+        config: migratedConfig,
+        systemMetadata: { hostname: 'wandb-import' },
+        createdAt: migratedCreatedAt,
+        updatedAt: migratedCreatedAt,
+      },
+    });
+
+    await extractAndUpsertColumnKeys(
+      prisma,
+      org.id,
+      migratedSweepProject.id,
+      migratedConfig,
+      { hostname: 'wandb-import' },
+      migratedRun.id,
+    );
+
+    await prisma.runLogs.createMany({
+      data: [
+        { runId: migratedRun.id, logName: 'loss', logGroup: '', logType: 'METRIC' as const },
+      ],
+      skipDuplicates: true,
+    });
+
+    pushSweepMetric(
+      migratedSweepProject.name,
+      migratedRun.id,
+      migratedCreatedAt,
+      'loss',
+      '',
+      migratedLoss,
+    );
+    console.log(
+      `   ✓ Created sweep-migrate-check with 1 migrated run (sweep:${MIGRATED_SWEEP_ID})`,
+    );
+  } else {
+    console.log('   ✓ sweep-migrate-check runs already exist');
+  }
+
+  if (sweepChUrl && sweepMetricRows.length > 0) {
+    const sweepCh = createClient({
+      url: sweepChUrl,
+      username: process.env.CLICKHOUSE_USER || 'default',
+      password: process.env.CLICKHOUSE_PASSWORD || '',
+    });
+    await sweepCh.insert({
+      table: 'mlop_metrics',
+      values: sweepMetricRows,
+      format: 'JSONEachRow',
+    });
+    await sweepCh.close();
+    console.log(`   ✓ Seeded ${sweepMetricRows.length} sweep metric datapoints`);
+  }
+
+  // 5j. Native rich-media / rich-data fixtures — `native-media-test`.
+  //
+  //     Two runs, deliberately few, each carrying every feature the branch
+  //     added on the render side: annotated images (boxes + real mask PNGs),
+  //     JSON-backed figures and point clouds, an HTML artifact, string
+  //     metrics, and tables with the cell types that used to fail the row
+  //     schema. Everything here is what the pluto SDK itself writes — no
+  //     `import:wandb` tag, no `config.wandb` block — because every one of
+  //     these renderers dispatches on the shape of the row, not on where the
+  //     run came from.
+  //
+  //     - `nm-annotated-1` (older) has all twelve logs.
+  //     - `nm-annotated-2` (newer) has three, and exists for the things one
+  //       run cannot show: multi-run overlays, and the mask lookup that must
+  //       be scoped to its own run (both runs' masks share a file name and
+  //       hold different class ids, so an unscoped lookup draws the wrong
+  //       picture rather than no picture).
+  //
+  //     Dated ~357/~356 days back, in line with the other fixture projects,
+  //     so these runs never win a "most recent" ordering somewhere else.
+  console.log('\n5️⃣j Creating native-media fixtures...');
+
+  const nmStorageEndpoint = process.env.STORAGE_ENDPOINT;
+  const nmStorageAccessKey = process.env.STORAGE_ACCESS_KEY_ID;
+  const nmStorageSecretKey = process.env.STORAGE_SECRET_ACCESS_KEY;
+  const nmStorageBucket = process.env.STORAGE_BUCKET;
+  const nmStorageRegion = process.env.STORAGE_REGION || 'us-east-1';
+  const nmClickhouseUrl = process.env.CLICKHOUSE_URL;
+
+  if (
+    !nmClickhouseUrl ||
+    !nmStorageEndpoint ||
+    !nmStorageAccessKey ||
+    !nmStorageSecretKey ||
+    !nmStorageBucket
+  ) {
+    console.log(
+      '   ⚠ Missing CLICKHOUSE_URL or STORAGE_* env vars, skipping native-media fixtures',
+    );
+  } else {
+    const nmS3 = new S3Client({
+      endpoint: nmStorageEndpoint,
+      region: nmStorageRegion,
+      credentials: {
+        accessKeyId: nmStorageAccessKey,
+        secretAccessKey: nmStorageSecretKey,
+      },
+      forcePathStyle: true,
+    });
+    const nmCh = createClient({
+      url: nmClickhouseUrl,
+      username: process.env.CLICKHOUSE_USER || 'default',
+      password: process.env.CLICKHOUSE_PASSWORD || '',
+    });
+
+    const nmFileRows: Record<string, unknown>[] = [];
+    const nmDataRows: Record<string, unknown>[] = [];
+    const nmMetricRows: Record<string, unknown>[] = [];
+    const nmUploads: Promise<unknown>[] = [];
+
+    /** ClickHouse DateTime64(3) literal from an epoch millisecond value. */
+    const chTime = (ms: number) =>
+      new Date(ms).toISOString().replace('T', ' ').replace('Z', '');
+
+    /** One file: an mlop_files row plus the object it points at in S3. */
+    const pushFile = (opts: {
+      projectName: string;
+      runId: bigint;
+      baseTime: number;
+      logName: string;
+      step: number;
+      fileName: string;
+      fileType: string;
+      body: Buffer;
+      contentType: string;
+      caption?: string | null;
+      sampleIndex?: number;
+      annotations?: unknown;
+    }) => {
+      const logGroup = opts.logName.includes('/')
+        ? opts.logName.slice(0, opts.logName.lastIndexOf('/'))
+        : '';
+      nmFileRows.push({
+        tenantId: org.id,
+        projectName: opts.projectName,
+        runId: Number(opts.runId),
+        logGroup,
+        logName: opts.logName,
+        time: chTime(opts.baseTime + opts.step * 1000),
+        step: opts.step,
+        fileName: opts.fileName,
+        fileType: opts.fileType,
+        fileSize: opts.body.length,
+        caption: opts.caption ?? null,
+        sampleIndex: opts.sampleIndex ?? 0,
+        annotations:
+          opts.annotations == null ? null : JSON.stringify(opts.annotations),
+      });
+      nmUploads.push(
+        nmS3.send(
+          new PutObjectCommand({
+            // Exactly the layout getImageUrl signs against:
+            // {tenantId}/{projectName}/{runId}/{logName}/{fileName}
+            Bucket: nmStorageBucket,
+            Key: `${org.id}/${opts.projectName}/${opts.runId}/${opts.logName}/${opts.fileName}`,
+            Body: opts.body,
+            ContentType: opts.contentType,
+          }),
+        ),
+      );
+    };
+
+    /** One mlop_data row (a table step, or one step of a string series). */
+    const pushData = (opts: {
+      projectName: string;
+      runId: bigint;
+      baseTime: number;
+      logName: string;
+      dataType: string;
+      step: number;
+      data: string;
+    }) => {
+      const logGroup = opts.logName.includes('/')
+        ? opts.logName.slice(0, opts.logName.lastIndexOf('/'))
+        : '';
+      nmDataRows.push({
+        tenantId: org.id,
+        projectName: opts.projectName,
+        runId: Number(opts.runId),
+        logGroup,
+        logName: opts.logName,
+        dataType: opts.dataType,
+        time: chTime(opts.baseTime + opts.step * 1000),
+        step: opts.step,
+        data: opts.data,
+      });
+    };
+
+    /** A short numeric curve, so these projects behave like any other. */
+    const pushLossCurve = (
+      projectName: string,
+      runId: bigint,
+      baseTime: number,
+      start: number,
+      slope: number,
+    ) => {
+      for (let step = 0; step < 10; step++) {
+        nmMetricRows.push({
+          tenantId: org.id,
+          projectName,
+          runId: Number(runId),
+          logGroup: 'train',
+          logName: 'train/loss',
+          time: chTime(baseTime + step * 1000),
+          step,
+          value: start - slope * step,
+        });
+      }
+    };
+
+    const nmProject = await prisma.projects.upsert({
+      where: {
+        organizationId_name: { organizationId: org.id, name: NM_PROJECT },
+      },
+      create: { name: NM_PROJECT, organizationId: org.id },
+      update: {},
+    });
+
+    const nmExisting = await prisma.runs.findFirst({
+      where: {
+        projectId: nmProject.id,
+        organizationId: org.id,
+        name: 'nm-annotated-1',
+      },
+      select: { id: true },
+    });
+
+    if (nmExisting) {
+      console.log('   ✓ native-media-test runs already exist');
+    } else {
+      const nmConfig = { lr: 0.001, batch_size: 32, model: 'resnet50' };
+      const nmSysMeta = { hostname: 'nm-fixture', python: '3.11' };
+
+      const nmRun1CreatedAt = new Date(Date.now() - 357 * 24 * 60 * 60 * 1000);
+      const nmRun2CreatedAt = new Date(Date.now() - 356 * 24 * 60 * 60 * 1000);
+
+      const makeNmRun = async (name: string, createdAt: Date) => {
+        const run = await prisma.runs.create({
+          data: {
+            name,
+            organizationId: org.id,
+            projectId: nmProject.id,
+            createdById: user.id,
+            creatorApiKeyId: apiKey.id,
+            status: 'COMPLETED',
+            tags: [],
+            config: nmConfig,
+            systemMetadata: nmSysMeta,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        });
+        await extractAndUpsertColumnKeys(
+          prisma,
+          org.id,
+          nmProject.id,
+          nmConfig,
+          nmSysMeta,
+          run.id,
+        );
+        return run;
+      };
+
+      const nmRun1 = await makeNmRun('nm-annotated-1', nmRun1CreatedAt);
+      const nmRun2 = await makeNmRun('nm-annotated-2', nmRun2CreatedAt);
+
+      const nmBase1 = nmRun1CreatedAt.getTime();
+      const nmBase2 = nmRun2CreatedAt.getTime();
+
+      // ── Annotated images + mask PNGs ────────────────────────────────────
+      // Masks live in the SAME logName as the image that references them:
+      // presigned URLs are signed per object key, so the mask resolver can
+      // only find one that came back in the same file query. They carry
+      // `fileType: "mask"`, which is what keeps them out of the image grid
+      // (`excludeMaskFiles`) while leaving them in the query result.
+      const segImage = (step: number) =>
+        createSimplePNG(NM_IMAGE_SIZE, NM_IMAGE_SIZE, 40 + step * 10, 90, 160);
+
+      pushFile({
+        projectName: NM_PROJECT,
+        runId: nmRun1.id,
+        baseTime: nmBase1,
+        logName: NM_SEG_LOG,
+        step: 0,
+        fileName: 'seg_step_0.png',
+        fileType: 'png',
+        body: segImage(0),
+        contentType: 'image/png',
+        caption: 'epoch 0 predictions vs truth',
+        annotations: NM_SEG_ANNOTATIONS_STEP0,
+      });
+      pushFile({
+        projectName: NM_PROJECT,
+        runId: nmRun1.id,
+        baseTime: nmBase1,
+        logName: NM_SEG_LOG,
+        step: 0,
+        fileName: 'seg_step_0_mask.png',
+        fileType: 'mask',
+        body: createClassMaskPNG(NM_IMAGE_SIZE, NM_IMAGE_SIZE, NM_MASK_STEP0),
+        contentType: 'image/png',
+      });
+      // Step 1 is bare: same log, no annotations at all. Gives every
+      // annotation assertion a negative control in the same widget.
+      pushFile({
+        projectName: NM_PROJECT,
+        runId: nmRun1.id,
+        baseTime: nmBase1,
+        logName: NM_SEG_LOG,
+        step: 1,
+        fileName: 'seg_step_1.png',
+        fileType: 'png',
+        body: segImage(1),
+        contentType: 'image/png',
+      });
+      pushFile({
+        projectName: NM_PROJECT,
+        runId: nmRun1.id,
+        baseTime: nmBase1,
+        logName: NM_SEG_LOG,
+        step: 2,
+        fileName: 'seg_step_2.png',
+        fileType: 'png',
+        body: segImage(2),
+        contentType: 'image/png',
+        annotations: NM_SEG_ANNOTATIONS_STEP2,
+      });
+      pushFile({
+        projectName: NM_PROJECT,
+        runId: nmRun1.id,
+        baseTime: nmBase1,
+        logName: NM_SEG_LOG,
+        step: 2,
+        fileName: 'seg_step_2_mask.png',
+        fileType: 'mask',
+        body: createClassMaskPNG(NM_IMAGE_SIZE, NM_IMAGE_SIZE, (x) =>
+          NM_MASK_STEP2(x),
+        ),
+        contentType: 'image/png',
+      });
+      pushFile({
+        projectName: NM_PROJECT,
+        runId: nmRun1.id,
+        baseTime: nmBase1,
+        logName: NM_SEG_LOG,
+        step: 3,
+        fileName: 'seg_step_3.png',
+        fileType: 'png',
+        body: segImage(3),
+        contentType: 'image/png',
+        annotations: NM_SEG_ANNOTATIONS_STEP3,
+      });
+
+      pushFile({
+        projectName: NM_PROJECT,
+        runId: nmRun2.id,
+        baseTime: nmBase2,
+        logName: NM_SEG_LOG,
+        step: 0,
+        fileName: 'seg_step_0.png',
+        fileType: 'png',
+        body: createSimplePNG(NM_IMAGE_SIZE, NM_IMAGE_SIZE, 160, 90, 40),
+        contentType: 'image/png',
+        caption: 'run 2 epoch 0',
+        annotations: NM_SEG_ANNOTATIONS_RUN2,
+      });
+      pushFile({
+        projectName: NM_PROJECT,
+        runId: nmRun2.id,
+        baseTime: nmBase2,
+        logName: NM_SEG_LOG,
+        step: 0,
+        // Same name as run 1's mask, different contents — see NM_MASK_RUN2.
+        fileName: 'seg_step_0_mask.png',
+        fileType: 'mask',
+        body: createClassMaskPNG(NM_IMAGE_SIZE, NM_IMAGE_SIZE, NM_MASK_RUN2),
+        contentType: 'image/png',
+      });
+
+      // ── Captions + list-logged (multi-index) media ──────────────────────
+      for (const sample of NM_CAPTION_SAMPLES) {
+        pushFile({
+          projectName: NM_PROJECT,
+          runId: nmRun1.id,
+          baseTime: nmBase1,
+          logName: NM_CAPTION_LOG,
+          step: 0,
+          fileName: sample.fileName,
+          fileType: 'png',
+          body: createSimplePNG(16, 16, 20 + sample.sampleIndex * 60, 140, 200),
+          contentType: 'image/png',
+          caption: sample.caption,
+          sampleIndex: sample.sampleIndex,
+        });
+      }
+      // One uncaptioned image at a later step, so "no caption" is testable
+      // without leaving the log.
+      pushFile({
+        projectName: NM_PROJECT,
+        runId: nmRun1.id,
+        baseTime: nmBase1,
+        logName: NM_CAPTION_LOG,
+        step: 1,
+        fileName: 'cap_none.png',
+        fileType: 'png',
+        body: createSimplePNG(16, 16, 200, 140, 20),
+        contentType: 'image/png',
+      });
+
+      // ── JSON-sniffed figures, point clouds, and a blob ──────────────────
+      const jsonFile = (
+        runId: bigint,
+        baseTime: number,
+        logName: string,
+        fileName: string,
+        payload: unknown,
+      ) =>
+        pushFile({
+          projectName: NM_PROJECT,
+          runId,
+          baseTime,
+          logName,
+          step: 0,
+          fileName,
+          fileType: 'json',
+          body: Buffer.from(JSON.stringify(payload), 'utf-8'),
+          contentType: 'application/json',
+        });
+
+      jsonFile(nmRun1.id, nmBase1, 'figures/plotly_figure', NM_PLOTLY_FILE, NM_PLOTLY_FIGURE);
+      jsonFile(nmRun1.id, nmBase1, 'figures/mpl_figure', NM_MPL_FILE, NM_MPL_FIGURE);
+      jsonFile(nmRun1.id, nmBase1, 'figures/point_cloud', NM_CLOUD_FILE, NM_POINT_CLOUD);
+      jsonFile(
+        nmRun1.id,
+        nmBase1,
+        'figures/point_cloud_rgb',
+        NM_CLOUD_RGB_FILE,
+        NM_POINT_CLOUD_RGB,
+      );
+      jsonFile(nmRun1.id, nmBase1, 'figures/json_blob', NM_BLOB_FILE, NM_JSON_BLOB);
+      // Run 2's figure is the same shape with different numbers, so a two-run
+      // comparison can tell which card belongs to which run from the plot
+      // alone (the y values differ, and so does the title).
+      jsonFile(nmRun2.id, nmBase2, 'figures/plotly_figure', NM_PLOTLY_FILE, {
+        ...NM_PLOTLY_FIGURE,
+        data: [
+          { ...NM_PLOTLY_FIGURE.data[0], y: [0.8, 0.5, 0.35, 0.28, 0.22] },
+          { ...NM_PLOTLY_FIGURE.data[1], y: [0.95, 0.66, 0.5, 0.46, 0.44] },
+        ],
+        layout: { ...NM_PLOTLY_FIGURE.layout, title: 'Native Plotly Figure (run 2)' },
+      });
+
+      pushFile({
+        projectName: NM_PROJECT,
+        runId: nmRun1.id,
+        baseTime: nmBase1,
+        logName: 'figures/report',
+        step: 0,
+        fileName: 'report.html',
+        fileType: 'html',
+        body: Buffer.from(NM_HTML, 'utf-8'),
+        contentType: 'text/html',
+      });
+
+      // ── String metrics (mlop_data, dataType `string-series`) ────────────
+      // The `data` column holds the RAW value, not JSON: the read path returns
+      // it verbatim as the category label.
+      NM_PHASE_RUN1.forEach((value, step) =>
+        pushData({
+          projectName: NM_PROJECT,
+          runId: nmRun1.id,
+          baseTime: nmBase1,
+          logName: 'status/phase',
+          dataType: 'string-series',
+          step,
+          data: value,
+        }),
+      );
+      NM_CHECKPOINT.forEach((value, step) =>
+        pushData({
+          projectName: NM_PROJECT,
+          runId: nmRun1.id,
+          baseTime: nmBase1,
+          logName: 'status/checkpoint',
+          dataType: 'string-series',
+          step,
+          data: value,
+        }),
+      );
+      NM_PHASE_RUN2.forEach((value, step) =>
+        pushData({
+          projectName: NM_PROJECT,
+          runId: nmRun2.id,
+          baseTime: nmBase2,
+          logName: 'status/phase',
+          dataType: 'string-series',
+          step,
+          data: value,
+        }),
+      );
+
+      // ── Tables ──────────────────────────────────────────────────────────
+      for (const { step, rows } of NM_TABLE_EVAL_STEPS) {
+        pushData({
+          projectName: NM_PROJECT,
+          runId: nmRun1.id,
+          baseTime: nmBase1,
+          logName: 'tables/eval_results',
+          dataType: 'table',
+          step,
+          data: JSON.stringify({ col: NM_TABLE_EVAL_COLS, table: rows }),
+        });
+      }
+      pushData({
+        projectName: NM_PROJECT,
+        runId: nmRun1.id,
+        baseTime: nmBase1,
+        logName: 'tables/predictions',
+        dataType: 'table',
+        step: 0,
+        data: JSON.stringify(NM_TABLE_PREDICTIONS),
+      });
+
+      pushLossCurve(NM_PROJECT, nmRun1.id, nmBase1, 1, 0.05);
+      pushLossCurve(NM_PROJECT, nmRun2.id, nmBase2, 0.9, 0.04);
+
+      await prisma.runLogs.createMany({
+        data: [
+          // nm-annotated-1 — every log.
+          { runId: nmRun1.id, logName: 'train/loss', logGroup: 'train', logType: 'METRIC' as const },
+          { runId: nmRun1.id, logName: NM_SEG_LOG, logGroup: 'media', logType: 'IMAGE' as const },
+          { runId: nmRun1.id, logName: NM_CAPTION_LOG, logGroup: 'media', logType: 'IMAGE' as const },
+          { runId: nmRun1.id, logName: 'figures/plotly_figure', logGroup: 'figures', logType: 'FILE' as const },
+          { runId: nmRun1.id, logName: 'figures/mpl_figure', logGroup: 'figures', logType: 'FILE' as const },
+          { runId: nmRun1.id, logName: 'figures/point_cloud', logGroup: 'figures', logType: 'FILE' as const },
+          { runId: nmRun1.id, logName: 'figures/point_cloud_rgb', logGroup: 'figures', logType: 'FILE' as const },
+          { runId: nmRun1.id, logName: 'figures/json_blob', logGroup: 'figures', logType: 'FILE' as const },
+          { runId: nmRun1.id, logName: 'figures/report', logGroup: 'figures', logType: 'FILE' as const },
+          // DATA is the string-metric log type — it rides the file-discovery
+          // proc but is routed to a categorical chart, not the Files tab.
+          { runId: nmRun1.id, logName: 'status/phase', logGroup: 'status', logType: 'DATA' as const },
+          { runId: nmRun1.id, logName: 'status/checkpoint', logGroup: 'status', logType: 'DATA' as const },
+          { runId: nmRun1.id, logName: 'tables/eval_results', logGroup: 'tables', logType: 'TABLE' as const },
+          { runId: nmRun1.id, logName: 'tables/predictions', logGroup: 'tables', logType: 'TABLE' as const },
+          // nm-annotated-2 — the subset the multi-run cases need.
+          { runId: nmRun2.id, logName: 'train/loss', logGroup: 'train', logType: 'METRIC' as const },
+          { runId: nmRun2.id, logName: NM_SEG_LOG, logGroup: 'media', logType: 'IMAGE' as const },
+          { runId: nmRun2.id, logName: 'status/phase', logGroup: 'status', logType: 'DATA' as const },
+          { runId: nmRun2.id, logName: 'figures/plotly_figure', logGroup: 'figures', logType: 'FILE' as const },
+        ],
+        skipDuplicates: true,
+      });
+
+      console.log(
+        `   ✓ Created ${NM_PROJECT} with 2 runs (${nmFileRows.length} files, ${nmDataRows.length} data rows)`,
+      );
+    }
+
+    // 5k. RECORDED wandb-migration media / data — `wandb-migrate-media`.
+    //
+    //     Five runs replaying rows captured from real imports (see the WM_*
+    //     provenance header). Every run carries `import:wandb`, which is what
+    //     the wandb badge is derived from, and a `config.wandb` block, because
+    //     that is what a migrated run actually looks like.
+    //
+    //     The image BODIES are generated rather than recorded: they are flat
+    //     PNGs at the source images' exact dimensions (480x320 for the
+    //     detection frames, 16x64 for the gallery). Only the size is
+    //     load-bearing — the captured boxes are in pixel coordinates, so they
+    //     only land in the right place on a correctly-sized frame — and a
+    //     recorded 4KB photograph per step would bloat this file for nothing.
+    //     The MASK is recorded byte for byte; that one's encoding matters.
+    console.log('\n5️⃣k Creating recorded wandb-migration fixtures...');
+
+    const wmProject = await prisma.projects.upsert({
+      where: {
+        organizationId_name: { organizationId: org.id, name: WM_MEDIA_PROJECT },
+      },
+      create: { name: WM_MEDIA_PROJECT, organizationId: org.id },
+      update: {},
+    });
+
+    const wmExisting = await prisma.runs.findFirst({
+      where: {
+        projectId: wmProject.id,
+        organizationId: org.id,
+        name: 'wm-detections',
+      },
+      select: { id: true },
+    });
+
+    if (wmExisting) {
+      console.log(`   ✓ ${WM_MEDIA_PROJECT} runs already exist`);
+    } else {
+      const wmSysMeta = { hostname: 'wandb-import', python: '3.11' };
+
+      /** A migrated run: `import:wandb` plus a `config.wandb` block. */
+      const makeWmRun = async (name: string, daysBack: number, projectId: bigint) => {
+        const config = WM_CONFIG_BASE;
+        const createdAt = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000);
+        const run = await prisma.runs.create({
+          data: {
+            name,
+            organizationId: org.id,
+            projectId,
+            createdById: user.id,
+            creatorApiKeyId: apiKey.id,
+            status: 'COMPLETED',
+            tags: ['import:wandb'],
+            config,
+            systemMetadata: wmSysMeta,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        });
+        await extractAndUpsertColumnKeys(
+          prisma,
+          org.id,
+          projectId,
+          config,
+          wmSysMeta,
+          run.id,
+        );
+        return { run, base: createdAt.getTime() };
+      };
+
+      /**
+       * The per-run history artifact the exporter always writes.
+       *
+       * Seeded because `metrics-display.tsx` hides log names matching
+       * `run-<8 chars>-<name>:v<n>` outright, and a rule that hides something
+       * needs something to hide or it is only ever tested by its absence.
+       */
+      const pushWandbArtifact = (
+        projectName: string,
+        runId: bigint,
+        base: number,
+        logName: string,
+        fileName: string,
+      ) =>
+        pushFile({
+          projectName,
+          runId,
+          baseTime: base,
+          logName,
+          step: 0,
+          fileName,
+          fileType: 'parquet',
+          body: Buffer.from('PAR1recorded-fixture-stubPAR1', 'utf-8'),
+          contentType: 'application/octet-stream',
+          caption: '0000.parquet',
+        });
+
+      // ── wm-detections: boxes over one image log, a real mask over another ─
+      const det = await makeWmRun('wm-detections', 354, wmProject.id);
+      // 480x320 — the dimensions the captured pixel coordinates assume.
+      const detFrame = (step: number) => createSimplePNG(480, 320, 60 + step * 20, 80, 110);
+
+      const detSteps = [
+        {
+          step: 0,
+          fileName: 'epoch-0---6-detections.9f403b73-6e42-4b0d-92e6-7a276e73072a.png',
+          caption: 'epoch 0 — 6 detections',
+          annotations: WM_DET_ANNOTATIONS_STEP0,
+        },
+        {
+          step: 1,
+          fileName: 'epoch-1---7-detections.45c9ba28-3aad-494e-ab27-f15e2ccbf404.png',
+          caption: 'epoch 1 — 7 detections',
+          annotations: WM_DET_ANNOTATIONS_STEP1,
+        },
+      ];
+      for (const s of detSteps) {
+        pushFile({
+          projectName: WM_MEDIA_PROJECT,
+          runId: det.run.id,
+          baseTime: det.base,
+          logName: 'val/detections',
+          step: s.step,
+          fileName: s.fileName,
+          fileType: 'png',
+          body: detFrame(s.step),
+          contentType: 'image/png',
+          caption: s.caption,
+          annotations: s.annotations,
+        });
+      }
+
+      const wmMaskPng = Buffer.from(WM_MASK_PNG_BASE64, 'base64');
+      const segSteps = [
+        {
+          step: 0,
+          fileName:
+            'epoch-0---semantic-segmentation.79554e67-1177-48cd-bf86-364c5500da49.png',
+          caption: 'epoch 0 — semantic segmentation',
+          annotations: WM_SEG_ANNOTATIONS_STEP0,
+          maskFileName: '91f6e810-1a4e-4c49-89a4-bb3becdebfa5.mask.png',
+        },
+        {
+          step: 1,
+          fileName:
+            'epoch-1---semantic-segmentation.a8d1a9cd-f14c-43b9-9414-fe92bbfb5114.png',
+          caption: 'epoch 1 — semantic segmentation',
+          annotations: WM_SEG_ANNOTATIONS_STEP1,
+          maskFileName: '81cc6e2e-1af4-4729-b71f-5e86461f05c4.mask.png',
+        },
+      ];
+      for (const s of segSteps) {
+        pushFile({
+          projectName: WM_MEDIA_PROJECT,
+          runId: det.run.id,
+          baseTime: det.base,
+          logName: 'val/segmentation',
+          step: s.step,
+          fileName: s.fileName,
+          fileType: 'png',
+          body: detFrame(s.step),
+          contentType: 'image/png',
+          caption: s.caption,
+          annotations: s.annotations,
+        });
+        // Same recorded bytes under both names — the source run's two masks
+        // are two renders of the same scene, and only the reference matters.
+        pushFile({
+          projectName: WM_MEDIA_PROJECT,
+          runId: det.run.id,
+          baseTime: det.base,
+          logName: 'val/segmentation',
+          step: s.step,
+          fileName: s.maskFileName,
+          fileType: 'mask',
+          body: wmMaskPng,
+          contentType: 'image/png',
+        });
+      }
+      pushLossCurve(WM_MEDIA_PROJECT, det.run.id, det.base, 1.2, 0.08);
+
+      // ── wm-exotic: the four artifacts that only content-sniffing can sort ─
+      const exotic = await makeWmRun('wm-exotic', 353, wmProject.id);
+      const exoticFiles = [
+        {
+          logName: 'plotly',
+          step: 0,
+          fileName: '0cfd84bf-eb1a-4b93-ba55-3bc15f7dd725.json',
+          fileType: 'json',
+          body: Buffer.from(JSON.stringify(WM_PLOTLY_FIGURE), 'utf-8'),
+          contentType: 'application/json',
+        },
+        {
+          logName: 'html',
+          step: 1,
+          fileName: 'ffa1824a-9afe-4623-a320-05d9d981cccf.html',
+          fileType: 'html',
+          body: Buffer.from(WM_HTML, 'utf-8'),
+          contentType: 'text/html',
+        },
+        {
+          logName: 'cloud',
+          step: 2,
+          fileName: '3d3a0da5-9055-414c-99f7-8dc965b099c8.json',
+          fileType: 'json',
+          body: Buffer.from(JSON.stringify(WM_POINT_CLOUD), 'utf-8'),
+          contentType: 'application/json',
+        },
+        {
+          logName: 'mpl',
+          step: 3,
+          fileName: '5966d8ca-2d83-4de3-9343-608058627145.json',
+          fileType: 'json',
+          body: Buffer.from(JSON.stringify(WM_MPL_FIGURE), 'utf-8'),
+          contentType: 'application/json',
+        },
+      ];
+      for (const f of exoticFiles) {
+        pushFile({
+          projectName: WM_MEDIA_PROJECT,
+          runId: exotic.run.id,
+          baseTime: exotic.base,
+          ...f,
+        });
+      }
+      // A wandb artifact dump whose file type IS renderable — the fixture that
+      // separates the artifact-NAME rule from the renderable-TYPE one.
+      //
+      // The other two dumps are `.parquet`, which no widget can draw, so the
+      // type rule hides them on its own and a view that dropped the name rule
+      // still looked correct. This one is a raw `.json`, which is what the
+      // exporter actually writes for a table artifact and what
+      // `isRenderableInWidget` has to accept (only the body can tell a Plotly
+      // figure from a blob) — so it renders as a widget on any view that stops
+      // applying the name rule. The individual-run page did exactly that.
+      //
+      // Named `…-plotly_table:v0` on purpose: it shares the substring "plotly"
+      // with `wm-exotic`'s real figure log, so a metric search for "plotly"
+      // matches BOTH and the search can never be what hides it.
+      pushFile({
+        projectName: WM_MEDIA_PROJECT,
+        runId: exotic.run.id,
+        baseTime: exotic.base,
+        logName: 'run-abcd1234-plotly_table:v0',
+        step: 0,
+        fileName: 'plotly_table.table.json',
+        fileType: 'json',
+        // Valid JSON that is neither a figure nor a point cloud, i.e. what a
+        // wandb table artifact holds — if it ever does render, it renders as a
+        // syntax-highlighted document, which is the bug.
+        body: Buffer.from(
+          JSON.stringify({
+            columns: ['label', 'value'],
+            data: [
+              ['c0', 1],
+              ['c1', 2],
+            ],
+          }),
+          'utf-8',
+        ),
+        contentType: 'application/json',
+      });
+      pushLossCurve(WM_MEDIA_PROJECT, exotic.run.id, exotic.base, 0.5, 0);
+
+      // ── wm-gallery: list-logged images, ordered only by sampleIndex ───────
+      const gallery = await makeWmRun('wm-gallery', 352, wmProject.id);
+      WM_GALLERY_UUIDS.forEach((uuid, sampleIndex) => {
+        pushFile({
+          projectName: WM_MEDIA_PROJECT,
+          runId: gallery.run.id,
+          baseTime: gallery.base,
+          logName: 'gallery',
+          step: 0,
+          fileName: `idx${sampleIndex}.${uuid}.png`,
+          fileType: 'png',
+          // 16x64, the source gallery's dimensions.
+          body: createSimplePNG(16, 64, (sampleIndex * 20) % 256, 120, 180),
+          contentType: 'image/png',
+          caption: `idx${sampleIndex}`,
+          sampleIndex,
+        });
+      });
+      WM_GALLERY_UUIDS_STEP1.forEach((uuid, sampleIndex) => {
+        pushFile({
+          projectName: WM_MEDIA_PROJECT,
+          runId: gallery.run.id,
+          baseTime: gallery.base,
+          logName: 'gallery',
+          step: 1,
+          fileName: `idx${sampleIndex}.${uuid}.png`,
+          fileType: 'png',
+          body: createSimplePNG(16, 64, 200, (sampleIndex * 60) % 256, 40),
+          contentType: 'image/png',
+          caption: `idx${sampleIndex}`,
+          sampleIndex,
+        });
+      });
+      pushLossCurve(WM_MEDIA_PROJECT, gallery.run.id, gallery.base, 2, 0.1);
+
+      // ── wm-strings: the string series wandb itself could not keep ────────
+      const strings = await makeWmRun('wm-strings', 351, wmProject.id);
+      WM_PHASE.forEach((value, step) =>
+        pushData({
+          projectName: WM_MEDIA_PROJECT,
+          runId: strings.run.id,
+          baseTime: strings.base,
+          logName: 'phase',
+          dataType: 'string-series',
+          step,
+          data: value,
+        }),
+      );
+      pushLossCurve(WM_MEDIA_PROJECT, strings.run.id, strings.base, 0.9, 0.07);
+
+      // ── wm-tables: bool + unicode cells, and a media column ──────────────
+      const tables = await makeWmRun('wm-tables', 350, wmProject.id);
+      // `dataType` is upper-case in every recorded row — the read path matches
+      // it with `ILIKE 'table'`, and writing it lower-case here would retire
+      // the only fixture that proves the case-insensitivity is needed.
+      pushData({
+        projectName: WM_MEDIA_PROJECT,
+        runId: tables.run.id,
+        baseTime: tables.base,
+        logName: 'results',
+        dataType: 'TABLE',
+        step: 0,
+        data: JSON.stringify(WM_RESULTS_TABLE),
+      });
+      pushData({
+        projectName: WM_MEDIA_PROJECT,
+        runId: tables.run.id,
+        baseTime: tables.base,
+        logName: 'media_table',
+        dataType: 'TABLE',
+        step: 0,
+        data: JSON.stringify(WM_MEDIA_TABLE),
+      });
+      pushWandbArtifact(
+        WM_MEDIA_PROJECT,
+        tables.run.id,
+        tables.base,
+        'run-zvmxaggx-results:v0',
+        '0000.parquet.c30c1f43-dd68-4eb3-9073-8b3912985cfd.parquet',
+      );
+      pushLossCurve(WM_MEDIA_PROJECT, tables.run.id, tables.base, 1.1, 0.06);
+
+      await prisma.runLogs.createMany({
+        data: [
+          { runId: det.run.id, logName: 'val/detections', logGroup: 'val', logType: 'IMAGE' as const },
+          { runId: det.run.id, logName: 'val/segmentation', logGroup: 'val', logType: 'IMAGE' as const },
+          { runId: det.run.id, logName: 'train/loss', logGroup: 'train', logType: 'METRIC' as const },
+          // ARTIFACT, not FILE: that is the type the exporter registers, and it
+          // is what routes these to TextView / the file widget.
+          { runId: exotic.run.id, logName: 'plotly', logGroup: '', logType: 'ARTIFACT' as const },
+          { runId: exotic.run.id, logName: 'html', logGroup: '', logType: 'ARTIFACT' as const },
+          { runId: exotic.run.id, logName: 'cloud', logGroup: '', logType: 'ARTIFACT' as const },
+          { runId: exotic.run.id, logName: 'mpl', logGroup: '', logType: 'ARTIFACT' as const },
+          // The renderable-`.json` dump. `logGroup: ''` is what the exporter
+          // writes, so it lands in the SAME derived `files` group as the four
+          // figures above — the arrangement that made the run page render it.
+          {
+            runId: exotic.run.id,
+            logName: 'run-abcd1234-plotly_table:v0',
+            logGroup: '',
+            logType: 'ARTIFACT' as const,
+          },
+          { runId: exotic.run.id, logName: 'train/loss', logGroup: 'train', logType: 'METRIC' as const },
+          { runId: gallery.run.id, logName: 'gallery', logGroup: '', logType: 'IMAGE' as const },
+          { runId: gallery.run.id, logName: 'train/loss', logGroup: 'train', logType: 'METRIC' as const },
+          { runId: strings.run.id, logName: 'phase', logGroup: '', logType: 'DATA' as const },
+          { runId: strings.run.id, logName: 'train/loss', logGroup: 'train', logType: 'METRIC' as const },
+          { runId: tables.run.id, logName: 'results', logGroup: '', logType: 'TABLE' as const },
+          { runId: tables.run.id, logName: 'media_table', logGroup: '', logType: 'TABLE' as const },
+          { runId: tables.run.id, logName: 'run-zvmxaggx-results:v0', logGroup: '', logType: 'ARTIFACT' as const },
+          { runId: tables.run.id, logName: 'train/loss', logGroup: 'train', logType: 'METRIC' as const },
+        ],
+        skipDuplicates: true,
+      });
+
+      console.log(`   ✓ Created ${WM_MEDIA_PROJECT} with 5 recorded migrated runs`);
+    }
+
+    // 5l. RECORDED custom-chart panels — `wandb-migrate-charts`.
+    //
+    //     One run, six panels, six backing tables, all recorded. Its own
+    //     project so the custom-charts section on the all-runs page is either
+    //     entirely present (here) or entirely absent (everywhere else), with
+    //     no run selection that half-populates it.
+    console.log('\n5️⃣l Creating recorded custom-chart fixtures...');
+
+    const wmChartsProject = await prisma.projects.upsert({
+      where: {
+        organizationId_name: { organizationId: org.id, name: WM_CHARTS_PROJECT },
+      },
+      create: { name: WM_CHARTS_PROJECT, organizationId: org.id },
+      update: {},
+    });
+
+    const wmChartsExisting = await prisma.runs.findFirst({
+      where: {
+        projectId: wmChartsProject.id,
+        organizationId: org.id,
+        name: 'wm-custom-charts',
+      },
+      select: { id: true },
+    });
+
+    if (wmChartsExisting) {
+      console.log(`   ✓ ${WM_CHARTS_PROJECT} runs already exist`);
+    } else {
+      const chartsCreatedAt = new Date(Date.now() - 349 * 24 * 60 * 60 * 1000);
+      const chartsConfig = {
+        ...WM_CONFIG_BASE,
+        wandb: { ...WM_CONFIG_BASE.wandb, custom_charts: WM_PANELS },
+      };
+      const chartsSysMeta = { hostname: 'wandb-import', python: '3.11' };
+
+      const chartsRun = await prisma.runs.create({
+        data: {
+          name: 'wm-custom-charts',
+          organizationId: org.id,
+          projectId: wmChartsProject.id,
+          createdById: user.id,
+          creatorApiKeyId: apiKey.id,
+          status: 'COMPLETED',
+          tags: ['import:wandb'],
+          config: chartsConfig,
+          systemMetadata: chartsSysMeta,
+          createdAt: chartsCreatedAt,
+          updatedAt: chartsCreatedAt,
+        },
+      });
+      await extractAndUpsertColumnKeys(
+        prisma,
+        org.id,
+        wmChartsProject.id,
+        chartsConfig,
+        chartsSysMeta,
+        chartsRun.id,
+      );
+
+      const chartsBase = chartsCreatedAt.getTime();
+      for (const [logName, entry] of Object.entries(WM_CHART_TABLES)) {
+        pushData({
+          projectName: WM_CHARTS_PROJECT,
+          runId: chartsRun.id,
+          baseTime: chartsBase,
+          logName,
+          dataType: 'TABLE',
+          step: entry.step,
+          data: JSON.stringify(entry.data),
+        });
+      }
+      pushLossCurve(WM_CHARTS_PROJECT, chartsRun.id, chartsBase, 1, 0.05);
+
+      await prisma.runLogs.createMany({
+        data: [
+          { runId: chartsRun.id, logName: 'train/loss', logGroup: 'train', logType: 'METRIC' as const },
+          ...Object.keys(WM_CHART_TABLES).map((logName) => ({
+            runId: chartsRun.id,
+            logName,
+            logGroup: '',
+            logType: 'TABLE' as const,
+          })),
+          {
+            runId: chartsRun.id,
+            logName: 'run-fx2dl3j6-bar_table:v0',
+            logGroup: '',
+            logType: 'ARTIFACT' as const,
+          },
+        ],
+        skipDuplicates: true,
+      });
+
+      console.log(
+        `   ✓ Created ${WM_CHARTS_PROJECT} with 1 run and ${WM_PANELS.length} recorded panels`,
+      );
+    }
+
+    if (nmFileRows.length > 0) {
+      await nmCh.insert({
+        table: 'mlop_files',
+        values: nmFileRows,
+        format: 'JSONEachRow',
+      });
+      console.log(`   ✓ Inserted ${nmFileRows.length} file rows into ClickHouse`);
+    }
+    if (nmDataRows.length > 0) {
+      await nmCh.insert({
+        table: 'mlop_data',
+        values: nmDataRows,
+        format: 'JSONEachRow',
+      });
+      console.log(`   ✓ Inserted ${nmDataRows.length} mlop_data rows into ClickHouse`);
+    }
+    if (nmMetricRows.length > 0) {
+      await nmCh.insert({
+        table: 'mlop_metrics',
+        values: nmMetricRows,
+        format: 'JSONEachRow',
+      });
+      console.log(`   ✓ Inserted ${nmMetricRows.length} metric datapoints into ClickHouse`);
+    }
+    if (nmUploads.length > 0) {
+      await Promise.all(nmUploads);
+      console.log(`   ✓ Uploaded ${nmUploads.length} fixture files to S3/MinIO`);
+    }
+    await nmCh.close();
+  }
 
   // 6. Create a run in org 2 for org-switching tests
   console.log('\n6️⃣  Creating test run in org 2...');
