@@ -15,7 +15,11 @@ export type WidgetType =
   // widgets. Legacy "histogram" widgets and legacy file-group widgets
   // with categoricalPrefixes / HISTOGRAM file entries are migrated into
   // distributions on read by migrateDashboardConfig.
-  | "distributions";
+  | "distributions"
+  // A string metric (`log("phase", "warmup")`) drawn as a staircase over
+  // steps. Its own type rather than a "chart" because its Y axis is a list of
+  // labels, not a number line — a chart widget would render it as a flat NaN.
+  | "string-series";
 
 export type AggregationType = "LAST" | "AVG" | "MIN" | "MAX" | "VARIANCE";
 
@@ -173,6 +177,16 @@ export interface DistributionsWidgetConfig extends BaseWidgetConfig {
   entries: DistributionsEntry[];
 }
 
+// ─── String-series widget ───────────────────────────────────────────
+//
+// One string metric per widget, keyed by log name — the same shape a chart
+// widget uses for a numeric metric. Values live in `mlop_data`; the name is
+// discovered from Postgres `run_logs` (logType DATA), since
+// `mlop_metric_summaries` only has rows for numeric values.
+export interface StringSeriesWidgetConfig extends BaseWidgetConfig {
+  metric: string;
+}
+
 // Logs widget config
 export interface LogsWidgetConfig extends BaseWidgetConfig {
   logName: string;
@@ -194,7 +208,8 @@ export type WidgetConfig =
   | FileGroupWidgetConfig
   | LogsWidgetConfig
   | FileSeriesWidgetConfig
-  | DistributionsWidgetConfig;
+  | DistributionsWidgetConfig
+  | StringSeriesWidgetConfig;
 
 // Widget position and size in the grid
 export interface WidgetLayout {

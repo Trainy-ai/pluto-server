@@ -18,6 +18,7 @@ import { graphMultiMetricBatchBucketedGroupedProcedure } from "./procs/graph-mul
 import { logsProcedure } from "./procs/logs";
 import { modelGraphProcedure } from "./procs/model-graph";
 import { tableProcedure } from "./procs/table";
+import { stringSeriesProcedure } from "./procs/string-series";
 import { metricValuesProcedure } from "./procs/metric-values";
 export const dataRouter = router({
   files: filesProcedure,
@@ -39,5 +40,6 @@ export const dataRouter = router({
   logs: logsProcedure,
   modelGraph: modelGraphProcedure,
   table: tableProcedure,
+  stringSeries: stringSeriesProcedure,
   metricValues: metricValuesProcedure,
 });

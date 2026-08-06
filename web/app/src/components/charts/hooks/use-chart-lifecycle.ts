@@ -31,6 +31,8 @@ function detachLeaveHandler(chart: uPlot | null): void {
 
 
 interface UseChartLifecycleParams {
+  /** Y axis is categorical (a string metric) — see `skipY` below. */
+  isCategoricalY?: boolean;
   chartContainerRef: React.RefObject<HTMLDivElement | null>;
   chartRef: React.MutableRefObject<uPlot | null>;
   chartInstanceRef: React.MutableRefObject<uPlot | null>;
@@ -69,6 +71,7 @@ interface UseChartLifecycleParams {
  * structure change.
  */
 export function useChartLifecycle({
+  isCategoricalY,
   chartContainerRef,
   chartRef,
   chartInstanceRef,
@@ -513,7 +516,10 @@ export function useChartLifecycle({
       // Second pass: compute Y range within the visible X range
       let visibleYMin = Infinity;
       let visibleYMax = -Infinity;
-      const skipY = chart.scales.y?.distr === 3; // log-scale Y uses uPlot's built-in range
+      // Log-scale Y uses uPlot's built-in range; a categorical Y is a fixed row
+      // per category and must not be re-ranged to whatever happens to be
+      // visible, or a category's row moves when a run stops visiting it.
+      const skipY = chart.scales.y?.distr === 3 || isCategoricalY;
       if (!skipY) {
         for (let i = visibleXMinIdx; i <= visibleXMaxIdx; i++) {
           for (let si = 1; si < chart.data.length; si++) {

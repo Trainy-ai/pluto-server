@@ -26,6 +26,9 @@ export const WidgetTypeSchema = z.enum([
   // bars lived inside chart widgets and histograms lived inside
   // file-group widgets (or as standalone "histogram" widgets).
   "distributions",
+  // A string metric (`log("phase", "warmup")`), drawn as a staircase over
+  // steps. Not a "chart": its Y axis is a list of labels, not a number line.
+  "string-series",
 ]);
 export type WidgetType = z.infer<typeof WidgetTypeSchema>;
 
@@ -221,6 +224,11 @@ export const DistributionsEntrySchema = z.discriminatedUnion("kind", [
 ]);
 export type DistributionsEntry = z.infer<typeof DistributionsEntrySchema>;
 
+// One string metric per widget, keyed by log name.
+export const StringSeriesWidgetConfigSchema = BaseWidgetConfigSchema.extend({
+  metric: z.string(),
+});
+
 export const DistributionsWidgetConfigSchema = BaseWidgetConfigSchema.extend({
   entries: z.array(DistributionsEntrySchema),
 });
@@ -248,6 +256,7 @@ export type FileSeriesWidgetConfig = z.infer<typeof FileSeriesWidgetConfigSchema
 
 // Clean union type without passthrough index signatures
 type WidgetConfigType =
+  | z.infer<typeof StringSeriesWidgetConfigSchema>
   | z.infer<typeof ChartWidgetConfigSchema>
   | z.infer<typeof ScatterWidgetConfigSchema>
   | z.infer<typeof SingleValueWidgetConfigSchema>
@@ -257,12 +266,27 @@ type WidgetConfigType =
   | z.infer<typeof FileSeriesWidgetConfigSchema>
   | z.infer<typeof DistributionsWidgetConfigSchema>;
 
-// Union of all widget configs
-// IMPORTANT: .passthrough() prevents z.union from stripping unknown keys when
-// an earlier schema matches (e.g. LogsWidgetConfig matches file-series data
-// because both have `logName`, which would strip `mediaType`). The superRefine
-// on WidgetSchema handles authoritative type-specific validation.
-// The type cast preserves clean TS types while keeping passthrough runtime behavior.
+// Union of all widget configs.
+//
+// This union is STRUCTURAL ONLY — it exists so a config can be validated
+// without knowing its widget type. It cannot identify the right branch, for
+// two reasons that no amount of reordering fixes:
+//
+//   * A config carries no discriminator. `type` lives on the parent Widget, so
+//     this cannot be a z.discriminatedUnion.
+//   * Several branches share a required-key signature: {single-value,
+//     histogram, string-series} are all `{ metric }`, and {logs, file-series}
+//     are both `{ logName }`. z.union takes the FIRST branch that parses.
+//
+// `.passthrough()` stops a wrong-branch match from STRIPPING keys (the historic
+// "mediaType Required" bug: LogsWidgetConfig matched file-series data). It does
+// not stop a wrong branch from INJECTING them: a branch's `.default()` values
+// land in the output, which is how every saved string-series widget acquired a
+// meaningless `aggregation: "LAST"` from SingleValueWidgetConfigSchema.
+//
+// Therefore WidgetSchema below does NOT trust this union's output — it re-parses
+// the config through the schema for the widget's declared type and uses that as
+// the value. Order here is consequently irrelevant to correctness.
 export const WidgetConfigSchema = z.union([
   ChartWidgetConfigSchema.passthrough(),
   ScatterWidgetConfigSchema.passthrough(),
@@ -272,6 +296,7 @@ export const WidgetConfigSchema = z.union([
   LogsWidgetConfigSchema.passthrough(),
   FileSeriesWidgetConfigSchema.passthrough(),
   DistributionsWidgetConfigSchema.passthrough(),
+  StringSeriesWidgetConfigSchema.passthrough(),
 ]) as unknown as z.ZodType<WidgetConfigType, z.ZodTypeDef, WidgetConfigType>;
 export type WidgetConfig = WidgetConfigType;
 
@@ -288,42 +313,59 @@ export const WidgetLayoutSchema = z.object({
 });
 export type WidgetLayout = z.infer<typeof WidgetLayoutSchema>;
 
+/**
+ * The authoritative config schema for a widget type.
+ *
+ * The one place that mapping lives, so validation and value-resolution below
+ * cannot disagree about which schema owns a type.
+ */
+// `AnyZodObject`, not `ZodTypeAny`: every config schema is a ZodObject, and the
+// transform below needs `.passthrough()` on it.
+const configSchemaForType = (type: WidgetType): z.AnyZodObject | null => {
+  switch (type) {
+    case "chart":
+      return ChartWidgetConfigSchema;
+    case "scatter":
+      return ScatterWidgetConfigSchema;
+    case "single-value":
+      return SingleValueWidgetConfigSchema;
+    case "histogram":
+      return HistogramWidgetConfigSchema;
+    case "file-group":
+      return FileGroupWidgetConfigSchema;
+    case "logs":
+      return LogsWidgetConfigSchema;
+    case "file-series":
+      return FileSeriesWidgetConfigSchema;
+    case "distributions":
+      return DistributionsWidgetConfigSchema;
+    case "string-series":
+      return StringSeriesWidgetConfigSchema;
+    default:
+      return null;
+  }
+};
+
 // Complete widget definition
 export const WidgetSchema = z.object({
   id: z.string(),
   type: WidgetTypeSchema,
-  config: WidgetConfigSchema,
+  // Raw on purpose — NOT `WidgetConfigSchema`.
+  //
+  // Running the structural union here would bake its first-matching branch's
+  // defaults into the value before anything knows the widget's declared type,
+  // and `.passthrough()` means the transform below could never strip them back
+  // out again. So the config is carried through untouched, validated per-type
+  // by the superRefine, and resolved per-type by the transform.
+  config: z.record(z.unknown()) as unknown as z.ZodType<
+    WidgetConfigType,
+    z.ZodTypeDef,
+    WidgetConfigType
+  >,
   layout: WidgetLayoutSchema,
 }).superRefine((widget, ctx) => {
-  let schema: z.ZodTypeAny;
-  switch (widget.type) {
-    case "chart":
-      schema = ChartWidgetConfigSchema;
-      break;
-    case "scatter":
-      schema = ScatterWidgetConfigSchema;
-      break;
-    case "single-value":
-      schema = SingleValueWidgetConfigSchema;
-      break;
-    case "histogram":
-      schema = HistogramWidgetConfigSchema;
-      break;
-    case "file-group":
-      schema = FileGroupWidgetConfigSchema;
-      break;
-    case "logs":
-      schema = LogsWidgetConfigSchema;
-      break;
-    case "file-series":
-      schema = FileSeriesWidgetConfigSchema;
-      break;
-    case "distributions":
-      schema = DistributionsWidgetConfigSchema;
-      break;
-    default:
-      return;
-  }
+  const schema = configSchemaForType(widget.type);
+  if (!schema) return;
   const result = schema.safeParse(widget.config);
   if (!result.success) {
     result.error.issues.forEach((issue) => {
@@ -333,6 +375,28 @@ export const WidgetSchema = z.object({
       });
     });
   }
+}).transform((widget) => {
+  // Re-parse the config through the schema for the DECLARED type and keep that
+  // result as the value.
+  //
+  // Without this, the value is whatever branch of the structural
+  // `WidgetConfigSchema` union happened to match first — which for a
+  // string-series `{ metric }` was SingleValueWidgetConfigSchema, stamping a
+  // meaningless `aggregation: "LAST"` into the config on its way to
+  // `dashboard_views.config`. The superRefine above already knows which schema
+  // is authoritative; this makes that knowledge apply to the output too, not
+  // just to whether it validates.
+  //
+  // `.passthrough()` on the per-type schemas is what keeps this non-destructive
+  // for forward-compat keys the server does not model yet.
+  const schema = configSchemaForType(widget.type);
+  if (!schema) return widget;
+  const result = schema.passthrough().safeParse(widget.config);
+  // A failure here has already been reported by the superRefine, so the parse
+  // never reaches this transform in practice; returning the input unchanged is
+  // the safe degradation if it ever does.
+  if (!result.success) return widget;
+  return { ...widget, config: result.data as WidgetConfig };
 });
 export type Widget = z.infer<typeof WidgetSchema>;
 
@@ -483,6 +547,10 @@ export const createDefaultWidgetConfig = (type: WidgetType): WidgetConfig => {
     case "distributions":
       return {
         entries: [],
+      };
+    case "string-series":
+      return {
+        metric: "",
       };
   }
 };

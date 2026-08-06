@@ -14,6 +14,7 @@ import { LineChartIcon, BarChart3Icon, LayersIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ChartConfigForm } from "./chart-config-form";
 import { FilesConfigForm } from "./files-config-form";
+import { useDistinctFileLogNames } from "../../~queries/file-log-names";
 import { DistributionsConfigForm } from "./distributions-config-form";
 import type {
   WidgetType,
@@ -67,11 +68,57 @@ export function AddWidgetModal({
       const hc = editWidget.config as { metric?: string };
       return { files: hc.metric ? [hc.metric] : [] } as FileGroupWidgetConfig;
     }
+    // A string-series widget stores one `metric`; the Metrics tab's form works
+    // in `metrics[]`. Convert on the way in, and handleAdd converts back.
+    if (editWidget.type === "string-series") {
+      const sc = editWidget.config as { metric?: string };
+      return { metrics: sc.metric ? [sc.metric] : [] } as ChartWidgetConfig;
+    }
     return editWidget.config;
   });
   const [title, setTitle] = useState(editWidget?.config.title ?? "");
 
   const isEditing = !!editWidget;
+
+  const { data: fileLogNames, isPending: isStringMetricsPending } =
+    useDistinctFileLogNames(organizationId, projectName);
+  const stringMetricNames = useMemo(
+    () => (fileLogNames?.files ?? []).filter((f) => f.logType === "DATA").map((f) => f.logName),
+    [fileLogNames],
+  );
+  // Until this query settles, `stringMetricNames` is empty and every metric
+  // looks numeric — adding then would silently produce a chart widget holding
+  // a string metric ("No data received yet"). Settled, not successful: on
+  // error we let the user through rather than disabling the button forever.
+  const stringMetricsSettled = !isStringMetricsPending;
+
+  // Which of the currently-picked metrics are string metrics. Used both to
+  // decide the widget type on save and to block selections that cannot be
+  // expressed as a single widget while editing.
+  const pickedMetrics = useMemo(
+    () => (config as ChartWidgetConfig).metrics ?? [],
+    [config],
+  );
+  const pickedStringMetrics = useMemo(
+    () => pickedMetrics.filter((m) => stringMetricNames.includes(m)),
+    [pickedMetrics, stringMetricNames],
+  );
+
+  /**
+   * Adding fans a mixed pick out into one widget per string metric plus one
+   * chart for the numerics. Editing cannot: it replaces exactly one widget, so
+   * there is nowhere for the extras to go. Rather than silently dropping them
+   * — or worse, writing string metrics into a chart widget that renders "No
+   * data received yet" — the save is blocked and the reason is shown.
+   */
+  const editSelectionUnrepresentable =
+    isEditing &&
+    // "metrics" is the tab that resolves to the `chart` widget type; compared
+    // here rather than via resolvedWidgetType, which is declared below.
+    unifiedTab === "metrics" &&
+    (pickedStringMetrics.length > 1 ||
+      (pickedStringMetrics.length > 0 &&
+        pickedStringMetrics.length !== pickedMetrics.length));
 
   useEffect(() => {
     if (editWidget) {
@@ -79,6 +126,9 @@ export function AddWidgetModal({
       if (editWidget.type === "histogram") {
         const hc = editWidget.config as { metric?: string };
         setConfig({ files: hc.metric ? [hc.metric] : [] } as FileGroupWidgetConfig);
+      } else if (editWidget.type === "string-series") {
+        const sc = editWidget.config as { metric?: string };
+        setConfig({ metrics: sc.metric ? [sc.metric] : [] } as ChartWidgetConfig);
       } else {
         setConfig({ ...editWidget.config });
       }
@@ -119,9 +169,77 @@ export function AddWidgetModal({
 
   const handleAdd = () => {
     if (!resolvedWidgetType) return;
-    const finalConfig = { ...config, title: title || undefined };
+    // Defensive: canAdd already blocks both of these. Guarding here too means
+    // a future caller (or an Enter keypress wired past the button) still can't
+    // write string metrics into a chart widget.
+    if (editSelectionUnrepresentable) return;
+    if (resolvedWidgetType === "chart" && !stringMetricsSettled) return;
+
+    let finalType = resolvedWidgetType;
+    let finalConfig: Partial<WidgetConfig> = { ...config, title: title || undefined };
+
+    // The Metrics tab lists string metrics alongside numeric ones, because
+    // that is what they are. They need a different widget though: a chart
+    // widget would plot a list of labels as a number line. Detected by name
+    // rather than by a separate tab, so the user never has to know which kind
+    // a metric is before looking for it.
+    if (resolvedWidgetType === "chart") {
+      const strings = pickedStringMetrics;
+      const numbers = pickedMetrics.filter((m) => !stringMetricNames.includes(m));
+
+      // Several numeric metrics share one chart because they share a y axis.
+      // String metrics can't: each has its own list of labels, so two of them
+      // in one widget would need two unrelated y axes. Pick 4 and you get 4
+      // widgets — the alternative was one chart widget that silently rendered
+      // "No data received yet", since a string metric has no rows in
+      // `mlop_metrics` for a chart widget to read.
+      //
+      // Add-only: an edit replaces exactly one widget, so it has nowhere to
+      // put the extras. `editSelectionUnrepresentable` stops such a selection
+      // from reaching here, which leaves editing with at most one string
+      // metric and nothing else — handled by the single-metric branch below.
+      if (strings.length > 0 && !isEditing) {
+        for (const metric of strings) {
+          onAdd({
+            type: "string-series",
+            config: { metric, title: strings.length === 1 ? title || undefined : undefined } as WidgetConfig,
+            layout: { x: 0, y: 9999, w: 6, h: 4 },
+          });
+        }
+        if (numbers.length > 0) {
+          onAdd({
+            type: "chart",
+            config: { ...(config as ChartWidgetConfig), metrics: numbers, title: title || undefined } as WidgetConfig,
+            layout: { x: 0, y: 9999, w: 6, h: 4 },
+          });
+        }
+        setUnifiedTab(null);
+        setConfig({});
+        setTitle("");
+        onOpenChange(false);
+        return;
+      }
+
+      if (pickedMetrics.length === 1 && strings.length === 1) {
+        finalType = "string-series";
+        finalConfig = { metric: pickedMetrics[0], title: title || undefined };
+      } else if (
+        // Editing a string-series widget while discovery failed/returned
+        // empty: `pickedStringMetrics` is empty so the branch above misses,
+        // and falling through would rewrite the widget as `chart` (numeric
+        // path — "No data received yet"). Keep the known type instead.
+        isEditing &&
+        editWidget?.type === "string-series" &&
+        pickedMetrics.length === 1 &&
+        stringMetricNames.length === 0
+      ) {
+        finalType = "string-series";
+        finalConfig = { metric: pickedMetrics[0], title: title || undefined };
+      }
+    }
+
     onAdd({
-      type: resolvedWidgetType,
+      type: finalType,
       config: finalConfig as WidgetConfig,
       layout: editWidget?.layout ?? { x: 0, y: 9999, w: 6, h: 4 },
     });
@@ -142,8 +260,11 @@ export function AddWidgetModal({
     if (!resolvedWidgetType) return false;
     switch (resolvedWidgetType) {
       case "chart": {
-        const chartConfig = config as ChartWidgetConfig;
-        return !!chartConfig.metrics && chartConfig.metrics.length > 0;
+        if (pickedMetrics.length === 0) return false;
+        // Which widget type this becomes depends on knowing which of the
+        // picked metrics are string metrics, so don't let it be saved before
+        // that is known, or on a selection an edit can't represent.
+        return stringMetricsSettled && !editSelectionUnrepresentable;
       }
       case "distributions": {
         const distConfig = config as Partial<DistributionsWidgetConfig>;
@@ -156,7 +277,13 @@ export function AddWidgetModal({
       default:
         return false;
     }
-  }, [resolvedWidgetType, config]);
+  }, [
+    resolvedWidgetType,
+    config,
+    pickedMetrics,
+    stringMetricsSettled,
+    editSelectionUnrepresentable,
+  ]);
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
@@ -263,7 +390,18 @@ export function AddWidgetModal({
           )}
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="sm:items-center">
+          {/* A disabled Save with no reason reads as a broken dialog. */}
+          {editSelectionUnrepresentable && (
+            <p
+              className="mr-auto max-w-sm text-left text-xs text-muted-foreground"
+              data-testid="add-widget-string-metric-hint"
+            >
+              A string metric needs its own widget, so one widget can hold either
+              a single string metric or any number of numeric ones. Narrow the
+              selection, or cancel and add them separately.
+            </p>
+          )}
           <Button variant="outline" onClick={handleClose}>
             Cancel
           </Button>

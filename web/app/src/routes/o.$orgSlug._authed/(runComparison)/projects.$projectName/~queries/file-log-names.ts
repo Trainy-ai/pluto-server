@@ -7,6 +7,64 @@ export interface EligiblePrefixEntry {
   suffixCount: number;
 }
 
+/** The shape `runs.distinctFileLogNames` returns per entry. */
+interface FileLogNameEntry {
+  logName: string;
+  logType: string;
+}
+
+/**
+ * Log types that `runs.distinctFileLogNames` returns which are NOT files.
+ *
+ * `DATA` is a string metric (`log("phase", "warmup")`). It rides the file
+ * discovery proc only because its names are not in `mlop_metric_summaries`
+ * (which has rows for numeric values only), so `distinctMetricNames` can never
+ * see it — not because it is a file. `HISTOGRAM` moved to the Distributions
+ * tab.
+ *
+ * Callers must therefore split this proc's output rather than treat it as "the
+ * files". Six call sites were each re-deriving that split inline, which meant
+ * six places had to agree on which types belong where.
+ */
+const NON_FILE_LOG_TYPES = new Set(["DATA", "HISTOGRAM"]);
+
+/**
+ * True for a string metric — `log("phase", "warmup")`, registered as `DATA`.
+ *
+ * The one place that spelling lives, so a dispatch on it cannot drift from the
+ * tab-routing predicates below.
+ */
+export function isStringMetricLogType(logType: string | undefined): boolean {
+  return logType === "DATA";
+}
+
+/** Names of the string metrics (`logType: "DATA"`) in a proc response. */
+export function pickStringMetricNames(
+  files: readonly FileLogNameEntry[] | undefined,
+): string[] {
+  return (files ?? [])
+    .filter((f) => isStringMetricLogType(f.logType))
+    .map((f) => f.logName);
+}
+
+/**
+ * Names of the entries that genuinely belong on a Files tab.
+ *
+ * Drops string metrics (they belong on Metrics) and histograms (Distributions).
+ */
+export function pickFileLogNames(
+  files: readonly FileLogNameEntry[] | undefined,
+): string[] {
+  return (files ?? [])
+    .filter((f) => !NON_FILE_LOG_TYPES.has(f.logType))
+    .map((f) => f.logName);
+}
+
+/** True for a log type this proc returns that is not a file. */
+export function isNonFileLogType(logType: string | undefined): boolean {
+  return NON_FILE_LOG_TYPES.has(logType ?? "");
+}
+
 /**
  * Eligible {bars} prefixes for the Add-Widget Files dropdown.
  *

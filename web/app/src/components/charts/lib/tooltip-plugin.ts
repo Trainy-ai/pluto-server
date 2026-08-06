@@ -517,6 +517,9 @@ export function formatValueContent(
   valueSpan: HTMLSpanElement,
   data: TooltipRowData,
   textColor: string,
+  /** Overrides numeric formatting — used to print a category name for a
+   *  string metric, whose y value is an index into the label list. */
+  formatValue: (v: number | null) => string = formatAxisLabel,
 ) {
   if (data.flagText) {
     valueSpan.style.color = "#e8a838";
@@ -529,7 +532,9 @@ export function formatValueContent(
     valueSpan.style.fontWeight = "500";
     valueSpan.style.fontStyle = data.isInterpolated ? "italic" : "";
     valueSpan.style.opacity = data.isInterpolated ? "0.6" : "";
-    valueSpan.textContent = data.isInterpolated ? `~${formatAxisLabel(data.value)}` : formatAxisLabel(data.value);
+    valueSpan.textContent = data.isInterpolated
+      ? `~${formatValue(data.value)}`
+      : formatValue(data.value);
   }
   // Append non-finite marker icons if this bucket contains NaN/Inf
   if (data.nonFiniteFlags && data.nonFiniteFlags.size > 0) {
@@ -615,6 +620,8 @@ function createTooltipRow(
   textColor: string,
   columns: TooltipColumnConfig[],
   theme: string = "dark",
+  /** See formatValueContent — resolves a categorical index to its label. */
+  formatValue: (v: number | null) => string = formatAxisLabel,
 ): HTMLDivElement {
   const enabledColumns = columns.filter((c) => c.enabled);
   const row = document.createElement("div");
@@ -655,7 +662,7 @@ function createTooltipRow(
       case "value": {
         const valueSpan = document.createElement("span");
         valueSpan.style.cssText = `min-width: 0; overflow: hidden; text-overflow: ellipsis${divider}`;
-        formatValueContent(valueSpan, data, textColor);
+        formatValueContent(valueSpan, data, textColor, formatValue);
         row.appendChild(valueSpan);
         break;
       }
@@ -735,6 +742,8 @@ export interface HoverState {
 }
 
 export interface TooltipPluginOpts {
+  /** Y tick labels by index when the chart is categorical (a string metric). */
+  yCategories?: string[];
   theme: string;
   isDateTime: boolean;
   timeRange: number;
@@ -777,6 +786,12 @@ export interface TooltipPluginOpts {
 }
 
 export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
+  const { yCategories } = opts;
+  // A categorical chart's y values are indices; printing the number would be
+  // meaningless, so the tooltip resolves them back to the label.
+  const fmtValue = yCategories
+    ? (v: number | null) => (v == null ? "--" : yCategories[v] ?? "--")
+    : formatAxisLabel;
   const { theme, isDateTime, lines, hoverStateRef, onHoverChange, isActiveChart, highlightedSeriesRef, highlightedRunIdRef, highlightedSeriesIdRef, tooltipInterpolation = "none", spanGaps = true, xlabel, title, subtitle, onSeriesHover, sharedTooltipEl, sharedContentContainer, chartId: pluginChartId, activeTooltipChartRef, reparentTooltip } = opts;
   const isSharedMode = !!sharedTooltipEl;
 
@@ -2105,7 +2120,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
         metricName: s.metricName,
         nonFiniteFlags: s.nonFiniteFlags,
         rowHidden: s.seriesHidden,
-      }, textColor, columns, theme);
+      }, textColor, columns, theme, fmtValue);
 
       // Grey out hidden series
       if (s.seriesHidden) {
@@ -2394,7 +2409,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
           formatValueContent(cached.valueSpan, {
             name: labelText, value: 0, color: theme === "dark" ? "#555" : "#bbb",
             isHighlighted: false, isInterpolated: false, flagText: "hidden",
-          }, textColor);
+          }, textColor, fmtValue);
           if (cached.rawValueSpan) {
             cached.rawValueSpan.textContent = "";
             formatRawValueContent(cached.rawValueSpan, {
@@ -2450,7 +2465,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
             minValue: minVal, maxValue: maxVal,
           };
           cached.valueSpan.textContent = "";
-          formatValueContent(cached.valueSpan, flagRow, textColor);
+          formatValueContent(cached.valueSpan, flagRow, textColor, fmtValue);
           if (cached.rawValueSpan) {
             cached.rawValueSpan.textContent = "";
             formatRawValueContent(cached.rawValueSpan, flagRow, textColor);
@@ -2498,7 +2513,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
               minValue: minVal, maxValue: maxVal,
             };
             cached.valueSpan.textContent = "";
-            formatValueContent(cached.valueSpan, bucketRow, textColor);
+            formatValueContent(cached.valueSpan, bucketRow, textColor, fmtValue);
             if (cached.rawValueSpan) {
               cached.rawValueSpan.textContent = "";
               formatRawValueContent(cached.rawValueSpan, bucketRow, textColor);
@@ -2571,7 +2586,7 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
             nonFiniteFlags: bucketFlags,
           };
           cached.valueSpan.textContent = "";
-          formatValueContent(cached.valueSpan, rowData, textColor);
+          formatValueContent(cached.valueSpan, rowData, textColor, fmtValue);
           if (cached.rawValueSpan) {
             cached.rawValueSpan.textContent = "";
             formatRawValueContent(cached.rawValueSpan, rowData, textColor);

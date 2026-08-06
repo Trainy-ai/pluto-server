@@ -36,9 +36,29 @@ export function buildSeriesConfig(
   xlabel: string | undefined,
   chartLineWidth: number,
   refs: SeriesConfigRefs,
-  options?: { spanGaps?: boolean; theme?: "light" | "dark"; xLegendValue?: (u: uPlot, val: number | null) => string },
+  options?: {
+    spanGaps?: boolean;
+    theme?: "light" | "dark";
+    xLegendValue?: (u: uPlot, val: number | null) => string;
+    /**
+     * Draw as a staircase instead of connecting points diagonally.
+     *
+     * For a categorical series the value holds until it changes, so a diagonal
+     * would imply the run was gradually somewhere between "train" and "eval".
+     * The step also puts the corner exactly on the transition step, which is
+     * what makes it readable off the x-axis.
+     *
+     * Built by the caller rather than here: constructing it needs uPlot's
+     * runtime, whose module-level `matchMedia()` probe has no DOM under vitest.
+     */
+    steppedPaths?: uPlot.Series.PathBuilder;
+    /** Tick labels by y index, so the legend/tooltip reads "eval" not "2". */
+    yCategories?: string[];
+  },
 ): uPlot.Series[] {
   const spanGaps = options?.spanGaps ?? true;
+  const yCategories = options?.yCategories;
+  const steppedPaths = options?.steppedPaths;
   const isDark = options?.theme === "dark";
 
   // For each visible main series, locate its smoothing-companion data
@@ -204,6 +224,7 @@ export function buildSeriesConfig(
           return { dash: compensated, cap: "round" as const };
         })(),
         spanGaps,
+        ...(steppedPaths ? { paths: steppedPaths } : {}),
         points: {
           // Show points for single-point series since lines need 2+ points to be visible
           show: isSinglePoint,
@@ -219,6 +240,9 @@ export function buildSeriesConfig(
         // Min/Max never appear here — they're tooltip-only.
         value: (u: uPlot, val: number | null, _si: number, idx: number | null) => {
           if (val == null || idx == null) return "--";
+          // A categorical series' y value is an index into the label list —
+          // showing the raw number in the legend/tooltip would be meaningless.
+          if (yCategories) return yCategories[val] ?? "--";
           const valStr = formatAxisLabel(val);
           const rawIdx = companionRawIdx.get(i);
           if (rawIdx !== undefined) {

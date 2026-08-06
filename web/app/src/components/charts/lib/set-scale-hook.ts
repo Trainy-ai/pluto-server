@@ -3,6 +3,14 @@ import { toast } from "sonner";
 import type { LineData } from "./types";
 
 interface SetScaleHookParams {
+  /**
+   * Set when the Y axis is categorical (a string metric). Suppresses the
+   * auto-Y-range pass below: that range is fixed at one row per category, and
+   * re-ranging to whatever is visible would slide a category's row whenever a
+   * run stopped visiting it — which destroys the run-to-run comparison the
+   * chart exists for.
+   */
+  isCategoricalY?: boolean;
   logYAxis: boolean;
   logXAxis: boolean;
   isProgrammaticScaleRef: React.RefObject<boolean>;
@@ -31,6 +39,7 @@ interface SetScaleHookParams {
  * - Zoom range change callback for server re-fetch
  */
 export function buildSetScaleHook({
+  isCategoricalY,
   logYAxis,
   logXAxis,
   isProgrammaticScaleRef,
@@ -113,7 +122,7 @@ export function buildSetScaleHook({
             isProgrammaticScaleRef.current = false;
           }
         });
-      } else if (!userHasZoomedYRef.current && !logYAxis) {
+      } else if (!userHasZoomedYRef.current && !logYAxis && !isCategoricalY) {
         // Defer Y-range scan + no-data check to rAF so mouseup stays fast
         requestAnimationFrame(() => {
           // Combined single-pass scan: find visible Y range AND check for any data

@@ -84,6 +84,9 @@ interface ChartCardWrapperProps {
    *  parent (MultiGroup → ChartCardWrapper) needs to know so it can
    *  swap GroupedLineChart out for MultiLineChart on this widget. */
   onGroupingOverrideChange?: (overridden: boolean) => void;
+  /** The chart's Y axis is categorical (a string metric), so Y-specific
+   *  controls are hidden rather than shown doing nothing. */
+  categoricalY?: boolean;
 }
 
 export function ChartCardWrapper({
@@ -93,6 +96,7 @@ export function ChartCardWrapper({
   boundsResetKey = 0,
   globalLogXAxis = false,
   globalLogYAxis = false,
+  categoricalY = false,
   workspaceGroupingActive,
   onGroupingOverrideChange,
 }: ChartCardWrapperProps) {
@@ -187,6 +191,7 @@ export function ChartCardWrapper({
           <ChartScalePopover
             logXAxis={effectiveLogXAxis}
             logYAxis={effectiveLogYAxis}
+            hideLogYAxis={categoricalY}
             onLogScaleChange={handleLogScaleChange}
             workspaceGroupingActive={workspaceGroupingActive}
             groupingOverridden={groupingOverridden}

@@ -9,7 +9,9 @@ import type {
   ChartWidgetConfig,
   FileGroupWidgetConfig,
   DistributionsWidgetConfig,
+  StringSeriesWidgetConfig,
 } from "../../~types/dashboard-types";
+import { isStringMetricLogType } from "../../~queries/file-log-names";
 import { SYNTHETIC_CONSOLE_ENTRIES } from "./console-log-constants";
 import { useLineSettings } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/use-line-settings";
 import { bucketMetricsByPrefix, splitMetricPath } from "./bucket-metrics";
@@ -355,6 +357,20 @@ export function useDynamicSectionWidgets(
     }
 
     for (const file of filteredFiles) {
+      // String metrics ride the same Postgres discovery proc as images/video/
+      // audio (their names aren't in `mlop_metric_summaries`, which only has
+      // rows for numeric values), but they are metrics, not files — a
+      // file-group widget would try to render `phase` as a media entry.
+      if (isStringMetricLogType(file.logType)) {
+        const stringConfig: StringSeriesWidgetConfig = { metric: file.logName };
+        widgets.push({
+          id: `dyn-${sectionId}-string-${file.logName}`,
+          type: "string-series",
+          config: stringConfig,
+          layout: { x: 0, y: 0, w: 6, h: 4 },
+        });
+        continue;
+      }
       const config: FileGroupWidgetConfig = {
         files: [file.logName],
       };

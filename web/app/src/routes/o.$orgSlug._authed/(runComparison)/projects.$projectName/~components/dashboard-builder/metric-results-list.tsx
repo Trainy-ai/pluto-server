@@ -10,6 +10,7 @@ import {
   CheckIcon,
   TerminalIcon,
   TriangleAlertIcon,
+  InfoIcon,
   CircleAlertIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -29,6 +30,7 @@ export function MetricResultsList({
   onSelectAll,
   runMetricSet,
   nonFiniteOnlySet,
+  stringMetricSet,
   footer,
   itemLabel = "metric",
   typeMap,
@@ -45,6 +47,9 @@ export function MetricResultsList({
   /** Set of metrics whose values are entirely NaN/Inf in the selected runs.
    *  Only populated when the "Include NaN/Inf-only metrics" toggle is ON. */
   nonFiniteOnlySet?: Set<string> | null;
+  /** Metrics whose values are words, not numbers. Marked in the list because
+   *  they behave differently on selection — see the info tooltip. */
+  stringMetricSet?: Set<string> | null;
   footer?: React.ReactNode;
   itemLabel?: string;
   typeMap?: Map<string, string>;
@@ -141,6 +146,19 @@ export function MetricResultsList({
                     </TooltipTrigger>
                     <TooltipContent side="top" className="text-xs">
                       All values are NaN or Infinity in the selected run(s)
+                    </TooltipContent>
+                  </Tooltip>
+                ) : stringMetricSet?.has(metric) ? (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="ml-auto flex shrink-0 items-center">
+                        <InfoIcon className="size-3.5 text-sky-500" />
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-64 text-xs">
+                      String metric — values are words, not numbers, so it draws
+                      as a step chart. It can&apos;t share a y-axis with other
+                      metrics, so selecting several adds one widget each.
                     </TooltipContent>
                   </Tooltip>
                 ) : null}

@@ -75,6 +75,17 @@ export interface LineChartProps extends React.HTMLAttributes<HTMLDivElement> {
    *  using a fixed rightMargin can't predict that, so passing a matched
    *  value here pins both right edges to canvasWidth − N. */
   extraRightPadding?: number;
+  /**
+   * Turns the chart categorical: Y tick labels by index, for a string metric
+   * (`phase: warmup → train → done`) plotted as a staircase over steps.
+   *
+   * When set, the Y axis shows one tick per category instead of a number line,
+   * and the legend/tooltip report the category rather than its index. Omitted
+   * by every numeric chart, which keeps its existing behaviour exactly.
+   */
+  yCategories?: string[];
+  /** Draw lines as a staircase. Implied use is with `yCategories`. */
+  stepped?: boolean;
   /** Stable identity for this chart's CHART-LOCAL hidden series (tooltip /
    *  legend-row toggles). Defaults to sync key + title, which the inline and
    *  fullscreen renders of the same chart share. Pass an explicit id (e.g. a

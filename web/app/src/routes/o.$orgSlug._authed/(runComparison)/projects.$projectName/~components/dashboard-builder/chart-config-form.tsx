@@ -1,4 +1,9 @@
 import { useState, useMemo, useEffect } from "react";
+import {
+  useDistinctFileLogNames,
+  useRunFileLogNames,
+  pickStringMetricNames,
+} from "../../~queries/file-log-names";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -277,10 +282,22 @@ function SearchMetricPanel({
   // Combined "still in initial fan-out" flag: the dropdown stays in
   // skeleton mode until ALL of the slow sources have settled.
   const isInitialDataLoading = isLoadingInitial || isLoadingRun;
+  // Run-scoped string metrics, so they aren't flagged "Not present in selected
+  // run(s)". `runMetrics` comes from `mlop_metric_summaries`, which only has
+  // rows for numeric values — every string metric is missing from it and was
+  // therefore warned about even when the selected runs clearly logged it.
+  const { data: runStringLogs } = useRunFileLogNames(
+    organizationId,
+    projectName,
+    selectedRunIds ?? [],
+  );
   const runMetricSet = useMemo(() => {
     if (!runMetrics?.metricNames) return null;
-    return new Set(runMetrics.metricNames);
-  }, [runMetrics]);
+    return new Set([
+      ...runMetrics.metricNames,
+      ...pickStringMetricNames(runStringLogs?.files),
+    ]);
+  }, [runMetrics, runStringLogs]);
   const nonFiniteOnlySet = useMemo(() => {
     if (!runMetrics?.nonFiniteOnlyMetrics) return null;
     return new Set(runMetrics.nonFiniteOnlyMetrics);
@@ -288,14 +305,29 @@ function SearchMetricPanel({
   const { data: searchResults, isFetching: isSearching } =
     useSearchMetricNames(organizationId, projectName, debouncedSearch);
 
+  const { data: fileLogNames } = useDistinctFileLogNames(organizationId, projectName);
+  const stringMetricNames = useMemo(
+    () => pickStringMetricNames(fileLogNames?.files),
+    [fileLogNames],
+  );
+  const stringMetricSetForList = useMemo(
+    () => new Set(stringMetricNames),
+    [stringMetricNames],
+  );
+
   const { filteredMetrics, filteredMetricsTruncated } = useMemo(() => {
     const initial = initialMetrics?.metricNames ?? [];
     const searched = searchResults?.metricNames ?? [];
+    // String metrics belong on this tab — they're metrics whose values are
+    // words. They arrive from the Postgres proc rather than the summaries
+    // table, since `mlop_metric_summaries` only has rows for numeric values.
     // Also merge run-scoped metrics so that when the NaN/Inf toggle is ON,
     // all-NaN/Inf metrics (absent from the project-wide summaries queries)
     // still appear in the dropdown list.
     const runScoped = runMetrics?.metricNames ?? [];
-    const merged = Array.from(new Set([...searched, ...initial, ...runScoped]));
+    const merged = Array.from(
+      new Set([...searched, ...initial, ...runScoped, ...stringMetricNames]),
+    );
     const trimmed = search.trim();
     let result: string[];
     if (!trimmed) {
@@ -318,7 +350,7 @@ function SearchMetricPanel({
       filteredMetrics: wasTruncated ? result.slice(0, DROPDOWN_MAX_RESULTS) : result,
       filteredMetricsTruncated: wasTruncated,
     };
-  }, [initialMetrics, searchResults, runMetrics, search, isGlob]);
+  }, [initialMetrics, searchResults, runMetrics, stringMetricNames, search, isGlob]);
 
   const isLoading = isLoadingInitial || isSearching;
 
@@ -347,6 +379,7 @@ function SearchMetricPanel({
         onSelectAll={() => onSelectAll(filteredMetrics)}
         runMetricSet={runMetricSet}
         nonFiniteOnlySet={nonFiniteOnlySet}
+        stringMetricSet={stringMetricSetForList}
         footer={
           isGlob && search.trim() ? (
             <div className="flex items-center gap-2 border-t px-3 py-2">

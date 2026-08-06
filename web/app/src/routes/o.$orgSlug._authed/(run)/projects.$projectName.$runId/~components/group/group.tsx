@@ -8,6 +8,7 @@ import { HistogramView } from "./histogram-view";
 import { VideoView } from "./video";
 import { TableView } from "./table";
 import { TextView } from "./text-view";
+import { StringSeriesView } from "./string-series-view";
 import { RendererErrorBoundary } from "@/components/shared/renderer-error-boundary";
 import { getLogGroupLabel } from "@/lib/grouping/consts";
 import {
@@ -202,6 +203,20 @@ const LogView = memo(
           tenantId={tenantId}
           projectName={projectName}
           runId={runId}
+        />
+      );
+    }
+
+    if (log.logType === "DATA") {
+      return (
+        <StringSeriesView
+          log={log}
+          tenantId={tenantId}
+          projectName={projectName}
+          runId={runId}
+          runName={runName}
+          runCreatedAt={runCreatedAt}
+          boundsResetKey={boundsResetKey}
         />
       );
     }

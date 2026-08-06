@@ -80,6 +80,10 @@ export function getWidgetTitle(widget: Widget): string {
     }
     case "file-series":
       return "File Series";
+    case "string-series": {
+      const config = widget.config as { metric?: string };
+      return config.metric || "String Metric";
+    }
     default:
       return "Widget";
   }

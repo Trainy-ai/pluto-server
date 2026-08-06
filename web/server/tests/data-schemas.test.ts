@@ -9,6 +9,9 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import {
   histogramDataRow,
@@ -267,6 +270,114 @@ describe('Table Data Row Schema', () => {
 
     expect(() => tableDataRow.parse(row)).toThrow();
   });
+
+  // Regression: migrated wandb tables carry column types and cell values that
+  // pluto's own tables never produce. The schema enumerated dtype as
+  // int|float|str and cells as number|string, so a single bool column failed
+  // with invalid_union at ["col", N, "dtype"], the row threw, the whole query
+  // threw, and the UI reported "No table data available" for a table whose
+  // data was completely intact.
+  describe('migrated wandb tables (regression)', () => {
+    function tableRow(tableData: unknown) {
+      return {
+        logName: 'eval/confmat_table',
+        time: '2026-01-15 10:30:00',
+        step: 1,
+        tableData: JSON.stringify(tableData),
+      };
+    }
+
+    it('accepts a bool dtype and boolean cells', () => {
+      const result = tableDataRow.parse(
+        tableRow({
+          col: [
+            { name: 'Actual', dtype: 'str' },
+            { name: 'correct', dtype: 'bool' },
+          ],
+          table: [
+            ['a', true],
+            ['b', false],
+          ],
+        })
+      );
+      expect(result.tableData.col?.[1]).toEqual({ name: 'correct', dtype: 'bool' });
+      expect(result.tableData.table).toEqual([
+        ['a', true],
+        ['b', false],
+      ]);
+    });
+
+    it('accepts media/image cell dtypes and object cells', () => {
+      const result = tableDataRow.parse(
+        tableRow({
+          col: [
+            { name: 'image', dtype: 'image-file' },
+            { name: 'caption', dtype: 'str' },
+          ],
+          table: [[{ _type: 'image-file', path: 'media/images/x.png' }, 'a cat']],
+        })
+      );
+      expect(result.tableData.col?.[0].dtype).toBe('image-file');
+      expect(result.tableData.table[0][0]).toEqual({
+        _type: 'image-file',
+        path: 'media/images/x.png',
+      });
+    });
+
+    it('accepts null cells (missing values)', () => {
+      const result = tableDataRow.parse(
+        tableRow({
+          col: [{ name: 'score', dtype: 'float' }],
+          table: [[null], [0.5]],
+        })
+      );
+      expect(result.tableData.table).toEqual([[null], [0.5]]);
+    });
+
+    it('accepts a descriptor with no dtype at all', () => {
+      const result = tableDataRow.parse(
+        tableRow({ col: [{ name: 'Actual' }], table: [['a']] })
+      );
+      expect(result.tableData.col?.[0]).toEqual({ name: 'Actual' });
+    });
+
+    it('accepts the real migrated confusion-matrix shape', () => {
+      // Columns/data from run-fx2dl3j6-confmat_table:v0/confmat_table.table.json.
+      // The nested wandb `column_types` blob rides along and must not matter —
+      // only `columns`/`data` are needed, and unknown top-level keys are ignored.
+      const result = tableDataRow.parse(
+        tableRow({
+          column_types: {
+            params: { type_map: { Actual: { params: {}, wb_type: 'union' } } },
+            wb_type: 'typedDict',
+          },
+          col: [
+            { name: 'Actual', dtype: 'str' },
+            { name: 'Predicted', dtype: 'str' },
+            { name: 'nPredictions', dtype: 'float' },
+          ],
+          table: [
+            ['a', 'a', 3.0],
+            ['b', 'a', 1.0],
+          ],
+        })
+      );
+      expect(result.tableData.table).toHaveLength(2);
+      expect(result.tableData.col).toHaveLength(3);
+    });
+
+    it('accepts every dtype wandb is known to emit', () => {
+      for (const dtype of [
+        'bool', 'int', 'float', 'str', 'string', 'number', 'boolean',
+        'image-file', 'html-file', 'object3D-file', 'video-file', 'audio-file',
+        'table-file', 'unknown', 'any',
+      ]) {
+        expect(() =>
+          tableDataRow.parse(tableRow({ col: [{ name: 'c', dtype }], table: [['v']] }))
+        ).not.toThrow();
+      }
+    });
+  });
 });
 
 // ============================================================================
@@ -310,6 +421,7 @@ import {
   DashboardViewConfigSchema,
   WidgetSchema,
   WidgetConfigSchema,
+  WidgetTypeSchema,
   createDefaultWidgetConfig,
   type WidgetType,
 } from '../lib/dashboard-types';
@@ -366,6 +478,14 @@ const VALID_CONFIGS: Record<WidgetType, Record<string, unknown>> = {
     logName: 'generated_images',
     mediaType: 'IMAGE',
   },
+  distributions: {
+    entries: [
+      { kind: 'histogram', metric: 'layer1/weights', viewMode: 'ridgeline', ignoreOutliers: true, stepsOnX: false },
+    ],
+  },
+  'string-series': {
+    metric: 'phase',
+  },
 };
 
 // ============================================================================
@@ -399,6 +519,8 @@ describe('Dashboard WidgetSchema: union does not strip config properties', () =>
     'file-group': ['files'],
     logs: ['logName', 'maxLines'],
     'file-series': ['logName', 'mediaType'],
+    distributions: ['entries'],
+    'string-series': ['metric'],
   };
 
   for (const [type, keys] of Object.entries(KEY_PROPERTIES)) {
@@ -413,6 +535,28 @@ describe('Dashboard WidgetSchema: union does not strip config properties', () =>
       }
     });
   }
+
+  // Regression: the union must not INJECT keys either.
+  //
+  // `z.union` returns the first branch that parses, and a branch's `.default()`
+  // values land in the output. `SingleValueWidgetConfigSchema` is `{ metric,
+  // aggregation=LAST, format?, prefix?, suffix? }`, so it happily swallowed a
+  // string-series `{ metric }` and stamped `aggregation: "LAST"` onto it — a
+  // meaningless key, persisted into `dashboard_views.config` for every
+  // string-series widget ever saved. `WidgetSchema`'s superRefine only
+  // *validates* the config, it does not re-parse it, so nothing downstream
+  // caught this.
+  //
+  // Exact equality is the point: `toHaveProperty` checks above would all pass
+  // with a foreign key present.
+  it('regression: string-series config round-trips exactly, with no foreign defaults injected', () => {
+    const config = { metric: 'phase', title: 'Phase' };
+    const result = WidgetSchema.safeParse(mkWidget('string-series', config));
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.config).toEqual(config);
+  });
 
   // Explicit regression: the exact scenario that failed before the fix
   it('regression: file-series mediaType is not stripped by LogsWidgetConfig match', () => {
@@ -548,9 +692,12 @@ describe('WidgetConfigSchema union: property preservation', () => {
 // ============================================================================
 
 describe('createDefaultWidgetConfig round-trips through WidgetSchema', () => {
-  const widgetTypes: WidgetType[] = [
-    'chart', 'scatter', 'single-value', 'histogram', 'file-group', 'logs', 'file-series',
-  ];
+  // Driven off the schema itself, not a hand-maintained literal. The literal
+  // silently skipped every type added after it was written (`distributions`,
+  // `string-series`), so new `createDefaultWidgetConfig` branches shipped with
+  // no coverage at all. Reading `.options` means adding a widget type without a
+  // default now fails this suite instead of passing it by omission.
+  const widgetTypes = WidgetTypeSchema.options;
 
   it.each(widgetTypes)('%s default config validates', (type) => {
     const config = createDefaultWidgetConfig(type);
@@ -793,5 +940,55 @@ describe('Batch data input: runIds bounds (DoS guard)', () => {
       pathPrefix: 'training/dataset',
     });
     expect(r.success).toBe(true);
+  });
+});
+
+// ============================================================================
+// Suite 9: app/server WidgetType parity
+//
+// `web/app/src/routes/.../~types/dashboard-types.ts` is a hand-maintained
+// mirror of this module (the repo does the same for limits.ts and
+// group-field.ts). The app is a separate workspace with no dependency on
+// @mlop/server and only an `@/*` path alias, so it cannot import these types —
+// and the app file is pure `export type`, so there is no runtime value to
+// compare against either.
+//
+// Reading the source text is therefore the only way to hold the two in sync.
+// It is cheap and it fails loudly, which is all that is needed: the failure
+// mode being guarded against is someone adding a widget type on one side only,
+// which produces a dashboard the server accepts and the app cannot render (or
+// vice versa).
+// ============================================================================
+
+describe('WidgetType parity between server schema and app mirror', () => {
+  const APP_TYPES_PATH = join(
+    dirname(fileURLToPath(import.meta.url)),
+    '../../app/src/routes/o.$orgSlug._authed/(runComparison)/projects.$projectName/~types/dashboard-types.ts'
+  );
+
+  function appWidgetTypes(): string[] {
+    const source = readFileSync(APP_TYPES_PATH, 'utf8');
+    // The union runs from `export type WidgetType =` to the first `;`.
+    const block = /export type WidgetType\s*=([\s\S]*?);/.exec(source);
+    if (!block) throw new Error(`Could not find WidgetType union in ${APP_TYPES_PATH}`);
+    // Strip comments first — they quote type names in prose ("histogram"
+    // widgets, a "chart") which would otherwise be picked up as members.
+    const withoutComments = block[1]
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/[^\n]*/g, '');
+    return [...withoutComments.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+  }
+
+  it('the app mirror is parseable and non-empty', () => {
+    expect(appWidgetTypes().length).toBeGreaterThan(0);
+  });
+
+  it('app and server list exactly the same widget types', () => {
+    expect([...appWidgetTypes()].sort()).toEqual([...WidgetTypeSchema.options].sort());
+  });
+
+  it('every server widget type has a canonical config fixture in this file', () => {
+    // Keeps VALID_CONFIGS honest, which is what drives Suites 1, 2 and 7.
+    expect(Object.keys(VALID_CONFIGS).sort()).toEqual([...WidgetTypeSchema.options].sort());
   });
 });

@@ -11,8 +11,18 @@ export function useYRange(
   uplotData: uPlot.AlignedData,
   logYAxis: boolean,
   outlierDetection: boolean,
+  /** Category count when the Y axis is categorical (a string metric). */
+  categoryCount?: number,
 ): [number, number, boolean] {
   return useMemo<[number, number, boolean]>(() => {
+    // A categorical axis is one row per category, padded half a row so the
+    // first and last don't sit flush on the plot edge. Decided here rather
+    // than only in the scale config because several code paths (zoom restore,
+    // data-change rescale) apply this range imperatively via setScale, and
+    // they all read it from here — a scale-level `range` alone was silently
+    // overwritten by them on the next commit.
+    if (categoryCount) return [-0.5, categoryCount - 0.5, false];
+
     // Skip for log scale (handled by distr: 3)
     if (logYAxis) return [0, 1, false];
 
@@ -107,5 +117,5 @@ export function useYRange(
 
     const isOutlierAwareResult = effectiveMin !== dataMin || effectiveMax !== dataMax;
     return [yMin, yMax, isOutlierAwareResult];
-  }, [uplotData, logYAxis, outlierDetection]);
+  }, [uplotData, logYAxis, outlierDetection, categoryCount]);
 }

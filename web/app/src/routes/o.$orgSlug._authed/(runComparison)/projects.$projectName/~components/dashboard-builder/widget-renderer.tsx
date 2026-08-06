@@ -6,11 +6,13 @@ import type {
   DistributionsWidgetConfig,
   HistogramViewMode,
   HistogramDepthAxis,
+  StringSeriesWidgetConfig,
 } from "../../~types/dashboard-types";
 import type { GroupedMetrics } from "@/lib/grouping/types";
 import type { SelectedRunWithColor } from "../../~hooks/use-selected-runs";
 import { ChartWidget } from "./chart-widget";
 import { HistogramWidget } from "./histogram-widget";
+import { StringSeriesWidget } from "./string-series-widget";
 import { FileGroupWidget } from "./file-group-widget";
 import { DistributionsWidget } from "./distributions-widget";
 
@@ -138,6 +140,18 @@ export function WidgetRenderer({
                   onFileGroupHistogramsDetected(widget.id, fileNames)
               : undefined
           }
+        />
+      );
+    case "string-series":
+      return (
+        <StringSeriesWidget
+          config={widget.config as StringSeriesWidgetConfig}
+          selectedRuns={selectedRuns}
+          organizationId={organizationId}
+          projectName={projectName}
+          // Without this a hidden run stayed plotted in a string-series
+          // widget while disappearing from every numeric chart beside it.
+          hiddenRunIds={hiddenRunIds}
         />
       );
     case "distributions":

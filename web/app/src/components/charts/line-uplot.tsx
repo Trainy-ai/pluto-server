@@ -134,6 +134,8 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       forkSteps,
       extraLeftPadding,
       extraRightPadding,
+      yCategories,
+      stepped,
       legendStateKey,
       className,
       ...rest
@@ -284,7 +286,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
     uplotDataRef.current = uplotData;
 
     // Pre-calculate y-axis range with IQR-based outlier detection (extracted hook)
-    const yRange = useYRange(uplotData, logYAxis, outlierDetection);
+    const yRange = useYRange(uplotData, logYAxis, outlierDetection, yCategories?.length);
     // Hold yRange in a ref so buildScalesConfig's no-data fallback reads the
     // live value without yRange's always-fresh identity entering the `options`
     // useMemo deps. That dep was rebuilding the entire uPlot chart on every
@@ -463,7 +465,9 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
         lastFocusedSeriesRef, crossChartRunIdRef, tableHighlightRef,
         experimentRunIdsMapRef: chartSyncContext?.experimentRunIdsMapRef,
       }, {
-        spanGaps, theme,
+        spanGaps, theme, yCategories,
+        // Built here, where uPlot's runtime is already loaded.
+        steppedPaths: stepped ? uPlot.paths.stepped!({ align: 1 }) : undefined,
         xLegendValue: isDateTime
           ? (_u, val) => val == null ? "--" : smartDateFormatter(val, timeRange)
           : isRelativeTime
@@ -471,8 +475,8 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
             : (_u, val) => val == null ? "--" : formatAxisLabel(val),
       });
 
-      const scales = buildScalesConfig({ logXAxis, logYAxis, isDateTime, yRangeRef, yZoom });
-      const axes = buildAxesConfig({ showXAxis, showYAxis, axisColor, gridColor, isDateTime, isRelativeTime, logXAxis, logYAxis, xlabel, ylabel, timeRange });
+      const scales = buildScalesConfig({ logXAxis, logYAxis, isDateTime, yRangeRef, yZoom, categoryCount: yCategories?.length });
+      const axes = buildAxesConfig({ showXAxis, showYAxis, axisColor, gridColor, isDateTime, isRelativeTime, logXAxis, logYAxis, xlabel, ylabel, timeRange, yCategories });
       const cursor = buildCursorConfig(effectiveSyncKey, yZoom);
       const bands = buildBandsConfig(processedLinesRef.current, lastFocusedSeriesRef, crossChartRunIdRef, tableHighlightRef);
       const drawHook = buildDrawHook(processedLinesRef, lastFocusedSeriesRef, crossChartRunIdRef, tableHighlightRef, chartLineWidthRef, theme);
@@ -485,6 +489,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       });
       const interpolationDotsHook = buildInterpolationDotsHook({ processedLines: processedLinesRef.current, tooltipInterpolation, spanGaps, isActiveChart });
       const setScaleHook = buildSetScaleHook({
+        isCategoricalY: !!yCategories,
         logYAxis, logXAxis,
         isProgrammaticScaleRef, chartSyncContextRef, isZoomSourceChart,
         chartId, zoomGroup, userHasZoomedRef, userHasZoomedYRef,
@@ -524,6 +529,7 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
           // when the tooltip reads it to sort/highlight the hovered series
           { hooks: { setCursor: [focusDetectionHook] } },
           tooltipPlugin({
+            yCategories,
             theme, isDateTime, timeRange, lines: processedLinesRef.current,
             hoverStateRef, onHoverChange: handleHoverChange,
             isActiveChart, highlightedSeriesRef, highlightedRunIdRef,
@@ -691,11 +697,12 @@ const LineChartUPlotInner = forwardRef<LineChartUPlotRef, LineChartProps>(
       // padding value (e.g. they toggled "Steps on X" on a sibling
       // bars panel below). uPlot reads `padding` at init time, so this
       // is the only way to apply a new value.
-      extraLeftPadding, extraRightPadding,
+      extraLeftPadding, extraRightPadding, yCategories, stepped,
     ]);
 
     // Chart lifecycle management (extracted hook)
     useChartLifecycle({
+      isCategoricalY: !!yCategories,
       chartContainerRef, chartRef, chartInstanceRef,
       options, uplotData, uplotDataRef,
       processedLines, chartId, width, height,

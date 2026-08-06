@@ -13,6 +13,8 @@ interface ScalesConfigParams {
    */
   yRangeRef: { readonly current: [number, number, boolean] };
   yZoom: boolean;
+  /** Number of categories when the Y axis is categorical; omitted otherwise. */
+  categoryCount?: number;
 }
 
 /**
@@ -30,6 +32,7 @@ export function buildScalesConfig({
   isDateTime,
   yRangeRef,
   yZoom,
+  categoryCount,
 }: ScalesConfigParams): uPlot.Scales {
   return {
     x: logXAxis
@@ -75,7 +78,23 @@ export function buildScalesConfig({
       : isDateTime
         ? { time: true, auto: true }
         : { auto: true },
-    y: logYAxis
+    y: categoryCount
+      ? {
+          // Categorical Y: one row per category, padded half a row so the
+          // first and last don't sit flush against the plot edge where the
+          // staircase gets clipped.
+          //
+          // `auto` must stay TRUE even though the range is constant: uPlot
+          // only consults `range` when auto is on. With `auto: false` it kept
+          // the data bounds instead and the top category rendered on the edge.
+          //
+          // Constant rather than derived from the data: ranging to the values
+          // actually present would move a category's row as soon as one run
+          // stopped visiting it, which breaks comparison across runs.
+          auto: true,
+          range: (): uPlot.Range.MinMax => [-0.5, categoryCount - 0.5],
+        }
+      : logYAxis
       ? { distr: 3 }
       : {
           // auto:true makes uPlot recompute Y range from visible (shown)

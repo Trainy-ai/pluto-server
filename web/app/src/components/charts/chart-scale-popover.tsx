@@ -21,6 +21,10 @@ interface ChartScalePopoverProps {
   logXAxis?: boolean;
   /** Current effective log Y-axis state (per-chart override ?? global) */
   logYAxis?: boolean;
+  /** Hides the Y log-scale switch. Set for a categorical Y (a string metric),
+   *  whose values are label indices — a log scale over them means nothing, and
+   *  a control that silently does nothing is worse than no control. */
+  hideLogYAxis?: boolean;
   /** Callback when log scale toggles change. Applied immediately. */
   onLogScaleChange?: (axis: "x" | "y", value: boolean) => void;
   /** True when the page has active grouping — controls visibility of
@@ -44,6 +48,7 @@ interface ChartScalePopoverProps {
 export function ChartScalePopover({
   logXAxis,
   logYAxis,
+  hideLogYAxis,
   onLogScaleChange,
   workspaceGroupingActive,
   groupingOverridden,
@@ -117,23 +122,25 @@ export function ChartScalePopover({
                 className="scale-90"
               />
             </div>
-            <div className="flex items-center justify-between">
-              <Label
-                htmlFor="per-chart-log-y"
-                className="text-xs text-muted-foreground cursor-pointer"
-              >
-                Y Axis
-              </Label>
-              <Switch
-                id="per-chart-log-y"
-                checked={logYAxis ?? false}
-                onCheckedChange={(checked) =>
-                  onLogScaleChange?.("y", checked)
-                }
-                data-testid="log-y-axis-switch"
-                className="scale-90"
-              />
-            </div>
+            {!hideLogYAxis && (
+              <div className="flex items-center justify-between">
+                <Label
+                  htmlFor="per-chart-log-y"
+                  className="text-xs text-muted-foreground cursor-pointer"
+                >
+                  Y Axis
+                </Label>
+                <Switch
+                  id="per-chart-log-y"
+                  checked={logYAxis ?? false}
+                  onCheckedChange={(checked) =>
+                    onLogScaleChange?.("y", checked)
+                  }
+                  data-testid="log-y-axis-switch"
+                  className="scale-90"
+                />
+              </div>
+            )}
           </div>
           {workspaceGroupingActive && (
             <div className="space-y-2 border-t pt-3">

@@ -8,6 +8,7 @@ import { MultiGroupImage } from "./image";
 import { MultiGroupVideo } from "./video";
 import { MultiGroupTable } from "./table";
 import { MultiGroupFile } from "./file";
+import { MultiGroupStringSeries } from "./string-series";
 import { MultiHistogramView } from "./histogram-view";
 import { RendererErrorBoundary } from "@/components/shared/renderer-error-boundary";
 import { ChartCardWrapper } from "./chart-card-wrapper";
@@ -247,6 +248,24 @@ export const MultiGroup = ({
               projectName={projectName}
               runs={formattedRuns}
               className="h-full pb-2.5"
+            />
+          );
+        }
+
+        // Non-numeric string history (`log("phase", "warmup")`) is registered
+        // as DATA. Without this it hit the `() => null` fallthrough, so the
+        // section rendered a row of empty cards rather than nothing at all.
+        if (metric.type === "DATA") {
+          return () => (
+            <MultiGroupStringSeries
+              logName={metric.name}
+              organizationId={organizationId}
+              projectName={projectName}
+              runs={formattedRuns}
+              groupId={groupId}
+              globalLogXAxis={globalLogXAxis}
+              boundsResetKey={boundsResetKey}
+              className="h-full"
             />
           );
         }

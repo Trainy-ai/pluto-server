@@ -12,8 +12,22 @@ const DEFAULT_LIMIT = 500;
 /** Higher limit when scoped to specific runs */
 const SCOPED_LIMIT = 10000;
 
-/** Log types that represent "file" data (non-metric, non-text) */
-const FILE_LOG_TYPES = ["HISTOGRAM", "IMAGE", "VIDEO", "AUDIO"] as const;
+/**
+ * Log types discovered from Postgres rather than ClickHouse.
+ *
+ * `DATA` is a string metric (`log("phase", "warmup")`). It rides this proc
+ * rather than `distinctMetricNames` because that one reads
+ * `mlop_metric_summaries`, whose rows only exist for numeric values — a string
+ * metric would never appear. Querying `mlop_data` instead would mean a
+ * project-wide `DISTINCT logName`, and `logName` sits 5th in that table's sort
+ * key behind `runId`, so it cannot use the index and degrades to a scan.
+ *
+ * `run_logs` already registers every (runId, logName, logType) in ~36k indexed
+ * rows against 920M in `mlop_metrics`, and carries the type tag the frontend
+ * needs to pick a categorical chart. Callers distinguish by the returned
+ * `logType`, so adding DATA here does not make a string metric a "file".
+ */
+const FILE_LOG_TYPES = ["HISTOGRAM", "IMAGE", "VIDEO", "AUDIO", "DATA"] as const;
 
 /**
  * Discover distinct file-type log names (HISTOGRAM, IMAGE, VIDEO, AUDIO) in a project.

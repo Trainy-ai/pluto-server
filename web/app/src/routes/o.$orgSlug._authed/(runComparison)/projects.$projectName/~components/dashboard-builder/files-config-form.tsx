@@ -10,6 +10,8 @@ import {
   useRunFileLogNames,
   useSearchFileLogNames,
   useRegexSearchFileLogNames,
+  pickFileLogNames,
+  isNonFileLogType,
 } from "../../~queries/file-log-names";
 import { fuzzyFilter } from "@/lib/fuzzy-search";
 import { SYNTHETIC_CONSOLE_ENTRIES } from "./console-log-constants";
@@ -69,7 +71,8 @@ export function FilesConfigForm({
     useRegexSearchFileLogNames(organizationId, projectName, debouncedRegex);
 
   const regexFiles = useMemo(() => {
-    const backendFiles = regexResults?.files?.map((f) => f.logName) ?? [];
+    // Drops string metrics and histograms — see `pickFileLogNames`.
+    const backendFiles = pickFileLogNames(regexResults?.files);
     if (!debouncedRegex) return backendFiles;
     try {
       const re = new RegExp(debouncedRegex);
@@ -243,11 +246,15 @@ function SearchFilePanel({
     const syntheticNames = SYNTHETIC_CONSOLE_ENTRIES.map((e) => e.logName);
     const initial = (initialFiles?.files ?? []).map((f) => f.logName);
     const searched = (searchResults?.files ?? []).map((f) => f.logName);
-    // HISTOGRAM files moved to the Distributions tab. Strip them out
-    // here so the Files dropdown only surfaces image/video/audio/console
-    // entries.
-    const hideHistograms = (n: string) => typeMap.get(n) !== "HISTOGRAM";
-    const merged = Array.from(new Set([...syntheticNames, ...searched, ...initial])).filter(hideHistograms);
+    // Not every type this proc returns belongs on the Files tab — histograms
+    // moved to Distributions and string metrics belong on Metrics (see
+    // `isNonFileLogType`). Leaves image / video / audio / console here.
+    //
+    // Goes through typeMap rather than pickFileLogNames because the names here
+    // are already merged from three sources (synthetic console entries, search
+    // results, initial list) and only their types are still to hand.
+    const hideNonFiles = (n: string) => !isNonFileLogType(typeMap.get(n));
+    const merged = Array.from(new Set([...syntheticNames, ...searched, ...initial])).filter(hideNonFiles);
     const trimmed = search.trim();
     let result: string[];
     if (!trimmed) {
