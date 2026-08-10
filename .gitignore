@@ -1,4 +1,9 @@
 node_modules/
+# Written into the checkout (as root) when the Buildkite smoke environment is
+# run locally — .buildkite/setup-test-env.sh does `pnpm install` inside the
+# server container against the mounted repo. Several GB, and unignored it gets
+# swept into commits by `git add -A`.
+.pnpm-store/
 .DS_Store
 .env*
 !.env.example

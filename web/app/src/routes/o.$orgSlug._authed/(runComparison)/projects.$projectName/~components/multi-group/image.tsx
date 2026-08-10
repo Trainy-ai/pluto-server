@@ -11,6 +11,8 @@ import { MediaCardWrapper } from "@/components/core/media-card-wrapper";
 import { MediaSettingsPopover } from "@/components/core/media-settings-popover";
 import { useSampleIndexSync } from "./use-sample-index-sync";
 import { useMediaPins } from "./use-media-pins";
+import { WidgetLimitNotice } from "@/components/shared/widget-limit-notice";
+import { MAX_RUNS_PER_BATCH } from "@/lib/batch-limits";
 
 interface MultiGroupImageProps {
   logName: string;
@@ -33,6 +35,13 @@ export const MultiGroupImage = ({
 }: MultiGroupImageProps) => {
   const selectedRunIds = useMemo(() => runs.map((run) => run.runId), [runs]);
 
+  // filesBatch rejects more than MAX_RUNS_PER_BATCH runIds outright. Dashboard
+  // widgets pass every selected run (not just the runs that have this log), so
+  // the cap is reachable on any project with a big selection. Without this the
+  // rejected request left `byRun` undefined and the widget fell through to
+  // "No images found" — an empty state that reads as "this log has no images".
+  const overRunCap = selectedRunIds.length > MAX_RUNS_PER_BATCH;
+
   // One batched request for all runs (replaces the per-run runs.data.files
   // fan-out → no more 414s on media dashboards). NOT accumulated: presigned
   // URLs expire (~15min), so we keep a normal staleTime and refetch on
@@ -40,7 +49,10 @@ export const MultiGroupImage = ({
   const { data: byRun, isLoading } = useQuery(
     trpc.runs.data.filesBatch.queryOptions(
       { organizationId, projectName, logName, runIds: selectedRunIds },
-      { enabled: selectedRunIds.length > 0 && (logName?.length ?? 0) > 0 },
+      {
+        enabled:
+          selectedRunIds.length > 0 && !overRunCap && (logName?.length ?? 0) > 0,
+      },
     ),
   );
 
@@ -142,6 +154,18 @@ export const MultiGroupImage = ({
 
   const [syncZoom, setSyncZoom] = useState(false);
   const [sharedScale, setSharedScale] = useState(1);
+
+  if (overRunCap) {
+    return (
+      <WidgetLimitNotice
+        title={logName}
+        unit="runs"
+        count={selectedRunIds.length}
+        max={MAX_RUNS_PER_BATCH}
+        className={className}
+      />
+    );
+  }
 
   if (isLoading) {
     return (

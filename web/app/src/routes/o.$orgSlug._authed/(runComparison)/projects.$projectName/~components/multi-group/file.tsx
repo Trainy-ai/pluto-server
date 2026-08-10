@@ -3,6 +3,8 @@ import { useParams } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { ExternalLink, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { WidgetLimitNotice } from "@/components/shared/widget-limit-notice";
+import { MAX_RUNS_PER_BATCH } from "@/lib/batch-limits";
 import { trpc } from "@/utils/trpc";
 import { buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -57,6 +59,11 @@ export const MultiGroupFile = ({
   // Cross-widget run sync: the hook owns the index, keeps it in range as the
   // selection changes, and broadcasts/receives the current run while locked.
   const runIds = useMemo(() => runs.map((r) => r.runId), [runs]);
+
+  // filesBatch rejects more than MAX_RUNS_PER_BATCH runIds outright. Dashboard
+  // widgets pass every selected run (not just the runs that have this log), so
+  // the cap is reachable on any project with a big selection.
+  const overRunCap = runIds.length > MAX_RUNS_PER_BATCH;
   const { runIdx, setRunIdx, isLocked, setIsLocked, hasSyncContext } =
     useSyncedRunNavigation({ runIds });
   const safeIndex = Math.min(runIdx, Math.max(0, runs.length - 1));
@@ -67,7 +74,9 @@ export const MultiGroupFile = ({
   const { data: byRun, isLoading } = useQuery(
     trpc.runs.data.filesBatch.queryOptions(
       { organizationId, projectName, logName, runIds },
-      { enabled: runIds.length > 0 && logName.length > 0 },
+      {
+        enabled: runIds.length > 0 && !overRunCap && logName.length > 0,
+      },
     ),
   );
 
@@ -75,6 +84,18 @@ export const MultiGroupFile = ({
     () => ({ logName, logType: "ARTIFACT" }) as Parameters<typeof TextView>[0]["log"],
     [logName],
   );
+
+  if (overRunCap) {
+    return (
+      <WidgetLimitNotice
+        title={logName}
+        unit="runs"
+        count={runIds.length}
+        max={MAX_RUNS_PER_BATCH}
+        className={className}
+      />
+    );
+  }
 
   if (!activeRun) {
     return (

@@ -14,6 +14,8 @@ import { useSampleIndexSync } from "./use-sample-index-sync";
 import { MediaPinLabel } from "@/components/core/media-pin-label";
 import { pinRingClass } from "@/components/core/image-viewer/pin-styles";
 import { useMediaPins } from "./use-media-pins";
+import { WidgetLimitNotice } from "@/components/shared/widget-limit-notice";
+import { MAX_RUNS_PER_BATCH } from "@/lib/batch-limits";
 
 interface Video {
   url: string;
@@ -47,13 +49,23 @@ export const MultiGroupVideo = ({
   // Use useQueries at the top level to fetch videos for each run
   const selectedRunIds = useMemo(() => runs.map((run) => run.runId), [runs]);
 
+  // filesBatch rejects more than MAX_RUNS_PER_BATCH runIds outright. Dashboard
+  // widgets pass every selected run (not just the runs that have this log), so
+  // the cap is reachable on any project with a big selection. Without this the
+  // rejected request left `byRun` undefined and the widget fell through to
+  // "No videos found" — an empty state that reads as "this log has no videos".
+  const overRunCap = selectedRunIds.length > MAX_RUNS_PER_BATCH;
+
   // One batched request for all runs (replaces the per-run runs.data.files
   // fan-out → no more 414s). NOT accumulated: presigned URLs expire (~15min),
   // so normal staleTime + refetch on selection change keeps URLs fresh.
   const { data: byRun, isLoading } = useQuery(
     trpc.runs.data.filesBatch.queryOptions(
       { organizationId, projectName, logName, runIds: selectedRunIds },
-      { enabled: selectedRunIds.length > 0 && (logName?.length ?? 0) > 0 },
+      {
+        enabled:
+          selectedRunIds.length > 0 && !overRunCap && (logName?.length ?? 0) > 0,
+      },
     ),
   );
 
@@ -139,6 +151,18 @@ export const MultiGroupVideo = ({
 
   // Calculate a consistent aspect ratio container height
   const containerHeight = "aspect-video";
+
+  if (overRunCap) {
+    return (
+      <WidgetLimitNotice
+        title={logName}
+        unit="runs"
+        count={selectedRunIds.length}
+        max={MAX_RUNS_PER_BATCH}
+        className={className}
+      />
+    );
+  }
 
   if (isLoading) {
     return (

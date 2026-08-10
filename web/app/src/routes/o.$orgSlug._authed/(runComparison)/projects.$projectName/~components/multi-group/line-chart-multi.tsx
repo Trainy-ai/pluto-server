@@ -26,6 +26,8 @@ import {
 import { resolveChartBuckets } from "@/lib/chart-bucket-estimate";
 import { parseChTimeMs } from "@/components/charts/lib/format";
 import { getDashPattern } from "./metric-dash";
+import { WidgetLimitNotice } from "@/components/shared/widget-limit-notice";
+import { MAX_RUNS_PER_BATCH, resolveChartLimit } from "@/lib/batch-limits";
 
 // For active runs, refresh every 30 seconds
 // For completed runs, data never changes so use Infinity
@@ -221,9 +223,16 @@ const MultiLineChartInner = memo(
 
     // Safety check: too many series (0 = no limit)
     const maxSeries = settings.maxSeriesCount ?? DEFAULT_SETTINGS.maxSeriesCount;
-    const tooManySeries = maxSeries > 0 && queryPairs.length > maxSeries;
 
     const runIds = useMemo(() => lines.map((l) => l.runId), [lines]);
+
+    // Two limits, both expressed in series so the chart reports one number.
+    // Both limits resolved into one series count — see resolveChartLimit.
+    const { effectiveMaxSeries, overLimit, isRunBound } = resolveChartLimit({
+      metricCount: metricNames.length,
+      seriesCount: queryPairs.length,
+      maxSeries,
+    });
 
     // === Standard + Preview tiers: multi-metric batch with URL-safe chunking ===
     // Chunk metrics into groups to stay within tRPC URL length limits.
@@ -239,7 +248,7 @@ const MultiLineChartInner = memo(
 
     // Multi-metric path: one query per chunk
     const standardMultiQueries = useQueries({
-      queries: (isMultiMetricQuery && !tooManySeries)
+      queries: (isMultiMetricQuery && !overLimit)
         ? metricChunks.map((chunk) => {
             const opts = {
               organizationId,
@@ -264,7 +273,7 @@ const MultiLineChartInner = memo(
 
     // Single-metric fallback: use existing endpoint (avoids unnecessary nesting)
     const standardSingleQueries = useQueries({
-      queries: (!isMultiMetricQuery && !tooManySeries)
+      queries: (!isMultiMetricQuery && !overLimit)
         ? metricNames.map((metric) => {
             const opts = {
               organizationId,
@@ -440,6 +449,11 @@ const MultiLineChartInner = memo(
       projectName,
       logNames: metricNames,
       runIds,
+      // Hooks run before the over-limit early return below, and a zoom range
+      // persists across selection changes — so zooming under the cap and then
+      // selecting past it left this firing a request the server rejects, even
+      // though the chart itself had been replaced by the notice.
+      enabled: !overLimit,
       selectedLog: effectiveXAxis,
       staleTime,
       syncedZoomRange,
@@ -782,17 +796,17 @@ const MultiLineChartInner = memo(
     }, [filteredAllData, customLogData, settings, effectiveXAxis, title, xlabel, hasAnyData, queryPairs, getSeriesLabel, zoomDataMap, isMultiMetric, isMultiRun, chartColors, metricNames, lines, runBaselineMap]);
 
     // Too many series warning
-    if (tooManySeries) {
+    if (overLimit) {
       return (
-        <div className="flex h-full w-full flex-grow flex-col items-center justify-center bg-accent/50 p-4">
-          <p className="text-sm font-medium text-foreground">{title}</p>
-          <p className="mt-2 text-center text-sm text-muted-foreground">
-            Too many series ({queryPairs.length}). Maximum is {maxSeries}.
-          </p>
-          <p className="text-center text-xs text-muted-foreground">
-            Reduce the number of selected runs or metrics.
-          </p>
-        </div>
+        <WidgetLimitNotice
+          title={title}
+          unit="series"
+          count={queryPairs.length}
+          max={effectiveMaxSeries}
+          hint={
+            isRunBound ? undefined : "Reduce the number of selected runs or metrics."
+          }
+        />
       );
     }
 

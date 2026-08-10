@@ -9,6 +9,12 @@ import { useTheme } from "@/lib/hooks/use-theme";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
+import { WidgetLimitNotice } from "@/components/shared/widget-limit-notice";
+import { MAX_RUNS_PER_BATCH } from "@/lib/batch-limits";
+
+/** Stable empty selection: a fresh [] each render would re-run the fetch
+ *  hook's memos and re-fire the accumulator. */
+const NO_RUNS: any[] = [];
 import { useNormalizedHistogramData } from "./hooks/use-normalized-histogram";
 import { computeHistogramFences } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/group/histogram-outlier-fences";
 import {
@@ -734,11 +740,16 @@ export const MultiHistogramView: React.FC<MultiHistogramViewProps> = ({
   initialStepsOnX = false,
   onStepsOnXChange,
 }) => {
-  const { data, isLoading, hasError } = useNormalizedHistogramData(runs, {
-    tenantId,
-    projectName,
-    logName,
-  });
+  // histogramBatch rejects more than MAX_RUNS_PER_BATCH runIds outright, and
+  // dashboard widgets pass every selected run. Checked here rather than left to
+  // the request so the widget explains the limit instead of showing a bare
+  // "Error loading data".
+  const overRunCap = runs.length > MAX_RUNS_PER_BATCH;
+
+  const { data, isLoading, hasError } = useNormalizedHistogramData(
+    overRunCap ? NO_RUNS : runs,
+    { tenantId, projectName, logName },
+  );
 
   const [internalMode, setInternalMode] =
     useState<HistogramViewMode>("ridgeline");
@@ -995,6 +1006,18 @@ export const MultiHistogramView: React.FC<MultiHistogramViewProps> = ({
           <Skeleton className="h-full w-full" />
         </div>
       </div>
+    );
+  }
+
+  if (overRunCap) {
+    return (
+      <WidgetLimitNotice
+        title={hideTitle ? undefined : logName}
+        unit="runs"
+        count={runs.length}
+        max={MAX_RUNS_PER_BATCH}
+        className={className}
+      />
     );
   }
 

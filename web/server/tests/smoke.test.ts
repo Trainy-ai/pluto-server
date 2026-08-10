@@ -10836,4 +10836,127 @@ describe('SDK API Endpoints (with API Key)', () => {
       expect(ranged.length).toBeLessThan(lowerOnly.length);
     });
   });
+  // ---------------------------------------------------------------------
+  // Section 40: batch run caps
+  //
+  // Every batch data proc caps `runIds` at 200. The frontend is coded against
+  // that number — charts and media widgets refuse to query past it and explain
+  // why instead of firing a request the server rejects. These tests pin the
+  // server half of that contract: if a cap is raised or dropped here, the
+  // client's guard silently becomes wrong.
+  // ---------------------------------------------------------------------
+  describe('Section 40: batch procs cap runIds at 200', () => {
+    const CAP = 200;
+    const ids = (n: number) => Array.from({ length: n }, (_, i) => `r${i}`);
+
+    // Each entry: proc name plus the non-runIds input it needs to get past the
+    // rest of the schema, so the only thing under test is the run cap.
+    const CAPPED: [string, Record<string, unknown>][] = [
+      ['runs.data.graphBatchBucketed', { logName: 'loss' }],
+      ['runs.data.graphMultiMetricBatchBucketed', { logNames: ['loss'] }],
+      ['runs.data.graphBatch', { logName: 'loss' }],
+      ['runs.data.filesBatch', { logName: 'images' }],
+    ];
+
+    // TEST_EMAIL / TEST_PASSWORD are declared per-suite, not at module level,
+    // so this section owns its credentials rather than borrowing a sibling's.
+    const CAP_EMAIL = process.env.TEST_USER_EMAIL || 'test-smoke@mlop.local';
+    const CAP_PASSWORD = process.env.TEST_USER_PASSWORD || 'TestPassword123!';
+
+    let capCookie: string | null = null;
+    let capOrgId = '';
+
+    /**
+     * These procs take input, so the request needs superjson's `{json: ...}`
+     * envelope — makeTrpcRequest passes input through unwrapped, which tRPC v11
+     * reads as no input at all ("expected object, received undefined").
+     */
+    const callCapped = async (proc: string, input: Record<string, unknown>) => {
+      const url = new URL(`${BASE_URL}/trpc/${proc}`);
+      url.searchParams.set('input', JSON.stringify({ json: input }));
+      const res = await fetch(url.toString(), {
+        headers: { 'Content-Type': 'application/json', Cookie: capCookie ?? '' },
+      });
+      return res.text();
+    };
+
+    beforeAll(async () => {
+      try {
+        const health = await makeRequest('/api/health');
+        if (health.status !== 200) return;
+      } catch {
+        return;
+      }
+
+      const signIn = await makeRequest('/api/auth/sign-in/email', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          // better-auth rejects a POST sign-in with MISSING_OR_NULL_ORIGIN when
+          // the client sends no Origin, which Node's fetch does not by default.
+          Origin: process.env.TEST_APP_ORIGIN || BASE_URL,
+        },
+        body: JSON.stringify({
+          email: CAP_EMAIL,
+          password: CAP_PASSWORD,
+        }),
+      });
+      // Match either spelling of the cookie name: better-auth emits
+      // `better-auth.session_token`, while older releases used an underscore.
+      // Reconstruct from the match rather than assuming one.
+      const match = signIn.headers
+        .get('set-cookie')
+        ?.match(/(better[-_]auth\.session_token=[^;]+)/);
+      if (!match) return;
+      capCookie = match[1];
+
+      // The org check runs BEFORE input validation, so a bogus org id yields
+      // UNAUTHORIZED and the cap never gets exercised. Resolve the real one.
+      //
+      // Two shapes to tolerate: the payload is superjson-wrapped (`data.json`),
+      // and a freshly signed-in session has no activeOrganization yet — that's
+      // set when the app opens an org — so fall back to the first membership.
+      const auth = await (
+        await makeTrpcRequest('auth', {}, { Cookie: capCookie }, 'GET')
+      ).json();
+      const authData = auth.result?.data?.json ?? auth.result?.data ?? {};
+      capOrgId =
+        authData.activeOrganization?.id ?? authData.allOrgs?.[0]?.id ?? '';
+    });
+
+    for (const [proc, extra] of CAPPED) {
+      it(`Test 40.1 (${proc}): rejects ${CAP + 1} runIds`, async () => {
+        if (!capCookie || !capOrgId) {
+          console.log('   No session/org - skipping');
+          return;
+        }
+        const body = await callCapped(proc, {
+          organizationId: capOrgId,
+          projectName: TEST_PROJECT_NAME,
+          runIds: ids(CAP + 1),
+          ...extra,
+        });
+        // tRPC reports input-validation failures in the body, so assert on the
+        // zod error rather than the status code.
+        expect(body).toContain('too_big');
+        expect(body).toContain('maximum');
+      });
+    }
+
+    it(`Test 40.2: accepts exactly ${CAP} runIds`, async () => {
+      if (!capCookie || !capOrgId) {
+        console.log('   No session/org - skipping');
+        return;
+      }
+      // Unknown run ids are fine — this asserts the schema lets the request
+      // through, not that any data comes back.
+      const body = await callCapped('runs.data.graphBatchBucketed', {
+        organizationId: capOrgId,
+        projectName: TEST_PROJECT_NAME,
+        runIds: ids(CAP),
+        logName: 'loss',
+      });
+      expect(body).not.toContain('too_big');
+    });
+  });
 });

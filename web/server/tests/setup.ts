@@ -163,6 +163,14 @@ async function seedClickHouseMetrics(
   projectName: string,
   metricsPerRun: number,
   datapointsPerMetric: number,
+  /**
+   * Overrides the generated `train/metric_NN` names, one per metric. Fixtures
+   * whose `run_logs` registry names a specific metric must pass it here: the
+   * metric list comes from the registry but the chart's data comes from
+   * ClickHouse, so a name that appears in only one of the two lists a metric
+   * that can never draw.
+   */
+  metricNames?: string[],
 ): Promise<void> {
   const clickhouseUrl = process.env.CLICKHOUSE_URL;
   const clickhouseUser = process.env.CLICKHOUSE_USER || 'default';
@@ -190,14 +198,17 @@ async function seedClickHouseMetrics(
   for (const run of runs) {
     const baseTime = run.createdAt.getTime();
     for (let m = 0; m < metricsPerRun; m++) {
-      const metricName = `train/metric_${String(m).padStart(2, '0')}`;
+      const metricName =
+        metricNames?.[m] ?? `train/metric_${String(m).padStart(2, '0')}`;
+      // Group by the name's prefix, matching how the SDK emits grouped metrics.
+      const logGroup = metricName.includes('/') ? metricName.split('/')[0] : 'train';
 
       for (let step = 0; step < datapointsPerMetric; step++) {
         batch.push({
           tenantId,
           projectName,
           runId: Number(run.id),
-          logGroup: 'train',
+          logGroup,
           logName: metricName,
           time: new Date(baseTime + step * 1000).toISOString().replace('T', ' ').replace('Z', ''),
           step,
@@ -4100,6 +4111,186 @@ async function setupTestData(): Promise<TestData> {
   //     bucket paths for `field: "tag-prefix:group"`. The mutation-
   //     isolated projects (mut-2a/2b/2c/mut-3/view-7) the retired
   //     run-groups.spec.ts owned were dropped when that spec went away.
+  // ---------------------------------------------------------------------
+  console.log('\n5️⃣g² Creating over-cap-test project (210 runs)...');
+
+  // The batch data procs cap `runIds` at 200. No other seeded project comes
+  // close — the bulk project is 160 — so without this fixture the over-cap
+  // behaviour cannot be reached by any test that drives the UI honestly.
+  //
+  // Deliberately 1 metric per run: the cap counts RUNS, so breadth would only
+  // cost seed time. Two media logs, and the split between them is the point:
+  //
+  //   over-cap/images  on all 210  → a media widget legitimately over the cap,
+  //                                  so the "Too many runs" notice is CORRECT
+  //   rare/images      on only 3   → 210 runs selected, narrowed to 3, RENDERS
+  //
+  // That second case is the one that fails on code which sends the whole
+  // selection: it would report "Too many runs (210)" for a widget whose data
+  // lives on three of them.
+  const OVER_CAP_RUN_COUNT = 210;
+  const OVER_CAP_RARE_RUNS = 3;
+  const OVER_CAP_PROJECT = 'over-cap-test';
+  const OVER_CAP_COMMON_LOG = 'over-cap/images';
+  const OVER_CAP_RARE_LOG = 'rare/images';
+  // Grouped so the metric lands in its own `train` group, which the E2E specs
+  // filter the metric list down to. The same name is written into ClickHouse
+  // below — the registry and the data must agree or the chart never draws.
+  const OVER_CAP_METRIC = 'train/loss';
+
+  const overCapProject = await prisma.projects.upsert({
+    where: {
+      organizationId_name: { organizationId: org.id, name: OVER_CAP_PROJECT },
+    },
+    create: { name: OVER_CAP_PROJECT, organizationId: org.id },
+    update: {},
+  });
+
+  const overCapExisting = await prisma.runs.count({
+    where: { projectId: overCapProject.id },
+  });
+
+  if (overCapExisting < OVER_CAP_RUN_COUNT) {
+    await prisma.runs.createMany({
+      data: Array.from({ length: OVER_CAP_RUN_COUNT }, (_, i) => ({
+        // Zero-padded so lexical sort matches numeric order — tests select
+        // "all" rather than by name, but a stable order keeps failures legible.
+        name: `over-cap-run-${String(i).padStart(3, '0')}`,
+        organizationId: org.id,
+        projectId: overCapProject.id,
+        createdById: user.id,
+        creatorApiKeyId: apiKey.id,
+        status: 'COMPLETED' as const,
+        updatedAt: new Date(),
+      })),
+      skipDuplicates: true,
+    });
+
+    const overCapRuns = await prisma.runs.findMany({
+      where: { projectId: overCapProject.id },
+      select: { id: true, name: true, createdAt: true },
+      orderBy: { name: 'asc' },
+    });
+
+    // Registry rows: one metric everywhere, the common image log everywhere,
+    // the rare image log on the first three only.
+    await prisma.runLogs.createMany({
+      data: overCapRuns.flatMap((run, i) => [
+        {
+          runId: run.id,
+          logGroup: 'train',
+          logName: OVER_CAP_METRIC,
+          logType: 'METRIC' as const,
+        },
+        {
+          runId: run.id,
+          logGroup: 'over-cap',
+          logName: OVER_CAP_COMMON_LOG,
+          logType: 'IMAGE' as const,
+        },
+        ...(i < OVER_CAP_RARE_RUNS
+          ? [{
+              runId: run.id,
+              logGroup: 'rare',
+              logName: OVER_CAP_RARE_LOG,
+              logType: 'IMAGE' as const,
+            }]
+          : []),
+      ]),
+      skipDuplicates: true,
+    });
+
+    // 210 runs x 1 metric x 50 points — enough for a line to draw, small
+    // enough that this fixture costs a fraction of a bulk run.
+    await seedClickHouseMetrics(overCapRuns, org.id, OVER_CAP_PROJECT, 1, 50, [
+      OVER_CAP_METRIC,
+    ]);
+
+    if (
+      pinTestClickhouseUrl &&
+      pinTestStorageEndpoint &&
+      pinTestStorageAccessKey &&
+      pinTestStorageSecretKey &&
+      pinTestStorageBucket
+    ) {
+      const overCapS3 = new S3Client({
+        endpoint: pinTestStorageEndpoint,
+        region: process.env.STORAGE_REGION || 'us-east-1',
+        credentials: {
+          accessKeyId: pinTestStorageAccessKey,
+          secretAccessKey: pinTestStorageSecretKey,
+        },
+        forcePathStyle: true,
+      });
+      const overCapCh = createClient({
+        url: pinTestClickhouseUrl,
+        username: process.env.CLICKHOUSE_USER || 'default',
+        password: process.env.CLICKHOUSE_PASSWORD || '',
+      });
+
+      // One tiny PNG, uploaded once per (run, log). The assertions are about
+      // which runs a widget asks for, never about pixels, so every row can
+      // point at an identical image.
+      const overCapPng = createSimplePNG(16, 16, 90, 160, 240);
+      const overCapFileRows: Record<string, unknown>[] = [];
+      const overCapUploads: Promise<unknown>[] = [];
+      const overCapBase = Date.now() - 60_000;
+
+      for (const [i, run] of overCapRuns.entries()) {
+        const logs = [
+          { logGroup: 'over-cap', logName: OVER_CAP_COMMON_LOG },
+          ...(i < OVER_CAP_RARE_RUNS
+            ? [{ logGroup: 'rare', logName: OVER_CAP_RARE_LOG }]
+            : []),
+        ];
+        for (const log of logs) {
+          const fileName = 'sample.png';
+          const s3Key = `${org.id}/${OVER_CAP_PROJECT}/${run.id}/${log.logName}/${fileName}`;
+          overCapFileRows.push({
+            tenantId: org.id,
+            projectName: OVER_CAP_PROJECT,
+            runId: Number(run.id),
+            logGroup: log.logGroup,
+            logName: log.logName,
+            time: new Date(overCapBase + i * 10)
+              .toISOString()
+              .replace('T', ' ')
+              .replace('Z', ''),
+            step: 0,
+            fileName,
+            fileType: 'image/png',
+            fileSize: overCapPng.length,
+          });
+          overCapUploads.push(
+            overCapS3.send(
+              new PutObjectCommand({
+                Bucket: pinTestStorageBucket,
+                Key: s3Key,
+                Body: overCapPng,
+                ContentType: 'image/png',
+              }),
+            ),
+          );
+        }
+      }
+
+      await overCapCh.insert({
+        table: 'mlop_files',
+        values: overCapFileRows,
+        format: 'JSONEachRow',
+        clickhouse_settings: { async_insert: 0, wait_for_async_insert: 1 },
+      });
+      await Promise.all(overCapUploads);
+      await overCapCh.close();
+      console.log(
+        `   ✓ Seeded ${overCapRuns.length} runs, ${overCapFileRows.length} images ` +
+          `(${OVER_CAP_RARE_RUNS} with ${OVER_CAP_RARE_LOG})`,
+      );
+    }
+  } else {
+    console.log(`   ✓ over-cap-test already has ${overCapExisting} runs, skipping`);
+  }
+
   console.log('\n5️⃣h Creating run-groups project...');
 
   // `optimizer` is a string config key (distinct values sgd/adam/adamw)

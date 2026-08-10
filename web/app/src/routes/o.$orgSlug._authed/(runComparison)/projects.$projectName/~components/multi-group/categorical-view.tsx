@@ -6,6 +6,8 @@ import { cn } from "@/lib/utils";
 import type { inferOutput } from "@trpc/tanstack-react-query";
 import { trpc, trpcClient } from "@/utils/trpc";
 import { useRunBatchAccumulator } from "@/hooks/use-run-batch-accumulator";
+import { WidgetLimitNotice } from "@/components/shared/widget-limit-notice";
+import { MAX_RUNS_PER_BATCH } from "@/lib/batch-limits";
 import {
   CATEGORICAL_LAYOUT,
   categoricalBottomMargin,
@@ -587,6 +589,10 @@ export function MultiRunCategoricalView({
         .sort(),
     [runs],
   );
+  // barsDataBatch rejects more than MAX_RUNS_PER_BATCH runIds outright, and
+  // dashboard widgets pass every selected run.
+  const overRunCap = barsRunIds.length > MAX_RUNS_PER_BATCH;
+
   const { data: batchData, isLoading: anyLoading } =
     useRunBatchAccumulator<BarsRunResult>({
       selectedRunIds: barsRunIds,
@@ -605,7 +611,8 @@ export function MultiRunCategoricalView({
           pathPrefix,
           runIds: missingRunIds,
         }),
-      enabled: (pathPrefix?.length ?? 0) > 0 && barsRunIds.length > 0,
+      enabled:
+        (pathPrefix?.length ?? 0) > 0 && barsRunIds.length > 0 && !overRunCap,
       staleTime: 1000 * 5,
     });
   const allEmpty =
@@ -830,6 +837,18 @@ export function MultiRunCategoricalView({
     // h-full to resolve against). Use an explicit min-h matching the
     // wrapper's minHeight so the skeleton actually fills the slot.
     return <Skeleton className="h-full min-h-[420px] w-full" />;
+  }
+
+  if (overRunCap) {
+    return (
+      <WidgetLimitNotice
+        title={pathPrefix}
+        unit="runs"
+        count={barsRunIds.length}
+        max={MAX_RUNS_PER_BATCH}
+        className="min-h-[420px]"
+      />
+    );
   }
 
   if (allEmpty || !currentRun) {
