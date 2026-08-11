@@ -177,6 +177,21 @@ export function ParallelCoords({
       data: { name: DATASET },
       width: "container",
       height: 300,
+      // `width: "container"` measures the parent, but the axis chrome was being
+      // laid out OUTSIDE that box and clipped by the canvas: y labels lost their
+      // "0." prefix to the left edge and x labels were cut off below it.
+      //
+      // "fit" makes width/height the OUTER box, and the explicit padding is what
+      // reserves room for the chrome. Vega sizes padding from the axis extents
+      // it measures at layout time — and this view lays out while its named
+      // dataset is still empty (see the embed effect), so those extents are
+      // near-zero and the labels have nowhere to go. Fixed padding sidesteps
+      // that ordering entirely.
+      autosize: { type: "fit", contains: "padding" },
+      // Right side carries the objective's colour legend, which sits OUTSIDE
+      // the plot area — 10px there clipped the last digit off labels like
+      // "0.11". Sized for a symbol plus ~6 characters.
+      padding: { left: 54, right: 72, top: 10, bottom: 42 },
       layer: [
         {
           // Selection params must live on a unit spec, not the top of a layered
@@ -279,6 +294,7 @@ export function ParallelCoords({
   useEffect(() => {
     let disposed = false;
     let view: VegaView | null = null;
+    let resizeObserver: ResizeObserver | null = null;
     setError(null);
     // A rebuild wipes Vega's selection rectangle. Drop the mirrored brush with
     // it, or the table below stays dimmed by a filter with nothing on screen
@@ -299,6 +315,21 @@ export function ParallelCoords({
           return;
         }
         view = result.view as unknown as VegaView;
+        // `width: "container"` is measured once at embed time. Without this a
+        // narrowed window leaves the canvas at its old width (the clamp above
+        // then scales it down rather than re-laying it out).
+        if (hostRef.current && typeof ResizeObserver !== "undefined") {
+          resizeObserver = new ResizeObserver(() => {
+            try {
+              (view as unknown as { resize: () => { run: () => void } })
+                .resize()
+                .run();
+            } catch {
+              // A finalized view throws; the cleanup below owns teardown.
+            }
+          });
+          resizeObserver.observe(hostRef.current);
+        }
         viewRef.current = view;
         view.data(DATASET, rowsRef.current);
         view.run();
@@ -361,6 +392,7 @@ export function ParallelCoords({
 
     return () => {
       disposed = true;
+      resizeObserver?.disconnect();
       viewRef.current = null;
       if (brushFrame.current != null) {
         cancelAnimationFrame(brushFrame.current);
@@ -436,7 +468,14 @@ export function ParallelCoords({
           <span>Drag across an axis to filter the runs below.</span>
         )}
       </div>
-      <div ref={hostRef} className="w-full" />
+      {/* [&_canvas]:!max-w-full — Vega sizes the canvas in pixels when the
+          view is created and does not shrink it when the container does.
+          Radix's scroll viewport wraps the page in a `display: table` box,
+          which shrink-wraps to CONTENT, so one oversized canvas widens the
+          whole page and the viewport's overflow-x:hidden then clips every
+          row at the same edge — while document.scrollWidth still reports no
+          overflow. Same guard the custom-chart viewer already uses. */}
+      <div ref={hostRef} className="w-full [&_canvas]:!max-w-full" />
       {/* One equal column per axis, centred — `justify-between` pinned the
           first and last to the container edges instead of under their axis,
           which made it unclear which range belonged to which. */}

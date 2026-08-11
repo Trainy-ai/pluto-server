@@ -79,6 +79,15 @@ interface MultiLineChartProps {
   /** Extra right padding mirror. Pins the line chart's right edge to a
    *  known offset matching the bars chart's rightMargin. */
   extraRightPadding?: number;
+  /**
+   * Replaces the over-limit notice's remedy line.
+   *
+   * The default tells the user to reduce their selection, which is only
+   * actionable where there IS one. On the sweep page the run set is the
+   * sweep's membership — fixed — so that advice sends them looking for a
+   * control that does not exist.
+   */
+  limitHint?: string;
 }
 
 /** Props for the inner memo'd component (includes syncedZoomRange) */
@@ -124,6 +133,7 @@ const MultiLineChartInner = memo(
     settingsRunId,
     extraLeftPadding,
     extraRightPadding,
+    limitHint,
   }: MultiLineChartInnerProps) => {
     useCheckDatabaseSize(bucketedMetricsCache);
     const chartColors = useChartColors();
@@ -804,7 +814,8 @@ const MultiLineChartInner = memo(
           count={queryPairs.length}
           max={effectiveMaxSeries}
           hint={
-            isRunBound ? undefined : "Reduce the number of selected runs or metrics."
+            limitHint ??
+            (isRunBound ? undefined : "Reduce the number of selected runs or metrics.")
           }
         />
       );

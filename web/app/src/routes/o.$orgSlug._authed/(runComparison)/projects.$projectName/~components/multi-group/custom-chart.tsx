@@ -20,9 +20,12 @@ interface MultiGroupCustomChartProps {
   runs: {
     runId: string;
     runName: string;
+    /** Display id ("BL7-764"), used as the legend label. */
+    displayId?: string | null;
     color: string;
   }[];
-  /** Selected-run count before the overlay cap, so truncation can be stated. */
+  /** Runs holding this panel's table, before the overlay cap — so truncation
+   *  is stated against the runs that could have been drawn, not the selection. */
   totalRunCount?: number;
   className?: string;
 }
@@ -69,7 +72,14 @@ export const MultiGroupCustomChart = ({
       const table = latestTable(tableQueries[i]?.data);
       // Runs that never logged this panel's table are simply absent from the
       // overlay rather than drawing an empty series.
-      if (table) out.push({ runName: run.runName, color: run.color, table });
+      if (table) {
+        out.push({
+          runName: run.runName,
+          legendLabel: run.displayId ?? undefined,
+          color: run.color,
+          table,
+        });
+      }
     });
     return out;
     // Spread, not a bare `.map()`: a fresh array literal in the dep list is
@@ -103,7 +113,7 @@ export const MultiGroupCustomChart = ({
       )}
       {truncated && (
         <p className="text-center font-mono text-[10px] text-muted-foreground">
-          showing {runs.length} of {totalRunCount} selected runs
+          showing {runs.length} of {totalRunCount} runs with this chart
         </p>
       )}
     </>

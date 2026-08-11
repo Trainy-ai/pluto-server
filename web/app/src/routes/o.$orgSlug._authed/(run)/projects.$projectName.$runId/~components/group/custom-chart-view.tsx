@@ -73,6 +73,14 @@ interface TableShape {
 /** One run's backing table for a panel. */
 export interface ChartSource {
   runName: string;
+  /**
+   * Short label for the legend, e.g. "BL7-764". These specs key colour, legend
+   * and tooltip off one `name` field, and full run labels
+   * ("custom-charts-all-r07 (BL7-764)") made the legend as wide as the chart on
+   * a many-run overlay. Omitted on the single-run page, which has one series
+   * and no width problem.
+   */
+  legendLabel?: string;
   /** The run's colour from the runs table — wandb's specs colour by it. */
   color: string;
   table: TableShape;
@@ -116,7 +124,7 @@ function toRecords(sources: ChartSource[]): Record<string, unknown>[] {
     const cols = (src.table.col ?? []).map((c) => c.name);
     return src.table.table.map((row) => {
       const rec: Record<string, unknown> = {
-        name: src.runName,
+        name: src.legendLabel || src.runName,
         color: src.color || DEFAULT_SERIES_COLOR,
       };
       row.forEach((cell, i) => {

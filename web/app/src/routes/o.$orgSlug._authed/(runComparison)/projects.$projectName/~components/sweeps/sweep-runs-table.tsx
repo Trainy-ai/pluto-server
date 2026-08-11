@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
-import { ExternalLink, ArrowDown, ArrowUp } from "lucide-react";
+import { ArrowDown, ArrowUp } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -16,8 +16,9 @@ interface SweepRunsTableProps {
     status: string;
     config: Record<string, unknown>;
     metricValue: number | null;
-    wandbUrl?: string | null;
   }[];
+  /** Run id → line colour, so a row's swatch matches its curve below. */
+  runColors?: Map<string, string>;
   sweptKeys: string[];
   metricName: string | null;
   /**
@@ -49,6 +50,7 @@ interface SweepRunsTableProps {
  */
 export function SweepRunsTable({
   runs,
+  runColors,
   sweptKeys,
   metricName,
   goal,
@@ -166,6 +168,14 @@ export function SweepRunsTable({
               data-brushed={brushed == null ? undefined : String(brushed)}
             >
               <td className="px-3 py-2">
+                {runColors && (
+                  <span
+                    className="mr-2 inline-block size-2 shrink-0 rounded-full align-middle"
+                    style={{ backgroundColor: runColors.get(run.runId) }}
+                    data-testid="sweep-run-swatch"
+                    aria-hidden
+                  />
+                )}
                 <Link
                   to="/o/$orgSlug/projects/$projectName/$runId"
                   params={{ orgSlug, projectName, runId: run.displayId ?? run.runId }}
@@ -177,24 +187,6 @@ export function SweepRunsTable({
                   <span className="ml-2 text-[10px] font-medium text-emerald-500">
                     best
                   </span>
-                )}
-                {/* Migrated runs keep a pointer to where they came from, which
-                    is the only way back to the original for comparison. */}
-                {run.wandbUrl && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <a
-                        href={run.wandbUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="ml-2 inline-flex align-middle text-muted-foreground hover:text-foreground"
-                        data-testid="sweep-run-wandb-link"
-                      >
-                        <ExternalLink className="h-3 w-3" />
-                      </a>
-                    </TooltipTrigger>
-                    <TooltipContent>Open the original run on wandb</TooltipContent>
-                  </Tooltip>
                 )}
               </td>
               {sweptKeys.map((key) => (

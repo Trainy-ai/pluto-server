@@ -20,6 +20,8 @@ import { ParamImportance } from "./~components/sweeps/param-importance";
 import { SweepProgress } from "./~components/sweeps/sweep-progress";
 import { SearchSpace } from "./~components/sweeps/search-space";
 import { SweepSummaryBar } from "./~components/sweeps/sweep-summary-bar";
+import { SweepMetricCharts } from "./~components/sweeps/sweep-metric-charts";
+import { useSweepRunColors } from "./~components/sweeps/sweep-run-colors";
 
 type Goal = "minimize" | "maximize";
 
@@ -33,6 +35,9 @@ interface SweepSearchParams {
   /** Widen importance to every varying config key, not just swept ones. */
   allConfig?: boolean;
 }
+
+/** Stable empty list so the colour hook's memo doesn't churn while loading. */
+const EMPTY_RUNS: { runId: string }[] = [];
 
 export const Route = createFileRoute(
   "/o/$orgSlug/_authed/(runComparison)/projects/$projectName/sweeps/$sweepId",
@@ -120,6 +125,10 @@ function RouteComponent() {
       includeAllConfig: allConfig === true,
     }),
   });
+
+  // One colour per run, shared by the runs table's swatches and the metric
+  // curves so a row and its line are recognisably the same run.
+  const runColors = useSweepRunColors(data?.runs ?? EMPTY_RUNS);
 
   // Runs surviving the parallel-coords brush; null when nothing is brushed.
   const [brushedRunIds, setBrushedRunIds] = useState<string[] | null>(null);
@@ -289,7 +298,32 @@ function RouteComponent() {
                   sweep has more than a couple of axes. */}
               <SearchSpace parameters={data.parameters} sweptKeys={data.sweptKeys} />
 
-              <div className="grid gap-6 lg:grid-cols-2">
+              <SweepRunsTable
+                runs={data.runs}
+                runColors={runColors}
+                sweptKeys={data.sweptKeys}
+                metricName={data.resolvedMetric.name}
+                goal={data.resolvedMetric.goal}
+                projectName={projectName}
+                orgSlug={orgSlug}
+                bestRunId={bestRun?.runId}
+                highlightRunIds={brushedRunIds}
+              />
+
+              <SweepMetricCharts
+                runs={data.runs}
+                runColors={runColors}
+                availableMetrics={data.availableMetrics}
+                metricName={data.resolvedMetric.name}
+                organizationId={organizationId}
+                projectName={projectName}
+              />
+
+              {/* [&>*]:min-w-0 — grid items default to min-width:auto, so a
+                  child with a wide intrinsic minimum (the importance table's
+                  prose, a Vega canvas) pushes its track past 1fr and the row
+                  overflows the page instead of the child shrinking. */}
+              <div className="grid gap-6 lg:grid-cols-2 [&>*]:min-w-0">
                 <SweepProgress
                   runs={data.runs}
                   metricName={data.resolvedMetric.name}
@@ -311,17 +345,6 @@ function RouteComponent() {
                 metricName={data.resolvedMetric.name}
                 goal={data.resolvedMetric.goal}
                 onFilterChange={handleFilterChange}
-              />
-
-              <SweepRunsTable
-                runs={data.runs}
-                sweptKeys={data.sweptKeys}
-                metricName={data.resolvedMetric.name}
-                goal={data.resolvedMetric.goal}
-                projectName={projectName}
-                orgSlug={orgSlug}
-                bestRunId={bestRun?.runId}
-                highlightRunIds={brushedRunIds}
               />
             </>
           )}

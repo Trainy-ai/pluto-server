@@ -1,56 +1,42 @@
-import { useMemo } from "react";
-import { useQueries } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { trpc } from "@/utils/trpc";
 import type { CustomChartPanel } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~components/group/custom-chart-view";
 
-/**
- * How many selected runs are asked for their panel definitions.
- *
- * Panels are a property of the wandb *project* — every run in a migrated
- * project that logged a given `wandb.plot.*` chart carries the same entry — so
- * a handful of runs is enough to discover the set, and unioning a few covers
- * the case where only some runs logged a given chart. Probing all of them would
- * cost one `runs.get` per selected run, which on a 200-run project is 200
- * requests to learn nothing new.
- */
-const PANEL_PROBE_RUNS = 8;
+const NO_PANELS: CustomChartPanel[] = [];
 
 /**
  * Migrated wandb custom-chart panels (`wandb.plot.*`) across the selected runs.
  *
  * The exporter parks these on run config rather than in the log registry, so
  * unlike every other widget on this page they cannot be discovered from
- * `groupedMetrics` — they have to be read out of the runs themselves.
+ * `groupedMetrics`. This used to mean reading configs client-side, which cost
+ * one `runs.get` per run — so it sampled the first 8 and assumed the rest
+ * matched. In projects where only some runs log custom charts that assumption
+ * fails: the section showed only what those 8 held, changing with the selection
+ * order and disappearing when none of them had panels.
+ *
+ * `runs.customChartPanels` does the union in one Postgres pass instead (~5ms
+ * over a 771-run project), scoped to the selected runs so a chart appears when
+ * a selected run actually has it — the same rule the media and table sections
+ * follow.
  */
 export function useCustomChartPanels(
   organizationId: string,
   projectName: string,
   runIds: string[],
 ): CustomChartPanel[] {
-  const probeIds = useMemo(() => runIds.slice(0, PANEL_PROBE_RUNS), [runIds]);
-
-  const runQueries = useQueries({
-    queries: probeIds.map((runId) =>
-      trpc.runs.get.queryOptions({ organizationId, projectName, runId }),
+  const { data } = useQuery(
+    trpc.runs.customChartPanels.queryOptions(
+      { organizationId, projectName, runIds },
+      {
+        enabled: runIds.length > 0,
+        staleTime: 30 * 1000,
+        // Keeps the section mounted while a selection change refetches, rather
+        // than tearing it down and remounting every chart.
+        placeholderData: (prev) => prev,
+      },
     ),
-  });
+  );
 
-  const configs = runQueries.map((q) => q.data?.config);
-
-  return useMemo(() => {
-    const byKey = new Map<string, CustomChartPanel>();
-    for (const config of configs) {
-      const panels = (config as { wandb?: { custom_charts?: unknown } } | null | undefined)
-        ?.wandb?.custom_charts;
-      if (!Array.isArray(panels)) continue;
-      for (const p of panels) {
-        if (!p || typeof p !== "object") continue;
-        const panel = p as CustomChartPanel;
-        if (typeof panel.tableKey !== "string" || typeof panel.key !== "string") continue;
-        if (!byKey.has(panel.key)) byKey.set(panel.key, panel);
-      }
-    }
-    return [...byKey.values()];
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [JSON.stringify(configs.map((c) => (c as { wandb?: unknown })?.wandb ?? null))]);
+  return (data?.panels as CustomChartPanel[] | undefined) ?? NO_PANELS;
 }

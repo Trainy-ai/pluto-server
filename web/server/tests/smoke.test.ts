@@ -11192,4 +11192,171 @@ describe('SDK API Endpoints (with API Key)', () => {
       expect(map[secondLog]).toEqual([runWithoutLog]);
     });
   });
+  // ---------------------------------------------------------------------
+  // Section 42: runs.customChartPanels
+  //
+  // Migrated wandb custom-chart panels live in run CONFIG, not the log
+  // registry, so they can only be found by reading runs. This proc replaced a
+  // client-side sample of the first 8 selected runs, which made the section
+  // appear and disappear depending on which runs happened to sort first.
+  // What matters: it unions across the WHOLE selection and dedupes by panel key.
+  // ---------------------------------------------------------------------
+  describe('Section 42: customChartPanels reads the whole selection', () => {
+    const S42_EMAIL = process.env.TEST_USER_EMAIL || 'test-smoke@mlop.local';
+    const S42_PASSWORD = process.env.TEST_USER_PASSWORD || 'TestPassword123!';
+    const project = `custom-panels-${Date.now()}`;
+
+    let s42Cookie: string | null = null;
+    let s42OrgId = '';
+    /** Runs in selection order: the panel-carrying one is deliberately LAST. */
+    let plainRuns: string[] = [];
+    let panelRun = '';
+
+    const panels = [
+      { key: 'roc', panelDefId: 'wandb/area-under-curve/v0', tableKey: 'roc_table' },
+      { key: 'bar', panelDefId: 'wandb/bar/v0', tableKey: 'bar_table' },
+    ];
+
+    const createRun = async (name: string, config?: unknown) => {
+      const res = await makeRequest('/api/runs/create', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TEST_API_KEY}` },
+        body: JSON.stringify({
+          projectName: project,
+          runName: name,
+          ...(config ? { config: JSON.stringify(config) } : {}),
+        }),
+      });
+      return res.status === 200 ? res.json() : null;
+    };
+
+    beforeAll(async () => {
+      try {
+        const health = await makeRequest('/api/health');
+        if (health.status !== 200 || !TEST_API_KEY) return;
+      } catch {
+        return;
+      }
+
+      const signIn = await makeRequest('/api/auth/sign-in/email', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: process.env.TEST_APP_ORIGIN || BASE_URL,
+        },
+        body: JSON.stringify({ email: S42_EMAIL, password: S42_PASSWORD }),
+      });
+      const match = signIn.headers
+        .get('set-cookie')
+        ?.match(/(better[-_]auth\.session_token=[^;]+)/);
+      if (!match) return;
+      s42Cookie = match[1];
+
+      s42OrgId = await orgIdForApiKey();
+
+      // Nine runs without panels, then one with — mirroring the shape that
+      // broke the old sampler, which only ever looked at the first eight.
+      for (let i = 0; i < 9; i++) {
+        const r = await createRun(`s42-plain-${i}-${Date.now()}`);
+        if (r?.runId) plainRuns.push(sqidEncode(r.runId));
+      }
+      const withPanels = await createRun(`s42-panels-${Date.now()}`, {
+        wandb: { custom_charts: panels },
+      });
+      panelRun = withPanels?.runId ? sqidEncode(withPanels.runId) : '';
+    });
+
+    const call = async (runIds: string[]) => {
+      const res = await makeTrpcRequest(
+        'runs.customChartPanels',
+        { organizationId: s42OrgId, projectName: project, runIds },
+        { Cookie: s42Cookie ?? '' },
+        'GET',
+      );
+      const body = await res.json();
+      return (body.result?.data?.json ?? body.result?.data)?.panels ?? [];
+    };
+
+    it('Test 42.1: finds a panel on a run past the old 8-run sample window', async () => {
+      if (!s42Cookie || !s42OrgId || !panelRun || plainRuns.length < 9) {
+        console.log('   No session/fixtures - skipping');
+        return;
+      }
+      const found = await call([...plainRuns, panelRun]);
+      expect(found.map((p: { key: string }) => p.key).sort()).toEqual(['bar', 'roc']);
+    });
+
+    it('Test 42.2: returns nothing when no selected run carries a panel', async () => {
+      if (!s42Cookie || !s42OrgId || plainRuns.length < 9) {
+        console.log('   No session/fixtures - skipping');
+        return;
+      }
+      // Same rule as every other section: a widget appears when a SELECTED run
+      // actually has the data, not because the project does.
+      expect(await call(plainRuns)).toEqual([]);
+    });
+
+    it('Test 42.3: dedupes a panel repeated across runs', async () => {
+      if (!s42Cookie || !s42OrgId || !panelRun) {
+        console.log('   No session/fixtures - skipping');
+        return;
+      }
+      const second = await createRun(`s42-panels-dup-${Date.now()}`, {
+        wandb: { custom_charts: panels },
+      });
+      if (!second?.runId) return;
+      // Every migrated run repeats the same definitions; one chart, not N.
+      const found = await call([panelRun, sqidEncode(second.runId)]);
+      expect(found).toHaveLength(2);
+      expect(found.map((p: { key: string }) => p.key).sort()).toEqual(['bar', 'roc']);
+    });
+
+    it('Test 42.4: carries the backing table key through', async () => {
+      if (!s42Cookie || !s42OrgId || !panelRun) {
+        console.log('   No session/fixtures - skipping');
+        return;
+      }
+      // The frontend narrows a chart's runs by this key, so losing it would
+      // silently take the overlay back to sampling by position.
+      const roc = (await call([panelRun])).find(
+        (p: { key: string }) => p.key === 'roc',
+      );
+      expect(roc?.tableKey).toBe('roc_table');
+    });
+
+    /**
+     * Scoping lives in a hand-written WHERE clause (`p.id = $1 AND
+     * r."organizationId" = $2 AND r.id = ANY($3)`) rather than in Prisma's
+     * generated SQL, so nothing type-checks it. Drop the project term and every
+     * test above still passes — the run genuinely carries the panel — while a
+     * project inherits chart definitions from its neighbours. Same panel
+     * config, second project, asked for against the first.
+     */
+    it('Test 42.5: does not surface a panel from a run in another project', async () => {
+      if (!s42Cookie || !s42OrgId || !panelRun) {
+        console.log('   No session/fixtures - skipping');
+        return;
+      }
+
+      const created = await makeRequest('/api/runs/create', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TEST_API_KEY}` },
+        body: JSON.stringify({
+          projectName: `${project}-other`,
+          runName: `s42-elsewhere-${Date.now()}`,
+          config: JSON.stringify({ wandb: { custom_charts: panels } }),
+        }),
+      });
+      if (created.status !== 200) {
+        console.log('   Could not create the second project - skipping');
+        return;
+      }
+      const other = await created.json();
+      if (!other?.runId) return;
+
+      // Asked for against the FIRST project: the panel is on that run, but the
+      // run is not in this project, so nothing should come back.
+      expect(await call([sqidEncode(other.runId)])).toEqual([]);
+    });
+  });
 });

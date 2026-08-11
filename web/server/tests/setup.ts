@@ -4345,6 +4345,110 @@ async function setupTestData(): Promise<TestData> {
   });
   console.log('   ✓ Ensured "Over Cap Narrowing Test" dashboard');
 
+  // 5️⃣g³ `panel-discovery-test` — custom-chart panels parked past the windows
+  //      #574 used to sample.
+  //
+  // Its own project ON PURPOSE. The custom-charts section renders above the
+  // metric groups and fills the viewport, and the metric groups below it are
+  // lazily mounted on viewport proximity — so putting panels on over-cap-test
+  // pushed its `train` chart off-screen and the run-cap specs waited two
+  // minutes for a chart that would never mount. A fixture whose layout other
+  // tests depend on is not the place to add a section.
+  //
+  // 30 runs, panel on the LAST three. Both bugs are position bugs — discovery
+  // sampled the first 8 selected runs, the overlay took the first 25 — so runs
+  // 27-29 sit past both. At the front they would pass without the fix.
+  console.log('\n5️⃣g³ Creating panel-discovery-test project...');
+
+  const PANEL_PROJECT = 'panel-discovery-test';
+  const PANEL_RUN_COUNT = 30;
+  const PANEL_HOLDERS = 3;
+
+  const panelProject = await prisma.projects.upsert({
+    where: {
+      organizationId_name: { organizationId: org.id, name: PANEL_PROJECT },
+    },
+    create: { name: PANEL_PROJECT, organizationId: org.id },
+    update: {},
+  });
+
+  const panelExisting = await prisma.runs.count({
+    where: { projectId: panelProject.id },
+  });
+
+  const panelDef = WM_PANELS.find((p) => p.key === 'line');
+
+  if (panelExisting < PANEL_RUN_COUNT && panelDef) {
+    await prisma.runs.createMany({
+      data: Array.from({ length: PANEL_RUN_COUNT }, (_, i) => ({
+        name: `panel-run-${String(i).padStart(3, '0')}`,
+        organizationId: org.id,
+        projectId: panelProject.id,
+        createdById: user.id,
+        creatorApiKeyId: apiKey.id,
+        status: 'COMPLETED' as const,
+        updatedAt: new Date(),
+      })),
+      skipDuplicates: true,
+    });
+
+    const panelRuns = await prisma.runs.findMany({
+      where: { projectId: panelProject.id },
+      select: { id: true, name: true },
+      orderBy: { name: 'asc' },
+    });
+    const holders = panelRuns.slice(-PANEL_HOLDERS);
+
+    await prisma.runs.updateMany({
+      where: { id: { in: holders.map((r) => r.id) } },
+      data: { config: { wandb: { custom_charts: [panelDef] } } },
+    });
+    await prisma.runLogs.createMany({
+      data: holders.map((run) => ({
+        runId: run.id,
+        logName: panelDef.tableKey,
+        logGroup: '',
+        logType: 'TABLE' as const,
+      })),
+      skipDuplicates: true,
+    });
+
+    const panelTable = WM_CHART_TABLES[panelDef.tableKey];
+    if (pinTestClickhouseUrl && panelTable) {
+      const panelCh = createClient({
+        url: pinTestClickhouseUrl,
+        username: process.env.CLICKHOUSE_USER || 'default',
+        password: process.env.CLICKHOUSE_PASSWORD || '',
+      });
+      await panelCh.insert({
+        table: 'mlop_data',
+        values: holders.map((run) => ({
+          tenantId: org.id,
+          projectName: PANEL_PROJECT,
+          runId: Number(run.id),
+          logGroup: '',
+          logName: panelDef.tableKey,
+          time: new Date(Date.now() - 60_000)
+            .toISOString()
+            .replace('T', ' ')
+            .replace('Z', ''),
+          step: panelTable.step,
+          dataType: 'TABLE',
+          data: JSON.stringify(panelTable.data),
+        })),
+        format: 'JSONEachRow',
+        clickhouse_settings: { async_insert: 0, wait_for_async_insert: 1 },
+      });
+      await panelCh.close();
+    }
+
+    console.log(
+      `   ✓ Seeded ${panelRuns.length} runs, panel on the last ${PANEL_HOLDERS}`,
+    );
+  } else {
+    console.log(`   ✓ ${PANEL_PROJECT} already seeded, skipping`);
+  }
+
   console.log('\n5️⃣h Creating run-groups project...');
 
   // `optimizer` is a string config key (distinct values sgd/adam/adamw)

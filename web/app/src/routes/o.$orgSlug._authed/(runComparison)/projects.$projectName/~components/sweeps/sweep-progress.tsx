@@ -77,6 +77,18 @@ export function SweepProgress({ runs, metricName, goal, className }: SweepProgre
       data: { name: DATASET },
       width: "container",
       height: 260,
+      // `width: "container"` measures the parent, but the axis chrome was being
+      // laid out OUTSIDE that box and clipped by the canvas: y labels lost their
+      // "0." prefix to the left edge and x labels were cut off below it.
+      //
+      // "fit" makes width/height the OUTER box, and the explicit padding is what
+      // reserves room for the chrome. Vega sizes padding from the axis extents
+      // it measures at layout time — and this view lays out while its named
+      // dataset is still empty (see the embed effect), so those extents are
+      // near-zero and the labels have nowhere to go. Fixed padding sidesteps
+      // that ordering entirely.
+      autosize: { type: "fit", contains: "padding" },
+      padding: { left: 54, right: 10, top: 6, bottom: 54 },
       encoding: {
         x: {
           field: "created",
@@ -136,6 +148,7 @@ export function SweepProgress({ runs, metricName, goal, className }: SweepProgre
   useEffect(() => {
     let disposed = false;
     let view: VegaView | null = null;
+    let resizeObserver: ResizeObserver | null = null;
     // Otherwise one transient failure to load the Vega chunk latches the
     // component into its error state until it unmounts.
     setError(null);
@@ -154,6 +167,21 @@ export function SweepProgress({ runs, metricName, goal, className }: SweepProgre
           return;
         }
         view = result.view as unknown as VegaView;
+        // `width: "container"` is measured once at embed time. Without this a
+        // narrowed window leaves the canvas at its old width (the clamp above
+        // then scales it down rather than re-laying it out).
+        if (hostRef.current && typeof ResizeObserver !== "undefined") {
+          resizeObserver = new ResizeObserver(() => {
+            try {
+              (view as unknown as { resize: () => { run: () => void } })
+                .resize()
+                .run();
+            } catch {
+              // A finalized view throws; the cleanup below owns teardown.
+            }
+          });
+          resizeObserver.observe(hostRef.current);
+        }
         viewRef.current = view;
         view.data(DATASET, rowsRef.current);
         view.run();
@@ -164,6 +192,7 @@ export function SweepProgress({ runs, metricName, goal, className }: SweepProgre
 
     return () => {
       disposed = true;
+      resizeObserver?.disconnect();
       viewRef.current = null;
       view?.finalize();
     };
@@ -204,7 +233,14 @@ export function SweepProgress({ runs, metricName, goal, className }: SweepProgre
           (line = best so far, {goal === "maximize" ? "highest" : "lowest"})
         </span>
       </h2>
-      <div ref={hostRef} className="w-full" />
+      {/* [&_canvas]:!max-w-full — Vega sizes the canvas in pixels when the
+          view is created and does not shrink it when the container does.
+          Radix's scroll viewport wraps the page in a `display: table` box,
+          which shrink-wraps to CONTENT, so one oversized canvas widens the
+          whole page and the viewport's overflow-x:hidden then clips every
+          row at the same edge — while document.scrollWidth still reports no
+          overflow. Same guard the custom-chart viewer already uses. */}
+      <div ref={hostRef} className="w-full [&_canvas]:!max-w-full" />
     </div>
   );
 }

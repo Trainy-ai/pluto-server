@@ -24,6 +24,10 @@ import {
   runIdsByLogNameInput,
   MAX_RUNS_FOR_LOOKUP,
 } from '../trpc/routers/runs/procs/run-ids-by-log-name.schema';
+import {
+  customChartPanelsInput,
+  MAX_RUNS_FOR_PANEL_SCAN,
+} from '../trpc/routers/runs/procs/custom-chart-panels.schema';
 
 // --- Test Data ---
 
@@ -1043,6 +1047,41 @@ describe('runIdsByLogNameInput', () => {
     expect(
       runIdsByLogNameInput.safeParse({ projectName: 'p', logNames: ['l'], runIds: [] })
         .success,
+    ).toBe(false);
+  });
+});
+
+// --- customChartPanels input ---
+
+describe('customChartPanelsInput', () => {
+  const runIds = (n: number) => Array.from({ length: n }, (_, i) => `r${i}`);
+
+  /**
+   * This proc replaced client-side sampling of 8 runs. Its whole value is
+   * scanning the WHOLE selection in one pass, so its cap must stay well above
+   * the data procs' 200 — capping it low would quietly reintroduce sampling.
+   */
+  it('scans far more runs than the data procs accept', () => {
+    expect(MAX_RUNS_FOR_PANEL_SCAN).toBeGreaterThan(MAX_RUNS_PER_BATCH);
+    const parsed = customChartPanelsInput.safeParse({
+      projectName: 'p',
+      runIds: runIds(MAX_RUNS_PER_BATCH * 2),
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it('rejects past MAX_RUNS_FOR_PANEL_SCAN', () => {
+    expect(
+      customChartPanelsInput.safeParse({
+        projectName: 'p',
+        runIds: runIds(MAX_RUNS_FOR_PANEL_SCAN + 1),
+      }).success,
+    ).toBe(false);
+  });
+
+  it('requires at least one run', () => {
+    expect(
+      customChartPanelsInput.safeParse({ projectName: 'p', runIds: [] }).success,
     ).toBe(false);
   });
 });

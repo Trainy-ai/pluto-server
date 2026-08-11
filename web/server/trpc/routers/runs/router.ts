@@ -18,6 +18,7 @@ import { getFieldValuesProcedure } from "./procs/get-field-values";
 import { distinctMetricNamesProcedure } from "./procs/distinct-metric-names";
 import { distinctFileLogNamesProcedure } from "./procs/distinct-file-log-names";
 import { runIdsByLogNameProcedure } from "./procs/run-ids-by-log-name";
+import { customChartPanelsProcedure } from "./procs/custom-chart-panels";
 import { metricSummariesProcedure } from "./procs/metric-summaries";
 import { metricBestStepsProcedure } from "./procs/metric-best-steps";
 import { forkRunProcedure } from "./procs/fork-run";
@@ -43,6 +44,7 @@ export const runsRouter = router({
   distinctMetricNames: distinctMetricNamesProcedure,
   distinctFileLogNames: distinctFileLogNamesProcedure,
   runIdsByLogName: runIdsByLogNameProcedure,
+  customChartPanels: customChartPanelsProcedure,
   metricSummaries: metricSummariesProcedure,
   metricBestSteps: metricBestStepsProcedure,
   fork: forkRunProcedure,
