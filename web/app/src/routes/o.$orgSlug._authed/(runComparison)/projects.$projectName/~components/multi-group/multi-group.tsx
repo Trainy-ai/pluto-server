@@ -13,9 +13,10 @@ import { MultiHistogramView } from "./histogram-view";
 import { RendererErrorBoundary } from "@/components/shared/renderer-error-boundary";
 import { ChartCardWrapper } from "./chart-card-wrapper";
 import { Card } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
 import { useMemo, useCallback, memo } from "react";
 import { useHiddenRunIds } from "@/hooks/use-hidden-run-ids";
+import { filterRunsByLog } from "@/lib/filter-runs-by-log";
+import { useRunIdsByLogName } from "../../~queries/file-log-names";
 import { cn } from "@/lib/utils";
 import type { RunLogType, RunStatus } from "@/lib/grouping/types";
 import { trpc } from "@/utils/trpc";
@@ -59,6 +60,19 @@ interface MultiGroupProps {
   groupBy?: string[];
 }
 
+/** Widget types whose data procs cap runIds, so their run list is worth
+ *  narrowing before the request. METRIC is excluded: line charts already get
+ *  a per-metric run list from the grouping pipeline. */
+const FILTERABLE_WIDGET_TYPES = new Set<string>([
+  "IMAGE",
+  "VIDEO",
+  "AUDIO",
+  "HISTOGRAM",
+  "FILE",
+  "TEXT",
+  "ARTIFACT",
+]);
+
 // Constants for responsive design
 const CHART_HEIGHTS = {
   sm: "h-[300px]",
@@ -83,6 +97,27 @@ export const MultiGroup = ({
   groupBy,
 }: MultiGroupProps) => {
   const hiddenRunIds = useHiddenRunIds();
+
+  // Resolve, for every non-line widget in this group, which runs logged it.
+  // One lookup per group rather than per widget; run_logs is indexed and the
+  // result is cached, and METRIC groups skip it entirely.
+  const fileLogNames = useMemo(
+    () =>
+      metrics
+        .filter((m) => FILTERABLE_WIDGET_TYPES.has(m.type))
+        .map((m) => m.name),
+    [metrics],
+  );
+  const groupRunIds = useMemo(
+    () => [...new Set(metrics.flatMap((m) => m.data.map((d) => d.runId)))],
+    [metrics],
+  );
+  const { data: runIdsByLog } = useRunIdsByLogName(
+    organizationId,
+    projectName,
+    fileLogNames,
+    groupRunIds,
+  );
   const isGrouped = !!groupBy && groupBy.length > 0;
 
   // Memoize lines arrays for each metric to prevent recreation
@@ -173,13 +208,28 @@ export const MultiGroup = ({
         }
 
         // Format runName with displayId for non-METRIC types
-        // Filter out hidden runs so media components re-render without them
-        const formattedRuns = metric.data
-          .filter((d) => !hiddenRunIds.has(d.runId))
-          .map((d) => ({
-            ...d,
-            runName: formatRunLabel(d.runName, d.displayId),
-          }));
+        // Filter out hidden runs so media components re-render without them.
+        // Also narrow to runs that actually logged this name: unlike METRIC
+        // groups, a media group's `data` carries every selected run, so without
+        // this the widget hands all of them to filesBatch / histogramBatch —
+        // which cap runIds at 200.
+        //
+        // Fails open for the render before the lookup resolves, so a widget can
+        // still fire one full-selection request on first paint (exactly what it
+        // did before this filter existed). Gating the render on the lookup was
+        // tried and left the widgets stuck on skeletons: these branches return
+        // render callbacks that a memoized parent captures, so flipping a
+        // loading flag here doesn't re-render them. Over the 200 cap the
+        // widget's own guard blocks that first request anyway.
+        const formattedRuns = filterRunsByLog(
+          metric.data
+            .filter((d) => !hiddenRunIds.has(d.runId))
+            .map((d) => ({
+              ...d,
+              runName: formatRunLabel(d.runName, d.displayId),
+            })),
+          runIdsByLog?.runIdsByLogName[metric.name],
+        );
 
         // `pb-2.5` overrides the inner widget's default `pb-4`, shrinking
         // the gap between the sticky step slider and the chart-card
@@ -300,6 +350,11 @@ export const MultiGroup = ({
       // stale grouped lines) until they hard-refresh.
       isGrouped,
       groupBy,
+      // The narrowing lookup resolves a tick AFTER this memo first runs, so
+      // without it here the render callbacks keep the fail-open run lists
+      // forever and media widgets never narrow at all. Nothing else in this
+      // list changes when the mapping lands, so there is no second chance.
+      runIdsByLog,
     ],
   );
 

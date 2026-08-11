@@ -6,6 +6,9 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+// These two procs decode SQIDs directly rather than going through
+// resolveRunId, so the tests must address runs the way the app does.
+import { sqidEncode } from '../lib/sqid';
 
 const BASE_URL = process.env.TEST_BASE_URL || 'http://localhost:3001';
 const TEST_API_KEY = process.env.TEST_API_KEY || '';
@@ -41,6 +44,22 @@ async function makeTrpcRequest(procedure: string, input: any = {}, headers: Reco
     body: method === 'POST' ? JSON.stringify(input) : undefined,
   });
   return response;
+}
+
+/**
+ * The org that owns a project, resolved via the API key that created it.
+ *
+ * The smoke user belongs to two orgs, and a fresh session has no
+ * activeOrganization — so picking `allOrgs[0]` can address the wrong one and
+ * every org-scoped call quietly returns nothing.
+ */
+async function orgIdForApiKey(): Promise<string> {
+  const res = await makeRequest('/api/runs/projects', {
+    headers: { Authorization: `Bearer ${TEST_API_KEY}` },
+  });
+  if (res.status !== 200) return '';
+  const body = await res.json();
+  return body.projects?.[0]?.organizationId ?? body.organizationId ?? '';
 }
 
 describe('Backend Smoke Tests', () => {
@@ -10957,6 +10976,220 @@ describe('SDK API Endpoints (with API Key)', () => {
         logName: 'loss',
       });
       expect(body).not.toContain('too_big');
+    });
+  });
+  // ---------------------------------------------------------------------
+  // Section 41: runs.runIdsByLogName
+  //
+  // Dashboard widgets narrow their selection with this before hitting the
+  // capped data procs. Two properties carry that design, and both are easy to
+  // break without noticing:
+  //   - a requested name that NO run has must still come back, as an empty
+  //     array. An absent key is indistinguishable from "not resolved yet", and
+  //     callers fail open on that — sending the whole selection again.
+  //   - its own run cap must stay well above the data procs' 200, or the
+  //     narrowing cannot be applied to the selections that need it.
+  // ---------------------------------------------------------------------
+  describe('Section 41: runIdsByLogName narrows a selection', () => {
+    const S41_EMAIL = process.env.TEST_USER_EMAIL || 'test-smoke@mlop.local';
+    const S41_PASSWORD = process.env.TEST_USER_PASSWORD || 'TestPassword123!';
+    const project = `runids-by-log-${Date.now()}`;
+    const withLog = `s41/has-metric-${Date.now()}`;
+
+    let s41Cookie: string | null = null;
+    let s41OrgId = '';
+    let runWithLog = '';
+    let runWithoutLog = '';
+    /** Numeric id behind `runWithoutLog` — /logName/add takes the raw id. */
+    let runWithoutLogId = 0;
+
+    const createRun = async (name: string) => {
+      const res = await makeRequest('/api/runs/create', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TEST_API_KEY}` },
+        body: JSON.stringify({ projectName: project, runName: name }),
+      });
+      if (res.status !== 200) return null;
+      return res.json();
+    };
+
+    beforeAll(async () => {
+      try {
+        const health = await makeRequest('/api/health');
+        if (health.status !== 200 || !TEST_API_KEY) return;
+      } catch {
+        return;
+      }
+
+      const signIn = await makeRequest('/api/auth/sign-in/email', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: process.env.TEST_APP_ORIGIN || BASE_URL,
+        },
+        body: JSON.stringify({ email: S41_EMAIL, password: S41_PASSWORD }),
+      });
+      const match = signIn.headers
+        .get('set-cookie')
+        ?.match(/(better[-_]auth\.session_token=[^;]+)/);
+      if (!match) return;
+      s41Cookie = match[1];
+
+      s41OrgId = await orgIdForApiKey();
+
+      // One run that logs the metric, one that does not — the whole point is
+      // telling them apart.
+      const a = await createRun(`s41-with-log-${Date.now()}`);
+      const b = await createRun(`s41-without-log-${Date.now()}`);
+      runWithLog = a?.runId ? sqidEncode(a.runId) : '';
+      runWithoutLog = b?.runId ? sqidEncode(b.runId) : '';
+      runWithoutLogId = b?.runId ?? 0;
+      if (a?.runId) {
+        await makeRequest('/api/runs/logName/add', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${TEST_API_KEY}` },
+          body: JSON.stringify({
+            runId: a.runId,
+            logName: [withLog],
+            logType: 'METRIC',
+          }),
+        });
+      }
+    });
+
+    const call = async (logNames: string[], runIds: string[]) => {
+      const res = await makeTrpcRequest(
+        'runs.runIdsByLogName',
+        { organizationId: s41OrgId, projectName: project, logNames, runIds },
+        { Cookie: s41Cookie ?? '' },
+        'GET',
+      );
+      const body = await res.json();
+      return (body.result?.data?.json ?? body.result?.data)?.runIdsByLogName;
+    };
+
+    it('Test 41.1: returns only the runs that logged the name', async () => {
+      if (!s41Cookie || !s41OrgId || !runWithLog || !runWithoutLog) {
+        console.log('   No session/fixtures - skipping');
+        return;
+      }
+      const map = await call([withLog], [runWithLog, runWithoutLog]);
+      expect(map).toBeDefined();
+      expect(map[withLog]).toContain(runWithLog);
+      expect(map[withLog]).not.toContain(runWithoutLog);
+    });
+
+    it('Test 41.2: a name no run has still comes back, as an empty array', async () => {
+      if (!s41Cookie || !s41OrgId || !runWithLog) {
+        console.log('   No session/fixtures - skipping');
+        return;
+      }
+      const absent = `s41/nobody-logged-this-${Date.now()}`;
+      const map = await call([withLog, absent], [runWithLog, runWithoutLog]);
+      // Present-but-empty, NOT missing: callers fail open on a missing key and
+      // would send the entire selection to a proc that caps at 200.
+      expect(Object.keys(map)).toContain(absent);
+      expect(map[absent]).toEqual([]);
+    });
+
+    it('Test 41.3: accepts a selection larger than the data procs allow', async () => {
+      if (!s41Cookie || !s41OrgId || !runWithLog) {
+        console.log('   No session/fixtures - skipping');
+        return;
+      }
+      // 201 ids: one real, the rest padding. The data procs reject this size —
+      // this proc exists to narrow exactly such a selection.
+      const padded = [runWithLog, ...Array.from({ length: 200 }, (_, i) => `pad${i}`)];
+      const res = await makeTrpcRequest(
+        'runs.runIdsByLogName',
+        {
+          organizationId: s41OrgId,
+          projectName: project,
+          logNames: [withLog],
+          runIds: padded,
+        },
+        { Cookie: s41Cookie },
+        'GET',
+      );
+      const body = await res.text();
+      expect(body).not.toContain('too_big');
+    });
+
+    /**
+     * The lookup joins through `run: { projectId, organizationId }`. Drop the
+     * project half and every test above still passes — the run genuinely has
+     * the log — while widgets start narrowing to runs from a project the user
+     * isn't looking at. Same log name in a second project, asked for against
+     * the first: it must not come back.
+     */
+    it('Test 41.4: does not resolve a run that lives in another project', async () => {
+      if (!s41Cookie || !s41OrgId || !runWithLog) {
+        console.log('   No session/fixtures - skipping');
+        return;
+      }
+
+      const otherProject = `${project}-other`;
+      const created = await makeRequest('/api/runs/create', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TEST_API_KEY}` },
+        body: JSON.stringify({
+          projectName: otherProject,
+          runName: `s41-elsewhere-${Date.now()}`,
+        }),
+      });
+      if (created.status !== 200) {
+        console.log('   Could not create the second project - skipping');
+        return;
+      }
+      const other = await created.json();
+      if (!other?.runId) return;
+
+      // Identical log name, so only the project scoping can tell them apart.
+      await makeRequest('/api/runs/logName/add', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TEST_API_KEY}` },
+        body: JSON.stringify({
+          runId: other.runId,
+          logName: [withLog],
+          logType: 'METRIC',
+        }),
+      });
+
+      const foreignRun = sqidEncode(other.runId);
+      const map = await call([withLog], [runWithLog, foreignRun]);
+      expect(map[withLog]).toContain(runWithLog);
+      expect(map[withLog]).not.toContain(foreignRun);
+    });
+
+    /**
+     * Every earlier test asks about one name that some run has. If the proc
+     * ever returned one shared list under every key — a union rather than a
+     * per-name mapping — all of them would still pass, and each widget would
+     * be handed its neighbours' runs. Two names on two different runs is the
+     * cheapest arrangement that can tell those apart.
+     */
+    it('Test 41.5: keys each name to its own runs, not to a union', async () => {
+      if (!s41Cookie || !s41OrgId || !runWithLog || !runWithoutLog) {
+        console.log('   No session/fixtures - skipping');
+        return;
+      }
+
+      // `runWithoutLog` has no logs yet; give it one the other run lacks.
+      const secondLog = `s41/other-metric-${Date.now()}`;
+      if (!runWithoutLogId) return;
+      await makeRequest('/api/runs/logName/add', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TEST_API_KEY}` },
+        body: JSON.stringify({
+          runId: runWithoutLogId,
+          logName: [secondLog],
+          logType: 'METRIC',
+        }),
+      });
+
+      const map = await call([withLog, secondLog], [runWithLog, runWithoutLog]);
+      expect(map[withLog]).toEqual([runWithLog]);
+      expect(map[secondLog]).toEqual([runWithoutLog]);
     });
   });
 });

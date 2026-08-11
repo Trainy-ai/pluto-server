@@ -20,6 +20,10 @@ import {
   MAX_RUNS_PER_BATCH,
 } from '../trpc/routers/runs/routers/data/procs/histogram.schema';
 import { tableDataRow } from '../trpc/routers/runs/routers/data/procs/table.schema';
+import {
+  runIdsByLogNameInput,
+  MAX_RUNS_FOR_LOOKUP,
+} from '../trpc/routers/runs/procs/run-ids-by-log-name.schema';
 
 // --- Test Data ---
 
@@ -990,5 +994,55 @@ describe('WidgetType parity between server schema and app mirror', () => {
   it('every server widget type has a canonical config fixture in this file', () => {
     // Keeps VALID_CONFIGS honest, which is what drives Suites 1, 2 and 7.
     expect(Object.keys(VALID_CONFIGS).sort()).toEqual([...WidgetTypeSchema.options].sort());
+  });
+});
+
+// --- runIdsByLogName input ---
+
+describe('runIdsByLogNameInput', () => {
+  const runIds = (n: number) => Array.from({ length: n }, (_, i) => `r${i}`);
+
+  /**
+   * The whole point of this proc is to narrow a selection the data procs
+   * refuse, so its run cap must sit above theirs. If someone ever "aligns"
+   * the two, dashboards silently lose the narrowing and go back to sending
+   * every selected run.
+   */
+  it('accepts more runs than the data procs cap at', () => {
+    const parsed = runIdsByLogNameInput.safeParse({
+      projectName: 'p',
+      logNames: ['images/train'],
+      runIds: runIds(MAX_RUNS_PER_BATCH + 1),
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it('accepts exactly MAX_RUNS_FOR_LOOKUP runs', () => {
+    const parsed = runIdsByLogNameInput.safeParse({
+      projectName: 'p',
+      logNames: ['images/train'],
+      runIds: runIds(MAX_RUNS_FOR_LOOKUP),
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it('rejects past MAX_RUNS_FOR_LOOKUP', () => {
+    const parsed = runIdsByLogNameInput.safeParse({
+      projectName: 'p',
+      logNames: ['images/train'],
+      runIds: runIds(MAX_RUNS_FOR_LOOKUP + 1),
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it('requires at least one log name and one run', () => {
+    expect(
+      runIdsByLogNameInput.safeParse({ projectName: 'p', logNames: [], runIds: ['r0'] })
+        .success,
+    ).toBe(false);
+    expect(
+      runIdsByLogNameInput.safeParse({ projectName: 'p', logNames: ['l'], runIds: [] })
+        .success,
+    ).toBe(false);
   });
 });

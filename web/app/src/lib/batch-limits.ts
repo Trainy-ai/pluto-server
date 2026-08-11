@@ -11,6 +11,17 @@
  */
 export const MAX_RUNS_PER_BATCH = 200;
 
+/**
+ * Max log names one `runs.runIdsByLogName` lookup may resolve. A widget whose
+ * glob resolves past this must slice before calling: the schema rejects the
+ * whole request, so one over-long list costs every entry its narrowing rather
+ * than just the overflow.
+ *
+ * Keep in sync with `MAX_LOG_NAMES_FOR_LOOKUP` in
+ * server/trpc/routers/runs/procs/run-ids-by-log-name.schema.ts.
+ */
+export const MAX_LOG_NAMES_PER_LOOKUP = 200;
+
 /** What a chart's limits work out to for a given metric/run count. */
 export interface ChartLimit {
   /** Series (metrics × runs) the chart may draw before it refuses. */

@@ -9,6 +9,9 @@ import type { SelectedRunWithColor } from "../../~hooks/use-selected-runs";
 import { MultiRunCategoricalView } from "../multi-group/categorical-view";
 import { MultiHistogramView } from "../multi-group/histogram-view";
 import { useHiddenRunIds } from "@/hooks/use-hidden-run-ids";
+import { filterRunsByLog } from "@/lib/filter-runs-by-log";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useRunIdsByLogName } from "../../~queries/file-log-names";
 import { formatRunLabel } from "@/lib/format-run-label";
 import { getDisplayIdForRun } from "../../~lib/metrics-utils";
 
@@ -79,6 +82,39 @@ export function DistributionsWidget({
     }));
   }, [entries.length, selectedRuns]);
 
+  // Histogram entries name an exact metric, so the runs that logged it can be
+  // resolved up front — histogramBatch caps runIds at 200, and sending the
+  // whole selection to discover a handful of runs wastes the request.
+  //
+  // Bars entries are keyed by a path PREFIX, not a log name, so the same
+  // lookup doesn't apply; they still send the full selection and rely on the
+  // over-cap notice. Narrowing those would need prefix matching server-side.
+  const histogramLogNames = useMemo(
+    () =>
+      entries
+        .filter((e) => e.kind === "histogram")
+        .map((e) => e.metric)
+        .filter((m): m is string => (m?.length ?? 0) > 0),
+    [entries],
+  );
+  const selectedRunIds = useMemo(() => Object.keys(selectedRuns), [selectedRuns]);
+  const {
+    data: runIdsByLog,
+    isLoading: isLoadingRunIds,
+    isPlaceholderData: isStaleRunIds,
+  } = useRunIdsByLogName(
+    organizationId,
+    projectName,
+    histogramLogNames,
+    selectedRunIds,
+  );
+
+  // `placeholderData` hands back the PREVIOUS selection's mapping while the new
+  // one is in flight, with isLoading false — so without isPlaceholderData a
+  // selection change filters the new runs through the old map and hides the
+  // ones just added until the refetch lands.
+  const isResolvingRuns = isLoadingRunIds || isStaleRunIds;
+
   if (entries.length === 0) {
     return (
       <div className="flex h-full items-center justify-center text-muted-foreground">
@@ -101,6 +137,15 @@ export function DistributionsWidget({
         </div>
       </div>
     );
+  }
+
+  // Hold histogram entries back until the mapping lands — filterRunsByLog
+  // fails open, so rendering now would fire an unfiltered histogramBatch and
+  // then a narrowed one a tick later. Bars entries don't use the mapping, but
+  // they share the widget's layout, so the whole widget waits. Errors leave
+  // isLoading false, so a failed lookup still renders (unfiltered).
+  if (isResolvingRuns) {
+    return <Skeleton className="h-full w-full" />;
   }
 
   const renderEntry = (entry: DistributionsEntry, index: number) => {
@@ -151,7 +196,10 @@ export function DistributionsWidget({
         logName={entry.metric}
         tenantId={organizationId}
         projectName={projectName}
-        runs={histogramRuns}
+        runs={filterRunsByLog(
+          histogramRuns,
+          runIdsByLog?.runIdsByLogName[entry.metric],
+        )}
         mode={entry.viewMode ?? "step"}
         // Show the per-entry mode toggle so users (and E2E tests) can
         // switch Step / Ridgeline / Heatmap on each histogram entry,

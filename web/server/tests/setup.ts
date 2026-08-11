@@ -4291,6 +4291,60 @@ async function setupTestData(): Promise<TestData> {
     console.log(`   ✓ over-cap-test already has ${overCapExisting} runs, skipping`);
   }
 
+  // Dashboard for the narrowing tests. Dashboard widgets are the reason the
+  // narrowing exists — they are config-driven, so a widget knows a log name
+  // and nothing about which runs hold it. Two widgets, and the contrast
+  // between them IS the test: with all 210 runs selected the rare one must
+  // narrow to 3 and render, the common one must stay over the cap and say so.
+  //
+  // Upserted outside the seeding guard above so it exists even when the runs
+  // are already there and that block is skipped.
+  const overCapDashboardConfig = {
+    version: 1,
+    sections: [
+      {
+        id: 'over-cap-static-section',
+        name: 'Narrowing (Static)',
+        collapsed: false,
+        widgets: [
+          {
+            id: 'over-cap-rare-images',
+            type: 'file-group',
+            config: { title: 'Rare images', files: [OVER_CAP_RARE_LOG] },
+            layout: { x: 0, y: 0, w: 6, h: 5 },
+          },
+          {
+            id: 'over-cap-common-images',
+            type: 'file-group',
+            config: { title: 'Common images', files: [OVER_CAP_COMMON_LOG] },
+            layout: { x: 6, y: 0, w: 6, h: 5 },
+          },
+        ],
+      },
+    ],
+    settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
+  };
+
+  await prisma.dashboardView.upsert({
+    where: {
+      organizationId_projectId_name: {
+        organizationId: org.id,
+        projectId: overCapProject.id,
+        name: 'Over Cap Narrowing Test',
+      },
+    },
+    update: { config: overCapDashboardConfig },
+    create: {
+      name: 'Over Cap Narrowing Test',
+      organizationId: org.id,
+      projectId: overCapProject.id,
+      createdById: user.id,
+      isDefault: false,
+      config: overCapDashboardConfig,
+    },
+  });
+  console.log('   ✓ Ensured "Over Cap Narrowing Test" dashboard');
+
   console.log('\n5️⃣h Creating run-groups project...');
 
   // `optimizer` is a string config key (distinct values sgd/adam/adamw)

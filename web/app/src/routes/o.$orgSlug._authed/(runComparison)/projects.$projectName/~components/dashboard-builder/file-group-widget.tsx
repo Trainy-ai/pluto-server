@@ -1,5 +1,10 @@
 import { useMemo, useState, useEffect, useRef } from "react";
 import { useHiddenRunIds } from "@/hooks/use-hidden-run-ids";
+import { filterRunsByLog } from "@/lib/filter-runs-by-log";
+import { Skeleton } from "@/components/ui/skeleton";
+
+/** Stable empty list: a fresh [] each render would churn the query key. */
+const EMPTY_LOG_NAMES: string[] = [];
 import { useQueries } from "@tanstack/react-query";
 import { trpc } from "@/utils/trpc";
 import type {
@@ -20,7 +25,8 @@ import {
   getRegexPattern,
   isPatternValue,
 } from "./glob-utils";
-import { useRunFileLogNames } from "../../~queries/file-log-names";
+import { useRunFileLogNames, useRunIdsByLogName } from "../../~queries/file-log-names";
+import { MAX_LOG_NAMES_PER_LOOKUP } from "@/lib/batch-limits";
 import { formatRunLabel } from "@/lib/format-run-label";
 import { getDisplayIdForRun } from "../../~lib/metrics-utils";
 import {
@@ -31,6 +37,7 @@ import { ConsoleLogWidget } from "./console-log-widget";
 
 /** Cap parallel pattern-resolution queries per widget to prevent request storms */
 const MAX_PATTERN_QUERIES = 20;
+
 
 interface FileGroupWidgetProps {
   config: FileGroupWidgetConfig;
@@ -189,6 +196,46 @@ export function FileGroupWidget({
     onHistogramsDetected(histograms);
   }, [resolvedFiles, typeMap, onHistogramsDetected]);
 
+  // Names the registry can actually answer for.
+  //
+  // sys.stdout / sys.stderr are SYNTHETIC — they live in ClickHouse mlop_logs,
+  // never in run_logs — so asking about them returns a present-and-empty array,
+  // which is a resolved "no run has this" rather than "not looked up yet". That
+  // filters every run out and leaves console widgets blank. Fail-open protects
+  // against unresolved, not against confidently wrong.
+  //
+  // Sliced to the schema's limit: a wide glob can resolve past it, and the whole
+  // request would then be rejected, leaving every entry unnarrowed. Names beyond
+  // the slice simply get no mapping and fail open on their own.
+  const lookupLogNames = useMemo(
+    () =>
+      (resolvedFiles ?? [])
+        .filter((f) => !isConsoleLogType(typeMap.get(f) ?? ""))
+        .slice(0, MAX_LOG_NAMES_PER_LOOKUP),
+    [resolvedFiles, typeMap],
+  );
+
+  // Narrow each entry's runs to the ones that actually logged it. The widget
+  // knows only a log name, so without this it hands the whole selection to
+  // filesBatch and discards the empty responses — wasteful, and unrenderable
+  // past that proc's 200-run cap even when a handful of runs have the data.
+  const {
+    data: runIdsByLog,
+    isLoading: isLoadingRunIds,
+    isPlaceholderData: isStaleRunIds,
+  } = useRunIdsByLogName(
+    organizationId,
+    projectName,
+    lookupLogNames.length > 0 ? lookupLogNames : EMPTY_LOG_NAMES,
+    selectedRunIds,
+  );
+
+  // `placeholderData` keeps the PREVIOUS selection's mapping while a new one is
+  // in flight, and it arrives with isLoading false — so without isPlaceholderData
+  // a selection change filters the new runs through the old map and hides the
+  // ones just added until the refetch lands.
+  const isResolvingRuns = isLoadingRunIds || isStaleRunIds;
+
   if (!resolvedFiles || resolvedFiles.length === 0) {
     return (
       <div className="flex h-full items-center justify-center text-muted-foreground">
@@ -197,6 +244,14 @@ export function FileGroupWidget({
         </div>
       </div>
     );
+  }
+
+  // Hold the entries back until the mapping lands. filterRunsByLog fails open,
+  // so rendering now would fire an unfiltered request for every entry and then
+  // a narrowed one a tick later — the double-fetch this widget exists to avoid.
+  // Errors leave isLoading false, so a failed lookup still renders (unfiltered).
+  if (isResolvingRuns) {
+    return <Skeleton className="h-full w-full" />;
   }
 
   if (runs.length === 0) {
@@ -234,7 +289,7 @@ export function FileGroupWidget({
       key={item.logName}
       logName={item.logName}
       logType={item.logType}
-      runs={runs}
+      runs={filterRunsByLog(runs, runIdsByLog?.runIdsByLogName[item.logName])}
       organizationId={organizationId}
       projectName={projectName}
     />

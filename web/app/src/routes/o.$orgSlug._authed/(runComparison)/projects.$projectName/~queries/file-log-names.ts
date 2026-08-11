@@ -188,3 +188,35 @@ export function useRegexSearchFileLogNames(orgId: string, projectName: string, r
     )
   );
 }
+
+/**
+ * Which of `runIds` logged each of `logNames`, keyed by log name.
+ *
+ * Lets a dashboard widget narrow its selection to the runs that actually have
+ * its data before hitting the batch data procs — those cap `runIds` at 200, so
+ * an unfiltered widget is unrenderable on a large selection even when only a
+ * few runs have the log. Disabled until both lists are non-empty; callers
+ * treat a missing entry as "not resolved yet" and keep every run.
+ */
+export function useRunIdsByLogName(
+  orgId: string,
+  projectName: string,
+  logNames: string[],
+  runIds: string[],
+) {
+  return useQuery(
+    trpc.runs.runIdsByLogName.queryOptions(
+      {
+        organizationId: orgId,
+        projectName,
+        logNames,
+        runIds,
+      },
+      {
+        enabled: logNames.length > 0 && runIds.length > 0,
+        staleTime: 30 * 1000,
+        placeholderData: (prev) => prev,
+      },
+    ),
+  );
+}

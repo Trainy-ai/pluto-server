@@ -17,6 +17,7 @@ import { getLogsByRunIdsProcedure } from "./procs/get-logs-by-run-ids";
 import { getFieldValuesProcedure } from "./procs/get-field-values";
 import { distinctMetricNamesProcedure } from "./procs/distinct-metric-names";
 import { distinctFileLogNamesProcedure } from "./procs/distinct-file-log-names";
+import { runIdsByLogNameProcedure } from "./procs/run-ids-by-log-name";
 import { metricSummariesProcedure } from "./procs/metric-summaries";
 import { metricBestStepsProcedure } from "./procs/metric-best-steps";
 import { forkRunProcedure } from "./procs/fork-run";
@@ -41,6 +42,7 @@ export const runsRouter = router({
   getFieldValues: getFieldValuesProcedure,
   distinctMetricNames: distinctMetricNamesProcedure,
   distinctFileLogNames: distinctFileLogNamesProcedure,
+  runIdsByLogName: runIdsByLogNameProcedure,
   metricSummaries: metricSummariesProcedure,
   metricBestSteps: metricBestStepsProcedure,
   fork: forkRunProcedure,
