@@ -49,7 +49,7 @@
     "fake-indexeddb": "6.2.5",
     "jsdom": "28.0.0",
     "knip": "5.83.0",
-    "postcss": "8.5.3",
+    "postcss": "8.5.23",
     "prettier": "3.5.3",
     "prettier-plugin-tailwindcss": "0.6.11",
     "tailwindcss": "4.1.3",
