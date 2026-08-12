@@ -37,6 +37,8 @@ import { GitStatus } from "./~components/git-status";
 import { Process } from "./~components/process";
 import { SystemDisplay } from "./~components/system-display";
 import { useDuration } from "@/lib/hooks/use-duration";
+import { terminalEndTime } from "@/lib/format-duration";
+import { useMemo } from "react";
 import { FilesSection } from "./~components/files-section";
 
 export const Route = createFileRoute(
@@ -83,9 +85,16 @@ function RouteComponent() {
     runId,
   );
 
+  // A finished run ends at its terminal status change, not at a later metadata
+  // edit — the same rule the runs table and the dashboard's Recent Runs use.
+  const endTime = useMemo(
+    () => (currentRun ? terminalEndTime(currentRun) : undefined),
+    [currentRun?.statusUpdated, currentRun?.updatedAt],
+  );
+
   const { formattedDuration } = useDuration({
     startTime: currentRun?.createdAt ?? new Date(),
-    endTime: currentRun?.updatedAt,
+    endTime,
     runStatus: currentRun?.status ?? "RUNNING",
   });
 

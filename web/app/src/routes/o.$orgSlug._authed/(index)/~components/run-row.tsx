@@ -2,6 +2,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { TableCell, TableRow } from "@/components/ui/table";
 import { RunStatusBadge } from "@/components/core/runs/run-status-badge";
 import { useDuration } from "@/lib/hooks/use-duration";
+import { terminalEndTime } from "@/lib/format-duration";
 import { formatRelativeTime } from "@/lib/format-relative-time";
 import type { inferOutput } from "@trpc/tanstack-react-query";
 import { trpc } from "@/utils/trpc";
@@ -20,7 +21,7 @@ export function RunRow({ run, orgSlug }: RunRowProps) {
     startTime: run.createdAt,
     // Match the experiments-table Duration column: a finished run ends at its
     // terminal status change (statusUpdated), not a later metadata edit.
-    endTime: run.statusUpdated ?? run.updatedAt,
+    endTime: terminalEndTime(run),
     runStatus: run.status,
   });
 

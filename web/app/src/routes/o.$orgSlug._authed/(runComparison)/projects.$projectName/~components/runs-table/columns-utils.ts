@@ -2,7 +2,7 @@ import type { Row } from "@tanstack/react-table";
 import type { ColumnConfig } from "../../~hooks/use-column-config";
 import type { Run } from "../../~queries/list-runs";
 import { formatValue } from "@/lib/flatten-object";
-import { formatDuration } from "@/lib/format-duration";
+import { formatDuration, terminalEndTime } from "@/lib/format-duration";
 
 /** Returns the contiguous slice of rows between idA and idB (inclusive, in array order). */
 export function getRowRange<T>(rows: Array<Row<T>>, idA: string, idB: string) {
@@ -64,7 +64,7 @@ export function getCustomColumnValue(run: Run, col: ColumnConfig): unknown {
         const end =
           run.status === "RUNNING"
             ? new Date(run.heartbeatAt ?? run.updatedAt).getTime()
-            : new Date(run.statusUpdated ?? run.updatedAt).getTime();
+            : terminalEndTime(run).getTime();
         if (Number.isNaN(start) || Number.isNaN(end)) return null;
         return Math.max(0, end - start);
       }
