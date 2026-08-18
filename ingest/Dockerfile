@@ -1,4 +1,4 @@
-ARG RUST_VERSION=1.86.0
+ARG RUST_VERSION=1.97.0
 
 # Build-time version info
 ARG GIT_COMMIT="unknown"

@@ -45,6 +45,13 @@ struct Cli {
 
 #[tokio::main]
 async fn main() {
+    // rustls 0.23 panics on first use if it cannot pick a process-level provider,
+    // which happens as soon as anything in the tree enables both `ring` and
+    // `aws_lc_rs`. Install one explicitly so startup never depends on that.
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .expect("failed to install the rustls aws-lc-rs CryptoProvider");
+
     // Parse command-line arguments
     let cli = Cli::parse();
 

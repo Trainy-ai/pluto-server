@@ -1,4 +1,5 @@
 use aws_config::meta::region::RegionProviderChain;
+use aws_config::BehaviorVersion;
 use aws_sdk_s3::config::Credentials;
 use aws_sdk_s3::presigning::PresigningConfig;
 use aws_sdk_s3::Client;
@@ -317,7 +318,7 @@ pub async fn generate_presigned_urls(
     // Setup S3/R2 client configuration using credentials from app config
     let region_provider =
         RegionProviderChain::first_try(Region::new(state.config.storage_region.clone()));
-    let mut config_builder = aws_config::from_env()
+    let mut config_builder = aws_config::defaults(BehaviorVersion::latest())
         .region(region_provider)
         .credentials_provider(Credentials::new(
             state.config.storage_access_key_id.as_str(),
@@ -330,18 +331,36 @@ pub async fn generate_presigned_urls(
     // Only set endpoint_url for non-AWS S3 (MinIO, R2, etc.)
     // AWS S3 handles virtual-hosted style automatically; setting endpoint_url
     // causes signature mismatch between path-style and virtual-hosted URLs
-    if !state
+    let is_custom_endpoint = !state
         .config
         .storage_endpoint
         .to_lowercase()
-        .contains("amazonaws.com")
-    {
+        .contains("amazonaws.com");
+
+    if is_custom_endpoint {
         config_builder = config_builder.endpoint_url(state.config.storage_endpoint.as_str());
     }
 
     let shared_config = config_builder.load().await;
 
-    let s3_client: Arc<Client> = Arc::new(Client::new(&shared_config));
+    // Non-AWS endpoints given as a hostname need path-style addressing. The SDK
+    // otherwise signs virtual-host URLs like `http://<bucket>.minio:9000/<key>`,
+    // and `<bucket>.minio` is not a resolvable host, so the presigned URL is
+    // unusable (this is what `deployments/demo` uses). Path-style instead gives
+    // `http://minio:9000/<bucket>/<key>`. An endpoint that is a bare IP already
+    // forces path-style, which is why local dev never hit this.
+    //
+    // Mirrors `forcePathStyle: true` in web/server/lib/s3.ts, which documents the
+    // same failure. R2 accepts both styles. AWS S3 keeps virtual-host addressing.
+    let s3_client: Arc<Client> = Arc::new(if is_custom_endpoint {
+        Client::from_conf(
+            aws_sdk_s3::config::Builder::from(&shared_config)
+                .force_path_style(true)
+                .build(),
+        )
+    } else {
+        Client::new(&shared_config)
+    });
 
     // Build a presigning config with a defined expiry and explicit start time
     // Using explicit start_time helps mitigate potential clock skew issues

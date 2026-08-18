@@ -22,14 +22,25 @@ serde = { version = "1.0", features = ["derive"] }
 tokio = { version = "1.49.0", features = ["full"] }
 serde-inline-default = "0.2.3"
 lazy_static = "1.5.0"
-clap = { version = "3.0", features = ["derive"] }
-aws-config = "0.56.1"
-aws-sdk-s3 = "0.33.0"
-aws-types = "0.56.1"
+clap = { version = "4.5", features = ["derive"] }
+aws-config = "1.10"
+# default-features disabled to drop the legacy `rustls` feature, which pulls in
+# rustls 0.21 (and the vulnerable rustls-webpki 0.101.x). `default-https-client`
+# supplies the modern rustls 0.23 + aws-lc-rs stack instead.
+aws-sdk-s3 = { version = "1.141", default-features = false, features = [
+    "sigv4a",
+    "http-1x",
+    "default-https-client",
+    "rt-tokio",
+] }
+aws-types = "1.5"
 chrono = { version = "0.4.39", features = ["serde"] }
-sqlx = { version = "0.7.3", features = [
+# `tls-rustls` aliases to `tls-rustls-ring`. The AWS SDK brings rustls 0.23 with
+# the aws-lc-rs provider, and rustls refuses to auto-select when both `ring` and
+# `aws_lc_rs` are enabled, so pin sqlx to the same provider as the SDK.
+sqlx = { version = "0.8", features = [
     "runtime-tokio",
-    "tls-rustls",
+    "tls-rustls-aws-lc-rs",
     "postgres",
     "chrono",
     "uuid",
@@ -37,16 +48,16 @@ sqlx = { version = "0.7.3", features = [
 sha2 = "0.10.8"
 dotenv = "0.15.0"
 simd-json = "0.15.1"
-bytes = "1.10.1"
+bytes = "1.11.1"
 tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"] }
+tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt"] }
 uuid = { version = "1.10", features = ["v4", "serde"] }
 thiserror = "2.0"
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] }
 
 [dev-dependencies]
-testcontainers = { version = "0.26.3", features = ["blocking"] }
-testcontainers-modules = { version = "0.14.0", features = ["postgres"] }
+testcontainers = { version = "0.27.0", features = ["blocking"] }
+testcontainers-modules = { version = "0.15.0", features = ["postgres"] }
 http-body-util = "0.1"
 tower = { version = "0.4", features = ["util"] }
-rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] }
 tempfile = "3.12"
