@@ -29,6 +29,10 @@ export const WidgetTypeSchema = z.enum([
   // A string metric (`log("phase", "warmup")`), drawn as a staircase over
   // steps. Not a "chart": its Y axis is a list of labels, not a number line.
   "string-series",
+  // "panel" is a user-authored Python (Streamlit via stlite/Pyodide)
+  // panel executed fully in-browser inside a sandboxed iframe. See
+  // PanelWidgetConfigSchema below for the security notes.
+  "panel",
 ]);
 export type WidgetType = z.infer<typeof WidgetTypeSchema>;
 
@@ -254,6 +258,36 @@ export const FileSeriesWidgetConfigSchema = BaseWidgetConfigSchema.extend({
 });
 export type FileSeriesWidgetConfig = z.infer<typeof FileSeriesWidgetConfigSchema>;
 
+// ─── Panel widget ───────────────────────────────────────────────────
+//
+// User-authored Python (Streamlit) panel. The code runs entirely in the
+// viewer's browser via stlite (Streamlit-on-Pyodide) inside an iframe
+// with sandbox="allow-scripts" (opaque origin: no cookies, no parent
+// DOM, network egress blocked by CSP + CORS). Data access goes through
+// a host-mediated postMessage bridge that only executes an allowlist of
+// existing read-only tRPC queries with the VIEWER's session.
+//
+// SECURITY: panel code stored in a shared dashboard executes in other
+// viewers' browsers. This is safe ONLY because of the opaque-origin
+// sandboxed iframe above — never render/eval this code outside that
+// sandbox, and never widen the iframe's sandbox attributes without a
+// security review. See the Python Panels plan for the full threat model.
+export const PanelWidgetConfigSchema = BaseWidgetConfigSchema.extend({
+  // The Streamlit script. 64KB cap: the whole DashboardView config is a
+  // single JSON blob in PostgreSQL, so panel code must stay bounded.
+  code: z.string().min(1).max(65536),
+  // micropip package names installed into the Pyodide runtime at boot.
+  requirements: z.array(z.string().min(1).max(100)).max(20).default([]),
+  // Re-run the panel automatically when the selected-runs context changes.
+  autoRunOnRunChange: z.boolean().default(false),
+  // Reserved for the V2 org-level panel library (linked panels): when the
+  // library ships, a set panelId means "resolve code from the library at
+  // render time". V1 ignores this field entirely — it exists now so V1
+  // readers keep parsing configs written after the library lands.
+  panelId: z.string().optional(),
+});
+export type PanelWidgetConfig = z.infer<typeof PanelWidgetConfigSchema>;
+
 // Clean union type without passthrough index signatures
 type WidgetConfigType =
   | z.infer<typeof StringSeriesWidgetConfigSchema>
@@ -264,7 +298,8 @@ type WidgetConfigType =
   | z.infer<typeof FileGroupWidgetConfigSchema>
   | z.infer<typeof LogsWidgetConfigSchema>
   | z.infer<typeof FileSeriesWidgetConfigSchema>
-  | z.infer<typeof DistributionsWidgetConfigSchema>;
+  | z.infer<typeof DistributionsWidgetConfigSchema>
+  | z.infer<typeof PanelWidgetConfigSchema>;
 
 // Union of all widget configs.
 //
@@ -297,6 +332,12 @@ export const WidgetConfigSchema = z.union([
   FileSeriesWidgetConfigSchema.passthrough(),
   DistributionsWidgetConfigSchema.passthrough(),
   StringSeriesWidgetConfigSchema.passthrough(),
+  // Panel goes LAST and stays safe there: `code` is required (min 1) and no
+  // other schema in this union has a required `code` field, so a panel
+  // config can only match here, and configs of the other types can never
+  // accidentally match the panel schema first. configSchemaForType below
+  // remains the authoritative per-type validation either way.
+  PanelWidgetConfigSchema.passthrough(),
 ]) as unknown as z.ZodType<WidgetConfigType, z.ZodTypeDef, WidgetConfigType>;
 export type WidgetConfig = WidgetConfigType;
 
@@ -341,6 +382,8 @@ const configSchemaForType = (type: WidgetType): z.AnyZodObject | null => {
       return DistributionsWidgetConfigSchema;
     case "string-series":
       return StringSeriesWidgetConfigSchema;
+    case "panel":
+      return PanelWidgetConfigSchema;
     default:
       return null;
   }
@@ -552,8 +595,35 @@ export const createDefaultWidgetConfig = (type: WidgetType): WidgetConfig => {
       return {
         metric: "",
       };
+    case "panel":
+      return {
+        code: DEFAULT_PANEL_CODE,
+        requirements: [],
+        autoRunOnRunChange: false,
+      };
   }
 };
+
+// Starter template for new panel widgets. Uses the `mlop` bridge SDK
+// mounted into the stlite runtime (async-first; stlite supports
+// top-level await). Kept short — it should render something useful
+// against any project with at least one logged metric.
+const DEFAULT_PANEL_CODE = `import streamlit as st
+import mlop
+
+ctx = mlop.get_context()
+st.title("My Panel")
+st.caption(f"Project: {ctx.project} — {len(ctx.runs)} run(s) selected")
+
+names = await mlop.get_metric_names()
+if not names:
+    st.info("No metrics logged in this project yet.")
+    st.stop()
+
+metric = st.selectbox("Metric", names)
+df = await mlop.get_metrics(metrics=[metric])
+st.line_chart(df, x="step", y="value", color="run")
+`;
 
 // Helper to create an empty dashboard config
 export const createEmptyDashboardConfig = (): DashboardViewConfig => ({

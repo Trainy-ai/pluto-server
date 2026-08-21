@@ -19,7 +19,11 @@ export type WidgetType =
   // A string metric (`log("phase", "warmup")`) drawn as a staircase over
   // steps. Its own type rather than a "chart" because its Y axis is a list of
   // labels, not a number line — a chart widget would render it as a flat NaN.
-  | "string-series";
+  | "string-series"
+  // `panel` is a user-authored Python (Streamlit via stlite/Pyodide)
+  // panel executed fully in-browser inside a sandboxed iframe. See
+  // PanelWidgetConfig below.
+  | "panel";
 
 export type AggregationType = "LAST" | "AVG" | "MIN" | "MAX" | "VARIANCE";
 
@@ -187,6 +191,29 @@ export interface StringSeriesWidgetConfig extends BaseWidgetConfig {
   metric: string;
 }
 
+// ─── Panel widget ───────────────────────────────────────────────────
+//
+// User-authored Python (Streamlit) panel run via stlite inside an
+// iframe with sandbox="allow-scripts" (opaque origin). Data access is
+// limited to the host-mediated postMessage bridge allowlist
+// (src/lib/panels/panel-bridge-allowlist.ts).
+//
+// SECURITY: panel code stored in a shared dashboard executes in other
+// viewers' browsers — safe ONLY inside the opaque-origin sandboxed
+// iframe. Never eval/render this code outside that sandbox.
+export interface PanelWidgetConfig extends BaseWidgetConfig {
+  // The Streamlit script (1..65536 chars; server-enforced 64KB cap).
+  code: string;
+  // micropip package names installed at runtime boot (≤20, each ≤100 chars).
+  requirements: string[];
+  // Re-run the panel automatically when the selected-runs context changes.
+  autoRunOnRunChange: boolean;
+  // Reserved for the V2 org-level panel library (linked panels).
+  // Ignored in V1 — present so V1 readers keep parsing configs written
+  // after the library ships.
+  panelId?: string;
+}
+
 // Logs widget config
 export interface LogsWidgetConfig extends BaseWidgetConfig {
   logName: string;
@@ -209,7 +236,8 @@ export type WidgetConfig =
   | LogsWidgetConfig
   | FileSeriesWidgetConfig
   | DistributionsWidgetConfig
-  | StringSeriesWidgetConfig;
+  | StringSeriesWidgetConfig
+  | PanelWidgetConfig;
 
 // Widget position and size in the grid
 export interface WidgetLayout {

@@ -494,6 +494,11 @@ const VALID_CONFIGS: Record<WidgetType, Record<string, unknown>> = {
   'string-series': {
     metric: 'phase',
   },
+  panel: {
+    code: "import streamlit as st\nst.write('hello')\n",
+    requirements: ['plotly'],
+    autoRunOnRunChange: false,
+  },
 };
 
 // ============================================================================
@@ -529,6 +534,7 @@ describe('Dashboard WidgetSchema: union does not strip config properties', () =>
     'file-series': ['logName', 'mediaType'],
     distributions: ['entries'],
     'string-series': ['metric'],
+    panel: ['code', 'requirements', 'autoRunOnRunChange'],
   };
 
   for (const [type, keys] of Object.entries(KEY_PROPERTIES)) {

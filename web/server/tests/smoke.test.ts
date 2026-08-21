@@ -2647,6 +2647,169 @@ describe('SDK API Endpoints (with API Key)', () => {
 
       await makeTrpcRequest('dashboardViews.delete', { viewId }, { 'Cookie': sessionCookie }, 'POST');
     });
+
+    it('Test 15.13: Panel widget round-trips through create → get → update', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+      const panelCode = 'import streamlit as st\nimport mlop\n\nst.write("hello from panel")\n';
+      const config = {
+        version: 1,
+        sections: [{
+          id: 'panel-section',
+          name: 'Panels',
+          collapsed: false,
+          widgets: [
+            { id: 'w-panel', type: 'panel', config: {
+              title: 'My Python Panel',
+              code: panelCode,
+              requirements: ['seaborn', 'plotly'],
+              autoRunOnRunChange: true,
+            }, layout: { x: 0, y: 0, w: 6, h: 4 } },
+          ],
+        }],
+        settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
+      };
+      const createRes = await makeTrpcRequest('dashboardViews.create', {
+        projectName: TEST_PROJECT_NAME,
+        name: `Panel Roundtrip ${Date.now()}`,
+        config,
+      }, { 'Cookie': sessionCookie }, 'POST');
+      expect(createRes.status).toBe(200);
+      const viewId = (await createRes.json()).result?.data?.id;
+      expect(viewId).toBeDefined();
+
+      // Read back — all panel fields survive
+      const getRes = await makeTrpcRequest('dashboardViews.get', { viewId }, { 'Cookie': sessionCookie }, 'GET');
+      expect(getRes.status).toBe(200);
+      const widget = (await getRes.json()).result?.data?.config?.sections?.[0]?.widgets?.[0];
+      expect(widget.type).toBe('panel');
+      expect(widget.config.code).toBe(panelCode);
+      expect(widget.config.requirements).toEqual(['seaborn', 'plotly']);
+      expect(widget.config.autoRunOnRunChange).toBe(true);
+      expect(widget.config.title).toBe('My Python Panel');
+
+      // Update the code and round-trip again (the editor-save path)
+      const updatedCode = panelCode + 'st.write("edited")\n';
+      config.sections[0].widgets[0].config.code = updatedCode;
+      const updateRes = await makeTrpcRequest('dashboardViews.update', {
+        viewId,
+        config,
+      }, { 'Cookie': sessionCookie }, 'POST');
+      expect(updateRes.status).toBe(200);
+
+      const getRes2 = await makeTrpcRequest('dashboardViews.get', { viewId }, { 'Cookie': sessionCookie }, 'GET');
+      const widget2 = (await getRes2.json()).result?.data?.config?.sections?.[0]?.widgets?.[0];
+      expect(widget2.config.code).toBe(updatedCode);
+
+      await makeTrpcRequest('dashboardViews.delete', { viewId }, { 'Cookie': sessionCookie }, 'POST');
+    });
+
+    it('Test 15.14: Panel widget with code >64KB is rejected', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+      const config = {
+        version: 1,
+        sections: [{
+          id: 'panel-too-big',
+          name: 'Too Big',
+          collapsed: false,
+          widgets: [
+            { id: 'w-panel', type: 'panel', config: {
+              code: 'x'.repeat(65537), // one char over the 64KB cap
+              requirements: [],
+              autoRunOnRunChange: false,
+            }, layout: { x: 0, y: 0, w: 6, h: 4 } },
+          ],
+        }],
+        settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
+      };
+      const createRes = await makeTrpcRequest('dashboardViews.create', {
+        projectName: TEST_PROJECT_NAME,
+        name: `Panel Too Big ${Date.now()}`,
+        config,
+      }, { 'Cookie': sessionCookie }, 'POST');
+      expect(createRes.status).toBe(400);
+    });
+
+    it('Test 15.15: Panel widget with missing or empty code is rejected', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+      const makePanelConfig = (panelConfig: Record<string, unknown>) => ({
+        version: 1,
+        sections: [{
+          id: 'panel-bad',
+          name: 'Bad Panel',
+          collapsed: false,
+          widgets: [
+            { id: 'w-panel', type: 'panel', config: panelConfig, layout: { x: 0, y: 0, w: 6, h: 4 } },
+          ],
+        }],
+        settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
+      });
+
+      // Missing code entirely
+      const missingRes = await makeTrpcRequest('dashboardViews.create', {
+        projectName: TEST_PROJECT_NAME,
+        name: `Panel Missing Code ${Date.now()}`,
+        config: makePanelConfig({ requirements: [], autoRunOnRunChange: false }),
+      }, { 'Cookie': sessionCookie }, 'POST');
+      expect(missingRes.status).toBe(400);
+
+      // Empty-string code (min(1) violation)
+      const emptyRes = await makeTrpcRequest('dashboardViews.create', {
+        projectName: TEST_PROJECT_NAME,
+        name: `Panel Empty Code ${Date.now()}`,
+        config: makePanelConfig({ code: '', requirements: [], autoRunOnRunChange: false }),
+      }, { 'Cookie': sessionCookie }, 'POST');
+      expect(emptyRes.status).toBe(400);
+    });
+
+    it('Test 15.16: Regression — configs without panel widgets still parse after adding the panel type', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+      // Pre-panel-era config shape (chart widget + dynamic section only) —
+      // must keep round-tripping unchanged now that "panel" is in the
+      // widget union.
+      const legacyConfig = {
+        version: 1,
+        sections: [{
+          id: 'legacy-section',
+          name: 'Legacy',
+          collapsed: false,
+          widgets: [
+            { id: 'w-chart', type: 'chart', config: { metrics: ['loss'], xAxis: 'step', yAxisScale: 'linear', xAxisScale: 'linear', aggregation: 'LAST', showOriginal: false }, layout: { x: 0, y: 0, w: 6, h: 4 } },
+          ],
+          dynamicPattern: 'train/*',
+          dynamicPatternMode: 'search',
+        }],
+        settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
+      };
+      const createRes = await makeTrpcRequest('dashboardViews.create', {
+        projectName: TEST_PROJECT_NAME,
+        name: `Legacy No Panel ${Date.now()}`,
+        config: legacyConfig,
+      }, { 'Cookie': sessionCookie }, 'POST');
+      expect(createRes.status).toBe(200);
+      const viewId = (await createRes.json()).result?.data?.id;
+      expect(viewId).toBeDefined();
+
+      const getRes = await makeTrpcRequest('dashboardViews.get', { viewId }, { 'Cookie': sessionCookie }, 'GET');
+      expect(getRes.status).toBe(200);
+      const section = (await getRes.json()).result?.data?.config?.sections?.[0];
+      expect(section?.widgets?.[0]?.type).toBe('chart');
+      expect(section?.widgets?.[0]?.config?.metrics).toEqual(['loss']);
+      expect(section?.dynamicPattern).toBe('train/*');
+
+      await makeTrpcRequest('dashboardViews.delete', { viewId }, { 'Cookie': sessionCookie }, 'POST');
+    });
   });
 
   // NOTE: Test Suites 16 and 17 are temporarily disabled until we can properly
