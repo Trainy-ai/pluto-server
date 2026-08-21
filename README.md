@@ -78,6 +78,50 @@ docker compose --env-file .env up -d
 ```
 
 
+### 🗃️ Database Migrations
+
+Prisma migrations (`web/server/prisma/migrations/`) normally apply themselves —
+you should rarely need to run one by hand:
+
+- **Docker Compose**: the backend entrypoint runs `prisma migrate deploy`
+  before starting the server, so `docker compose up` with a new image applies
+  any pending migrations.
+- **Kubernetes (terraform)**: the `prisma-migrate` job
+  (`terraform/modules/kubernetes/init-job.tf`) runs `npx prisma migrate deploy`
+  from the backend image, and each backend rollout re-runs it on startup.
+
+`migrate deploy` is idempotent: it only applies migrations not yet recorded in
+the `_prisma_migrations` table, so re-running it is always safe.
+
+**Running a migration manually** (e.g. applying a merged migration to prod
+before the backend release rolls out):
+
+From a backend image that contains the migration:
+
+```bash
+docker run --rm -e DATABASE_URL='postgresql://USER:PASS@HOST:5432/postgres' -e DATABASE_DIRECT_URL='postgresql://USER:PASS@HOST:5432/postgres' asaiacai/mlop-backend:<tag> npx prisma migrate deploy
+```
+
+Or with a slim `node` container and a git checkout — useful when no backend
+image with the migration has been published yet (the schema + migrations are
+mounted straight from the repo; `libc6-compat`/`openssl` are required by the
+Prisma engines on alpine):
+
+```bash
+docker run --rm -v "$PWD/web/server/prisma":/work/prisma -w /work -e DATABASE_URL='postgresql://USER:PASS@HOST:5432/postgres' -e DATABASE_DIRECT_URL='postgresql://USER:PASS@HOST:5432/postgres' node:20-alpine sh -c 'apk add --no-cache libc6-compat openssl >/dev/null && npx -y prisma@5.2.0 migrate deploy'
+```
+
+(Pin `prisma` to the version in `web/server/package.json`.)
+
+On a cluster, the equivalent one-off is cloning the existing job:
+
+```bash
+kubectl -n mlop create job prisma-migrate-manual --from=job/prisma-migrate
+```
+
+— noting that the cloned job runs the image tag currently referenced by the
+job spec, which must already contain the new migration.
+
 ### 📦 Moving Servers
 
 You should be aware of all your data stored on the server. That's why the contents of the databases are mapped to directories on the host by default. When you need to migrate the server to a different host, simply make sure you take the `.pluto` folder and `.env` file with you.
