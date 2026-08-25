@@ -63,6 +63,9 @@ export function PanelSandbox({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const initSentRef = useRef(false);
+  /** Theme the CURRENT kernel was mounted with (theme.base is a mount-
+   *  time Streamlit config — a live session can't switch it). */
+  const bootThemeRef = useRef<PanelContext["theme"] | null>(null);
 
   const [shouldBoot, setShouldBoot] = useState(false);
   const [bootAttempt, setBootAttempt] = useState(0);
@@ -117,6 +120,7 @@ export function PanelSandbox({
         context: current.context,
       });
       initSentRef.current = true;
+      bootThemeRef.current = current.context.theme;
       transitionPhase("loading-runtime");
     },
     onStatus: (statusPhase, detail) => {
@@ -149,16 +153,26 @@ export function PanelSandbox({
     return () => observer.disconnect();
   }, [shouldBoot]);
 
-  // Keep the panel's context file current (run selection, theme, size).
+  // Keep the panel's context file current (run selection, size). A THEME
+  // change instead remounts the sandbox: Streamlit's theme.base is a
+  // kernel-mount config option with no live-session switch in stlite, so
+  // a fresh boot is the supported path (theme toggles are rare — the
+  // ~10s warm reboot behind the loading skeleton is the documented cost).
   const contextSignature = useMemo(() => JSON.stringify(context), [context]);
   useEffect(() => {
-    if (initSentRef.current) {
-      postToPanelRef.current({
-        mlop: PANEL_BRIDGE_VERSION,
-        type: "context-update",
-        context: propsRef.current.context,
-      });
+    if (!initSentRef.current) {
+      return;
     }
+    const currentTheme = propsRef.current.context.theme;
+    if (bootThemeRef.current !== null && currentTheme !== bootThemeRef.current) {
+      remountRef.current();
+      return;
+    }
+    postToPanelRef.current({
+      mlop: PANEL_BRIDGE_VERSION,
+      type: "context-update",
+      context: propsRef.current.context,
+    });
   }, [contextSignature]);
 
   // Best-effort dispose so the host page can unmount its kernel before
@@ -183,13 +197,18 @@ export function PanelSandbox({
     [],
   );
 
-  const retry = () => {
+  // Fresh iframe + token, skeleton shown again. Serves both the error
+  // Retry button and the theme-change remount.
+  const remount = () => {
     initSentRef.current = false;
+    bootThemeRef.current = null;
     setErrorDetail(null);
     transitionPhaseRef.current("waiting");
     setHasBooted(false);
     setBootAttempt((attempt) => attempt + 1);
   };
+  const remountRef = useRef(remount);
+  remountRef.current = remount;
 
   const hasError = errorDetail !== null;
   const showSkeleton = !hasError && !hasBooted;
@@ -230,7 +249,7 @@ export function PanelSandbox({
           <p className="max-h-24 max-w-full overflow-auto whitespace-pre-wrap break-all text-xs text-muted-foreground">
             {errorDetail}
           </p>
-          <Button variant="outline" size="sm" onClick={retry}>
+          <Button variant="outline" size="sm" onClick={remount}>
             <RotateCcwIcon className="mr-1.5 size-3.5" />
             Retry
           </Button>

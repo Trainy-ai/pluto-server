@@ -21,6 +21,10 @@ import type { SelectedRunWithColor } from "../../~hooks/use-selected-runs";
 /** Debounce for ResizeObserver → context-update (avoid resize-drag spam). */
 const RESIZE_DEBOUNCE_MS = 300;
 
+/** Debounce for autoRunOnRunChange reruns: rapid run-selection clicks
+ *  (e.g. checking five table rows in a row) coalesce into one rerun. */
+const AUTO_RERUN_DEBOUNCE_MS = 500;
+
 interface PanelWidgetProps {
   config: PanelWidgetConfig;
   selectedRuns: Record<string, SelectedRunWithColor>;
@@ -130,6 +134,12 @@ export function PanelWidget({
   // signature guard absorbs mount and autoRunOnRunChange toggles, and
   // includes appliedRunIds so a Refresh that only removes runs (same
   // intersection, e.g. after a deselect) still reruns.
+  // Auto mode debounces: every selection click changes the signature, so
+  // the timer resets until the user pauses, then one rerun fires against
+  // the final run set (the signature ref updates only when the rerun
+  // actually fires, so a cancelled debounce isn't marked as executed).
+  // A manual Refresh reruns immediately — it is already a single
+  // deliberate action.
   const runsSignature = useMemo(
     () =>
       JSON.stringify(displayedRuns.map((run) => run.id)) +
@@ -145,12 +155,20 @@ export function PanelWidget({
     if (runsSignature === lastRerunSignatureRef.current) {
       return;
     }
-    if (!autoRun && !manualRefreshPendingRef.current) {
+    if (!autoRun) {
+      if (!manualRefreshPendingRef.current) {
+        return;
+      }
+      manualRefreshPendingRef.current = false;
+      lastRerunSignatureRef.current = runsSignature;
+      sandboxRef.current?.rerun();
       return;
     }
-    manualRefreshPendingRef.current = false;
-    lastRerunSignatureRef.current = runsSignature;
-    sandboxRef.current?.rerun();
+    const timer = setTimeout(() => {
+      lastRerunSignatureRef.current = runsSignature;
+      sandboxRef.current?.rerun();
+    }, AUTO_RERUN_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
   }, [runsSignature, autoRun]);
 
   const context = useMemo<PanelContext>(
@@ -182,24 +200,47 @@ export function PanelWidget({
           className="absolute inset-0 z-10"
         />
       )}
-      {runsChanged && (
-        <div className="absolute right-2 top-2 z-20 flex items-center gap-2 rounded-full border bg-card/95 py-1 pl-3 pr-1 text-xs shadow-sm">
-          <span className="text-muted-foreground">Runs changed</span>
-          <Button
-            variant="secondary"
-            size="sm"
-            className="h-6 rounded-full px-2 text-xs"
-            data-testid="panel-refresh-runs"
-            onClick={() => {
+      <div className="absolute right-2 top-2 z-20 flex items-center gap-2">
+        {runsChanged && (
+          <div className="flex items-center gap-2 rounded-full border bg-card/95 py-1 pl-3 pr-1 text-xs shadow-sm">
+            <span className="text-muted-foreground">Runs changed</span>
+            <Button
+              variant="secondary"
+              size="sm"
+              className="h-6 rounded-full px-2 text-xs"
+              data-testid="panel-refresh-runs"
+              onClick={() => {
+                manualRefreshPendingRef.current = true;
+                setAppliedRunIds(liveRunIds);
+              }}
+            >
+              <RefreshCwIcon className="mr-1 size-3" />
+              Refresh
+            </Button>
+          </div>
+        )}
+        {/* Always-available force re-run: panels never auto-refresh on new
+            data (by design), so this is how a viewer pulls the latest
+            metrics into an already-rendered panel. When the selection has
+            drifted it doubles as the pill's Refresh (applies live runs). */}
+        <Button
+          variant="secondary"
+          size="icon"
+          className="size-6 rounded-full border bg-card/95 shadow-sm"
+          title="Re-run panel with latest data"
+          data-testid="panel-force-rerun"
+          onClick={() => {
+            if (runsChanged) {
               manualRefreshPendingRef.current = true;
               setAppliedRunIds(liveRunIds);
-            }}
-          >
-            <RefreshCwIcon className="mr-1 size-3" />
-            Refresh
-          </Button>
-        </div>
-      )}
+              return;
+            }
+            sandboxRef.current?.rerun();
+          }}
+        >
+          <RefreshCwIcon className="size-3" />
+        </Button>
+      </div>
     </div>
   );
 }

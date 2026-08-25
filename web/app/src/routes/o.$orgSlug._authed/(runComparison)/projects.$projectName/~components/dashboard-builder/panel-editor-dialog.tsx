@@ -35,6 +35,7 @@ import {
   requirementsEqual,
   validateRequirements,
 } from "@/lib/panels/panel-requirements";
+import type { PanelTemplate } from "@/lib/panels/panel-templates";
 import type { PanelWidgetConfig } from "../../~types/dashboard-types";
 import type { SelectedRunWithColor } from "../../~hooks/use-selected-runs";
 import {
@@ -45,6 +46,7 @@ import {
   PanelDiscardConfirmDialog,
   PanelEditorStatusBar,
 } from "./panel-editor-status-bar";
+import { PanelTemplateMenu } from "./panel-template-menu";
 
 /** Server-enforced cap on panel code size (PanelWidgetConfigSchema). */
 const MAX_CODE_LENGTH = 65_536;
@@ -160,6 +162,14 @@ export function PanelEditorDialog({
     }
   }, [isDirty, onClose]);
 
+  // Template gallery: replace the DRAFT code + packages (dirty-confirm
+  // handled inside PanelTemplateMenu). Never runs or saves by itself.
+  const applyTemplate = useCallback((template: PanelTemplate) => {
+    setCode(template.code);
+    setRequirementsText(formatRequirements(template.requirements));
+    setValidationError(null);
+  }, []);
+
   const handleSave = useCallback(() => {
     const requirements = parseRequirements(requirementsText);
     const error = validateRequirements(requirements) ?? validateCode(code);
@@ -219,6 +229,10 @@ export function PanelEditorDialog({
                   onChange={(event) => setTitle(event.target.value)}
                   data-testid="panel-editor-title"
                 />
+              </div>
+              <div className="flex items-center justify-between">
+                <Label>Code</Label>
+                <PanelTemplateMenu isDirty={isDirty} onApply={applyTemplate} />
               </div>
               <CodeEditor
                 value={code}

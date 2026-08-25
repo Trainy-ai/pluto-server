@@ -10,6 +10,8 @@ import { defineConfig, type Plugin } from "vite";
 // production for /stlite/panel-host.html. Keep the two in sync.
 // script-src data: is required: stlite embeds its worker as a data: URL
 // that its blob wrapper importScripts. Isolation comes from connect-src.
+// img-src keeps * deliberately: panel file rendering uses presigned
+// STORAGE_ENDPOINT URLs unknowable at build time (see nginx.conf).
 const PANEL_HOST_CSP = [
   "default-src 'none'",
   "script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval' blob: data:",

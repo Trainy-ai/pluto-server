@@ -220,7 +220,17 @@ async def get_metric_summaries(metrics, aggregation="LAST", runs=None):
     if runs is not None:
         params["runIds"] = list(runs)
     result = await _request("getMetricSummaries", params)
-    return result["summaries"]
+    # The wire shape keys values by "<metric>|<AGGREGATION>" (the proc
+    # supports mixed aggregations per request; this SDK sends one). Strip
+    # the suffix so callers index by plain metric name as documented.
+    suffix = "|" + aggregation
+    return {
+        run_id: {
+            (key[: -len(suffix)] if key.endswith(suffix) else key): value
+            for key, value in by_metric.items()
+        }
+        for run_id, by_metric in result["summaries"].items()
+    }
 
 
 async def get_metric_values(run_id):

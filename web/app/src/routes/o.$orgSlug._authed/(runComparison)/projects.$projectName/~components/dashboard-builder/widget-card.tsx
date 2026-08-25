@@ -1,4 +1,4 @@
-import { type ReactNode, useRef } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import {
   MoreHorizontalIcon,
@@ -6,6 +6,7 @@ import {
   Trash2Icon,
   MoveIcon,
   Maximize2Icon,
+  Minimize2Icon,
   SlidersHorizontalIcon,
   ZapIcon,
   CopyIcon,
@@ -94,15 +95,48 @@ export function WidgetCard({
   renderWidget,
 }: WidgetCardProps) {
   const contentRef = useRef<HTMLDivElement | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const chartConfig = widget.type === "chart" ? (widget.config as ChartWidgetConfig) : null;
   const histogramConfig =
     widget.type === "histogram" ? (widget.config as HistogramWidgetConfig) : null;
 
+  // Panel fullscreen uses the native Fullscreen API on the CARD ITSELF
+  // instead of ChartFullscreenDialog. Rationale: the panel's content is a
+  // live Pyodide kernel inside an iframe — rendering it into a dialog
+  // (Radix portal) or reparenting the iframe in any way reloads the
+  // iframe's document and forces a full ~10s kernel reboot. Promoting
+  // the card to the browser top layer keeps the exact same iframe
+  // instance running (no DOM move), and — unlike position:fixed — also
+  // escapes react-grid-layout's `transform` containing block.
+  const isPanel = widget.type === "panel";
+  const [isPanelFullscreen, setIsPanelFullscreen] = useState(false);
+  useEffect(() => {
+    if (!isPanel) {
+      return;
+    }
+    const onFullscreenChange = () => {
+      setIsPanelFullscreen(document.fullscreenElement === rootRef.current);
+    };
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    return () =>
+      document.removeEventListener("fullscreenchange", onFullscreenChange);
+  }, [isPanel]);
+
+  const togglePanelFullscreen = () => {
+    if (document.fullscreenElement === rootRef.current) {
+      void document.exitFullscreen();
+    } else {
+      void rootRef.current?.requestFullscreen();
+    }
+  };
+
   return (
     <div
+      ref={rootRef}
       className={cn(
         "group relative h-full rounded-lg border bg-card shadow-sm",
-        isEditing && "ring-1 ring-transparent hover:ring-primary/50"
+        isEditing && "ring-1 ring-transparent hover:ring-primary/50",
+        isPanelFullscreen && "rounded-none border-0"
       )}
     >
       {/* Widget Header */}
@@ -188,6 +222,31 @@ export function WidgetCard({
               </Button>
             </>
           )}
+
+          {/* Panel-specific actions: native-fullscreen toggle (see the
+              rationale above — a dialog would reboot the Python kernel).
+              Hidden where the Fullscreen API is unavailable (e.g. iPhone
+              Safari); always visible while fullscreen so it can exit. */}
+          {isPanel &&
+            typeof document !== "undefined" &&
+            document.fullscreenEnabled && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className={cn(
+                  "widget-drag-cancel size-7 opacity-0 group-hover:opacity-100",
+                  isPanelFullscreen && "opacity-100"
+                )}
+                data-testid="panel-fullscreen-btn"
+                onClick={togglePanelFullscreen}
+              >
+                {isPanelFullscreen ? (
+                  <Minimize2Icon className="size-3.5" />
+                ) : (
+                  <Maximize2Icon className="size-3.5" />
+                )}
+              </Button>
+            )}
 
           {/* Edit mode actions */}
           {isEditing && (

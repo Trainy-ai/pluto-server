@@ -118,6 +118,13 @@ async function boot(init) {
 
   status("installing", `mounting kernel (${requirements.length} wheels)`);
   currentCode = init.code;
+  // The app's resolved theme crosses the bridge in init.context.theme.
+  // theme.base is a regular Streamlit config option (StreamlitConfig is
+  // an arbitrary option map — see vendored stlite.d.ts), applied at
+  // KERNEL MOUNT only: stlite has no supported way to swap the config
+  // theme on a live session, so the parent (PanelSandbox) remounts the
+  // sandbox when the theme changes (rare; documented choice).
+  const themeBase = init.context && init.context.theme === "dark" ? "dark" : "light";
   app = mount(
     {
       entrypoint: "streamlit_app.py",
@@ -129,7 +136,10 @@ async function boot(init) {
       },
       requirements,
       pyodideUrl: new URL("./pyodide/pyodide.mjs", document.location.href).href,
-      streamlitConfig: { "client.toolbarMode": "viewer" },
+      streamlitConfig: {
+        "client.toolbarMode": "viewer",
+        "theme.base": themeBase,
+      },
     },
     document.getElementById("root"),
   );

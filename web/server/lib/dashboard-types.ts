@@ -616,8 +616,8 @@ st.title("My Panel")
 st.caption(f"Project: {ctx.project} — {len(ctx.runs)} run(s) selected")
 
 names = await mlop.get_metric_names()
-if not names:
-    st.info("No metrics logged in this project yet.")
+if not names or not ctx.runs:
+    st.info("Select at least one run in a project with logged metrics.")
     st.stop()
 
 metric = st.selectbox("Metric", names)
