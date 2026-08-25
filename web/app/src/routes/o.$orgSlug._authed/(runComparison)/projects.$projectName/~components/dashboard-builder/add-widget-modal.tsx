@@ -10,7 +10,12 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { LineChartIcon, BarChart3Icon, LayersIcon } from "lucide-react";
+import {
+  LineChartIcon,
+  BarChart3Icon,
+  LayersIcon,
+  CodeIcon,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ChartConfigForm } from "./chart-config-form";
 import { FilesConfigForm } from "./files-config-form";
@@ -34,6 +39,12 @@ interface AddWidgetModalProps {
   editWidget?: Widget;
   /** Selected run IDs (SQID) for "not present" warnings in metric selector */
   selectedRunIds?: string[];
+  /**
+   * Invoked when the user picks the "Python Panel" card. Panels are
+   * authored in the dedicated two-pane editor dialog, not this config
+   * modal — the parent closes this modal and opens the editor.
+   */
+  onSelectPanel?: () => void;
 }
 
 type UnifiedTab = "metrics" | "distributions" | "files";
@@ -58,6 +69,7 @@ export function AddWidgetModal({
   projectName,
   editWidget,
   selectedRunIds,
+  onSelectPanel,
 }: AddWidgetModalProps) {
   const [unifiedTab, setUnifiedTab] = useState<UnifiedTab | null>(
     editWidget ? toUnifiedSubTab(editWidget.type) : null,
@@ -300,7 +312,14 @@ export function AddWidgetModal({
         </DialogHeader>
 
         <div className="space-y-6 py-4">
-          <div className="grid grid-cols-3 gap-3">
+          <div
+            className={cn(
+              "grid gap-3",
+              // The panel card only shows for adds — panel edits route to
+              // the dedicated editor dialog before this modal opens.
+              onSelectPanel && !isEditing ? "grid-cols-4" : "grid-cols-3",
+            )}
+          >
             <button
               className={cn(
                 "flex flex-col items-center gap-1.5 rounded-lg border p-3 text-center transition-colors hover:bg-accent",
@@ -343,6 +362,22 @@ export function AddWidgetModal({
                 Logs, images, videos, audio
               </div>
             </button>
+            {onSelectPanel && !isEditing && (
+              <button
+                className="flex flex-col items-center gap-1.5 rounded-lg border p-3 text-center transition-colors hover:bg-accent"
+                data-testid="add-widget-tab-panel"
+                onClick={() => {
+                  onSelectPanel();
+                  handleClose();
+                }}
+              >
+                <CodeIcon className="size-6 text-muted-foreground" />
+                <div className="text-sm font-medium">Python Panel</div>
+                <div className="text-xs text-muted-foreground">
+                  Custom Streamlit script over run data
+                </div>
+              </button>
+            )}
           </div>
 
           {unifiedTab && (

@@ -622,7 +622,7 @@ if not names:
 
 metric = st.selectbox("Metric", names)
 df = await mlop.get_metrics(metrics=[metric])
-st.line_chart(df, x="step", y="value", color="run")
+st.line_chart(df, x="step", y="value", color="run_name")
 `;
 
 // Helper to create an empty dashboard config

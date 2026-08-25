@@ -28,8 +28,12 @@ import mlopSdkSource from "@/lib/panels/mlop_sdk.py?raw";
 import { usePanelBridge, type PanelStatusPhase } from "./use-panel-bridge";
 
 export interface PanelSandboxHandle {
-  /** Re-execute the panel script inside the live kernel (~2s, no reboot). */
-  rerun: () => void;
+  /**
+   * Re-execute the panel script inside the live kernel (~2s, no reboot).
+   * Pass `code` to replace the running script first — the panel editor's
+   * fast Run path.
+   */
+  rerun: (code?: string) => void;
 }
 
 interface PanelSandboxProps {
@@ -37,16 +41,23 @@ interface PanelSandboxProps {
   requirements: string[];
   context: PanelContext;
   className?: string;
+  /**
+   * Observe boot/run lifecycle transitions (mirrors the internal phase
+   * state, including the pre-boot "waiting" phase). Used by the panel
+   * editor's status bar; rendering widgets can ignore it.
+   */
+  onPhaseChange?: (phase: SandboxPhase, detail?: string) => void;
   ref?: Ref<PanelSandboxHandle>;
 }
 
-type SandboxPhase = "waiting" | PanelStatusPhase;
+export type SandboxPhase = "waiting" | PanelStatusPhase;
 
 export function PanelSandbox({
   code,
   requirements,
   context,
   className,
+  onPhaseChange,
   ref,
 }: PanelSandboxProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -63,8 +74,15 @@ export function PanelSandbox({
   // eslint-disable-next-line react-hooks/exhaustive-deps -- bootAttempt intentionally forces a new token per boot
   const token = useMemo(() => createBridgeToken(), [bootAttempt]);
 
-  const propsRef = useRef({ code, requirements, context });
-  propsRef.current = { code, requirements, context };
+  const propsRef = useRef({ code, requirements, context, onPhaseChange });
+  propsRef.current = { code, requirements, context, onPhaseChange };
+
+  const transitionPhase = (nextPhase: SandboxPhase, detail?: string) => {
+    setPhase(nextPhase);
+    propsRef.current.onPhaseChange?.(nextPhase, detail);
+  };
+  const transitionPhaseRef = useRef(transitionPhase);
+  transitionPhaseRef.current = transitionPhase;
 
   const hostCtx = useMemo<PanelHostContext>(
     () => ({
@@ -99,10 +117,10 @@ export function PanelSandbox({
         context: current.context,
       });
       initSentRef.current = true;
-      setPhase("loading-runtime");
+      transitionPhase("loading-runtime");
     },
     onStatus: (statusPhase, detail) => {
-      setPhase(statusPhase);
+      transitionPhase(statusPhase, detail);
       if (statusPhase === "error") {
         setErrorDetail(detail ?? "Unknown sandbox error");
       } else if (statusPhase === "done") {
@@ -154,8 +172,12 @@ export function PanelSandbox({
   useImperativeHandle(
     ref,
     () => ({
-      rerun: () => {
-        postToPanelRef.current({ mlop: PANEL_BRIDGE_VERSION, type: "rerun" });
+      rerun: (nextCode?: string) => {
+        postToPanelRef.current({
+          mlop: PANEL_BRIDGE_VERSION,
+          type: "rerun",
+          code: nextCode,
+        });
       },
     }),
     [],
@@ -164,7 +186,7 @@ export function PanelSandbox({
   const retry = () => {
     initSentRef.current = false;
     setErrorDetail(null);
-    setPhase("waiting");
+    transitionPhaseRef.current("waiting");
     setHasBooted(false);
     setBootAttempt((attempt) => attempt + 1);
   };

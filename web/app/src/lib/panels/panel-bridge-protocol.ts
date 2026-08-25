@@ -178,6 +178,13 @@ export const PanelRerunMessageSchema = z
   .object({
     mlop: versionField,
     type: z.literal("rerun"),
+    /**
+     * Replacement panel script. When present the host page overwrites
+     * streamlit_app.py with this code before re-running — the panel
+     * editor's fast "Run" path (~2s, no kernel reboot). Omitted for
+     * context-driven reruns, which re-execute the already-loaded code.
+     */
+    code: z.string().optional(),
   })
   .strict();
 

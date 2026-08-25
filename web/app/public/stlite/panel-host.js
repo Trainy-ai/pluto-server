@@ -24,6 +24,52 @@ const PROTOCOL_VERSION = 1;
 const appOrigin = new URL(document.location.href).origin;
 const token = new URLSearchParams(document.location.hash.slice(1)).get("t");
 
+// Fixed stlite entrypoint. The USER's script is mounted as
+// panel_code.py and compiled/executed by this wrapper instead of being
+// the entrypoint itself: a SyntaxError in the entrypoint kills stlite's
+// script runner silently (blank app, no traceback — verified against
+// stlite 1.8.1), while this wrapper renders it via st.exception exactly
+// like runtime errors render. Uses streamlit's internal add_magic
+// (pinned by the vendored wheel) so bare-expression "magic" keeps
+// working, and PyCF_ALLOW_TOP_LEVEL_AWAIT so top-level `await mlop.*`
+// still runs. Reruns rewrite panel_code.py; this wrapper re-reads it
+// on every script run.
+const PANEL_ENTRYPOINT = `import ast
+
+import streamlit as st
+
+_PANEL_PATH = "panel_code.py"
+
+with open(_PANEL_PATH) as _f:
+    _panel_src = _f.read()
+
+_panel_code = None
+try:
+    try:
+        from streamlit.runtime.scriptrunner.magic import add_magic as _add_magic
+
+        _panel_ast = _add_magic(_panel_src, _PANEL_PATH)
+    except SyntaxError:
+        raise
+    except Exception:
+        _panel_ast = ast.parse(_panel_src, _PANEL_PATH, "exec")
+    _panel_code = compile(
+        _panel_ast,
+        _PANEL_PATH,
+        "exec",
+        flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT,
+        dont_inherit=True,
+    )
+except SyntaxError as _e:
+    st.exception(_e)
+
+if _panel_code is not None:
+    _panel_globals = {"__name__": "__main__", "__file__": _PANEL_PATH}
+    _panel_result = eval(_panel_code, _panel_globals)
+    if _panel_result is not None:
+        await _panel_result
+`;
+
 const postToParent = (msg) => window.parent.postMessage(msg, appOrigin);
 const status = (phase, detail) =>
   token &&
@@ -76,7 +122,8 @@ async function boot(init) {
     {
       entrypoint: "streamlit_app.py",
       files: {
-        "streamlit_app.py": init.code,
+        "streamlit_app.py": PANEL_ENTRYPOINT,
+        "panel_code.py": init.code,
         "mlop.py": init.sdk,
         "mlop_context.json": JSON.stringify(init.context),
       },
@@ -131,7 +178,7 @@ function handleRerun() {
   queueFsOp(
     () =>
       app
-        .writeFile("streamlit_app.py", currentCode)
+        .writeFile("panel_code.py", currentCode)
         .then(() =>
           app.runPython(
             "import streamlit.runtime as _sr\n_sr.get_instance()._script_cache.clear()\n",
@@ -143,7 +190,10 @@ function handleRerun() {
           document.body.dispatchEvent(
             new KeyboardEvent("keydown", { key: "r", code: "KeyR", keyCode: 82, bubbles: true }),
           );
-          status("running", "rerun dispatched");
+          // "done" = rerun delivered to the kernel. Script-level errors
+          // (tracebacks) render inside the Streamlit app itself, exactly
+          // like they do on boot — status never reports them.
+          status("done", "rerun dispatched");
         }),
     "rerun",
   );
@@ -181,6 +231,7 @@ window.addEventListener("message", (ev) => {
       break;
     }
     case "rerun": {
+      if (typeof d.code === "string") currentCode = d.code;
       handleRerun();
       break;
     }

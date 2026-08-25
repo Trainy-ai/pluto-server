@@ -7,6 +7,8 @@ import { SectionContainer, FolderContainer, AddSectionButton, AddFolderButton } 
 import { WidgetGrid } from "./widget-grid";
 import { WidgetRenderer } from "./widget-renderer";
 import { AddWidgetModal } from "./add-widget-modal";
+import { PanelEditorDialog } from "./panel-editor-dialog";
+import { createStarterPanelConfig } from "./panel-starter-template";
 import { DynamicSectionGrid } from "./dynamic-section-grid";
 import { DashboardToolbar } from "./dashboard-toolbar";
 import {
@@ -20,6 +22,7 @@ import { useNavigationGuard } from "./use-navigation-guard";
 import { useHiddenPatternWidgets } from "./use-hidden-pattern-widgets";
 import { useDashboardSave } from "./use-dashboard-save";
 import { useSectionDrag } from "./use-section-drag";
+import { useDistributionsEntryCallbacks } from "./use-distributions-entry-callbacks";
 import { DashboardStaleWarning } from "./dashboard-stale-warning";
 import {
   useCreateDashboardView,
@@ -32,6 +35,7 @@ import {
   type Widget,
   type ChartWidgetConfig,
   type HistogramViewMode,
+  type PanelWidgetConfig,
 } from "../../~types/dashboard-types";
 import * as configOps from "./use-dashboard-config";
 import type { GroupedMetrics } from "@/lib/grouping/types";
@@ -84,6 +88,14 @@ export function DashboardBuilder({
   const [hasChanges, setHasChanges] = useState(false);
   const [addWidgetSectionId, setAddWidgetSectionId] = useState<string | null>(null);
   const [editingWidget, setEditingWidget] = useState<Widget | null>(null);
+  // Python panel authoring happens in the dedicated two-pane editor
+  // dialog (code + live preview), NOT the AddWidgetModal config form.
+  // `widget` is set when editing an existing panel, absent for adds.
+  const [panelEditor, setPanelEditor] = useState<{
+    sectionId: string;
+    parentId?: string;
+    widget?: Widget;
+  } | null>(null);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [showDraftRestore, setShowDraftRestore] = useState(false);
   const [fullscreenWidget, setFullscreenWidget] = useState<Widget | null>(null);
@@ -483,6 +495,11 @@ export function DashboardBuilder({
   }, []);
 
   const editWidget = useCallback((sectionId: string, widget: Widget, parentId?: string) => {
+    if (widget.type === "panel") {
+      // Panels are edited in the code editor dialog, not the config modal.
+      setPanelEditor({ sectionId, parentId, widget });
+      return;
+    }
     setAddWidgetSectionId(sectionId);
     setAddWidgetParentId(parentId ?? null);
     setEditingWidget(widget);
@@ -539,55 +556,14 @@ export function DashboardBuilder({
     [],
   );
 
-  // Distributions-widget per-entry mutators. Each callback targets an
-  // entry by INDEX inside config.entries[]. A single distributions
-  // widget can hold many bars/histogram entries; the renderer threads
-  // the entry index back through every change handler.
-  const updateWidgetDistributionsEntryViewMode = useCallback(
-    (widgetId: string, index: number, mode: HistogramViewMode) => {
-      setConfig((prev) =>
-        configOps.updateWidgetDistributionsEntryViewMode(prev, widgetId, index, mode),
-      );
-      setHasChanges(true);
-    },
-    [],
-  );
-  const updateWidgetDistributionsEntryDepthAxis = useCallback(
-    (widgetId: string, index: number, axis: "step" | "run") => {
-      setConfig((prev) =>
-        configOps.updateWidgetDistributionsEntryDepthAxis(prev, widgetId, index, axis),
-      );
-      setHasChanges(true);
-    },
-    [],
-  );
-  const updateWidgetDistributionsEntryBinRange = useCallback(
-    (widgetId: string, index: number, range: { start: number; end: number }) => {
-      setConfig((prev) =>
-        configOps.updateWidgetDistributionsEntryBinRange(prev, widgetId, index, range),
-      );
-      setHasChanges(true);
-    },
-    [],
-  );
-  const updateWidgetDistributionsEntryIgnoreOutliers = useCallback(
-    (widgetId: string, index: number, next: boolean) => {
-      setConfig((prev) =>
-        configOps.updateWidgetDistributionsEntryIgnoreOutliers(prev, widgetId, index, next),
-      );
-      setHasChanges(true);
-    },
-    [],
-  );
-  const updateWidgetDistributionsEntryStepsOnX = useCallback(
-    (widgetId: string, index: number, next: boolean) => {
-      setConfig((prev) =>
-        configOps.updateWidgetDistributionsEntryStepsOnX(prev, widgetId, index, next),
-      );
-      setHasChanges(true);
-    },
-    [],
-  );
+  // Distributions-widget per-entry mutators (see the hook for details).
+  const {
+    updateViewMode: updateWidgetDistributionsEntryViewMode,
+    updateDepthAxis: updateWidgetDistributionsEntryDepthAxis,
+    updateBinRange: updateWidgetDistributionsEntryBinRange,
+    updateIgnoreOutliers: updateWidgetDistributionsEntryIgnoreOutliers,
+    updateStepsOnX: updateWidgetDistributionsEntryStepsOnX,
+  } = useDistributionsEntryCallbacks({ setConfig, setHasChanges });
 
   // Per-widget maxGroups cap (1..100). Same mutation shape as the
   // override above so the saved view's config carries both.
@@ -786,6 +762,45 @@ export function DashboardBuilder({
       setEditingWidget(null);
     },
     [editingWidget, addWidgetSectionId, addWidgetParentId]
+  );
+
+  // AddWidgetModal "Python Panel" card → swap the config modal for the
+  // panel editor dialog, keeping the same target section/folder.
+  const handleSelectPanelWidget = useCallback(() => {
+    if (!addWidgetSectionId) return;
+    setPanelEditor({
+      sectionId: addWidgetSectionId,
+      parentId: addWidgetParentId ?? undefined,
+    });
+  }, [addWidgetSectionId, addWidgetParentId]);
+
+  const handlePanelEditorSave = useCallback(
+    (panelConfig: PanelWidgetConfig) => {
+      if (!panelEditor) return;
+      if (panelEditor.widget) {
+        setConfig((prev) =>
+          configOps.handleEditWidgetSave(
+            prev,
+            panelEditor.sectionId,
+            panelEditor.widget!.id,
+            { type: "panel", config: panelConfig, layout: panelEditor.widget!.layout },
+            panelEditor.parentId,
+          )
+        );
+      } else {
+        setConfig((prev) =>
+          configOps.addWidget(
+            prev,
+            panelEditor.sectionId,
+            { type: "panel", config: panelConfig, layout: { x: 0, y: 9999, w: 6, h: 5 } },
+            panelEditor.parentId,
+          )
+        );
+      }
+      setHasChanges(true);
+      setPanelEditor(null);
+    },
+    [panelEditor]
   );
 
   // ─── Section/folder rendering helpers ──────────────────────────────
@@ -1113,7 +1128,26 @@ export function DashboardBuilder({
         projectName={projectName}
         editWidget={editingWidget ?? undefined}
         selectedRunIds={selectedRunIds}
+        onSelectPanel={handleSelectPanelWidget}
       />
+
+      {/* Python Panel editor (add + edit; unmounts on close so every
+       *  open starts from a fresh draft of the widget/starter config) */}
+      {panelEditor && (
+        <PanelEditorDialog
+          initialConfig={
+            panelEditor.widget
+              ? (panelEditor.widget.config as PanelWidgetConfig)
+              : createStarterPanelConfig()
+          }
+          isEditing={!!panelEditor.widget}
+          onSave={handlePanelEditorSave}
+          onClose={() => setPanelEditor(null)}
+          selectedRuns={selectedRuns}
+          organizationId={organizationId}
+          projectName={projectName}
+        />
+      )}
 
       {/* Fullscreen Chart Dialog.
        *  `fullscreenWidget` state captures only the WIDGET IDENTITY at open
