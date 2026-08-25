@@ -1,0 +1,111 @@
+{
+  "$comment": "Pinned assets for Python Panels (stlite/Pyodide). Consumed by fetch-panel-assets.mjs. stlite 1.8.1 hard-pins pyodide v0.29.3 inside its worker — bump them together and re-run the boot manifest capture (see docs in fetch-panel-assets.mjs).",
+  "stlite": {
+    "version": "1.8.1",
+    "url": "https://registry.npmjs.org/@stlite/browser/-/browser-1.8.1.tgz",
+    "sha256": "4feb5536633b676fa421f0779f60296c6b0acac03e151cb0ad52cea14a1cc571"
+  },
+  "pyodide": {
+    "version": "0.29.3",
+    "baseUrl": "https://cdn.jsdelivr.net/pyodide/v0.29.3/full/",
+    "coreFiles": {
+      "pyodide-lock.json": "3256ffc76388de0e37f4b34d42ab484268d1afc675179ff97b2a5bb14f84ccac",
+      "pyodide.mjs": "23213d27e9dacbda6f25f955fb38dabfc40ada082c04ee253047ea5dddcaa3b5",
+      "pyodide.asm.js": "1263f02b5b26099b96112378156f242dd98b39a8201ba7765e5fe3d455c5ce91",
+      "pyodide.asm.wasm": "e2f4ee75b325e35eb31bfb8c613d4dd5098f5502c156a97847686875b5025480",
+      "python_stdlib.zip": "4298b6ee445cb724c3973437da47789752b9e6ff4e26619026b283ec801fc46b"
+    },
+    "$packagesComment": "Union of (a) the empirically captured stlite 1.8.1 boot manifest (spike asset-manifest.txt) and (b) matplotlib. Transitive deps are resolved against pyodide-lock.json at fetch time; wheel sha256s come from the lock (itself pinned above). Do NOT vendor the whole ~300MB distro.",
+    "packages": [
+      "altair",
+      "anyio",
+      "attrs",
+      "cachetools",
+      "cramjam",
+      "fastparquet",
+      "fsspec",
+      "jinja2",
+      "jsonschema",
+      "jsonschema-specifications",
+      "libopenssl",
+      "markupsafe",
+      "matplotlib",
+      "micropip",
+      "narwhals",
+      "numpy",
+      "packaging",
+      "pandas",
+      "pillow",
+      "pyodide-http",
+      "pyrsistent",
+      "python-dateutil",
+      "pytz",
+      "referencing",
+      "rpds-py",
+      "six",
+      "sniffio",
+      "ssl",
+      "starlette",
+      "typing-extensions"
+    ]
+  },
+  "$pypiWheelsComment": "Pure-Python wheels micropip would otherwise resolve from pypi.org at boot (blocked by the sandbox CSP). fetch-panel-assets.mjs downloads them into pyodide/ and INJECTS them as packages into the served pyodide-lock.json — micropip resolves name-based requirements (streamlit's own protobuf/blinker/... constraints AND user panel requirements like seaborn/plotly) against the lockfile before ever touching an index, so boot needs zero PyPI access. `depends` must reference lockfile package names (normalized, dashed).",
+  "pypiWheels": [
+    {
+      "name": "blinker",
+      "version": "1.9.0",
+      "imports": ["blinker"],
+      "depends": [],
+      "url": "https://files.pythonhosted.org/packages/10/cb/f2ad4230dc2eb1a74edf38f1a38b9b52277f75bef262d8908e60d957e13c/blinker-1.9.0-py3-none-any.whl",
+      "sha256": "ba0efaa9080b619ff2f3459d1d500c57bddea4a6b424b60a91141db6fd2f08bc"
+    },
+    {
+      "name": "itsdangerous",
+      "version": "2.2.0",
+      "imports": ["itsdangerous"],
+      "depends": [],
+      "url": "https://files.pythonhosted.org/packages/04/96/92447566d16df59b2a776c0fb82dbc4d9e07cd95062562af01e408583fc4/itsdangerous-2.2.0-py3-none-any.whl",
+      "sha256": "c6242fc49e35958c8b15141343aa660db5fc54d4f13a1db01a3f5891b98700ef"
+    },
+    {
+      "name": "protobuf",
+      "version": "7.35.1",
+      "imports": ["google"],
+      "depends": ["typing-extensions"],
+      "url": "https://files.pythonhosted.org/packages/19/c7/5f7c636ec43e0c545e28d1f1db71990108306f7bdcb89f069ba97e428e7f/protobuf-7.35.1-py3-none-any.whl",
+      "sha256": "4bc97768d8fe4ad6743c8a19403e314511ed9f6d13205b687e52421c023ac1b9"
+    },
+    {
+      "name": "tenacity",
+      "version": "9.1.4",
+      "imports": ["tenacity"],
+      "depends": [],
+      "url": "https://files.pythonhosted.org/packages/d7/c1/eb8f9debc45d3b7918a32ab756658a0904732f75e555402972246b0b8e71/tenacity-9.1.4-py3-none-any.whl",
+      "sha256": "6095a360c919085f28c6527de529e76a06ad89b23659fa881ae0649b867a9d55"
+    },
+    {
+      "name": "python-multipart",
+      "version": "0.0.32",
+      "imports": ["multipart", "python_multipart"],
+      "depends": [],
+      "url": "https://files.pythonhosted.org/packages/e1/04/e8135ebd1ad02c56ec633277529b2602ff99ff634be76cdba5744cf554fd/python_multipart-0.0.32-py3-none-any.whl",
+      "sha256": "ff6d3f776f16878c894e52e107296ffc890e913c611b1a4ec6c44e2821fe2e23"
+    },
+    {
+      "name": "seaborn",
+      "version": "0.13.2",
+      "imports": ["seaborn"],
+      "depends": ["numpy", "pandas", "matplotlib"],
+      "url": "https://files.pythonhosted.org/packages/83/11/00d3c3dfc25ad54e731d91449895a79e4bf2384dc3ac01809010ba88f6d5/seaborn-0.13.2-py3-none-any.whl",
+      "sha256": "636f8336facf092165e27924f223d3c62ca560b1f2bb5dff7ab7fad265361987"
+    },
+    {
+      "name": "plotly",
+      "version": "6.8.0",
+      "imports": ["plotly"],
+      "depends": ["narwhals", "packaging"],
+      "url": "https://files.pythonhosted.org/packages/f9/14/abe5ce876ab5b66ee3c691bf537fcd43d037aea55d447aacf74630a8f31e/plotly-6.8.0-py3-none-any.whl",
+      "sha256": "13c5c4a0f70b74cab1913eda0de49b826df5931708eb6f9c3010040614700ec8"
+    }
+  ]
+}

@@ -84,6 +84,8 @@ export function getWidgetTitle(widget: Widget): string {
       const config = widget.config as { metric?: string };
       return config.metric || "String Metric";
     }
+    case "panel":
+      return "Python Panel";
     default:
       return "Widget";
   }

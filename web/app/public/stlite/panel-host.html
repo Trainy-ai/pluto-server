@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>mlop panel</title>
+<link rel="stylesheet" href="./stlite/stlite.css" />
+<style>
+  html, body, #root { margin: 0; height: 100%; }
+  body { background: transparent; }
+</style>
+</head>
+<body>
+<!--
+  Python Panels sandbox host page. Loaded in an <iframe sandbox="allow-scripts">
+  (opaque origin) by PanelSandbox (src/components/panels/panel-sandbox.tsx).
+  All logic lives in panel-host.js (plain ESM, no build step). Served with a
+  strict CSP (see nginx.conf / vite.config.ts) — the only reachable network
+  endpoints are this host's /stlite/ assets.
+-->
+<div id="root"></div>
+<script type="module" src="./panel-host.js"></script>
+</body>
+</html>

@@ -850,6 +850,7 @@ export function DashboardBuilder({
             organizationId={organizationId}
             projectName={projectName}
             settingsRunId={settingsRunId}
+            isGridEditing={isEditing}
             yZoomRange={widgetYZoomRanges[widget.id] ?? null}
             onYZoomRangeChange={(range) => setWidgetYZoomRanges((prev) => ({ ...prev, [widget.id]: range }))}
             groupBy={groupBy}

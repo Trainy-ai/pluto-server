@@ -4,6 +4,7 @@ import type {
   HistogramWidgetConfig,
   FileGroupWidgetConfig,
   DistributionsWidgetConfig,
+  PanelWidgetConfig,
   HistogramViewMode,
   HistogramDepthAxis,
   StringSeriesWidgetConfig,
@@ -15,6 +16,7 @@ import { HistogramWidget } from "./histogram-widget";
 import { StringSeriesWidget } from "./string-series-widget";
 import { FileGroupWidget } from "./file-group-widget";
 import { DistributionsWidget } from "./distributions-widget";
+import { PanelWidget } from "./panel-widget";
 
 interface WidgetRendererProps {
   widget: Widget;
@@ -24,6 +26,9 @@ interface WidgetRendererProps {
   projectName: string;
   /** When provided, reads line settings from this runId instead of the "full" key */
   settingsRunId?: string;
+  /** True while the dashboard grid is in edit mode. Consumed by widgets
+   *  embedding iframes (panel) that must not capture drag pointers. */
+  isGridEditing?: boolean;
   /** Externally-stored Y zoom range for persistence across mini/fullscreen */
   yZoomRange?: [number, number] | null;
   /** Called when user drags to zoom Y axis, or null on reset */
@@ -83,6 +88,7 @@ export function WidgetRenderer({
   organizationId,
   projectName,
   settingsRunId,
+  isGridEditing,
   yZoomRange,
   onYZoomRangeChange,
   groupBy,
@@ -196,6 +202,16 @@ export function WidgetRenderer({
               : undefined
           }
           compactChrome={compactDistributionsChrome}
+        />
+      );
+    case "panel":
+      return (
+        <PanelWidget
+          config={widget.config as PanelWidgetConfig}
+          selectedRuns={selectedRuns}
+          organizationId={organizationId}
+          projectName={projectName}
+          isGridEditing={isGridEditing}
         />
       );
     default:

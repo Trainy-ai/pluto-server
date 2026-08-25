@@ -15,3 +15,8 @@ server/node_modules
 app/dist
 app/.next
 e2e
+# Locally-vendored panel runtime assets (~137MB) — the image build fetches
+# its own pinned copy; only the committed host page files are needed.
+app/public/stlite/*
+!app/public/stlite/panel-host.html
+!app/public/stlite/panel-host.js

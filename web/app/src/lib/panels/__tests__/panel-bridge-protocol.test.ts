@@ -168,6 +168,7 @@ describe("panel-bridge-protocol: parent → iframe guards", () => {
         token: TOKEN,
         code: "import streamlit as st",
         requirements: ["seaborn"],
+        sdk: "# mlop sdk source",
         context,
       }),
     ).toBe(true);
@@ -181,6 +182,7 @@ describe("panel-bridge-protocol: parent → iframe guards", () => {
         token: TOKEN,
         code: "x",
         requirements: [],
+        sdk: "# mlop sdk source",
         context: { ...context, theme: "solarized" },
       }),
     ).toBe(false);

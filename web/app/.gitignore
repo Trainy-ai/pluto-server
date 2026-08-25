@@ -19,3 +19,10 @@ dist/
 
 *.env*
 !.env.example
+
+# Python Panels runtime assets: the whole public/ dir is already ignored by
+# the ROOT .gitignore (`web/app/public`); committed files under it (like
+# public/stlite/panel-host.html and panel-host.js) are force-added
+# (`git add -f`), matching the existing tracked public/ files. The vendored
+# downloads in public/stlite/{stlite,pyodide}/ + manifest.json must stay
+# untracked — they are fetched by scripts/fetch-panel-assets.mjs.

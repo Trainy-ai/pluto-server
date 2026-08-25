@@ -48,6 +48,14 @@ COPY server/package.json ./server/
 # Install with the frozen lockfile — reproducible, no transitive drift.
 RUN pnpm install --frozen-lockfile --filter @mlop/app
 
+# Vendor the pinned Python Panels runtime assets (stlite + Pyodide,
+# sha256-verified) BEFORE the app source copy so the ~45MB download layer
+# caches on the pins file, not on unrelated source changes. Vite copies
+# public/ into dist/, baking the assets into the image — nothing is
+# fetched at runtime (air-gapped safe).
+COPY app/scripts/fetch-panel-assets.mjs app/scripts/panel-asset-pins.json ./app/scripts/
+RUN node app/scripts/fetch-panel-assets.mjs
+
 # Copy the app source and build.
 COPY app/ ./app/
 RUN pnpm --filter @mlop/app build
