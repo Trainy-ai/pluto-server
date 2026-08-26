@@ -78,3 +78,22 @@ export const isApiKeyExpired = (
 export const isApiKeyRevoked = (
   revokedAt: Date | null | undefined
 ): boolean => revokedAt != null;
+
+/**
+ * Prisma `where` matching the API keys of an organization that can still
+ * authenticate: not revoked, and not past their expiry.
+ *
+ * Revocation and expiry are both enforced at authentication time (see
+ * routes/middleware.ts and ingest/src/db.rs), so a key failing either test is
+ * dead everywhere. Listing one next to live keys therefore misrepresents an
+ * organization's real access surface — it reads as a credential someone still
+ * holds. Anything that shows keys to a human should filter with this.
+ *
+ * `now` is injectable so callers (and tests) can pin the instant; it defaults
+ * to the current one.
+ */
+export const liveApiKeyWhere = (organizationId: string, now: Date = new Date()) => ({
+  organizationId,
+  revokedAt: null,
+  OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+});

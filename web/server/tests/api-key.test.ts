@@ -15,6 +15,7 @@ import {
   keyToSearchFor,
   createKeyString,
   isApiKeyExpired,
+  liveApiKeyWhere,
   SECURE_API_KEY_PREFIX,
   INSECURE_API_KEY_PREFIX,
 } from '../lib/api-key';
@@ -179,5 +180,38 @@ describe('isApiKeyExpired', () => {
     expect(utc.getTime()).toBe(withOffset.getTime());
     expect(isApiKeyExpired(utc)).toBe(false);
     expect(isApiKeyExpired(withOffset)).toBe(false);
+  });
+});
+
+describe('liveApiKeyWhere', () => {
+  const NOW = new Date('2026-08-26T12:00:00.000Z');
+
+  it('scopes to the organization', () => {
+    expect(liveApiKeyWhere('org_1', NOW).organizationId).toBe('org_1');
+  });
+
+  it('excludes revoked keys', () => {
+    // Revocation is a soft delete, so the rows stay in the table.
+    expect(liveApiKeyWhere('org_1', NOW).revokedAt).toBeNull();
+  });
+
+  it('keeps keys that never expire', () => {
+    const clauses = liveApiKeyWhere('org_1', NOW).OR;
+    expect(clauses).toContainEqual({ expiresAt: null });
+  });
+
+  it('excludes keys whose expiry has passed', () => {
+    // The whole point: a lapsed key can no longer authenticate anywhere, so a
+    // listing that still shows it misrepresents live access.
+    const clauses = liveApiKeyWhere('org_1', NOW).OR;
+    expect(clauses).toContainEqual({ expiresAt: { gt: NOW } });
+  });
+
+  it('defaults to the current instant', () => {
+    const before = Date.now();
+    const clauses = liveApiKeyWhere('org_1').OR;
+    const boundary = (clauses[1] as { expiresAt: { gt: Date } }).expiresAt.gt;
+    expect(boundary.getTime()).toBeGreaterThanOrEqual(before);
+    expect(boundary.getTime()).toBeLessThanOrEqual(Date.now());
   });
 });

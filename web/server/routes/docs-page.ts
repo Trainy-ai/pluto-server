@@ -18,6 +18,11 @@ const TRPC_SPEC_URL = "/api/docs/openapi-trpc.json";
  * Client bootstrap. Kept free of template literals so it survives being
  * embedded in one, and free of server-injected values so nothing user-supplied
  * is ever interpolated into the page.
+ *
+ * Loading this script must never mint a key. It asks who the reader is (to
+ * populate the org picker) and then stops; a credential is created only when
+ * the reader clicks "Create key". Reading the docs is not consent to issue an
+ * API key against your own organization.
  */
 const BOOTSTRAP_SCRIPT = String.raw`
 (function () {
@@ -28,6 +33,7 @@ const BOOTSTRAP_SCRIPT = String.raw`
   var DOCS_HEADERS = { "Content-Type": "application/json", "x-mlop-docs": "1" };
   var state = {
     key: null, orgs: [], orgId: null, expiresAt: null, spec: "rest", identity: null,
+    ttlMinutes: null,
   };
   var ui = null;
 
@@ -72,10 +78,13 @@ const BOOTSTRAP_SCRIPT = String.raw`
 
   function renderKey() {
     var box = byId("mlop-key");
+    var button = byId("mlop-create");
     if (!state.key) {
       box.textContent = "not authorized";
+      if (button) { button.textContent = "Create key"; }
       return;
     }
+    if (button) { button.textContent = "New key"; }
     var expires = state.expiresAt ? new Date(state.expiresAt) : null;
     box.textContent =
       state.key.slice(0, 9) + "…" + state.key.slice(-4) +
@@ -118,7 +127,8 @@ const BOOTSTRAP_SCRIPT = String.raw`
         state.expiresAt = null;
         deauthorize();
         renderKey();
-        setStatus("Temporary key revoked. Reload the page to get a new one.", "");
+        state.identity = null;
+        setStatus("Temporary key revoked. Click Create key if you need another.", "");
       });
   }
 
@@ -142,7 +152,15 @@ const BOOTSTRAP_SCRIPT = String.raw`
   // One status line, rebuilt from state, so switching surfaces never leaves a
   // message describing the other one behind.
   function renderStatus() {
-    if (!state.identity) { return; }
+    if (!state.identity) {
+      setStatus(
+        "No key has been created. Click Create key when you want to call the " +
+          "API — it lasts " + (state.ttlMinutes || 15) + " minutes and only " +
+          "then does a credential exist.",
+        ""
+      );
+      return;
+    }
     setStatus(
       "Authorized as " + state.identity.email + " on " + state.identity.org + specNote(),
       "ok"
@@ -178,7 +196,9 @@ const BOOTSTRAP_SCRIPT = String.raw`
     });
     select.addEventListener("change", function () {
       state.orgId = select.value;
-      mint();
+      // Only follow the picker with a new key if the reader already asked for
+      // one. Switching orgs is not itself a request to mint.
+      if (state.key) { mint(); }
     });
   }
 
@@ -220,8 +240,8 @@ const BOOTSTRAP_SCRIPT = String.raw`
     if (!ui) {
       byId("swagger-ui").innerHTML =
         "<p style=\"padding:16px;font-family:sans-serif\">Swagger UI could not be " +
-        "loaded from the CDN. The temporary key above still works — copy it and " +
-        "call the API directly, or read the spec at " +
+        "loaded from the CDN. Create a temporary key above and call the API " +
+        "directly, or read the spec at " +
         "<a href=\"/api/openapi.json\">/api/openapi.json</a>.</p>";
     }
 
@@ -232,7 +252,11 @@ const BOOTSTRAP_SCRIPT = String.raw`
       });
     }
 
-    byId("mlop-refresh").addEventListener("click", mint);
+    // Draw the key box and the button label from state rather than trusting
+    // the static markup, so "Create key"/"New key" always matches reality.
+    renderKey();
+
+    byId("mlop-create").addEventListener("click", mint);
     byId("mlop-revoke").addEventListener("click", revoke);
     byId("mlop-copy").addEventListener("click", copyKey);
 
@@ -246,6 +270,7 @@ const BOOTSTRAP_SCRIPT = String.raw`
         state.orgs = session.organizations || [];
         state.orgId = session.activeOrganizationId ||
           (state.orgs[0] ? state.orgs[0].id : null);
+        state.ttlMinutes = session.ttlMinutes || null;
         renderOrgs();
         if (!session.tempKeysEnabled) {
           setStatus(
@@ -254,7 +279,8 @@ const BOOTSTRAP_SCRIPT = String.raw`
           );
           return;
         }
-        mint();
+        // Deliberately no mint() here: opening the docs creates no credential.
+        renderStatus();
       });
   }
 
@@ -295,6 +321,18 @@ const BANNER_STYLES = `
   }
 `;
 
+/**
+ * The bootstrap with its spec-URL placeholders filled in. Exported so tests can
+ * execute it against a stub DOM and assert what it does — above all, that it
+ * mints nothing on load.
+ */
+export function buildBootstrapScript(): string {
+  return BOOTSTRAP_SCRIPT.replace("__REST_SPEC_URL__", REST_SPEC_URL).replace(
+    "__TRPC_SPEC_URL__",
+    TRPC_SPEC_URL,
+  );
+}
+
 export function renderDocsPage(): string {
   const body = SwaggerUI({
     // Ignored — manuallySwaggerUIHtml takes over the rendering — but the
@@ -310,7 +348,7 @@ export function renderDocsPage(): string {
         <span>temporary key:</span>
         <span class="mlop-key" id="mlop-key">not authorized</span>
         <button type="button" id="mlop-copy">Copy key</button>
-        <button type="button" id="mlop-refresh">New key</button>
+        <button type="button" id="mlop-create">Create key</button>
         <button type="button" id="mlop-revoke">Revoke</button>
         <select id="mlop-org" aria-label="Organization"></select>
         <span class="mlop-status" id="mlop-status">Loading…</span>
@@ -320,7 +358,7 @@ export function renderDocsPage(): string {
       ${asset.js
         .map((url) => `<script src="${url}" crossorigin="anonymous"></script>`)
         .join("")}
-      <script>${BOOTSTRAP_SCRIPT.replace("__REST_SPEC_URL__", REST_SPEC_URL).replace("__TRPC_SPEC_URL__", TRPC_SPEC_URL)}</script>
+      <script>${buildBootstrapScript()}</script>
     `,
   });
 
@@ -351,8 +389,9 @@ export function renderSignInPage(): string {
     <div class="mlop-signin">
       <h1>Sign in to view the API docs</h1>
       <p>
-        The interactive docs mint a temporary API key from your own account, so
-        they are only available to a signed-in user.
+        The interactive docs can mint a short-lived API key from your own
+        account, so they are only available to a signed-in user. No key is
+        created until you ask for one.
       </p>
       <p>
         <a href="${env.BETTER_AUTH_URL}/auth/sign-in">Sign in to mlop</a>, then

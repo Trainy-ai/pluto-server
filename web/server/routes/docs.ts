@@ -6,13 +6,17 @@
  * app uses. There is no anonymous view: an unauthenticated request gets a
  * sign-in page and a 401.
  *
- * Once the page loads it mints a short-lived API key from the caller's OWN
- * organization membership and preauthorizes Swagger UI with it. That makes
- * "Try it out" send a real `Authorization: Bearer <key>` header, and — the
- * point of the exercise — the curl command Swagger UI prints is copy-pasteable
- * and succeeds verbatim in a terminal.
+ * On request — never merely because the page was opened — it mints a
+ * short-lived API key from the caller's OWN organization membership and
+ * preauthorizes Swagger UI with it. That makes "Try it out" send a real
+ * `Authorization: Bearer <key>` header, and — the point of the exercise — the
+ * curl command Swagger UI prints is copy-pasteable and succeeds verbatim in a
+ * terminal.
  *
  * Properties that matter for a pentest of this surface:
+ *   - Nothing is minted implicitly. Reading the docs creates no credential;
+ *     a key exists only after the reader asks for one, so browsing the page
+ *     never leaves a live key behind in the org's key list.
  *   - The key is bound to an org the session user is a member of. The org can
  *     be chosen, but only from that user's memberships (an unknown or
  *     non-member org id is a 403), so the page cannot be used to widen access.
@@ -45,8 +49,15 @@ const router = new Hono();
 /** Name every auto-minted key carries, so they are identifiable and revocable. */
 export const DOCS_KEY_NAME = "Swagger UI (temporary)";
 
-/** Lifetime of an auto-minted docs key. */
-export const DOCS_KEY_TTL_MINUTES = 60;
+/**
+ * Lifetime of a docs key.
+ *
+ * Kept short deliberately: the plaintext is shown on screen and copied into
+ * curl commands that end up in terminals, tickets and chat threads, so the
+ * window in which a leaked one is worth anything should be small. A reader who
+ * needs longer clicks "New key".
+ */
+export const DOCS_KEY_TTL_MINUTES = 15;
 
 /**
  * Required on mint/revoke. A cross-site page can send a cookie-bearing form
@@ -131,6 +142,26 @@ async function readJsonBody(c: Context): Promise<Record<string, unknown>> {
   }
 }
 
+/**
+ * Retire docs keys whose TTL has already lapsed.
+ *
+ * An expired key cannot authenticate, but until it is revoked the row is still
+ * a live-looking entry. Sweeping on the caller's own visits keeps the table
+ * honest without putting a write on the authentication path.
+ */
+async function sweepExpiredDocsKeys(userId: string) {
+  const { count } = await prisma.apiKey.updateMany({
+    where: {
+      userId,
+      name: DOCS_KEY_NAME,
+      revokedAt: null,
+      expiresAt: { lt: new Date() },
+    },
+    data: { revokedAt: new Date() },
+  });
+  return count;
+}
+
 /** Revoke (soft-delete) every live auto-minted docs key for a user+org. */
 async function revokeDocsKeys(userId: string, organizationId: string) {
   const { count } = await prisma.apiKey.updateMany({
@@ -190,6 +221,8 @@ router.get("/session", async (c) => {
   if (!session) {
     return c.json({ error: "Unauthorized" }, 401, NO_STORE);
   }
+
+  await sweepExpiredDocsKeys(session.user.id);
 
   const memberships = await listMemberships(session.user.id);
   return c.json(

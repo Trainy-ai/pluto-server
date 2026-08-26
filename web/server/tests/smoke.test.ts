@@ -11863,6 +11863,72 @@ describe('SDK API Endpoints (with API Key)', () => {
       // only the masked keyString.
       expect(raw).not.toContain(minted.apiKey);
     });
+
+    it('Test 43.15: a docs key is short-lived enough to be low value if it leaks', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+
+      const response = await makeRequest('/api/docs/key', {
+        method: 'POST',
+        headers: { Cookie: sessionCookie, ...DOCS_HEADER },
+        body: JSON.stringify({}),
+      });
+      expect(response.status).toBe(200);
+      const body = await response.json();
+
+      // The key ends up in copy-pasted curl commands, so the window in which a
+      // leaked one is useful has to stay small.
+      expect(body.ttlMinutes).toBeLessThanOrEqual(15);
+      const expiresAt = new Date(body.expiresAt).getTime();
+      expect(expiresAt).toBeLessThanOrEqual(Date.now() + 15 * 60 * 1000 + 5000);
+    });
+
+    it('Test 43.16: the org key list never shows a lapsed key as if it were live', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+
+      const session = await makeRequest('/api/docs/session', {
+        headers: { Cookie: sessionCookie },
+      });
+      if (session.status !== 200) {
+        console.log('   No docs session - skipping');
+        return;
+      }
+      const { organizations } = await session.json();
+      const organizationId = organizations?.[0]?.id;
+      if (!organizationId) {
+        console.log('   No organization - skipping');
+        return;
+      }
+
+      const listed = await makeTrpcRequest(
+        'organization.apiKey.listApiKeys',
+        { organizationId },
+        { Cookie: sessionCookie },
+        'GET',
+      );
+      if (listed.status !== 200) {
+        console.log('   listApiKeys unavailable - skipping');
+        return;
+      }
+      const payload = await listed.json();
+      const keys = payload.result?.data?.json ?? payload.result?.data ?? [];
+
+      // A lapsed credential rendered next to live ones reads as access that is
+      // still in play. Every row the UI draws must actually still authenticate.
+      for (const key of keys as Array<{ name: string; expiresAt: string | null }>) {
+        if (key.expiresAt) {
+          expect(
+            new Date(key.expiresAt).getTime(),
+            `listed key "${key.name}" has already expired`,
+          ).toBeGreaterThan(Date.now());
+        }
+      }
+    });
   });
 
 });
