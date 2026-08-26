@@ -15,6 +15,7 @@
     "test:smoke:local": "dotenv -e .env.locals -- vitest run",
     "test:smoke:dev": "dotenv -e .env.dev -- vitest run",
     "test:cache": "vitest run tests/cache.test.ts --reporter=verbose",
+    "inventory": "tsx scripts/generate-api-inventory.ts",
     "seed:dev": "dotenv -e .env.locals -- tsx scripts/seed-dev.ts",
     "seed:dev:docker": "dotenv -e .env -- tsx scripts/seed-dev.ts",
     "seed:images": "dotenv -e .env.locals -- tsx scripts/seed-images.ts",
@@ -80,7 +81,6 @@
   },
   "devDependencies": {
     "@better-auth/sso": "1.6.27",
-    "knip": "5.83.0",
     "@better-auth/utils": "0.4.2",
     "@noble/hashes": "2.0.1",
     "@types/bcrypt": "6.0.0",
@@ -92,9 +92,11 @@
     "drizzle-kit": "0.31.8",
     "esbuild": "0.25.2",
     "eslint": "9.39.2",
+    "knip": "5.83.0",
     "tsx": "4.19.3",
     "typescript": "5.8.3",
     "typescript-eslint": "8.53.0",
-    "vitest": "3.2.6"
+    "vitest": "3.2.6",
+    "zod-to-json-schema": "^3.25.2"
   }
 }

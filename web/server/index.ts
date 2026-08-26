@@ -1,5 +1,4 @@
 import { trpcServer } from "@hono/trpc-server";
-import { swaggerUI } from "@hono/swagger-ui";
 import { OpenAPIHono, z } from "@hono/zod-openapi";
 import { cors } from "hono/cors";
 import { compress } from "hono/compress";
@@ -25,6 +24,7 @@ import authRoutes from "./routes/auth";
 import chartDataRoutes from "./routes/chart-data";
 import stripeWebhookRoutes from "./routes/stripe-webhook";
 import linearOAuthRoutes from "./routes/linear-oauth";
+import docsRoutes from "./routes/docs";
 import { withApiKey } from "./routes/middleware";
 
 const app = new OpenAPIHono();
@@ -170,7 +170,9 @@ const RunFilterGrammarDoc = z.object({
 });
 app.openAPIRegistry.register("RunFilterGrammar", RunFilterGrammarDoc);
 
-// Swagger UI
-app.get("/api/docs", swaggerUI({ url: "/api/openapi.json" }));
+// Swagger UI — session-gated, and it preauthorizes itself with a short-lived
+// API key minted from the caller's own membership (see routes/docs.ts), so
+// "Try it out" and the curl it prints work without pasting a key by hand.
+app.route("/api/docs", docsRoutes);
 
 export default app;

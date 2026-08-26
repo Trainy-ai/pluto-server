@@ -21,33 +21,48 @@ const fastSuperjson = {
   deserialize: superjson.deserialize.bind(superjson),
 };
 
-export const t = initTRPC.context<Context>().create({
+/**
+ * Per-procedure metadata. `auth` records which credential a procedure demands,
+ * set once on each base procedure below and inherited by everything derived
+ * from it. Nothing at runtime reads it — the enforcement is the middleware —
+ * but it makes the auth tier of all ~94 procedures machine-readable, which is
+ * what `scripts/generate-api-inventory.ts` publishes so the tRPC surface can be
+ * reviewed and security-tested without reading every proc file.
+ */
+export interface ProcedureMeta {
+  auth: "public" | "session" | "session+org";
+}
+
+export const t = initTRPC.context<Context>().meta<ProcedureMeta>().create({
   transformer: fastSuperjson,
 });
 
 export const router = t.router;
 
-export const publicProcedure = t.procedure;
+export const publicProcedure = t.procedure.meta({ auth: "public" });
 
-export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
-  if (!ctx.session) {
-    throw new TRPCError({
-      code: "UNAUTHORIZED",
-      message: "Authentication required",
-      cause: "No session",
+export const protectedProcedure = t.procedure
+  .meta({ auth: "session" })
+  .use(({ ctx, next }) => {
+    if (!ctx.session) {
+      throw new TRPCError({
+        code: "UNAUTHORIZED",
+        message: "Authentication required",
+        cause: "No session",
+      });
+    }
+    return next({
+      ctx: {
+        ...ctx,
+        session: ctx.session,
+        user: ctx.session?.user,
+        prisma,
+      },
     });
-  }
-  return next({
-    ctx: {
-      ...ctx,
-      session: ctx.session,
-      user: ctx.session?.user,
-      prisma,
-    },
   });
-});
 
 export const protectedOrgProcedure = protectedProcedure
+  .meta({ auth: "session+org" })
   .input(
     z.object({
       organizationId: z.string(),

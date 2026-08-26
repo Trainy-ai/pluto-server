@@ -11522,4 +11522,347 @@ describe('SDK API Endpoints (with API Key)', () => {
       expect(await call([sqidEncode(other.runId)])).toEqual([]);
     });
   });
+
+  // Test Suite 43: Authenticated Swagger UI (/api/docs).
+  //
+  // The docs UI is session-gated: a signed-in user gets Swagger UI plus a
+  // short-lived API key minted from their OWN membership, so "Try it out"
+  // sends a real Authorization header and the curl Swagger UI prints works
+  // verbatim in a terminal. These tests pin the gate (nothing is reachable
+  // without a session), the CSRF header on the mint endpoint, that the minted
+  // key actually authenticates against a real API endpoint, and that revoke
+  // kills it.
+  describe('Test Suite 43: Authenticated Swagger UI (/api/docs)', () => {
+    const TEST_EMAIL = process.env.TEST_USER_EMAIL || 'test-smoke@mlop.local';
+    const TEST_PASSWORD = 'TestPassword123!';
+    // better-auth validates Origin against trustedOrigins whenever Sec-Fetch-*
+    // headers are present (undici always sends them) — same reasoning as Suite 41.
+    const SIGN_IN_ORIGIN = process.env.PUBLIC_URL || BASE_URL;
+    const DOCS_HEADER = { 'x-mlop-docs': '1' };
+    let sessionCookie: string | null = null;
+
+    beforeAll(async () => {
+      try {
+        const signInResponse = await makeRequest('/api/auth/sign-in/email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Origin: SIGN_IN_ORIGIN },
+          body: JSON.stringify({ email: TEST_EMAIL, password: TEST_PASSWORD }),
+        });
+        const setCookie = signInResponse.headers.get('set-cookie');
+        const match = setCookie?.match(/better-auth\.session_token=([^;]+)/);
+        if (match) {
+          sessionCookie = `better-auth.session_token=${match[1]}`;
+        }
+      } catch {
+        sessionCookie = null;
+      }
+    });
+
+    it('Test 43.1: GET /api/docs without a session returns 401, not the UI', async () => {
+      const response = await makeRequest('/api/docs');
+
+      expect(response.status).toBe(401);
+      const body = await response.text();
+      // The sign-in page, not Swagger UI: no spec loader, no try-it-out.
+      expect(body).not.toContain('SwaggerUIBundle');
+      expect(body.toLowerCase()).toContain('sign in');
+    });
+
+    it('Test 43.2: GET /api/docs with a session renders Swagger UI', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+
+      const response = await makeRequest('/api/docs', {
+        headers: { Cookie: sessionCookie },
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.text();
+      expect(body).toContain('SwaggerUIBundle');
+      expect(body).toContain('/api/openapi.json');
+      // The page must not be cached by a proxy — it is per-user.
+      expect(response.headers.get('cache-control')).toContain('no-store');
+    });
+
+    it('Test 43.3: GET /api/docs/session without a session returns 401', async () => {
+      const response = await makeRequest('/api/docs/session');
+
+      expect(response.status).toBe(401);
+    });
+
+    it('Test 43.4: GET /api/docs/session reports the caller and their orgs', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+
+      const response = await makeRequest('/api/docs/session', {
+        headers: { Cookie: sessionCookie },
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.user?.email).toBe(TEST_EMAIL);
+      expect(Array.isArray(body.organizations)).toBe(true);
+      expect(body.organizations.length).toBeGreaterThan(0);
+      expect(body.organizations[0].id).toBeTruthy();
+      expect(body.organizations[0].slug).toBeTruthy();
+    });
+
+    it('Test 43.5: POST /api/docs/key without a session returns 401', async () => {
+      const response = await makeRequest('/api/docs/key', {
+        method: 'POST',
+        headers: DOCS_HEADER,
+        body: JSON.stringify({}),
+      });
+
+      expect(response.status).toBe(401);
+      const body = await response.json();
+      expect(body.apiKey).toBeUndefined();
+    });
+
+    it('Test 43.6: POST /api/docs/key without the x-mlop-docs header returns 403', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+
+      // A cross-site form POST cannot set a custom header, so this check is what
+      // stops a drive-by page from minting a key with the victim's cookies.
+      const response = await makeRequest('/api/docs/key', {
+        method: 'POST',
+        headers: { Cookie: sessionCookie },
+        body: JSON.stringify({}),
+      });
+
+      expect(response.status).toBe(403);
+      const body = await response.json();
+      expect(body.apiKey).toBeUndefined();
+    });
+
+    it('Test 43.7: POST /api/docs/key mints a scoped, expiring key that actually authenticates', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+
+      const response = await makeRequest('/api/docs/key', {
+        method: 'POST',
+        headers: { Cookie: sessionCookie, ...DOCS_HEADER },
+        body: JSON.stringify({}),
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('cache-control')).toContain('no-store');
+      const body = await response.json();
+
+      // Secure (hashed-at-rest) key, bound to an org the caller belongs to.
+      expect(typeof body.apiKey).toBe('string');
+      expect(body.apiKey.startsWith('mlps_')).toBe(true);
+      expect(body.organization?.id).toBeTruthy();
+      expect(body.organization?.slug).toBeTruthy();
+
+      // Short-lived: expiry is in the future and no further out than the TTL.
+      const expiresAt = new Date(body.expiresAt).getTime();
+      expect(expiresAt).toBeGreaterThan(Date.now());
+      expect(expiresAt).toBeLessThanOrEqual(Date.now() + body.ttlMinutes * 60 * 1000 + 5000);
+
+      // The whole point: the key works as a bearer token on a real endpoint,
+      // which is what makes the curl Swagger UI prints copy-pasteable.
+      const projects = await makeRequest('/api/runs/projects', {
+        headers: { Authorization: `Bearer ${body.apiKey}` },
+      });
+      expect(projects.status).toBe(200);
+    });
+
+    it('Test 43.8: POST /api/docs/key rejects an org the caller does not belong to', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+
+      const response = await makeRequest('/api/docs/key', {
+        method: 'POST',
+        headers: { Cookie: sessionCookie, ...DOCS_HEADER },
+        body: JSON.stringify({ organizationId: 'org-that-does-not-exist' }),
+      });
+
+      expect(response.status).toBe(403);
+      const body = await response.json();
+      expect(body.apiKey).toBeUndefined();
+    });
+
+    it('Test 43.9: minting again revokes the previous docs key', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+
+      const first = await (
+        await makeRequest('/api/docs/key', {
+          method: 'POST',
+          headers: { Cookie: sessionCookie, ...DOCS_HEADER },
+          body: JSON.stringify({}),
+        })
+      ).json();
+      const second = await (
+        await makeRequest('/api/docs/key', {
+          method: 'POST',
+          headers: { Cookie: sessionCookie, ...DOCS_HEADER },
+          body: JSON.stringify({}),
+        })
+      ).json();
+
+      expect(first.apiKey).not.toBe(second.apiKey);
+
+      // Exactly one live docs credential per user+org: the older one is dead.
+      const withOld = await makeRequest('/api/runs/projects', {
+        headers: { Authorization: `Bearer ${first.apiKey}` },
+      });
+      expect(withOld.status).toBe(401);
+
+      const withNew = await makeRequest('/api/runs/projects', {
+        headers: { Authorization: `Bearer ${second.apiKey}` },
+      });
+      expect(withNew.status).toBe(200);
+    });
+
+    it('Test 43.10: POST /api/docs/key/revoke kills the live docs key', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+
+      const minted = await (
+        await makeRequest('/api/docs/key', {
+          method: 'POST',
+          headers: { Cookie: sessionCookie, ...DOCS_HEADER },
+          body: JSON.stringify({}),
+        })
+      ).json();
+
+      const revoke = await makeRequest('/api/docs/key/revoke', {
+        method: 'POST',
+        headers: { Cookie: sessionCookie, ...DOCS_HEADER },
+        body: JSON.stringify({}),
+      });
+      expect(revoke.status).toBe(200);
+      const revokeBody = await revoke.json();
+      expect(revokeBody.revoked).toBeGreaterThanOrEqual(1);
+
+      const afterRevoke = await makeRequest('/api/runs/projects', {
+        headers: { Authorization: `Bearer ${minted.apiKey}` },
+      });
+      expect(afterRevoke.status).toBe(401);
+    });
+
+    it('Test 43.12: the tRPC spec is session-gated, unlike the public REST spec', async () => {
+      // A machine-readable map of every internal procedure and its input shape
+      // is reconnaissance; it must not be readable without signing in.
+      const anonymous = await makeRequest('/api/docs/openapi-trpc.json');
+      expect(anonymous.status).toBe(401);
+
+      // The REST spec stays public - the SDK contract-tests against it.
+      const restSpec = await makeRequest('/api/openapi.json');
+      expect(restSpec.status).toBe(200);
+    });
+
+    it('Test 43.13: the tRPC spec describes the real procedures and their auth tiers', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+
+      const response = await makeRequest('/api/docs/openapi-trpc.json', {
+        headers: { Cookie: sessionCookie },
+      });
+      expect(response.status).toBe(200);
+      const spec = await response.json();
+
+      expect(spec.openapi).toBe('3.0.0');
+      // Every path addresses a real tRPC procedure.
+      const paths = Object.keys(spec.paths);
+      expect(paths.length).toBeGreaterThan(50);
+      expect(paths.every((path: string) => path.startsWith('/trpc/'))).toBe(true);
+
+      // Org-scoped procedures are tagged so the UI groups by credential.
+      const listMembers = spec.paths['/trpc/organization.listMembers']?.get;
+      expect(listMembers).toBeDefined();
+      expect(listMembers.tags).toContain('session+org');
+
+      // The input must be modelled as the superjson envelope, or every request
+      // the UI builds is rejected before reaching a resolver.
+      const schema = listMembers.parameters[0].content['application/json'].schema;
+      expect(schema.required).toEqual(['json']);
+    });
+
+    it('Test 43.14: an API key does not open the tRPC surface the spec describes', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+
+      const minted = await (
+        await makeRequest('/api/docs/key', {
+          method: 'POST',
+          headers: { Cookie: sessionCookie, ...DOCS_HEADER },
+          body: JSON.stringify({}),
+        })
+      ).json();
+
+      const input = encodeURIComponent(
+        JSON.stringify({ json: { organizationId: minted.organization.id } }),
+      );
+
+      // The two surfaces take different credentials. The docs page relies on
+      // this: it must not attach the bearer key to /trpc/* requests, because
+      // the resulting curl could never work.
+      const withKey = await makeRequest(
+        `/trpc/organization.listMembers?input=${input}`,
+        { headers: { Authorization: `Bearer ${minted.apiKey}` } },
+      );
+      expect(withKey.status).toBe(401);
+
+      const withSession = await makeRequest(
+        `/trpc/organization.listMembers?input=${input}`,
+        { headers: { Cookie: sessionCookie } },
+      );
+      expect(withSession.status).toBe(200);
+    });
+
+    it('Test 43.11: docs keys never leak into the org API key list as usable secrets', async () => {
+      if (!sessionCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+
+      const minted = await (
+        await makeRequest('/api/docs/key', {
+          method: 'POST',
+          headers: { Cookie: sessionCookie, ...DOCS_HEADER },
+          body: JSON.stringify({}),
+        })
+      ).json();
+
+      const listed = await makeTrpcRequest(
+        'organization.apiKey.listApiKeys',
+        { organizationId: minted.organization.id },
+        { Cookie: sessionCookie },
+        'GET',
+      );
+      if (listed.status !== 200) {
+        console.log('   listApiKeys unavailable - skipping');
+        return;
+      }
+      const payload = await listed.json();
+      const keys = payload.result?.data?.json ?? payload.result?.data ?? [];
+      const raw = JSON.stringify(keys);
+      // The plaintext is returned exactly once, at mint time; the listing shows
+      // only the masked keyString.
+      expect(raw).not.toContain(minted.apiKey);
+    });
+  });
+
 });

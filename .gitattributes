@@ -1,0 +1,7 @@
+# Generated files: collapsed by default in GitHub diffs and excluded from
+# language stats, so a regenerated artifact does not drown a review. They are
+# still committed — the point is that `git diff` after regenerating shows
+# surface/route drift — but nobody needs to read 5k lines of JSON Schema.
+docs/api-surface.json linguist-generated=true
+docs/api-surface.md linguist-generated=true
+web/app/src/routeTree.gen.ts linguist-generated=true

@@ -64,6 +64,15 @@ const envSchema = z.object({
   IS_DOCKER: z.string().optional(), // Could refine if specific values like "true" are expected
   VERCEL: z.string().optional(), // Could refine if specific values like "1" are expected
 
+  // Kill switch for the temporary API keys the authenticated Swagger UI mints
+  // for the signed-in user (see routes/docs.ts). With this set the docs page
+  // still renders for a signed-in user, but they must paste a key into
+  // Swagger's own Authorize dialog.
+  DOCS_TEMP_KEYS_DISABLED: z.preprocess(
+    (val) => val === "true",
+    z.boolean().default(false)
+  ),
+
   // Demo mode - skips authentication and uses a pre-seeded demo user
   SKIP_AUTH_DEMO: z.preprocess(
     (val) => val === "true",
