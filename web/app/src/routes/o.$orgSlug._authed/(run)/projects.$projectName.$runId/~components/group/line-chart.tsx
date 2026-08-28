@@ -5,15 +5,15 @@ import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import LineChart from "@/components/charts/line-wrapper";
 import { ChartCardWrapper } from "@/routes/o.$orgSlug._authed/(runComparison)/projects.$projectName/~components/multi-group/chart-card-wrapper";
-import { ensureGetGraph, useGetGraphProgressive } from "../../~queries/get-graph";
+import { ensureGetParametric, useGetGraphProgressive } from "../../~queries/get-graph";
 import { useCheckDatabaseSize } from "@/lib/db/local-cache";
 import { metricsCache, type MetricDataPoint } from "@/lib/db/index";
 import { useLineSettings, type LineChartSettings } from "../use-line-settings";
 import { useChartSyncContext } from "@/components/charts/context/chart-sync-context";
 import { useZoomRefetch, zoomKey } from "@/lib/hooks/use-zoom-refetch";
 import {
-  alignAndUnzip,
   applySmoothing,
+  splitMonotonicLegs,
   bucketedAndSmooth,
   type BucketedChartDataPoint,
   type ChartSeriesData,
@@ -173,6 +173,11 @@ function buildChartStrategy(
   return (strategies[strategy] || strategies.default)();
 }
 
+/** Why a parametric (y-vs-x) chart has nothing to draw. These need different
+ *  fixes from the user, so they get different messages rather than one
+ *  catch-all. */
+type ParametricError = "x-metric-missing" | "no-shared-steps" | null;
+
 // Custom hook for chart configuration generation
 function useChartConfig(
   data: BucketedChartDataPoint[] | undefined,
@@ -181,12 +186,16 @@ function useChartConfig(
   projectName: string,
   runId: string,
   settings: LineChartSettings,
+  /** bucket count for the parametric x-axis query — same resolution the
+   *  step/time charts request, so switching axes doesn't change fidelity */
+  resolvedBuckets: number,
   zoomData?: BucketedChartDataPoint[],
   runCreatedAt?: string,
   runName?: string,
-): [ChartConfig | null, boolean] {
+): [ChartConfig | null, boolean, ParametricError] {
   const [chartConfig, setChartConfig] = useState<ChartConfig | null>(null);
   const [isLoadingCustomChart, setIsLoadingCustomChart] = useState(false);
+  const [parametricError, setParametricError] = useState<ParametricError>(null);
   const COLOR = "hsl(216, 66%, 60%)";
 
   useEffect(() => {
@@ -210,6 +219,7 @@ function useChartConfig(
       const selectedLog = settings.selectedLog;
 
       if (["Step", "Absolute Time", "Relative Time"].includes(selectedLog)) {
+        setParametricError(null);
         setChartConfig(
           buildChartStrategy(
             selectedLog,
@@ -226,52 +236,75 @@ function useChartConfig(
         return;
       }
 
-      // Custom selected log chart — need raw graph data for x-axis alignment
+      // Parametric chart: y plotted against another metric. The join runs
+      // server-side on raw rows and only the joined pairs are bucketed —
+      // fetching the x-metric separately and aligning it here against the
+      // already-bucketed y series matched two independently-downsampled step
+      // lattices and threw away nearly every real pair.
       setIsLoadingCustomChart(true);
 
       try {
-        const selectLogData = await ensureGetGraph(
+        const parametric = await ensureGetParametric(
           tenantId,
           projectName,
           runId,
+          logName,
           selectedLog,
+          resolvedBuckets,
         );
 
-        if (!selectLogData || selectLogData.length === 0) {
-          setChartConfig(
-            buildChartStrategy("default", data, logName, COLOR, settings.smoothing, undefined, undefined, runId, runName),
-          );
-          return;
+        const series = parametric?.series?.[logName]?.[runId];
+
+        const x: number[] = [];
+        const y: number[] = [];
+        for (let i = 0; i < (series?.xs.length ?? 0); i++) {
+          const yv = series!.values[i];
+          if (yv == null) continue;
+          x.push(series!.xs[i]);
+          y.push(yv);
         }
 
-        // Convert bucketed data to step/value for alignment, filtering out null values
-        const yData = data
-          .filter((d) => d.value != null)
-          .map((d) => ({
-            step: d.step,
-            time: d.time,
-            value: d.value as number,
-          }));
-
-        const { x, y } = alignAndUnzip(selectLogData, yData);
-
-        if (x.length === 0 || y.length === 0) {
+        if (x.length === 0) {
+          // Nothing to draw. This page used to quietly fall back to a step
+          // chart, which is worse than an error: the axis label says one thing
+          // and the curve shows another, so a mis-picked x-axis looked like a
+          // working chart. Say which of the two problems it is instead.
+          const hasX = (parametric?.runsWithXMetric ?? []).includes(runId);
+          setParametricError(hasX ? "no-shared-steps" : "x-metric-missing");
           setChartConfig(null);
           return;
         }
 
-        const baseData = {
-          x,
-          y,
-          label: logName,
-          color: COLOR,
-          metricName: logName,
-          runId,
-          runName,
-        };
+        setParametricError(null);
+
+        // Points arrive in step order. An x-metric that doubles back splits into
+        // monotonic legs so the branches stay distinct instead of averaging into
+        // a value that never occurred.
+        const legs = splitMonotonicLegs(x, y);
+        const lines = legs.flatMap((leg, i) =>
+          withMeta(
+            applySmoothing(
+              {
+                x: leg.x,
+                y: leg.y,
+                label: legs.length > 1
+                  ? `${logName} (${leg.direction === 1 ? "↑" : "↓"}${i + 1})`
+                  : logName,
+                color: COLOR,
+                metricName: logName,
+                runId,
+                runName,
+              },
+              settings.smoothing,
+            ),
+            logName,
+            runId,
+            runName,
+          ),
+        );
 
         setChartConfig({
-          lines: withMeta(applySmoothing(baseData, settings.smoothing), logName, runId, runName),
+          lines,
           xlabel: selectedLog,
           showLegend: true,
         });
@@ -286,9 +319,9 @@ function useChartConfig(
     };
 
     generateChartConfig();
-  }, [data, logName, settings, tenantId, projectName, runId, zoomData, runCreatedAt, runName]);
+  }, [data, logName, settings, resolvedBuckets, tenantId, projectName, runId, zoomData, runCreatedAt, runName]);
 
-  return [chartConfig, isLoadingCustomChart];
+  return [chartConfig, isLoadingCustomChart, parametricError];
 }
 
 // Main component with refactored structure
@@ -394,13 +427,14 @@ export const LineChartWithFetch = memo(
     });
     const zoomData = zoomDataMap?.get(zoomKey(runId, logName));
 
-    const [chartConfig, isLoadingCustomChart] = useChartConfig(
+    const [chartConfig, isLoadingCustomChart, parametricError] = useChartConfig(
       data,
       logName,
       tenantId,
       projectName,
       runId,
       settings,
+      resolvedBuckets,
       zoomData,
       runCreatedAt,
       runName,
@@ -440,11 +474,24 @@ export const LineChartWithFetch = memo(
       return (
         <div className="flex h-full flex-grow flex-col items-center justify-center bg-accent p-4">
           <p className="text-center text-sm text-gray-500">
-            Could not compare{" "}
-            <code className="rounded bg-muted px-1">{logName}</code> with{" "}
-            <code className="rounded bg-muted px-1">
-              {settings.selectedLog}
-            </code>
+            {parametricError === "x-metric-missing" ? (
+              <>
+                <code className="rounded bg-muted px-1">
+                  {settings.selectedLog}
+                </code>{" "}
+                was never logged for this run, so it can&apos;t be used as an
+                x-axis.
+              </>
+            ) : (
+              <>
+                <code className="rounded bg-muted px-1">{logName}</code> and{" "}
+                <code className="rounded bg-muted px-1">
+                  {settings.selectedLog}
+                </code>{" "}
+                were never logged at the same step, so there are no points to
+                plot.
+              </>
+            )}
           </p>
         </div>
       );

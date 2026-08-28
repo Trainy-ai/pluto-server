@@ -2,9 +2,9 @@
 
 import { default as LineChart } from "@/components/charts/line-wrapper";
 import { ChartLoadingSkeleton } from "@/components/charts/chart-loading-skeleton";
-import { memo, useEffect, useMemo } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { computeExperimentSegments } from "@/lib/experiment-data-utils";
-import { useQueries, keepPreviousData } from "@tanstack/react-query";
+import { useQueries, useQuery, keepPreviousData } from "@tanstack/react-query";
 import { trpc, trpcClient } from "@/utils/trpc";
 import { useCheckDatabaseSize } from "@/lib/db/local-cache";
 import { bucketedMetricsCache, metricsCache, type MetricDataPoint } from "@/lib/db/index";
@@ -15,13 +15,14 @@ import { useZoomRefetch, zoomKey } from "@/lib/hooks/use-zoom-refetch";
 import { useChartColors } from "@/components/ui/color-picker";
 import { useChartSyncContext } from "@/components/charts/context/chart-sync-context";
 import {
-  alignAndUnzip,
   applySmoothing,
   bucketedAndSmooth,
   fromColumnar,
   MULTI_METRIC_CHUNK,
   chunkArray,
+  splitMonotonicLegs,
   type ColumnarBucketedSeries,
+  type ColumnarParametricSeries,
 } from "@/lib/chart-data-utils";
 import { resolveChartBuckets } from "@/lib/chart-bucket-estimate";
 import { parseChTimeMs } from "@/components/charts/lib/format";
@@ -341,34 +342,49 @@ const MultiLineChartInner = memo(
     // width, no bounds CTE) the standard tier responds in <20ms server-side,
     // making a separate low-res preview unnecessary overhead.
 
-    // If the effective x-axis is not a standard one, fetch that data for each run
-    // to use as x-axis values (only need one per run, not per metric)
-    // Custom log queries still use raw graph endpoint for step-level alignment
-    const customLogQueries = useLocalQueries<MetricDataPoint>(
+    // Parametric x-axis: plot the y-metrics against another metric instead of
+    // step/time. The join runs SERVER-SIDE on raw rows and only the joined
+    // pairs get bucketed.
+    //
+    // This used to fetch the x-metric separately (runs.data.graph, reservoir
+    // sampled to every k-th real step) and join it in the browser against the
+    // already-bucketed y series (whose steps have been rewritten to synthetic
+    // bucket boundaries — step values that were never logged). Exact-step
+    // matching between those two sets survives only where the two lattices
+    // coincide, so it kept `range / lcm(k, bucketWidth)` points: a heavily
+    // decimated curve at best, and frequently zero points — "Could not
+    // compare" — even when every raw y point had an exact x partner.
+    const isParametricXAxis =
       effectiveXAxis !== "Step" &&
-        effectiveXAxis !== "Absolute Time" &&
-        effectiveXAxis !== "Relative Time"
-        ? lines.map((line) => {
-            const opts = {
-              organizationId,
-              projectName,
-              runId: line.runId,
-              logName: effectiveXAxis,
-            };
+      effectiveXAxis !== "Absolute Time" &&
+      effectiveXAxis !== "Relative Time";
 
-            const queryOptions = trpc.runs.data.graph.queryOptions(opts);
+    // A drag-zoom on a parametric chart selects a range of the X-METRIC, not of
+    // step, so it cannot ride the step-based zoom hook below. Held here and
+    // passed to the query as an x-window, which re-buckets only the survivors --
+    // that is what makes zooming actually resolve more detail.
+    const [parametricZoom, setParametricZoom] = useState<[number, number] | null>(null);
+    useEffect(() => {
+      setParametricZoom(null);
+    }, [effectiveXAxis, metricNames, runIds]);
 
-            return {
-              queryKey: queryOptions.queryKey,
-              queryFn: ({ signal }: { signal?: AbortSignal } = {}) => trpcClient.runs.data.graph.query(opts, { signal }),
-              staleTime,
-              gcTime: GC_TIME,
-              localCache: metricsCache,
-              enabled: true,
-            };
-          })
-        : [],
-    );
+    const parametricQuery = useQuery({
+      ...trpc.runs.data.graphParametricBatchBucketed.queryOptions({
+        organizationId,
+        projectName,
+        runIds,
+        logNames: metricNames,
+        xMetric: effectiveXAxis,
+        buckets: standardBuckets,
+        ...(parametricZoom
+          ? { xMin: parametricZoom[0], xMax: parametricZoom[1] }
+          : {}),
+      }),
+      enabled: isParametricXAxis && !overLimit,
+      staleTime,
+      gcTime: GC_TIME,
+      placeholderData: keepPreviousData,
+    });
 
     // Compute per-run baselines for relative time: use run.createdAt when
     // available, falling back to the first data point's timestamp.
@@ -473,10 +489,30 @@ const MultiLineChartInner = memo(
       algorithm: algorithm !== "avg" ? algorithm : undefined,
     });
 
-    // Check error states and get data
-    const isError = isMultiMetricQuery
+    // Route a drag-zoom to whichever axis this chart is actually on. The step
+    // hook cannot serve a parametric chart: its range is in x-metric units, so
+    // translating it to steps would be a guess. Parametric drags become an
+    // x-window on the parametric query instead.
+    const handleZoomRangeChange = useCallback(
+      (range: [number, number] | null) => {
+        if (isParametricXAxis) {
+          setParametricZoom(range);
+          return;
+        }
+        onZoomRangeChange(range);
+      },
+      [isParametricXAxis, onZoomRangeChange],
+    );
+
+    // Check error states and get data. The parametric join is a separate
+    // request, and a failed one leaves parametricData undefined forever — which
+    // the empty-state branch would otherwise render as "never logged at the
+    // same step", i.e. a confident claim about the data from a request that
+    // never answered.
+    const parametricFailed = isParametricXAxis && parametricQuery.isError;
+    const isError = (isMultiMetricQuery
       ? standardMultiQueries.some((q) => q.isError)
-      : standardSingleQueries.some((query) => query.isError);
+      : standardSingleQueries.some((query) => query.isError)) || parametricFailed;
 
     // Build series label based on multi-metric / multi-run context
     const getSeriesLabel = useMemo(() => {
@@ -532,27 +568,35 @@ const MultiLineChartInner = memo(
       });
     }, [allData, experimentSegments]);
 
-    // Also get custom log data if applicable - memoized
-    const customLogData = useMemo(() => {
-      return customLogQueries.map((query, index) => ({
-        data: (query.data ?? []) as MetricDataPoint[],
-        runId: lines[index]?.runId,
-      }));
-    }, [customLogQueries, lines]);
+    // Server-joined parametric series: logName → encoded runId → columnar {xs, values, …}
+    const parametricData = parametricQuery?.data as
+      | {
+          series: Record<string, Record<string, ColumnarParametricSeries>>;
+          runsWithXMetric: string[];
+        }
+      | undefined;
 
     const hasAnyData = filteredAllData.some((item) => item.data?.length > 0);
     const allQueriesDone = isMultiMetricQuery
       ? standardMultiQueries.every((q) => !q.isLoading)
       : standardSingleQueries.every((query) => !query.isLoading);
 
-    // We're also loading if we're fetching custom log data
+    // We're also loading while the parametric join is in flight.
     const isLoadingCustomLogData =
-      customLogQueries.length > 0 &&
-      !customLogQueries.every((q) => q.data !== undefined);
+      isParametricXAxis && parametricData === undefined && !parametricFailed;
 
-    // Show loading spinner only if we have no data yet
+    // The parametric term is deliberately OUTSIDE the !hasAnyData guard. The
+    // y-metric query and the parametric join are separate requests, and the
+    // y-side usually wins the race — so gating on "no data yet" let a chart
+    // with y-data but no join result fall straight through to the empty state
+    // and announce that the two metrics were never logged at the same step,
+    // purely because the join had not come back yet. Switching a working chart
+    // to a metric x-axis flashed that message every time.
+    //
+    // Safe against hanging: overLimit returns its own notice before this, and a
+    // failed join is excluded above and surfaces through isError instead.
     const isInitialLoading =
-      !hasAnyData && (!allQueriesDone || isLoadingCustomLogData);
+      (!hasAnyData && !allQueriesDone) || isLoadingCustomLogData;
 
     // Memoize all chart data computations to prevent chart recreation on every render
     // IMPORTANT: This useMemo must be called BEFORE any early returns to maintain hook order
@@ -725,74 +769,71 @@ const MultiLineChartInner = memo(
         }
 
         default: {
-          // Custom selected log chart - use the selected log for x-axis values
-          if (customLogData.length === 0) {
-            return {
-              type: "error" as const,
-              errorType: "no-custom-data" as const,
-            };
+          // Parametric chart: y-metrics plotted against effectiveXAxis, joined
+          // on step server-side. Each series arrives pre-paired and pre-bucketed.
+          if (!parametricData) {
+            return null; // still loading — handled by the isInitialLoading branch
           }
 
-          // Match up x values (selected log) with y values (current log)
-          // Bucketed data has representative steps — alignment still works
-          const validChartData: {
-            pair: typeof queryPairs[0];
-            alignedData: { x: number[]; y: number[] } | null;
-          }[] = filteredAllData
-            .filter((item) => item.data.length > 0)
-            .map(({ data, pair }) => {
-              // Find matching custom log data for this run
-              const matchingXData = customLogData.find(
-                (d) => d.runId === pair.line.runId,
-              )?.data;
+          const runsWithX = new Set(parametricData.runsWithXMetric);
 
-              if (!matchingXData || matchingXData.length === 0) {
-                return { pair, alignedData: null };
-              }
+          const data = queryPairs.flatMap((pair) => {
+            const series = parametricData.series[pair.metric]?.[pair.line.runId];
+            if (!series || series.xs.length === 0) {
+              return [];
+            }
 
-              // Convert bucketed data to ChartDataPoint for alignment, filtering out null values
-              const yData = data
-                .filter((d) => d.value != null)
-                .map((d) => ({
-                  step: d.step,
-                  time: d.time,
-                  value: d.value as number,
-                }));
+            const props = seriesProps(pair);
+            // Drop buckets whose y is all non-finite — they have no position.
+            const x: number[] = [];
+            const y: number[] = [];
+            for (let i = 0; i < series.xs.length; i++) {
+              const yv = series.values[i];
+              if (yv == null) continue;
+              x.push(series.xs[i]);
+              y.push(yv);
+            }
+            if (x.length === 0) return [];
 
-              const alignedData = alignAndUnzip(matchingXData, yData);
-
-              if (alignedData.x.length === 0 || alignedData.y.length === 0) {
-                return { pair, alignedData: null };
-              }
-
-              return { pair, alignedData };
+            // Points arrive in step order — curve order. An x-metric that turns
+            // around (warmup→decay LR, any oscillating counter) becomes several
+            // monotonic legs, each its own series. One leg is the usual case and
+            // behaves exactly as before.
+            const legs = splitMonotonicLegs(x, y);
+            return legs.flatMap((leg, legIndex) => {
+              const label = legs.length > 1
+                ? `${props.label} (${leg.direction === 1 ? "↑" : "↓"}${legIndex + 1})`
+                : props.label;
+              return applySmoothing(
+                {
+                  ...props,
+                  x: leg.x,
+                  y: leg.y,
+                  label,
+                  seriesId: legs.length > 1 ? `${props.seriesId}:leg${legIndex}` : props.seriesId,
+                  // Later legs dash so overlapping branches stay tellable apart
+                  // without spending another palette colour on the same run.
+                  dash: legIndex === 0 ? props.dash : getDashPattern(legIndex),
+                },
+                settings.smoothing,
+                isMultiMetric,
+              );
             });
+          });
 
-          // Check if we have any valid data to show
-          const hasValidData = validChartData.some(
-            (item) => item.alignedData !== null,
-          );
-
-          if (!hasValidData) {
+          if (data.length === 0) {
+            // Nothing to draw. Separate the two very different reasons so the
+            // empty state can say which one it is: the x-metric was never
+            // logged for these runs, vs. it was logged but shares no steps
+            // with the y-metric.
+            const anyRunHasX = queryPairs.some((pair) => runsWithX.has(pair.line.runId));
             return {
               type: "error" as const,
-              errorType: "no-valid-data" as const,
+              errorType: anyRunHasX
+                ? ("no-shared-steps" as const)
+                : ("x-metric-missing" as const),
             };
           }
-
-          // Create chart data from valid comparisons
-          // Custom log axes can't use server envelopes — apply smoothing only
-          const data = validChartData
-            .filter((item) => item.alignedData !== null)
-            .flatMap(({ pair, alignedData }) => {
-              const props = seriesProps(pair);
-              const baseData = {
-                x: alignedData!.x,
-                y: alignedData!.y,
-                ...props,
-              };
-              return applySmoothing(baseData, settings.smoothing, isMultiMetric);
-            });
 
           return {
             type: "data" as const,
@@ -803,7 +844,7 @@ const MultiLineChartInner = memo(
           };
         }
       }
-    }, [filteredAllData, customLogData, settings, effectiveXAxis, title, xlabel, hasAnyData, queryPairs, getSeriesLabel, zoomDataMap, isMultiMetric, isMultiRun, chartColors, metricNames, lines, runBaselineMap]);
+    }, [filteredAllData, parametricData, settings, effectiveXAxis, title, xlabel, hasAnyData, queryPairs, getSeriesLabel, zoomDataMap, isMultiMetric, isMultiRun, chartColors, metricNames, lines, runBaselineMap]);
 
     // Too many series warning
     if (overLimit) {
@@ -855,16 +896,28 @@ const MultiLineChartInner = memo(
       );
     }
 
-    // Handle error cases from chart data computation
+    // Handle error cases from chart data computation.
+    // Name the actual cause — these two states look identical to the user but
+    // need completely different fixes, and collapsing them into one sentence
+    // left people with no way to tell which problem they had.
     if (!chartResult || chartResult.type === "error") {
+      const errorType = chartResult?.type === "error" ? chartResult.errorType : undefined;
       return (
         <div className="flex h-full flex-grow flex-col items-center justify-center bg-accent p-4">
           <p className="text-center text-sm text-gray-500">
-            Could not compare{" "}
-            <code className="rounded bg-muted px-1">{title}</code> with{" "}
-            <code className="rounded bg-muted px-1">
-              {effectiveXAxis}
-            </code>
+            {errorType === "x-metric-missing" ? (
+              <>
+                <code className="rounded bg-muted px-1">{effectiveXAxis}</code> was
+                never logged for {lines.length === 1 ? "this run" : "these runs"},
+                so it can&apos;t be used as an x-axis.
+              </>
+            ) : (
+              <>
+                <code className="rounded bg-muted px-1">{title}</code> and{" "}
+                <code className="rounded bg-muted px-1">{effectiveXAxis}</code> were
+                never logged at the same step, so there are no points to plot.
+              </>
+            )}
           </p>
         </div>
       );
@@ -874,7 +927,7 @@ const MultiLineChartInner = memo(
     return (
       <div className="relative h-full w-full">
         {/* Zoom refetch loading indicator */}
-        {isZoomFetching && (
+        {(isZoomFetching || (isParametricXAxis && parametricQuery.isFetching)) && (
           <div className="absolute top-0 right-0 left-0 z-10 h-0.5 overflow-hidden bg-muted">
             <div className="h-full w-1/3 animate-[shimmer_1s_ease-in-out_infinite] bg-primary" />
           </div>
@@ -892,7 +945,7 @@ const MultiLineChartInner = memo(
           tooltipInterpolation={settings.tooltipInterpolation}
           outlierDetection={settings.yAxisScaleMode === "outlier-aware"}
           spanGaps={!settings.skipMissingValues}
-          onZoomRangeChange={onZoomRangeChange}
+          onZoomRangeChange={handleZoomRangeChange}
           yZoomRange={yZoomRange}
           onYZoomRangeChange={onYZoomRangeChange}
           forkSteps={showInheritedMetrics ? forkSteps : undefined}

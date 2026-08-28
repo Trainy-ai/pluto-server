@@ -102,40 +102,6 @@ export function getTimeUnitForDisplay(maxSeconds: number): {
 }
 
 /**
- * Align two metric data series by step and unzip into x/y arrays.
- * Builds a map from xData's step→value, then walks yData to find matching steps.
- * Used for custom X-axis selection (e.g., plot loss vs. learning_rate).
- */
-export function alignAndUnzip(
-  xData: ChartDataPoint[],
-  yData: ChartDataPoint[],
-): { x: number[]; y: number[] } {
-  const xMap = new Map<number, number>();
-  for (const { step, value } of xData) {
-    xMap.set(Number(step), Number(value));
-  }
-
-  const pairs: [number, number][] = [];
-  for (const { step, value: yVal } of yData) {
-    const xVal = xMap.get(Number(step));
-    if (xVal !== undefined) {
-      pairs.push([xVal, Number(yVal)]);
-    }
-  }
-
-  const sortedPairs = pairs.sort((a, b) => a[0] - b[0]);
-
-  const x: number[] = [];
-  const y: number[] = [];
-  for (const [xVal, yVal] of sortedPairs) {
-    x.push(xVal);
-    y.push(yVal);
-  }
-
-  return { x, y };
-}
-
-/**
  * Threshold: auto-smooth series in multi-metric charts above this many
  * (downsampled) points. In multi-metric charts, dashed lines need smoothing
  * so dash patterns are visible (canvas path zigzag merges dashes into solid
@@ -293,6 +259,14 @@ export interface ColumnarBucketedSeries {
   nfFlags: number[];
 }
 
+/** Columnar parametric series: a bucketed series plus the x-metric column.
+ *  Returned by runs.data.graphParametricBatchBucketed, where the y-metric and
+ *  the x-metric are joined on step server-side BEFORE bucketing, so xs[i] and
+ *  values[i] always describe the same underlying rows. */
+export interface ColumnarParametricSeries extends ColumnarBucketedSeries {
+  xs: number[];
+}
+
 /** Convert columnar wire format back to row-oriented BucketedChartDataPoint[] */
 export function fromColumnar(series: ColumnarBucketedSeries): BucketedChartDataPoint[] {
   const len = series.steps.length;
@@ -411,3 +385,110 @@ export function bucketedAndSmooth(
   return series.flatMap((s) => applySmoothing(s, smoothingSettings, isMultiMetric));
 }
 
+
+/** One maximal stretch of a parametric curve that moves in a single x direction. */
+export interface MonotonicLeg {
+  x: number[];
+  y: number[];
+  /** 1 = x increasing over the leg, -1 = decreasing */
+  direction: 1 | -1;
+}
+
+/**
+ * Split a parametric curve into legs that are each monotonic in x.
+ *
+ * uPlot draws one y per x, left to right, so a curve that doubles back cannot
+ * be a single series. The tempting fix — bucket along x and average whatever
+ * lands together — reports values that never occurred: on a warmup-then-decay
+ * learning rate, LR 1e-4 happens once early (high loss) and once late (low
+ * loss), and their mean describes neither. Splitting at the turning points
+ * keeps both branches intact and each one renderable.
+ *
+ * Points must arrive in curve order (i.e. ordered by step), NOT sorted by x.
+ *
+ * A reversal only counts once x has retraced more than `tolerance` of the total
+ * x range, so an x that merely wobbles — a noisy throughput counter — stays one
+ * leg instead of shattering into hundreds.
+ *
+ * Descending legs are reversed on the way out, since uPlot still needs ascending
+ * x within a series; direction is reported so callers can label them.
+ */
+export function splitMonotonicLegs(
+  x: number[],
+  y: number[],
+  tolerance = 0.02,
+): MonotonicLeg[] {
+  const n = Math.min(x.length, y.length);
+  if (n < 3) {
+    if (n === 0) return [];
+    // Too few points to detect a turn, but a 2-point window on a decay branch
+    // (a narrow zoom, say) can still arrive descending. Returning it as-is
+    // would hand uPlot an unsorted series and break its own contract.
+    const lx = x.slice(0, n);
+    const ly = y.slice(0, n);
+    if (n === 2 && lx[1] < lx[0]) {
+      return [{ x: [lx[1], lx[0]], y: [ly[1], ly[0]], direction: -1 }];
+    }
+    return [{ x: lx, y: ly, direction: 1 }];
+  }
+
+  let lo = x[0];
+  let hi = x[0];
+  for (let i = 1; i < n; i++) {
+    if (x[i] < lo) lo = x[i];
+    if (x[i] > hi) hi = x[i];
+  }
+  const minRetrace = (hi - lo) * tolerance;
+  if (!(minRetrace > 0)) {
+    return [{ x: x.slice(), y: y.slice(), direction: 1 }];
+  }
+
+  const cuts: number[] = [];
+  let dir: 1 | -1 | 0 = 0;
+  let extremeIdx = 0;
+  let extremeVal = x[0];
+
+  for (let i = 1; i < n; i++) {
+    const d = x[i] - x[i - 1];
+    if (dir === 0) {
+      if (d !== 0) {
+        dir = d > 0 ? 1 : -1;
+        extremeIdx = i;
+        extremeVal = x[i];
+      }
+      continue;
+    }
+    // Strictly advancing, so a plateau at the turn keeps the FIRST point that
+    // reached the extreme. Ties otherwise drag the cut past the turn and the
+    // ascending leg inherits the first descending sample.
+    const advancing = dir === 1 ? x[i] > extremeVal : x[i] < extremeVal;
+    if (advancing) {
+      extremeVal = x[i];
+      extremeIdx = i;
+    } else if (Math.abs(x[i] - extremeVal) > minRetrace) {
+      // Retraced far enough to be a real turn, not noise. The leg ends at the
+      // extreme itself so the two legs meet at the turning point.
+      cuts.push(extremeIdx);
+      dir = dir === 1 ? -1 : 1;
+      extremeVal = x[i];
+      extremeIdx = i;
+    }
+  }
+
+  const bounds = [0, ...cuts, n - 1];
+  const legs: MonotonicLeg[] = [];
+  for (let i = 0; i < bounds.length - 1; i++) {
+    const start = bounds[i];
+    const end = bounds[i + 1];
+    if (end <= start) continue;
+    let lx = x.slice(start, end + 1);
+    let ly = y.slice(start, end + 1);
+    const direction: 1 | -1 = lx[lx.length - 1] >= lx[0] ? 1 : -1;
+    if (direction === -1) {
+      lx = lx.slice().reverse();
+      ly = ly.slice().reverse();
+    }
+    legs.push({ x: lx, y: ly, direction });
+  }
+  return legs.length > 0 ? legs : [{ x: x.slice(), y: y.slice(), direction: 1 }];
+}

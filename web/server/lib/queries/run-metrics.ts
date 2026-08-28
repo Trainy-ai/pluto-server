@@ -821,6 +821,232 @@ export function toColumnar(points: BucketedMetricDataPoint[]): ColumnarBucketedS
   return { steps, times, values, minYs, maxYs, counts, nfFlags };
 }
 
+/** One bucket of a parametric (y-vs-x) curve: a bucketed y point plus the
+ *  x-metric value that supplies its horizontal coordinate. */
+export interface ParametricBucketedPoint extends BucketedMetricDataPoint {
+  /** avg of the x-metric over the bucket — the horizontal coordinate */
+  x: number;
+}
+
+/** Columnar parametric series — {@link ColumnarBucketedSeries} plus the x column. */
+export interface ColumnarParametricSeries extends ColumnarBucketedSeries {
+  xs: number[];
+}
+
+/** Convert row-oriented parametric points to columnar format for wire transfer */
+export function toColumnarParametric(
+  points: ParametricBucketedPoint[]
+): ColumnarParametricSeries {
+  const base = toColumnar(points);
+  const xs = new Array<number>(points.length);
+  for (let i = 0; i < points.length; i++) {
+    xs[i] = points[i].x;
+  }
+  return { ...base, xs };
+}
+
+/**
+ * Parametric (y-vs-x) bucketed query: plots y-metrics against another metric
+ * on the x-axis, joined on step, for multiple runs in a SINGLE query.
+ *
+ * The join runs on RAW rows and bucketing happens AFTER, on the joined pairs.
+ * That ordering is the entire point of this procedure. Fetching x and y
+ * through two independently-downsampled endpoints and joining in the browser
+ * destroys the alignment: bucketing rewrites y's steps to synthetic bucket
+ * boundaries (`minStep + bucket * bucketWidth` — step values that were never
+ * logged), while reservoir sampling keeps only every k-th real step of x. An
+ * exact-equality join between those two sets finds `range / lcm(k, width)`
+ * points — frequently zero — even when every raw y point has an exact x
+ * partner. Joining first and downsampling second keeps x and y together by
+ * construction, the way a single wide history row would.
+ *
+ * Buckets are cut along STEP, and the result is returned in step order. Step is
+ * the curve's parameter: it is what orders the points along the path, and it is
+ * the only ordering that survives an x-metric which doubles back.
+ *
+ * An earlier version bucketed along X instead, to guarantee the x-sorted output
+ * uPlot needs. That works, but it silently averages the branches of any
+ * non-monotonic x together: on a warmup-then-decay learning rate, the same LR
+ * occurs once on the way up and once on the way down, and collapsing them
+ * reports a loss that happened at neither. Keeping step order preserves both
+ * branches; the client splits them into separate monotonic series before
+ * handing them to uPlot (see splitMonotonicLegs).
+ *
+ * xMin/xMax filter on the JOINED x value, which is what a zoom on a parametric
+ * chart selects — the viewport is a range of the x-metric, not of step. Buckets
+ * are then computed over the filtered rows, so zooming buys real resolution.
+ *
+ * Returns a nested map: logName → runId → parametric points in step order. A
+ * (logName, runId) pair with no overlapping steps is absent from the result.
+ */
+export async function queryRunMetricsParametricBatchBucketed(
+  ch: typeof clickhouse,
+  params: {
+    organizationId: string;
+    projectName: string;
+    runIds: number[];
+    logNames: string[];
+    /** logName supplying the x coordinate */
+    xMetric: string;
+    buckets?: number;
+    stepMin?: number;
+    stepMax?: number;
+    /** Zoom window on the x-METRIC's value (not on step) */
+    xMin?: number;
+    xMax?: number;
+    preview?: boolean;
+  }
+): Promise<Record<string, Record<number, ParametricBucketedPoint[]>>> {
+  const { organizationId, projectName, runIds, logNames, xMetric, stepMin, stepMax, xMin, xMax, preview } = params;
+
+  if (runIds.length === 0 || logNames.length === 0 || !xMetric) return {};
+
+  const numBuckets = params.buckets ?? (preview ? PREVIEW_BUCKETS : DEFAULT_BUCKETS);
+
+  const queryParams: Record<string, unknown> = {
+    tenantId: organizationId,
+    projectName,
+    runIds,
+    logNames,
+    xMetric,
+    numBuckets,
+  };
+
+  let stepRange = "";
+  if (stepMin !== undefined && stepMax !== undefined) {
+    stepRange = ` AND step >= {stepMin: UInt64} AND step <= {stepMax: UInt64}`;
+    queryParams.stepMin = stepMin;
+    queryParams.stepMax = stepMax;
+  }
+
+  // A zoom on a parametric chart selects a range of the x-METRIC. Applying it to
+  // the joined rows (rather than to either input series) is what makes zoom buy
+  // real resolution: bucket bounds below are computed over the survivors.
+  let xWindow = "";
+  if (xMin !== undefined && xMax !== undefined) {
+    xWindow = ` WHERE xv >= {xMin: Float64} AND xv <= {xMax: Float64}`;
+    queryParams.xMin = xMin;
+    queryParams.xMax = xMax;
+  }
+
+  const scopeFilter = `
+    tenantId = {tenantId: String}
+    AND projectName = {projectName: String}
+    AND runId IN ({runIds: Array(UInt64)})
+  `;
+
+  // xs collapses to one value per (runId, step) so the join can't fan out.
+  // Non-finite x values are dropped: they cannot position a point on the axis.
+  // ys keeps raw rows so the per-bucket aggregation matches the non-parametric
+  // bucketed path exactly (avgIf/minIf/maxIf over every row in the bucket).
+  const query = `
+    WITH
+      xs AS (
+        SELECT runId, step, argMax(value, time) AS xv
+        FROM mlop_metrics_v2 FINAL
+        WHERE ${scopeFilter}
+          AND logName = {xMetric: String}
+          AND isFinite(value)${stepRange}
+        GROUP BY runId, step
+      ),
+      ys AS (
+        SELECT logName, runId, step, time, value
+        FROM mlop_metrics_v2 FINAL
+        WHERE ${scopeFilter}
+          AND logName IN ({logNames: Array(String)})${stepRange}
+      ),
+      j AS (
+        SELECT * FROM (
+          SELECT ys.logName AS logName, ys.runId AS runId, ys.step AS step,
+                 ys.time AS time, ys.value AS value, xs.xv AS xv
+          FROM ys INNER JOIN xs ON ys.runId = xs.runId AND ys.step = xs.step
+        )${xWindow}
+      ),
+      params AS (
+        SELECT logName, runId, min(step) AS minStep,
+          greatest(toUInt64(1), intDiv(max(step) - min(step) + 1, toUInt64({numBuckets: UInt32}))) AS bucketWidth
+        FROM j
+        GROUP BY logName, runId
+      )
+    SELECT
+      j.logName AS logName,
+      j.runId AS runId,
+      intDiv(j.step - p.minStep, p.bucketWidth) AS bucket,
+      any(toUInt64(p.minStep + intDiv(j.step - p.minStep, p.bucketWidth) * p.bucketWidth)) AS step,
+      argMin(j.time, j.step) AS time,
+      avg(j.xv) AS x,
+      avgIf(j.value, isFinite(j.value)) AS value,
+      minIf(j.value, isFinite(j.value)) AS minY,
+      maxIf(j.value, isFinite(j.value)) AS maxY,
+      toUInt64(count()) AS count,
+      toUInt8((countIf(isNaN(j.value)) > 0) + (countIf(isInfinite(j.value) AND j.value > 0) > 0) * 2 + (countIf(isInfinite(j.value) AND j.value < 0) > 0) * 4) AS nonFiniteFlags
+    FROM j
+    INNER JOIN params p ON j.runId = p.runId AND j.logName = p.logName
+    GROUP BY j.logName, j.runId, bucket
+    ORDER BY j.logName, j.runId, bucket ASC
+  `;
+  // bucket ASC == step ASC: points come back in curve order, which the client
+  // needs in order to detect where a non-monotonic x turns around.
+
+  const result = await ch.query(query, queryParams);
+  const raw = (await result.json()) as (ParametricBucketedPoint & {
+    logName: string;
+    runId: number;
+  })[];
+  const rows = sanitizeBucketedRows(raw) as typeof raw;
+
+  // Group by logName → runId
+  const grouped: Record<string, Record<number, ParametricBucketedPoint[]>> = {};
+  for (const row of rows) {
+    const byRun = grouped[row.logName] ?? (grouped[row.logName] = {});
+    const arr = byRun[row.runId] ?? (byRun[row.runId] = []);
+    arr.push({
+      step: row.step,
+      time: row.time,
+      x: Number(row.x),
+      value: row.value,
+      minY: row.minY,
+      maxY: row.maxY,
+      count: row.count,
+      nonFiniteFlags: row.nonFiniteFlags,
+    });
+  }
+
+  return grouped;
+}
+
+/**
+ * Which of `runIds` have any data at all for `xMetric`.
+ *
+ * Lets the caller tell "the x-metric was never logged for this run" apart from
+ * "both metrics exist but share no steps" — two very different user-facing
+ * problems that today collapse into one identical "Could not compare" message.
+ */
+export async function queryRunsWithMetric(
+  ch: typeof clickhouse,
+  params: {
+    organizationId: string;
+    projectName: string;
+    runIds: number[];
+    logName: string;
+  }
+): Promise<number[]> {
+  const { organizationId, projectName, runIds, logName } = params;
+  if (runIds.length === 0 || !logName) return [];
+
+  const result = await ch.query(
+    `SELECT DISTINCT runId
+     FROM mlop_metric_summaries_v2
+     WHERE tenantId = {tenantId: String}
+       AND projectName = {projectName: String}
+       AND runId IN ({runIds: Array(UInt64)})
+       AND logName = {logName: String}`,
+    { tenantId: organizationId, projectName, runIds, logName }
+  );
+  const rows = (await result.json()) as { runId: number | string }[];
+  return rows.map((r) => Number(r.runId));
+}
+
 /** Aggregated bucketed series for one group of runs at one logName.
  *  Mean = value (the line); min/max = envelope across runs in the group
  *  inside each bucket. */

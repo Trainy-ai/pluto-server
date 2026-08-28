@@ -3,7 +3,6 @@ import {
   applySmoothing,
   buildValueFlags,
   getTimeUnitForDisplay,
-  alignAndUnzip,
   applyServerBuckets,
   bucketedAndSmooth,
   fromColumnar,
@@ -297,41 +296,6 @@ describe("getTimeUnitForDisplay", () => {
       divisor: 86400,
       unit: "day",
     });
-  });
-});
-
-describe("alignAndUnzip", () => {
-  it("aligns by step and sorts by x value", () => {
-    const xData: ChartDataPoint[] = [
-      { step: 0, time: "t0", value: 10 },
-      { step: 1, time: "t1", value: 20 },
-      { step: 2, time: "t2", value: 30 },
-    ];
-    const yData: ChartDataPoint[] = [
-      { step: 2, time: "t2", value: 0.9 },
-      { step: 0, time: "t0", value: 0.5 },
-      { step: 1, time: "t1", value: 0.7 },
-    ];
-
-    const result = alignAndUnzip(xData, yData);
-    expect(result.x).toEqual([10, 20, 30]);
-    expect(result.y).toEqual([0.5, 0.7, 0.9]);
-  });
-
-  it("drops unmatched steps", () => {
-    const xData: ChartDataPoint[] = [
-      { step: 0, time: "t0", value: 10 },
-      { step: 2, time: "t2", value: 30 },
-    ];
-    const yData: ChartDataPoint[] = [
-      { step: 0, time: "t0", value: 0.5 },
-      { step: 1, time: "t1", value: 0.7 },
-      { step: 2, time: "t2", value: 0.9 },
-    ];
-
-    const result = alignAndUnzip(xData, yData);
-    expect(result.x).toEqual([10, 30]);
-    expect(result.y).toEqual([0.5, 0.9]);
   });
 });
 

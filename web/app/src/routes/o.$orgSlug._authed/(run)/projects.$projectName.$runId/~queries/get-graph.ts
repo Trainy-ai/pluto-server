@@ -16,6 +16,46 @@ const getGraphCache = new LocalCache<GetGraphData>(
   1000 * 10,
 );
 
+type GetParametricData = inferOutput<typeof trpc.runs.data.graphParametricBatchBucketed>;
+
+const getParametricCache = new LocalCache<GetParametricData>(
+  "getParametric",
+  "getParametric",
+  1000 * 10,
+);
+
+/**
+ * Fetch a parametric (y-vs-x) series with the join already done server-side.
+ *
+ * Replaces "fetch the x-metric separately and align it in the browser": both
+ * sides used to be downsampled independently before being matched on exact
+ * step equality, which discards nearly every real pair (see
+ * queryRunMetricsParametricBatchBucketed). Here the pairing arrives intact.
+ */
+export const ensureGetParametric = (
+  orgId: string,
+  projectName: string,
+  runId: string,
+  logName: string,
+  xMetric: string,
+  buckets: number,
+) => {
+  const input = {
+    organizationId: orgId,
+    projectName,
+    runIds: [runId],
+    logNames: [logName],
+    xMetric,
+    buckets,
+  };
+  return ensureLocalQuery(queryClient, {
+    queryKey: trpc.runs.data.graphParametricBatchBucketed.queryKey(input),
+    queryFn: () => trpcClient.runs.data.graphParametricBatchBucketed.query(input),
+    localCache: getParametricCache,
+    staleTime: 1000 * 5,
+  });
+};
+
 export const ensureGetGraph = (
   orgId: string,
   projectName: string,

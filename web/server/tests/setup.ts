@@ -7649,6 +7649,294 @@ async function setupTestData(): Promise<TestData> {
   });
   console.log('   ✓ Created Line Chart Variants Test dashboard view');
 
+  // 11f. Parametric x-axis fixture: metrics shaped to exercise plotting one
+  // metric against another.
+  //
+  // The shape is deliberate, not arbitrary. The parametric join used to happen
+  // in the browser between two independently-downsampled series, and it only
+  // misbehaves once the x-metric crosses the server's 10,000-point reservoir
+  // cap — below that no sampling happens, every step survives, and a broken
+  // join looks perfectly healthy. `staircase` (500 points) is exactly that
+  // trap: a test written against it passes on the bug.
+  //
+  //   paramx/tokens_seen  12,000 pts, every step  -> over the cap, so
+  //                                                      sampling keeps the
+  //                                                      EVEN steps
+  //   paramx/eval_loss    30 pts at (step+1)%400  -> steps 399, 799, ...
+  //                                                      i.e. always ODD
+  //
+  // Odd steps can never land on an even lattice, so the pre-fix code recovers
+  // 1 of 30 points here while the fixed code recovers all 30. The `(step+1) %
+  // N == 0` cadence is what a real training loop writes (evaluate at the end of
+  // each window) — the odd landing is a consequence, not a contrivance.
+  console.log('\n1️⃣1️⃣f Seeding parametric x-axis metrics...');
+
+  // Must stay above DEFAULT_MAX_POINTS (10,000) in lib/queries/run-metrics.ts:
+  // that is what makes the server reservoir-sample the x-metric at all. Drop
+  // below it and no sampling happens, the pre-fix join succeeds, and every test
+  // here would pass against the bug.
+  const PARAMETRIC_STEPS = 12000;
+  const PARAMETRIC_EVAL_EVERY = 400;
+  const PARAMETRIC_WARMUP = 1500;
+  const PARAMETRIC_PEAK_LR = 3e-4;
+  const PARAMETRIC_METRICS = [
+    'paramx/tokens_seen',
+    'paramx/eval_loss',
+    'paramx/step_loss',
+    'paramx/lr',
+    'paramx/orphan',
+  ];
+
+  const parametricRuns = await prisma.runs.findMany({
+    where: {
+      projectId: project.id,
+      organizationId: org.id,
+      name: { startsWith: 'a-bulk-run-' },
+    },
+    select: { id: true, name: true, createdAt: true },
+    // Deterministic order: the per-run scale below is derived from the index,
+    // so an unordered fetch would make each run's x-span — and the assertions
+    // that bound it — depend on Postgres heap order.
+    orderBy: { name: 'asc' },
+  });
+
+  if (parametricRuns.length > 0) {
+    await prisma.runLogs.createMany({
+      data: parametricRuns.flatMap((run) =>
+        PARAMETRIC_METRICS.map((logName) => ({
+          runId: run.id,
+          logName,
+          logGroup: 'paramx',
+          logType: 'METRIC' as const,
+        })),
+      ),
+      skipDuplicates: true,
+    });
+
+    const clickhouseUrl = process.env.CLICKHOUSE_URL;
+    if (clickhouseUrl) {
+      const ch = createClient({
+        url: clickhouseUrl,
+        username: process.env.CLICKHOUSE_USER || 'default',
+        password: process.env.CLICKHOUSE_PASSWORD || '',
+      });
+
+      const rows: Record<string, unknown>[] = [];
+      const push = (
+        run: { id: bigint; createdAt: Date },
+        logName: string,
+        step: number,
+        value: number,
+        /** Seconds after run start to stamp the row. Defaults to `step`, which
+         *  is wrong for the orphan metric: its steps are ~900,000, which would
+         *  place those rows 10 days after the rest of the run and stretch the
+         *  time axis for every other chart on these runs. */
+        timeStep: number = step,
+      ) => {
+        rows.push({
+          tenantId: org.id,
+          projectName: project.name,
+          runId: Number(run.id),
+          logGroup: 'paramx',
+          logName,
+          time: new Date(run.createdAt.getTime() + timeStep * 1000)
+            .toISOString().replace('T', ' ').replace('Z', ''),
+          step,
+          value,
+        });
+      };
+
+      parametricRuns.forEach((run, runIndex) => {
+        // Different batch size per run so the three series are distinguishable
+        // and tokens_seen genuinely differs from step. Every run is scaled so
+        // that its OWN x-span clears the span assertion — the individual-run
+        // locations plot a single run, not the union of all three.
+        const batch = 512 * (runIndex + 1);
+        for (let step = 0; step < PARAMETRIC_STEPS; step++) {
+          const tokens = (step + 1) * batch;
+          push(run, 'paramx/tokens_seen', step, tokens);
+
+          // Non-monotonic: climbs to a peak, then cosine-decays back down, so
+          // every LR value occurs twice with a different loss each time.
+          const lr =
+            step < PARAMETRIC_WARMUP
+              ? (PARAMETRIC_PEAK_LR * step) / PARAMETRIC_WARMUP
+              : PARAMETRIC_PEAK_LR *
+                0.5 *
+                (1 +
+                  Math.cos(
+                    (Math.PI * (step - PARAMETRIC_WARMUP)) /
+                      (PARAMETRIC_STEPS - PARAMETRIC_WARMUP),
+                  ));
+          push(run, 'paramx/lr', step, lr);
+
+          const loss = 0.35 + 2.2 * Math.exp(-tokens / 400000);
+          if (step % 10 === 0) {
+            push(run, 'paramx/step_loss', step, loss);
+          }
+          if ((step + 1) % PARAMETRIC_EVAL_EVERY === 0) {
+            push(run, 'paramx/eval_loss', step, loss);
+          }
+        }
+        // Shares no steps with anything above, so selecting it as the x-axis
+        // exercises the "never logged at the same step" empty state as
+        // distinct from "never logged for this run".
+        for (let i = 0; i < 30; i++) {
+          push(run, 'paramx/orphan', 900000 + i, i, i);
+        }
+      });
+
+      // Idempotency: unlike the run creation above, this block is unguarded, so
+      // a re-seed against a populated database would insert all of these rows a
+      // second time. mlop_metrics_v2 is a ReplacingMergeTree and the parametric
+      // query reads it FINAL, so the charts would still be correct — but
+      // mlop_metrics itself doubles and the insert is pure waste.
+      const existing = await ch.query({
+        query: `SELECT count() AS n FROM mlop_metrics WHERE tenantId = {tenantId:String}
+                  AND projectName = {projectName:String} AND logGroup = 'paramx'`,
+        query_params: { tenantId: org.id, projectName: project.name },
+        format: 'JSONEachRow',
+      });
+      const [{ n }] = (await existing.json()) as { n: string }[];
+      if (Number(n) >= rows.length) {
+        await ch.close();
+        console.log(`   ✓ paramx datapoints already present (${n}), skipping`);
+      } else {
+
+      const PARAMETRIC_BATCH = 50000;
+      for (let i = 0; i < rows.length; i += PARAMETRIC_BATCH) {
+        await ch.insert({
+          table: 'mlop_metrics',
+          values: rows.slice(i, i + PARAMETRIC_BATCH),
+          format: 'JSONEachRow',
+        });
+      }
+      await ch.close();
+      console.log(
+        `   ✓ Seeded ${rows.length.toLocaleString()} parametric datapoints across ${parametricRuns.length} runs`,
+      );
+      }
+    } else {
+      console.log('   ⚠ CLICKHOUSE_URL not set, skipping parametric seeding');
+    }
+  }
+
+  // 11g. "Parametric X-Axis Test" dashboard — widgets already pointed at a
+  // metric x-axis, so tests never have to drive the settings drawer to get
+  // there. Two sections because forEachChartLocation collapses whichever one
+  // it is not targeting.
+  console.log('\n1️⃣1️⃣g Creating Parametric X-Axis Test dashboard view...');
+
+  const parametricChart = (
+    id: string,
+    title: string,
+    metric: string,
+    xAxis: string,
+    x: number,
+    y: number,
+  ) => ({
+    id,
+    type: 'chart',
+    config: {
+      title,
+      metrics: [metric],
+      xAxis,
+      yAxisScale: 'linear',
+      xAxisScale: 'linear',
+      aggregation: 'LAST',
+      showOriginal: false,
+    },
+    layout: { x, y, w: 6, h: 4 },
+  });
+
+  const parametricDashboardConfig = {
+    version: 1,
+    sections: [
+      {
+        id: 'parametric-dynamic-section',
+        name: 'Parametric Metrics (Dynamic)',
+        collapsed: false,
+        widgets: [],
+        dynamicPattern: 'paramx/*',
+        dynamicPatternMode: 'search',
+      },
+      {
+        id: 'parametric-static-section',
+        name: 'Parametric Widgets (Static)',
+        collapsed: false,
+        widgets: [
+          // The regression widget: sparse odd-stepped y against a dense,
+          // sampled x. 30 points when the join is right, 1 when it is not.
+          parametricChart(
+            'parametric-eval-vs-tokens',
+            'Eval loss vs tokens seen',
+            'paramx/eval_loss',
+            'paramx/tokens_seen',
+            0, 0,
+          ),
+          // Denser y, so a zoom has meaningfully more detail to reveal.
+          parametricChart(
+            'parametric-trainloss-vs-tokens',
+            'Train loss vs tokens seen',
+            'paramx/step_loss',
+            'paramx/tokens_seen',
+            6, 0,
+          ),
+          // Non-monotonic x: must render as two legs, not one averaged line.
+          parametricChart(
+            'parametric-trainloss-vs-lr',
+            'Train loss vs LR',
+            'paramx/step_loss',
+            'paramx/lr',
+            0, 4,
+          ),
+          // x exists on the run but shares no steps with y.
+          parametricChart(
+            'parametric-eval-vs-orphan',
+            'Eval loss vs orphan',
+            'paramx/eval_loss',
+            'paramx/orphan',
+            6, 4,
+          ),
+          // x was never logged for this run at all.
+          parametricChart(
+            'parametric-eval-vs-missing',
+            'Eval loss vs missing metric',
+            'paramx/eval_loss',
+            'paramx/never_logged',
+            0, 8,
+          ),
+        ],
+      },
+    ],
+    settings: {
+      gridCols: 12,
+      rowHeight: 80,
+      compactType: 'vertical',
+    },
+  };
+
+  await prisma.dashboardView.upsert({
+    where: {
+      organizationId_projectId_name: {
+        organizationId: org.id,
+        projectId: project.id,
+        name: 'Parametric X-Axis Test',
+      },
+    },
+    update: { config: parametricDashboardConfig },
+    create: {
+      name: 'Parametric X-Axis Test',
+      organizationId: org.id,
+      projectId: project.id,
+      createdById: user.id,
+      isDefault: false,
+      config: parametricDashboardConfig,
+    },
+  });
+  console.log('   ✓ Created Parametric X-Axis Test dashboard view');
+
+
   // --- Zoom Visibility Test dashboard ---
   const zoomVisibilityDashboardConfig = {
     version: 1,

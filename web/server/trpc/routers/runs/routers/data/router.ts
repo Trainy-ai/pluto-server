@@ -15,6 +15,7 @@ import { graphBucketedProcedure } from "./procs/graph-bucketed";
 import { graphBatchBucketedProcedure } from "./procs/graph-batch-bucketed";
 import { graphMultiMetricBatchBucketedProcedure } from "./procs/graph-multi-metric-batch-bucketed";
 import { graphMultiMetricBatchBucketedGroupedProcedure } from "./procs/graph-multi-metric-batch-bucketed-grouped";
+import { graphParametricBatchBucketedProcedure } from "./procs/graph-parametric-batch-bucketed";
 import { logsProcedure } from "./procs/logs";
 import { modelGraphProcedure } from "./procs/model-graph";
 import { tableProcedure } from "./procs/table";
@@ -37,6 +38,7 @@ export const dataRouter = router({
   graphBatchBucketed: graphBatchBucketedProcedure,
   graphMultiMetricBatchBucketed: graphMultiMetricBatchBucketedProcedure,
   graphMultiMetricBatchBucketedGrouped: graphMultiMetricBatchBucketedGroupedProcedure,
+  graphParametricBatchBucketed: graphParametricBatchBucketedProcedure,
   logs: logsProcedure,
   modelGraph: modelGraphProcedure,
   table: tableProcedure,

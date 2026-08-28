@@ -11931,4 +11931,344 @@ describe('SDK API Endpoints (with API Key)', () => {
     });
   });
 
+
+  /**
+   * Test Suite 44: Parametric X-Axis (runs.data.graphParametricBatchBucketed)
+   *
+   * Plotting one metric against another ("parametric curve") used to fetch the
+   * two metrics through two different endpoints and join them in the browser on
+   * exact step equality. Each side was downsampled first and independently: the
+   * y-side by bucketing, which REWRITES steps to synthetic bucket boundaries
+   * (minStep + bucket*bucketWidth — step values never logged), and the x-side by
+   * reservoir sampling, which keeps only every k-th real step. Exact matching
+   * between those two lattices survives only at their coincidences, so it kept
+   * roughly `range / lcm(k, bucketWidth)` points — a badly decimated curve, and
+   * very often zero points, rendering "Could not compare" over data where every
+   * y point had an exact x partner.
+   *
+   * The endpoint under test joins on RAW rows server-side and buckets the joined
+   * pairs afterwards, so x and y cannot drift apart. The load-bearing assertion
+   * throughout is COVERAGE: sum(counts) must equal the number of raw joinable
+   * rows, not merely "some points came back".
+   */
+  describe('Test Suite 44: Parametric X-Axis', () => {
+    const TEST_EMAIL = process.env.TEST_USER_EMAIL || 'test-smoke@mlop.local';
+    const TEST_PASSWORD = 'TestPassword123!';
+    let sessionCookie: string | null = null;
+    let staircaseRunSqid: string | null = null;
+
+    /** staircase-test seeds 500 points at steps 0..499 for both metrics */
+    const STAIRCASE_POINTS = 500;
+
+    interface ParametricSeries {
+      xs: number[];
+      steps: number[];
+      values: (number | null)[];
+      minYs: (number | null)[];
+      maxYs: (number | null)[];
+      counts: number[];
+    }
+    interface ParametricResponse {
+      series: Record<string, Record<string, ParametricSeries>>;
+      runsWithXMetric: string[];
+    }
+
+    async function fetchParametric(input: {
+      logNames: string[];
+      xMetric: string;
+      buckets?: number;
+      xMin?: number;
+      xMax?: number;
+    }): Promise<ParametricResponse | null> {
+      const response = await makeTrpcRequest('runs.data.graphParametricBatchBucketed', {
+        runIds: [staircaseRunSqid],
+        projectName: TEST_PROJECT_NAME,
+        ...input,
+      }, { 'Cookie': sessionCookie! }, 'GET');
+
+      if (response.status !== 200) return null;
+      const data = await response.json();
+      return (data.result?.data ?? null) as ParametricResponse | null;
+    }
+
+    beforeAll(async () => {
+      let serverAvailable = false;
+      try {
+        const healthCheck = await makeRequest('/api/health');
+        serverAvailable = healthCheck.status === 200;
+      } catch {
+        serverAvailable = false;
+      }
+      if (!serverAvailable) return;
+
+      try {
+        const signInResponse = await makeRequest('/api/auth/sign-in/email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: TEST_EMAIL, password: TEST_PASSWORD }),
+        });
+        const setCookie = signInResponse.headers.get('set-cookie');
+        const match = setCookie?.match(/better_auth\.session_token=([^;]+)/);
+        if (match) sessionCookie = `better_auth.session_token=${match[1]}`;
+      } catch (e) {
+        console.log('   Sign in failed:', e);
+      }
+      if (!sessionCookie) return;
+
+      const listResponse = await makeTrpcRequest('runs.list', {
+        projectName: TEST_PROJECT_NAME,
+        search: 'staircase-test',
+        limit: 5,
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      if (listResponse.status === 200) {
+        const listData = await listResponse.json();
+        const runs = listData.result?.data?.runs;
+        const staircase = runs?.find((r: { name: string }) => r.name === 'staircase-test');
+        if (staircase) staircaseRunSqid = staircase.id;
+      }
+    });
+
+    it('Test 44.1: Returns x and y as parallel arrays of equal length', async () => {
+      if (!sessionCookie || !staircaseRunSqid) {
+        console.log('   No session or staircase run - skipping');
+        return;
+      }
+
+      const result = await fetchParametric({
+        logNames: ['test/staircase_irregular'],
+        xMetric: 'test/staircase',
+        buckets: 50,
+      });
+
+      expect(result).not.toBeNull();
+      const series = result!.series['test/staircase_irregular']?.[staircaseRunSqid!];
+      expect(series).toBeDefined();
+
+      // xs is the addition that makes this endpoint parametric: every bucket
+      // carries its own x coordinate rather than borrowing one from a
+      // separately-fetched series.
+      expect(Array.isArray(series.xs)).toBe(true);
+      expect(series.xs.length).toBeGreaterThan(0);
+      expect(series.xs.length).toBe(series.values.length);
+      expect(series.xs.length).toBe(series.steps.length);
+      expect(series.xs.length).toBe(series.counts.length);
+      expect(series.xs.every((x) => Number.isFinite(x))).toBe(true);
+    });
+
+    it('Test 44.2: Covers every joinable raw point (the regression)', async () => {
+      if (!sessionCookie || !staircaseRunSqid) {
+        console.log('   No session or staircase run - skipping');
+        return;
+      }
+
+      // Both staircase metrics are logged at every step 0..499, so all 500
+      // rows are joinable. The old browser-side join saw a fraction of these;
+      // whatever bucket count is asked for, every raw row must be accounted
+      // for by exactly one bucket.
+      const result = await fetchParametric({
+        logNames: ['test/staircase_irregular'],
+        xMetric: 'test/staircase',
+        buckets: 50,
+      });
+
+      const series = result!.series['test/staircase_irregular']?.[staircaseRunSqid!];
+      expect(series).toBeDefined();
+
+      const covered = series.counts.reduce((a, b) => a + b, 0);
+      expect(covered).toBe(STAIRCASE_POINTS);
+    });
+
+    it('Test 44.3: Coverage holds across bucket counts', async () => {
+      if (!sessionCookie || !staircaseRunSqid) {
+        console.log('   No session or staircase run - skipping');
+        return;
+      }
+
+      // Bucket count is derived from chart width, so the same chart requests
+      // different resolutions as it is resized or fullscreened. Under the old
+      // client-side join that changed how much data survived — a chart could
+      // flip between "broken", "wrong" and "fine" purely on widget width.
+      // Coverage must now be invariant to it.
+      for (const buckets of [10, 50, 200, 1000]) {
+        const result = await fetchParametric({
+          logNames: ['test/staircase_irregular'],
+          xMetric: 'test/staircase',
+          buckets,
+        });
+        const series = result!.series['test/staircase_irregular']?.[staircaseRunSqid!];
+        expect(series).toBeDefined();
+
+        const covered = series.counts.reduce((a, b) => a + b, 0);
+        expect(covered).toBe(STAIRCASE_POINTS);
+        // Buckets are cut along STEP with an integer width, so the count lands
+        // near the request rather than exactly on it.
+        expect(series.xs.length).toBeLessThanOrEqual(Math.ceil(buckets * 1.1) + 1);
+      }
+    });
+
+    it('Test 44.4: x values come from the x-metric, not the y-metric', async () => {
+      if (!sessionCookie || !staircaseRunSqid) {
+        console.log('   No session or staircase run - skipping');
+        return;
+      }
+
+      // staircase value = floor(step / 50), so over steps 0..499 the metric
+      // ranges 0..9. If xs were accidentally carrying steps (0..499) or some
+      // bucket label, this bound would blow out.
+      const result = await fetchParametric({
+        logNames: ['test/staircase_irregular'],
+        xMetric: 'test/staircase',
+        buckets: 50,
+      });
+      const series = result!.series['test/staircase_irregular']?.[staircaseRunSqid!];
+
+      expect(Math.min(...series.xs)).toBeGreaterThanOrEqual(0);
+      expect(Math.max(...series.xs)).toBeLessThanOrEqual(9);
+
+      // Points come back in STEP order. test/staircase rises with step, so its
+      // x is non-decreasing here — with plateaus, since the staircase holds a
+      // value for 50 steps at a time.
+      for (let i = 1; i < series.xs.length; i++) {
+        expect(series.xs[i]).toBeGreaterThanOrEqual(series.xs[i - 1]);
+      }
+    });
+
+    it('Test 44.4b: returns points in step order, not sorted by x', async () => {
+      if (!sessionCookie || !staircaseRunSqid) {
+        console.log('   No session or staircase run - skipping');
+        return;
+      }
+
+      // Step order is the contract, and it is load-bearing: it is the only
+      // ordering that survives an x-metric which doubles back, and the client's
+      // splitMonotonicLegs relies on it to find the turning points. Sorting by
+      // x on the server would destroy that information irrecoverably.
+      const result = await fetchParametric({
+        logNames: ['test/staircase'],
+        xMetric: 'test/staircase_irregular',
+        buckets: 50,
+      });
+      const series = result!.series['test/staircase']?.[staircaseRunSqid!];
+      expect(series).toBeDefined();
+
+      for (let i = 1; i < series.steps.length; i++) {
+        expect(series.steps[i]).toBeGreaterThan(series.steps[i - 1]);
+      }
+    });
+
+    it('Test 44.5b: xMin/xMax zooms on the x-metric and re-buckets the window', async () => {
+      if (!sessionCookie || !staircaseRunSqid) {
+        console.log('   No session or staircase run - skipping');
+        return;
+      }
+
+      // A zoom on a parametric chart selects a range of the x-METRIC, so the
+      // window is applied to the joined rows. Before this existed, zooming just
+      // rescaled the overview buckets and revealed no new detail.
+      const full = await fetchParametric({
+        logNames: ['test/staircase_irregular'],
+        xMetric: 'test/staircase',
+        buckets: 50,
+      });
+      const fullSeries = full!.series['test/staircase_irregular']?.[staircaseRunSqid!];
+      // staircase value = floor(step/50) over steps 0..499, so x spans 0..9.
+      const inWindowBefore = fullSeries.xs.filter((x) => x >= 2 && x <= 4).length;
+
+      const zoomed = await fetchParametric({
+        logNames: ['test/staircase_irregular'],
+        xMetric: 'test/staircase',
+        buckets: 50,
+        xMin: 2,
+        xMax: 4,
+      });
+      const zoomSeries = zoomed!.series['test/staircase_irregular']?.[staircaseRunSqid!];
+      expect(zoomSeries).toBeDefined();
+
+      // Everything returned sits inside the requested window...
+      expect(zoomSeries.xs.every((x) => x >= 2 && x <= 4)).toBe(true);
+      // ...and the window is resolved at least as finely as it was before.
+      expect(zoomSeries.xs.length).toBeGreaterThanOrEqual(inWindowBefore);
+      // Coverage is still exact: every raw row in the window is accounted for.
+      const covered = zoomSeries.counts.reduce((a, b) => a + b, 0);
+      expect(covered).toBe(150); // steps 100..249 -> staircase levels 2,3,4
+    });
+
+    it('Test 44.5: Distinguishes a missing x-metric from a step mismatch', async () => {
+      if (!sessionCookie || !staircaseRunSqid) {
+        console.log('   No session or staircase run - skipping');
+        return;
+      }
+
+      // An x-metric this run never logged. Both the series map AND
+      // runsWithXMetric come back empty — that pairing is what lets the UI say
+      // "x was never logged" instead of the old catch-all "Could not compare",
+      // which covered this case and the no-shared-steps case identically.
+      const result = await fetchParametric({
+        logNames: ['test/staircase_irregular'],
+        xMetric: 'test/definitely-not-logged',
+        buckets: 50,
+      });
+
+      expect(result).not.toBeNull();
+      expect(Object.keys(result!.series)).toHaveLength(0);
+      expect(result!.runsWithXMetric).toHaveLength(0);
+    });
+
+    it('Test 44.6: Reports the run as having the x-metric when it does', async () => {
+      if (!sessionCookie || !staircaseRunSqid) {
+        console.log('   No session or staircase run - skipping');
+        return;
+      }
+
+      const result = await fetchParametric({
+        logNames: ['test/staircase_irregular'],
+        xMetric: 'test/staircase',
+        buckets: 50,
+      });
+
+      expect(result!.runsWithXMetric).toContain(staircaseRunSqid);
+    });
+
+    it('Test 44.7: Handles multiple y-metrics against one x-metric', async () => {
+      if (!sessionCookie || !staircaseRunSqid) {
+        console.log('   No session or staircase run - skipping');
+        return;
+      }
+
+      // A metric plotted against itself is a degenerate but legal request and
+      // a useful oracle: x and y must then be identical in every bucket.
+      const result = await fetchParametric({
+        logNames: ['test/staircase', 'test/staircase_irregular'],
+        xMetric: 'test/staircase',
+        buckets: 50,
+      });
+
+      const selfSeries = result!.series['test/staircase']?.[staircaseRunSqid!];
+      const otherSeries = result!.series['test/staircase_irregular']?.[staircaseRunSqid!];
+      expect(selfSeries).toBeDefined();
+      expect(otherSeries).toBeDefined();
+
+      for (let i = 0; i < selfSeries.xs.length; i++) {
+        expect(selfSeries.values[i]).toBeCloseTo(selfSeries.xs[i], 6);
+      }
+    });
+
+    it('Test 44.8: Rejects an empty x-metric', async () => {
+      if (!sessionCookie || !staircaseRunSqid) {
+        console.log('   No session or staircase run - skipping');
+        return;
+      }
+
+      const response = await makeTrpcRequest('runs.data.graphParametricBatchBucketed', {
+        runIds: [staircaseRunSqid],
+        projectName: TEST_PROJECT_NAME,
+        logNames: ['test/staircase'],
+        xMetric: '',
+        buckets: 50,
+      }, { 'Cookie': sessionCookie }, 'GET');
+
+      expect(response.status).toBe(400);
+    });
+  });
 });
