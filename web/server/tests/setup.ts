@@ -7685,6 +7685,7 @@ async function setupTestData(): Promise<TestData> {
     'paramx/step_loss',
     'paramx/lr',
     'paramx/orphan',
+    'paramx/x_sparse',
   ];
 
   const parametricRuns = await prisma.runs.findMany({
@@ -7769,6 +7770,17 @@ async function setupTestData(): Promise<TestData> {
                       (PARAMETRIC_STEPS - PARAMETRIC_WARMUP),
                   ));
           push(run, 'paramx/lr', step, lr);
+
+          // A near-miss x-metric: logged every 10th step only, so the odd
+          // eval_loss steps (399, 799, ...) NEVER coincide with it. An
+          // exact-step join returns nothing at all here; the as-of join pairs
+          // each eval with the x reading 9 steps earlier. This is the customer
+          // shape — two metrics on different cadences — and it is the one case
+          // tokens_seen cannot exercise, since that is logged at every step
+          // and so always has an exact partner in the raw data.
+          if (step % 10 === 0) {
+            push(run, 'paramx/x_sparse', step, tokens);
+          }
 
           const loss = 0.35 + 2.2 * Math.exp(-tokens / 400000);
           if (step % 10 === 0) {
@@ -7897,6 +7909,15 @@ async function setupTestData(): Promise<TestData> {
             'paramx/eval_loss',
             'paramx/orphan',
             6, 4,
+          ),
+          // Near-miss cadence: empty under an exact-step join, 30 points
+          // under the as-of join.
+          parametricChart(
+            'parametric-eval-vs-sparse',
+            'Eval loss vs sparse x',
+            'paramx/eval_loss',
+            'paramx/x_sparse',
+            6, 8,
           ),
           // x was never logged for this run at all.
           parametricChart(

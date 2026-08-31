@@ -340,8 +340,28 @@ export function applyServerBuckets(
     nonFiniteMarkers,
   };
 
+  return [main, ...envelopeSeries(x, yMin, yMax, label, color, seriesId)];
+}
+
+/**
+ * The two hidden companion series that carry a bucket's min/max.
+ *
+ * They are what the tooltip's MIN and MAX columns read (see
+ * `collectCompanionValues` in tooltip-plugin.ts, which finds them by
+ * `envelopeOf` + `envelopeBound`) and what draws the shaded band behind the
+ * line. A chart that omits them still renders, so the omission shows up only
+ * as two silently empty tooltip columns — which is exactly how the parametric
+ * charts shipped.
+ */
+export function envelopeSeries(
+  x: number[],
+  yMin: (number | null)[],
+  yMax: (number | null)[],
+  label: string,
+  color: string,
+  seriesId?: string,
+): ChartSeriesData[] {
   return [
-    main,
     {
       x,
       y: yMin,
@@ -392,6 +412,10 @@ export interface MonotonicLeg {
   y: number[];
   /** 1 = x increasing over the leg, -1 = decreasing */
   direction: 1 | -1;
+  /** Source index of each point, in leg order (so already reversed for a
+   *  descending leg). Lets a caller carry companion arrays — bucket min/max,
+   *  counts — through the split without re-deriving where the cuts fell. */
+  indices: number[];
 }
 
 /**
@@ -413,6 +437,13 @@ export interface MonotonicLeg {
  * Descending legs are reversed on the way out, since uPlot still needs ascending
  * x within a series; direction is reported so callers can label them.
  */
+/** [0, 1, ... n-1] */
+function allIndices(n: number): number[] {
+  const out = new Array<number>(n);
+  for (let i = 0; i < n; i++) out[i] = i;
+  return out;
+}
+
 export function splitMonotonicLegs(
   x: number[],
   y: number[],
@@ -427,9 +458,9 @@ export function splitMonotonicLegs(
     const lx = x.slice(0, n);
     const ly = y.slice(0, n);
     if (n === 2 && lx[1] < lx[0]) {
-      return [{ x: [lx[1], lx[0]], y: [ly[1], ly[0]], direction: -1 }];
+      return [{ x: [lx[1], lx[0]], y: [ly[1], ly[0]], direction: -1, indices: [1, 0] }];
     }
-    return [{ x: lx, y: ly, direction: 1 }];
+    return [{ x: lx, y: ly, direction: 1, indices: lx.map((_, i) => i) }];
   }
 
   let lo = x[0];
@@ -440,7 +471,7 @@ export function splitMonotonicLegs(
   }
   const minRetrace = (hi - lo) * tolerance;
   if (!(minRetrace > 0)) {
-    return [{ x: x.slice(), y: y.slice(), direction: 1 }];
+    return [{ x: x.slice(0, n), y: y.slice(0, n), direction: 1, indices: allIndices(n) }];
   }
 
   const cuts: number[] = [];
@@ -483,12 +514,16 @@ export function splitMonotonicLegs(
     if (end <= start) continue;
     let lx = x.slice(start, end + 1);
     let ly = y.slice(start, end + 1);
+    let li = allIndices(end + 1 - start).map((k) => start + k);
     const direction: 1 | -1 = lx[lx.length - 1] >= lx[0] ? 1 : -1;
     if (direction === -1) {
       lx = lx.slice().reverse();
       ly = ly.slice().reverse();
+      li = li.slice().reverse();
     }
-    legs.push({ x: lx, y: ly, direction });
+    legs.push({ x: lx, y: ly, direction, indices: li });
   }
-  return legs.length > 0 ? legs : [{ x: x.slice(), y: y.slice(), direction: 1 }];
+  return legs.length > 0
+    ? legs
+    : [{ x: x.slice(0, n), y: y.slice(0, n), direction: 1, indices: allIndices(n) }];
 }

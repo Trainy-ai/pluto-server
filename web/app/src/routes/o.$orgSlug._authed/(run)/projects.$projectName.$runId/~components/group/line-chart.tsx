@@ -14,6 +14,7 @@ import { useZoomRefetch, zoomKey } from "@/lib/hooks/use-zoom-refetch";
 import {
   applySmoothing,
   splitMonotonicLegs,
+  envelopeSeries,
   bucketedAndSmooth,
   type BucketedChartDataPoint,
   type ChartSeriesData,
@@ -255,13 +256,20 @@ function useChartConfig(
 
         const series = parametric?.series?.[logName]?.[runId];
 
+        // min/max ride along with the point they describe — filtering y
+        // without them would slide the envelope off its bucket and the
+        // tooltip would report a neighbour's spread.
         const x: number[] = [];
         const y: number[] = [];
+        const yMin: (number | null)[] = [];
+        const yMax: (number | null)[] = [];
         for (let i = 0; i < (series?.xs.length ?? 0); i++) {
           const yv = series!.values[i];
           if (yv == null) continue;
           x.push(series!.xs[i]);
           y.push(yv);
+          yMin.push(series!.minYs[i] ?? null);
+          yMax.push(series!.maxYs[i] ?? null);
         }
 
         if (x.length === 0) {
@@ -281,27 +289,40 @@ function useChartConfig(
         // monotonic legs so the branches stay distinct instead of averaging into
         // a value that never occurred.
         const legs = splitMonotonicLegs(x, y);
-        const lines = legs.flatMap((leg, i) =>
-          withMeta(
-            applySmoothing(
-              {
-                x: leg.x,
-                y: leg.y,
-                label: legs.length > 1
-                  ? `${logName} (${leg.direction === 1 ? "↑" : "↓"}${i + 1})`
-                  : logName,
-                color: COLOR,
-                metricName: logName,
-                runId,
-                runName,
-              },
-              settings.smoothing,
+        const lines = legs.flatMap((leg, i) => {
+          const label = legs.length > 1
+            ? `${logName} (${leg.direction === 1 ? "↑" : "↓"}${i + 1})`
+            : logName;
+          return [
+            ...withMeta(
+              applySmoothing(
+                {
+                  x: leg.x,
+                  y: leg.y,
+                  label,
+                  color: COLOR,
+                  metricName: logName,
+                  runId,
+                  runName,
+                },
+                settings.smoothing,
+              ),
+              logName,
+              runId,
+              runName,
             ),
-            logName,
-            runId,
-            runName,
-          ),
-        );
+            // Without these the tooltip's MIN and MAX columns render an
+            // em-dash on every parametric chart, even though the server
+            // returned a spread for each bucket.
+            ...envelopeSeries(
+              leg.x,
+              leg.indices.map((k) => yMin[k]),
+              leg.indices.map((k) => yMax[k]),
+              label,
+              COLOR,
+            ),
+          ];
+        });
 
         setChartConfig({
           lines,
@@ -484,12 +505,12 @@ export const LineChartWithFetch = memo(
               </>
             ) : (
               <>
-                <code className="rounded bg-muted px-1">{logName}</code> and{" "}
+                <code className="rounded bg-muted px-1">{logName}</code> was
+                never logged close enough to a{" "}
                 <code className="rounded bg-muted px-1">
                   {settings.selectedLog}
                 </code>{" "}
-                were never logged at the same step, so there are no points to
-                plot.
+                reading to pair the two, so there are no points to plot.
               </>
             )}
           </p>

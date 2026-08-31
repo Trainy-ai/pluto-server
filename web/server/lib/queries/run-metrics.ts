@@ -821,6 +821,24 @@ export function toColumnar(points: BucketedMetricDataPoint[]): ColumnarBucketedS
   return { steps, times, values, minYs, maxYs, counts, nfFlags };
 }
 
+/**
+ * How far a y point may reach back for an x reading, as a multiple of the
+ * x-metric's own average step spacing.
+ *
+ * Exact-step matching alone is too strict for a very ordinary pattern: a
+ * throughput counter logged on a wall-clock timer lands on irregular steps
+ * (0, 7, 14, 21 …) while eval runs on a step schedule (250, 500, 750 …). Both
+ * metrics span the same range and the curve is obviously plottable, yet the two
+ * almost never share an exact step — 30 of 200 points on a seeded run, and zero
+ * with slightly different jitter.
+ *
+ * 10 gaps is loose enough that ordinary jitter always matches and tight enough
+ * that a metric which STOPPED logging cannot pin every later point to one stale
+ * reading — which would draw a flat line and present it as data. W&B applies no
+ * such bound; it always carries the current value forward.
+ */
+const ASOF_GAP_FACTOR = 10;
+
 /** One bucket of a parametric (y-vs-x) curve: a bucketed y point plus the
  *  x-metric value that supplies its horizontal coordinate. */
 export interface ParametricBucketedPoint extends BucketedMetricDataPoint {
@@ -848,6 +866,19 @@ export function toColumnarParametric(
 /**
  * Parametric (y-vs-x) bucketed query: plots y-metrics against another metric
  * on the x-axis, joined on step, for multiple runs in a SINGLE query.
+ *
+ * Pairing is AS-OF, not exact: each y point takes the most recent x reading at
+ * or before its own step, within ASOF_GAP_FACTOR typical gaps. That is the same
+ * semantic W&B gives `define_metric(step_metric=…)` — verified against their API
+ * on identical data, where every point they attach matches the preceding x
+ * reading rather than the nearest or an interpolation. The difference is when it
+ * is applied: W&B binds the value at LOG time, so a run recorded without the
+ * declaration can never be re-plotted this way. Doing it at query time means it
+ * works on data already collected, with nothing to declare in advance.
+ *
+ * Reaching backwards (rather than to the nearest reading either side) also never
+ * overstates a cumulative counter: "loss at 2.0B timesteps" reports the tokens
+ * actually consumed by then, never a later, larger figure.
  *
  * The join runs on RAW rows and bucketing happens AFTER, on the joined pairs.
  * That ordering is the entire point of this procedure. Fetching x and y
@@ -910,6 +941,7 @@ export async function queryRunMetricsParametricBatchBucketed(
     logNames,
     xMetric,
     numBuckets,
+    asofGapFactor: ASOF_GAP_FACTOR,
   };
 
   let stepRange = "";
@@ -955,11 +987,31 @@ export async function queryRunMetricsParametricBatchBucketed(
         WHERE ${scopeFilter}
           AND logName IN ({logNames: Array(String)})${stepRange}
       ),
+      -- How far a y point may reach back for an x reading, per run. Expressed
+      -- in the x-metric's OWN typical spacing rather than an absolute number of
+      -- steps, because cadences differ by orders of magnitude between runs: one
+      -- logs every step, the next every thousand.
+      xgap AS (
+        SELECT runId,
+          greatest(
+            intDiv(max(step) - min(step), greatest(count() - 1, 1)) * {asofGapFactor: UInt32},
+            toUInt64(1)
+          ) AS maxGap
+        FROM xs GROUP BY runId
+      ),
+      paired AS (
+        SELECT ys.logName AS logName, ys.runId AS runId, ys.step AS step,
+               ys.time AS time, ys.value AS value, xs.xv AS xv,
+               ys.step - xs.step AS gap
+        FROM ys ASOF JOIN xs ON ys.runId = xs.runId AND ys.step >= xs.step
+      ),
       j AS (
         SELECT * FROM (
-          SELECT ys.logName AS logName, ys.runId AS runId, ys.step AS step,
-                 ys.time AS time, ys.value AS value, xs.xv AS xv
-          FROM ys INNER JOIN xs ON ys.runId = xs.runId AND ys.step = xs.step
+          SELECT p.logName AS logName, p.runId AS runId, p.step AS step,
+                 p.time AS time, p.value AS value, p.xv AS xv
+          FROM paired p
+          INNER JOIN xgap g ON p.runId = g.runId
+          WHERE p.gap <= g.maxGap
         )${xWindow}
       ),
       params AS (
@@ -1034,13 +1086,25 @@ export async function queryRunsWithMetric(
   const { organizationId, projectName, runIds, logName } = params;
   if (runIds.length === 0 || !logName) return [];
 
+  // mlop_metrics_v2, not mlop_metric_summaries_v2. The summaries table is a
+  // REFRESHABLE materialized view on a 5-minute cycle, so for up to five
+  // minutes after a metric is first written it holds no row for it — and this
+  // function would report a metric the run demonstrably logged as one it never
+  // logged, sending the chart to the wrong empty state. mlop_metrics_v2 is fed
+  // by an insert-triggered MV and is current the moment the write lands.
+  //
+  // `LIMIT 1 BY runId` keeps this as cheap as the summaries lookup was: the
+  // ORDER BY prefix (tenantId, projectName, runId, logGroup, logName) means
+  // one index seek per run, and it stops at the first matching row instead of
+  // scanning the run's whole history.
   const result = await ch.query(
-    `SELECT DISTINCT runId
-     FROM mlop_metric_summaries_v2
+    `SELECT runId
+     FROM mlop_metrics_v2
      WHERE tenantId = {tenantId: String}
        AND projectName = {projectName: String}
        AND runId IN ({runIds: Array(UInt64)})
-       AND logName = {logName: String}`,
+       AND logName = {logName: String}
+     LIMIT 1 BY runId`,
     { tenantId: organizationId, projectName, runIds, logName }
   );
   const rows = (await result.json()) as { runId: number | string }[];

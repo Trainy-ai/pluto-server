@@ -21,6 +21,7 @@ import {
   MULTI_METRIC_CHUNK,
   chunkArray,
   splitMonotonicLegs,
+  envelopeSeries,
   type ColumnarBucketedSeries,
   type ColumnarParametricSeries,
 } from "@/lib/chart-data-utils";
@@ -506,9 +507,9 @@ const MultiLineChartInner = memo(
 
     // Check error states and get data. The parametric join is a separate
     // request, and a failed one leaves parametricData undefined forever — which
-    // the empty-state branch would otherwise render as "never logged at the
-    // same step", i.e. a confident claim about the data from a request that
-    // never answered.
+    // the empty-state branch would otherwise render as "never logged close
+    // enough to pair", i.e. a confident claim about the data from a request
+    // that never answered.
     const parametricFailed = isParametricXAxis && parametricQuery.isError;
     const isError = (isMultiMetricQuery
       ? standardMultiQueries.some((q) => q.isError)
@@ -589,8 +590,8 @@ const MultiLineChartInner = memo(
     // y-metric query and the parametric join are separate requests, and the
     // y-side usually wins the race — so gating on "no data yet" let a chart
     // with y-data but no join result fall straight through to the empty state
-    // and announce that the two metrics were never logged at the same step,
-    // purely because the join had not come back yet. Switching a working chart
+    // and announce that the two metrics were never logged near enough to
+    // pair, purely because the join had not come back yet. Switching a working chart
     // to a metric x-axis flashed that message every time.
     //
     // Safe against hanging: overLimit returns its own notice before this, and a
@@ -785,13 +786,20 @@ const MultiLineChartInner = memo(
 
             const props = seriesProps(pair);
             // Drop buckets whose y is all non-finite — they have no position.
+            // The envelope travels with the point it belongs to: filtering y
+            // without filtering min/max would shift the bands off their
+            // buckets and the tooltip would report a neighbour's spread.
             const x: number[] = [];
             const y: number[] = [];
+            const yMin: (number | null)[] = [];
+            const yMax: (number | null)[] = [];
             for (let i = 0; i < series.xs.length; i++) {
               const yv = series.values[i];
               if (yv == null) continue;
               x.push(series.xs[i]);
               y.push(yv);
+              yMin.push(series.minYs[i] ?? null);
+              yMax.push(series.maxYs[i] ?? null);
             }
             if (x.length === 0) return [];
 
@@ -804,20 +812,43 @@ const MultiLineChartInner = memo(
               const label = legs.length > 1
                 ? `${props.label} (${leg.direction === 1 ? "↑" : "↓"}${legIndex + 1})`
                 : props.label;
-              return applySmoothing(
-                {
-                  ...props,
-                  x: leg.x,
-                  y: leg.y,
-                  label,
-                  seriesId: legs.length > 1 ? `${props.seriesId}:leg${legIndex}` : props.seriesId,
-                  // Later legs dash so overlapping branches stay tellable apart
-                  // without spending another palette colour on the same run.
-                  dash: legIndex === 0 ? props.dash : getDashPattern(legIndex),
-                },
-                settings.smoothing,
-                isMultiMetric,
+              const seriesId = legs.length > 1 ? `${props.seriesId}:leg${legIndex}` : props.seriesId;
+              const color = props.color;
+              // withMeta, not a bare spread: seriesProps speaks the layout's
+              // vocabulary (rawRunName/displayId) and the tooltip reads
+              // runName/runId. Spreading props straight through left the
+              // DISPLAY ID and RUN NAME columns blank on every parametric
+              // chart, since neither key was the one being looked up.
+              const main = withMeta(
+                applySmoothing(
+                  {
+                    ...props,
+                    x: leg.x,
+                    y: leg.y,
+                    label,
+                    seriesId,
+                    // Later legs dash so overlapping branches stay tellable apart
+                    // without spending another palette colour on the same run.
+                    dash: legIndex === 0 ? props.dash : getDashPattern(legIndex),
+                  },
+                  settings.smoothing,
+                  isMultiMetric,
+                ),
+                props,
               );
+              // A leg is a slice of the joined curve (reversed when it
+              // descends), so the envelope is the same slice of min/max.
+              return [
+                ...main,
+                ...envelopeSeries(
+                  leg.x,
+                  leg.indices.map((i) => yMin[i]),
+                  leg.indices.map((i) => yMax[i]),
+                  label,
+                  color,
+                  seriesId,
+                ),
+              ];
             });
           });
 
@@ -913,9 +944,10 @@ const MultiLineChartInner = memo(
               </>
             ) : (
               <>
-                <code className="rounded bg-muted px-1">{title}</code> and{" "}
-                <code className="rounded bg-muted px-1">{effectiveXAxis}</code> were
-                never logged at the same step, so there are no points to plot.
+                <code className="rounded bg-muted px-1">{title}</code> was never
+                logged close enough to a{" "}
+                <code className="rounded bg-muted px-1">{effectiveXAxis}</code>{" "}
+                reading to pair the two, so there are no points to plot.
               </>
             )}
           </p>

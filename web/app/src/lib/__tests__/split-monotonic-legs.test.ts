@@ -84,4 +84,60 @@ describe("splitMonotonicLegs", () => {
     expect(splitMonotonicLegs([1], [2])).toHaveLength(1);
     expect(splitMonotonicLegs([5, 5, 5, 5], [1, 2, 3, 4])).toHaveLength(1);
   });
+
+  // `indices` is what lets a caller carry companion arrays — the bucket
+  // min/max the tooltip's MIN and MAX columns read — through the split. If it
+  // drifts out of step with x, the envelope silently describes a neighbouring
+  // bucket and the tooltip reports a spread that belongs to a different point.
+  describe("indices", () => {
+    it("indexes back into the original arrays for a single leg", () => {
+      const x = [0, 10, 20, 30, 40];
+      const y = [5, 4, 3, 2, 1];
+      const [leg] = splitMonotonicLegs(x, y);
+      expect(leg.indices).toEqual([0, 1, 2, 3, 4]);
+      expect(leg.indices.map((i) => x[i])).toEqual(leg.x);
+      expect(leg.indices.map((i) => y[i])).toEqual(leg.y);
+    });
+
+    it("follows the reversal on a descending leg", () => {
+      // up to 1000 then back down — the second leg is emitted reversed so
+      // uPlot gets ascending x, and indices must be reversed with it.
+      const x = [...Array.from({ length: 11 }, (_, i) => i * 100),
+                 ...Array.from({ length: 10 }, (_, i) => 900 - i * 100)];
+      const y = x.map((_, i) => i);
+      const legs = splitMonotonicLegs(x, y);
+      expect(legs.length).toBeGreaterThan(1);
+      for (const leg of legs) {
+        expect(leg.indices).toHaveLength(leg.x.length);
+        expect(leg.indices.map((i) => x[i])).toEqual(leg.x);
+        expect(leg.indices.map((i) => y[i])).toEqual(leg.y);
+      }
+      const descending = legs.find((l) => l.direction === -1);
+      expect(descending).toBeDefined();
+      // reversed on the way out, so the indices run backwards
+      expect(descending!.indices[0]).toBeGreaterThan(descending!.indices[1]);
+    });
+
+    it("carries a companion array onto the right points", () => {
+      // A stand-in for the bucket min/max: value i is tagged "c<i>", so any
+      // misalignment shows up as the wrong tag rather than a subtle offset.
+      const x = [0, 100, 200, 300, 200, 100, 0];
+      const y = [1, 2, 3, 4, 5, 6, 7];
+      const companion = x.map((_, i) => `c${i}`);
+      for (const leg of splitMonotonicLegs(x, y)) {
+        const carried = leg.indices.map((i) => companion[i]);
+        expect(carried).toEqual(leg.y.map((v) => `c${y.indexOf(v)}`));
+      }
+    });
+
+    it("is present on every degenerate path", () => {
+      expect(splitMonotonicLegs([1], [2])[0].indices).toEqual([0]);
+      // flat x: no range to retrace, so one leg straight through
+      expect(splitMonotonicLegs([5, 5, 5, 5], [1, 2, 3, 4])[0].indices)
+        .toEqual([0, 1, 2, 3]);
+      // 2-point descending window gets reversed
+      expect(splitMonotonicLegs([10, 0], [1, 2])[0].indices).toEqual([1, 0]);
+      expect(splitMonotonicLegs([0, 10], [1, 2])[0].indices).toEqual([0, 1]);
+    });
+  });
 });

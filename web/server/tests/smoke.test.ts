@@ -11956,9 +11956,16 @@ describe('SDK API Endpoints (with API Key)', () => {
     const TEST_PASSWORD = 'TestPassword123!';
     let sessionCookie: string | null = null;
     let staircaseRunSqid: string | null = null;
+    /** every procedure here is a protectedOrgProcedure, so the org is required
+     *  input — omitting it fails Zod with a 400 before any handler runs. */
+    let orgId: string | null = null;
+    /** a-bulk-run-011, which carries the paramx/* fixture (setup.ts §11f) */
+    let paramxRunSqid: string | null = null;
 
     /** staircase-test seeds 500 points at steps 0..499 for both metrics */
     const STAIRCASE_POINTS = 500;
+    /** paramx/eval_loss: 30 points, at steps 399, 799, ... 11999 */
+    const PARAMX_EVAL_POINTS = 30;
 
     interface ParametricSeries {
       xs: number[];
@@ -11973,22 +11980,41 @@ describe('SDK API Endpoints (with API Key)', () => {
       runsWithXMetric: string[];
     }
 
+    /**
+     * tRPC v11 + superjson expects the input envelope `{"json": <input>}`.
+     * makeTrpcRequest passes whatever it is given straight through, so a bare
+     * object arrives as `undefined` after deserialisation and the procedure
+     * rejects it with a 400 before running. Every call in this suite goes
+     * through here so that cannot be forgotten on one of them.
+     */
+    async function trpcGet(procedure: string, input: Record<string, unknown>) {
+      return makeTrpcRequest(procedure, { json: input }, { Cookie: sessionCookie! }, 'GET');
+    }
+
+    /** superjson wraps the result too; __json_safe payloads may not. */
+    function unwrap(body: { result?: { data?: unknown } }): any {
+      const data = body.result?.data as { json?: unknown } | undefined;
+      return data && typeof data === 'object' && 'json' in data ? data.json : data;
+    }
+
     async function fetchParametric(input: {
       logNames: string[];
       xMetric: string;
       buckets?: number;
       xMin?: number;
       xMax?: number;
+      runSqid?: string;
     }): Promise<ParametricResponse | null> {
-      const response = await makeTrpcRequest('runs.data.graphParametricBatchBucketed', {
-        runIds: [staircaseRunSqid],
+      const { runSqid, ...rest } = input;
+      const response = await trpcGet('runs.data.graphParametricBatchBucketed', {
+        runIds: [runSqid ?? staircaseRunSqid],
+        organizationId: orgId,
         projectName: TEST_PROJECT_NAME,
-        ...input,
-      }, { 'Cookie': sessionCookie! }, 'GET');
+        ...rest,
+      });
 
       if (response.status !== 200) return null;
-      const data = await response.json();
-      return (data.result?.data ?? null) as ParametricResponse | null;
+      return (unwrap(await response.json()) ?? null) as ParametricResponse | null;
     }
 
     beforeAll(async () => {
@@ -12002,35 +12028,82 @@ describe('SDK API Endpoints (with API Key)', () => {
       if (!serverAvailable) return;
 
       try {
+        // The Origin header is required, not optional: better-auth runs its
+        // CSRF check whenever Sec-Fetch-* headers are present, and undici's
+        // global fetch always sends them. Without it the sign-in comes back
+        // 403 MISSING_OR_NULL_ORIGIN, sessionCookie stays null, and every test
+        // in this suite silently takes its `if (!sessionCookie) return` exit
+        // and reports green while asserting nothing. It must match a trusted
+        // origin (lib/origins.ts) — PUBLIC_URL, which is not necessarily the
+        // host the test client dials.
         const signInResponse = await makeRequest('/api/auth/sign-in/email', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Origin': process.env.PUBLIC_URL || BASE_URL,
+          },
           body: JSON.stringify({ email: TEST_EMAIL, password: TEST_PASSWORD }),
         });
         const setCookie = signInResponse.headers.get('set-cookie');
-        const match = setCookie?.match(/better_auth\.session_token=([^;]+)/);
-        if (match) sessionCookie = `better_auth.session_token=${match[1]}`;
+        // better-auth names the cookie with a HYPHEN ("better-auth.session_token").
+        // Matching only the underscore spelling leaves sessionCookie null, and
+        // every test below then takes its `if (!sessionCookie) return` escape
+        // hatch and reports green without having run. Accept either spelling
+        // and echo back whichever one the server actually sent.
+        const match = setCookie?.match(/(better[-_]auth\.session_token)=([^;]+)/);
+        if (match) sessionCookie = `${match[1]}=${match[2]}`;
       } catch (e) {
         console.log('   Sign in failed:', e);
       }
       if (!sessionCookie) return;
 
-      const listResponse = await makeTrpcRequest('runs.list', {
+      // tRPC serialises with superjson, so the payload sits under
+      // `result.data.json` — reading `result.data` directly yields undefined
+      // and silently disables the whole suite. Accept both shapes so this
+      // keeps working if the __json_safe bypass is ever applied here.
+      const authData = unwrap(
+        await (await makeTrpcRequest('auth', {}, { Cookie: sessionCookie }, 'GET')).json()
+      );
+      // A freshly signed-in session has no ACTIVE organization — that is set
+      // by visiting an org in the UI, which a fetch-based test never does — so
+      // activeOrganization is null here and only allOrgs is populated. The
+      // seeded user belongs to exactly one org; take it, but assert that
+      // rather than assume it, since allOrgs[0] against a multi-org user would
+      // silently address the wrong tenant and read an empty project.
+      orgId =
+        authData?.activeOrganization?.id ??
+        (authData?.allOrgs?.length === 1 ? authData.allOrgs[0].id : null);
+      if (!orgId) return;
+
+      const listResponse = await trpcGet('runs.list', {
+        organizationId: orgId,
         projectName: TEST_PROJECT_NAME,
         search: 'staircase-test',
         limit: 5,
-      }, { 'Cookie': sessionCookie }, 'GET');
+      });
 
       if (listResponse.status === 200) {
-        const listData = await listResponse.json();
-        const runs = listData.result?.data?.runs;
+        const runs = unwrap(await listResponse.json())?.runs;
         const staircase = runs?.find((r: { name: string }) => r.name === 'staircase-test');
         if (staircase) staircaseRunSqid = staircase.id;
+      }
+
+      const paramxResponse = await trpcGet('runs.list', {
+        organizationId: orgId,
+        projectName: TEST_PROJECT_NAME,
+        search: 'a-bulk-run-011',
+        limit: 5,
+      });
+
+      if (paramxResponse.status === 200) {
+        const bulkRuns = unwrap(await paramxResponse.json())?.runs;
+        const bulk = bulkRuns?.find((r: { name: string }) => r.name === 'a-bulk-run-011');
+        if (bulk) paramxRunSqid = bulk.id;
       }
     });
 
     it('Test 44.1: Returns x and y as parallel arrays of equal length', async () => {
-      if (!sessionCookie || !staircaseRunSqid) {
+      if (!sessionCookie || !orgId || !staircaseRunSqid) {
         console.log('   No session or staircase run - skipping');
         return;
       }
@@ -12057,7 +12130,7 @@ describe('SDK API Endpoints (with API Key)', () => {
     });
 
     it('Test 44.2: Covers every joinable raw point (the regression)', async () => {
-      if (!sessionCookie || !staircaseRunSqid) {
+      if (!sessionCookie || !orgId || !staircaseRunSqid) {
         console.log('   No session or staircase run - skipping');
         return;
       }
@@ -12080,7 +12153,7 @@ describe('SDK API Endpoints (with API Key)', () => {
     });
 
     it('Test 44.3: Coverage holds across bucket counts', async () => {
-      if (!sessionCookie || !staircaseRunSqid) {
+      if (!sessionCookie || !orgId || !staircaseRunSqid) {
         console.log('   No session or staircase run - skipping');
         return;
       }
@@ -12108,7 +12181,7 @@ describe('SDK API Endpoints (with API Key)', () => {
     });
 
     it('Test 44.4: x values come from the x-metric, not the y-metric', async () => {
-      if (!sessionCookie || !staircaseRunSqid) {
+      if (!sessionCookie || !orgId || !staircaseRunSqid) {
         console.log('   No session or staircase run - skipping');
         return;
       }
@@ -12135,7 +12208,7 @@ describe('SDK API Endpoints (with API Key)', () => {
     });
 
     it('Test 44.4b: returns points in step order, not sorted by x', async () => {
-      if (!sessionCookie || !staircaseRunSqid) {
+      if (!sessionCookie || !orgId || !staircaseRunSqid) {
         console.log('   No session or staircase run - skipping');
         return;
       }
@@ -12158,7 +12231,7 @@ describe('SDK API Endpoints (with API Key)', () => {
     });
 
     it('Test 44.5b: xMin/xMax zooms on the x-metric and re-buckets the window', async () => {
-      if (!sessionCookie || !staircaseRunSqid) {
+      if (!sessionCookie || !orgId || !staircaseRunSqid) {
         console.log('   No session or staircase run - skipping');
         return;
       }
@@ -12195,7 +12268,7 @@ describe('SDK API Endpoints (with API Key)', () => {
     });
 
     it('Test 44.5: Distinguishes a missing x-metric from a step mismatch', async () => {
-      if (!sessionCookie || !staircaseRunSqid) {
+      if (!sessionCookie || !orgId || !staircaseRunSqid) {
         console.log('   No session or staircase run - skipping');
         return;
       }
@@ -12216,7 +12289,7 @@ describe('SDK API Endpoints (with API Key)', () => {
     });
 
     it('Test 44.6: Reports the run as having the x-metric when it does', async () => {
-      if (!sessionCookie || !staircaseRunSqid) {
+      if (!sessionCookie || !orgId || !staircaseRunSqid) {
         console.log('   No session or staircase run - skipping');
         return;
       }
@@ -12231,7 +12304,7 @@ describe('SDK API Endpoints (with API Key)', () => {
     });
 
     it('Test 44.7: Handles multiple y-metrics against one x-metric', async () => {
-      if (!sessionCookie || !staircaseRunSqid) {
+      if (!sessionCookie || !orgId || !staircaseRunSqid) {
         console.log('   No session or staircase run - skipping');
         return;
       }
@@ -12254,19 +12327,104 @@ describe('SDK API Endpoints (with API Key)', () => {
       }
     });
 
+    it('Test 44.9: Pairs a y-metric with the most recent earlier x reading', async () => {
+      if (!sessionCookie || !orgId || !paramxRunSqid) {
+        console.log('   No session or paramx run - skipping');
+        return;
+      }
+
+      // paramx/x_sparse is written every 10th step; paramx/eval_loss lands on
+      // steps 399, 799, ... — always odd. The two therefore NEVER share a
+      // step, which is the customer's shape: an eval metric and a throughput
+      // counter written by different parts of the training loop.
+      //
+      // Demanding an exact step match returns nothing here at all. Each eval
+      // is instead paired with the x reading 9 steps earlier, so all 30
+      // survive.
+      const result = await fetchParametric({
+        runSqid: paramxRunSqid,
+        logNames: ['paramx/eval_loss'],
+        xMetric: 'paramx/x_sparse',
+        buckets: 200,
+      });
+
+      const series = result!.series['paramx/eval_loss']?.[paramxRunSqid!];
+      expect(series).toBeDefined();
+      const covered = series.counts.reduce((a, b) => a + b, 0);
+      expect(covered).toBe(PARAMX_EVAL_POINTS);
+
+      // The x values are x_sparse readings (token counts in the millions), not
+      // step numbers, and they sit on x_sparse's every-10th-step lattice.
+      expect(series.xs.every((x) => x >= 512)).toBe(true);
+      expect(Math.max(...series.xs)).toBeGreaterThan(1_000_000);
+    });
+
+    it('Test 44.10: Will not pair across an implausible gap', async () => {
+      if (!sessionCookie || !orgId || !paramxRunSqid) {
+        console.log('   No session or paramx run - skipping');
+        return;
+      }
+
+      // "Most recent earlier reading" without a bound would pair every eval
+      // point in the run with paramx/orphan's last value, drawing a confident
+      // flat line out of two series that have nothing to do with each other.
+      // orphan lives at steps 900000+, ~888,000 steps past the end of
+      // eval_loss — far outside the tolerance — so it stays unpaired and the
+      // UI keeps its empty state.
+      //
+      // This is the other half of 44.9: the rule loosened from "same step" to
+      // "close enough", and this is what "close enough" excludes.
+      const result = await fetchParametric({
+        runSqid: paramxRunSqid,
+        logNames: ['paramx/eval_loss'],
+        xMetric: 'paramx/orphan',
+        buckets: 200,
+      });
+
+      expect(result!.series['paramx/eval_loss']?.[paramxRunSqid!]).toBeUndefined();
+      // ...but the run DID log orphan, so the UI can still tell the user which
+      // of the two empty states this is.
+      expect(result!.runsWithXMetric).toContain(paramxRunSqid);
+    });
+
+    it('Test 44.11: Reports a just-written metric as logged', async () => {
+      if (!sessionCookie || !orgId || !paramxRunSqid) {
+        console.log('   No session or paramx run - skipping');
+        return;
+      }
+
+      // runsWithXMetric decides between "x was never logged" and "x could not
+      // be paired", so it has to read a table that is current. It used to read
+      // mlop_metric_summaries_v2, a REFRESHABLE view on a 5-minute cycle — for
+      // five minutes after a metric first appears that table holds no row for
+      // it, and a run that plainly logged the metric gets reported as never
+      // having logged it. Every paramx metric must be visible here.
+      for (const metric of ['paramx/tokens_seen', 'paramx/x_sparse', 'paramx/orphan']) {
+        const result = await fetchParametric({
+          runSqid: paramxRunSqid,
+          logNames: ['paramx/eval_loss'],
+          xMetric: metric,
+          buckets: 50,
+        });
+        expect(result!.runsWithXMetric, `${metric} should be reported as logged`)
+          .toContain(paramxRunSqid);
+      }
+    });
+
     it('Test 44.8: Rejects an empty x-metric', async () => {
-      if (!sessionCookie || !staircaseRunSqid) {
+      if (!sessionCookie || !orgId || !staircaseRunSqid) {
         console.log('   No session or staircase run - skipping');
         return;
       }
 
-      const response = await makeTrpcRequest('runs.data.graphParametricBatchBucketed', {
+      const response = await trpcGet('runs.data.graphParametricBatchBucketed', {
         runIds: [staircaseRunSqid],
+        organizationId: orgId,
         projectName: TEST_PROJECT_NAME,
         logNames: ['test/staircase'],
         xMetric: '',
         buckets: 50,
-      }, { 'Cookie': sessionCookie }, 'GET');
+      });
 
       expect(response.status).toBe(400);
     });
