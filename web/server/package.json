@@ -53,7 +53,7 @@
     "@aws-sdk/client-s3": "3.787.0",
     "@aws-sdk/s3-request-presigner": "3.787.0",
     "@clickhouse/client-web": "1.11.0",
-    "@hono/node-server": "1.19.11",
+    "@hono/node-server": "2.0.10",
     "@hono/swagger-ui": "0.5.3",
     "@hono/trpc-server": "0.3.4",
     "@hono/zod-openapi": "0.18.3",
