@@ -79,7 +79,7 @@
     "zod": "3.25.76"
   },
   "devDependencies": {
-    "@better-auth/sso": "1.4.10",
+    "@better-auth/sso": "1.6.11",
     "knip": "5.83.0",
     "@noble/hashes": "2.0.1",
     "@types/bcrypt": "6.0.0",
