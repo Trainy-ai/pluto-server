@@ -7687,6 +7687,7 @@ async function setupTestData(): Promise<TestData> {
     'paramx/lr',
     'paramx/orphan',
     'paramx/x_sparse',
+    'paramx/x_huge',
   ];
 
   const parametricRuns = await prisma.runs.findMany({
@@ -7781,6 +7782,14 @@ async function setupTestData(): Promise<TestData> {
           // and so always has an exact partner in the raw data.
           if (step % 10 === 0) {
             push(run, 'paramx/x_sparse', step, tokens);
+
+            // The same lattice, scaled past 8.64e12 — JavaScript's largest
+            // representable Date expressed in seconds. uPlot reads an x scale
+            // as time unless told otherwise, and above that bound it cannot
+            // place a single tick: the axis renders with no labels and no
+            // gridlines while the line itself draws perfectly. A cumulative
+            // token counter on a large model reaches this range for real.
+            push(run, 'paramx/x_huge', step, tokens * 2_000_000);
           }
 
           const loss = 0.35 + 2.2 * Math.exp(-tokens / 400000);
@@ -7910,6 +7919,14 @@ async function setupTestData(): Promise<TestData> {
             'paramx/eval_loss',
             'paramx/orphan',
             6, 4,
+          ),
+          // Values large enough that a time-mode x scale cannot tick at all.
+          parametricChart(
+            'parametric-eval-vs-huge',
+            'Eval loss vs huge x',
+            'paramx/eval_loss',
+            'paramx/x_huge',
+            0, 12,
           ),
           // Near-miss cadence: empty under an exact-step join, 30 points
           // under the as-of join.

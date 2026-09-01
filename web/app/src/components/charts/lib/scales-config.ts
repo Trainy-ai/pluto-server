@@ -39,6 +39,9 @@ export function buildScalesConfig({
       ? {
           distr: 3,
           auto: true,
+          // Same reason as the linear branch below: uPlot's x scale is
+          // time: true by default, and a log metric axis is not a clock.
+          time: false,
           // Guard against scaleMin <= 0. uPlot's logAxisSplits enters an
           // infinite loop when given scaleMin = 0: log(0) = -Infinity →
           // foundIncr = pow(10, -Inf) = 0 → split = scaleMin + foundIncr
@@ -77,7 +80,17 @@ export function buildScalesConfig({
         }
       : isDateTime
         ? { time: true, auto: true }
-        : { auto: true },
+        // time: false is load-bearing, not a tidy-up. uPlot's x scale
+        // defaults to time: true, so leaving it unset means tick positions
+        // are chosen on CALENDAR boundaries — and every non-datetime x axis
+        // we draw was getting them. On a step axis it passes for round
+        // numbers by coincidence (10.8k / 21.6k / 32.4k = 3h / 6h / 9h in
+        // seconds). On a parametric axis carrying a metric's own values it
+        // falls apart: a cumulative counter in the millions lands between
+        // day and month boundaries, so uPlot finds one or two usable ticks,
+        // and in the billions it finds none at all and the axis renders
+        // completely unlabelled.
+        : { auto: true, time: false },
     y: categoryCount
       ? {
           // Categorical Y: one row per category, padded half a row so the
