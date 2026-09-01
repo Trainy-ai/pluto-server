@@ -7,7 +7,7 @@ export const getViewProcedure = protectedOrgProcedure
   .input(
     z.object({
       viewId: z.coerce.string(),
-    })
+    }),
   )
   .query(async ({ ctx, input }) => {
     const { organizationId, viewId } = input;
@@ -44,6 +44,7 @@ export const getViewProcedure = protectedOrgProcedure
       id: view.id.toString(),
       name: view.name,
       isDefault: view.isDefault,
+      currentVersion: view.currentVersion,
       config: DashboardViewConfigSchema.parse(view.config),
       createdAt: view.createdAt,
       updatedAt: view.updatedAt,

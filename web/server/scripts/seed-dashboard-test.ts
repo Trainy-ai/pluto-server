@@ -56,9 +56,22 @@ function buildConfig() {
         name: "Matching Patterns (should be visible)",
         collapsed: false,
         widgets: [
-          chartWidget("glob:train/* (matches train metrics)", ["glob:train/*"], { x: 0, y: 0, w: 4, h: 4 }),
-          chartWidget("glob:sys/* (matches sys metrics)", ["glob:sys/*"], { x: 4, y: 0, w: 4, h: 4 }),
-          chartWidget("regex:^(train|debug)/.* (matches train+debug)", ["regex:^(train|debug)/.*"], { x: 8, y: 0, w: 4, h: 4 }),
+          chartWidget(
+            "glob:train/* (matches train metrics)",
+            ["glob:train/*"],
+            { x: 0, y: 0, w: 4, h: 4 },
+          ),
+          chartWidget("glob:sys/* (matches sys metrics)", ["glob:sys/*"], {
+            x: 4,
+            y: 0,
+            w: 4,
+            h: 4,
+          }),
+          chartWidget(
+            "regex:^(train|debug)/.* (matches train+debug)",
+            ["regex:^(train|debug)/.*"],
+            { x: 8, y: 0, w: 4, h: 4 },
+          ),
         ],
       },
 
@@ -68,10 +81,29 @@ function buildConfig() {
         name: "Non-Matching Patterns (should be auto-hidden)",
         collapsed: false,
         widgets: [
-          chartWidget("glob:validation/* (no match)", ["glob:validation/*"], { x: 0, y: 0, w: 4, h: 4 }),
-          chartWidget("glob:nonexistent/* (no match)", ["glob:nonexistent/*"], { x: 4, y: 0, w: 4, h: 4 }),
-          chartWidget("regex:^doesnotexist/.* (no match)", ["regex:^doesnotexist/.*"], { x: 8, y: 0, w: 4, h: 4 }),
-          chartWidget("glob:gpu/* (no match)", ["glob:gpu/*"], { x: 0, y: 4, w: 4, h: 4 }),
+          chartWidget("glob:validation/* (no match)", ["glob:validation/*"], {
+            x: 0,
+            y: 0,
+            w: 4,
+            h: 4,
+          }),
+          chartWidget("glob:nonexistent/* (no match)", ["glob:nonexistent/*"], {
+            x: 4,
+            y: 0,
+            w: 4,
+            h: 4,
+          }),
+          chartWidget(
+            "regex:^doesnotexist/.* (no match)",
+            ["regex:^doesnotexist/.*"],
+            { x: 8, y: 0, w: 4, h: 4 },
+          ),
+          chartWidget("glob:gpu/* (no match)", ["glob:gpu/*"], {
+            x: 0,
+            y: 4,
+            w: 4,
+            h: 4,
+          }),
         ],
       },
 
@@ -81,8 +113,17 @@ function buildConfig() {
         name: "Literal Metrics (always visible)",
         collapsed: false,
         widgets: [
-          chartWidget("train/loss (literal)", ["train/loss"], { x: 0, y: 0, w: 6, h: 4 }),
-          chartWidget("nonexistent/metric (literal, no data)", ["nonexistent/metric"], { x: 6, y: 0, w: 6, h: 4 }),
+          chartWidget("train/loss (literal)", ["train/loss"], {
+            x: 0,
+            y: 0,
+            w: 6,
+            h: 4,
+          }),
+          chartWidget(
+            "nonexistent/metric (literal, no data)",
+            ["nonexistent/metric"],
+            { x: 6, y: 0, w: 6, h: 4 },
+          ),
         ],
       },
 
@@ -92,8 +133,16 @@ function buildConfig() {
         name: "Mixed Pattern+Literal (never auto-hidden)",
         collapsed: false,
         widgets: [
-          chartWidget("literal + non-matching glob", ["train/loss", "glob:nonexistent/*"], { x: 0, y: 0, w: 6, h: 4 }),
-          chartWidget("matching glob + non-matching glob", ["glob:train/*", "glob:nonexistent/*"], { x: 6, y: 0, w: 6, h: 4 }),
+          chartWidget(
+            "literal + non-matching glob",
+            ["train/loss", "glob:nonexistent/*"],
+            { x: 0, y: 0, w: 6, h: 4 },
+          ),
+          chartWidget(
+            "matching glob + non-matching glob",
+            ["glob:train/*", "glob:nonexistent/*"],
+            { x: 6, y: 0, w: 6, h: 4 },
+          ),
         ],
       },
     ],
@@ -119,6 +168,7 @@ async function seedForProject(
     },
   });
 
+  const config = buildConfig();
   const view = await prisma.dashboardView.create({
     data: {
       name: DASHBOARD_NAME,
@@ -126,7 +176,17 @@ async function seedForProject(
       projectId: project.id,
       createdById: userId,
       isDefault: false,
-      config: buildConfig() as any,
+      config: config as any,
+      currentVersion: 1,
+      versions: {
+        create: {
+          version: 1,
+          name: DASHBOARD_NAME,
+          config: config as any,
+          createdById: userId,
+          source: "seed",
+        },
+      },
     },
   });
 
@@ -138,7 +198,10 @@ async function main() {
   const org = await prisma.organization.findUnique({
     where: { slug: DEV_ORG_SLUG },
   });
-  if (!org) throw new Error(`Organization '${DEV_ORG_SLUG}' not found. Run seed-dev first.`);
+  if (!org)
+    throw new Error(
+      `Organization '${DEV_ORG_SLUG}' not found. Run seed-dev first.`,
+    );
 
   const member = await prisma.member.findFirst({
     where: { organizationId: org.id },
@@ -162,18 +225,30 @@ async function main() {
     );
   }
 
-  console.log(`Seeding "${DASHBOARD_NAME}" dashboard in ${projects.length} project(s):\n`);
+  console.log(
+    `Seeding "${DASHBOARD_NAME}" dashboard in ${projects.length} project(s):\n`,
+  );
 
   for (const project of projects) {
     await seedForProject(org, project, member.userId);
   }
 
   console.log(`\nTest plan:`);
-  console.log(`  Section 1 — "Matching Patterns": 3 widgets with glob/regex that match real metrics → VISIBLE`);
-  console.log(`  Section 2 — "Non-Matching Patterns": 4 widgets with patterns matching nothing → AUTO-HIDDEN`);
-  console.log(`  Section 3 — "Literal Metrics": 2 widgets (one real, one nonexistent) → both VISIBLE`);
-  console.log(`  Section 4 — "Mixed": 2 widgets mixing literal+pattern → both VISIBLE`);
-  console.log(`\nTotal: 11 widgets. Expected visible in view mode: 7. Expected hidden: 4.`);
+  console.log(
+    `  Section 1 — "Matching Patterns": 3 widgets with glob/regex that match real metrics → VISIBLE`,
+  );
+  console.log(
+    `  Section 2 — "Non-Matching Patterns": 4 widgets with patterns matching nothing → AUTO-HIDDEN`,
+  );
+  console.log(
+    `  Section 3 — "Literal Metrics": 2 widgets (one real, one nonexistent) → both VISIBLE`,
+  );
+  console.log(
+    `  Section 4 — "Mixed": 2 widgets mixing literal+pattern → both VISIBLE`,
+  );
+  console.log(
+    `\nTotal: 11 widgets. Expected visible in view mode: 7. Expected hidden: 4.`,
+  );
 }
 
 main()

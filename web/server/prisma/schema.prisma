@@ -48,16 +48,17 @@ model User {
   members          Member[]
   invitations      Invitation[]
 
-  finishedOnboarding Boolean?
-  OnboardingDetails  OnboardingDetails?
-  ApiKey             ApiKey[]
-  Feedback           Feedback[]
-  Runs               Runs[]
-  DashboardView      DashboardView[]
-  RunTableView       RunTableView[]
-  ChartsLayout       ChartsLayout[]
-  Integration        Integration[]
-  RunStatusEvent     RunStatusEvent[]
+  finishedOnboarding   Boolean?
+  OnboardingDetails    OnboardingDetails?
+  ApiKey               ApiKey[]
+  Feedback             Feedback[]
+  Runs                 Runs[]
+  DashboardView        DashboardView[]
+  DashboardViewVersion DashboardViewVersion[]
+  RunTableView         RunTableView[]
+  ChartsLayout         ChartsLayout[]
+  Integration          Integration[]
+  RunStatusEvent       RunStatusEvent[]
 
   @@unique([email])
   @@map("user")
@@ -493,16 +494,39 @@ model DashboardView {
   createdById    String
   isDefault      Boolean  @default(false)
   config         Json // Sections, widgets, layout configuration
+  currentVersion Int      @default(1)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  project      Projects     @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  createdBy    User         @relation(fields: [createdById], references: [id], onDelete: Cascade)
+  organization Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project      Projects               @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy    User                   @relation(fields: [createdById], references: [id], onDelete: Cascade)
+  versions     DashboardViewVersion[]
 
   @@unique([organizationId, projectId, name])
   @@index([organizationId, projectId])
   @@map("dashboard_views")
+}
+
+// Immutable dashboard snapshots. Restores append a new snapshot instead of
+// moving the head backwards so every AI and human edit remains recoverable.
+model DashboardViewVersion {
+  id                  BigInt   @id @default(autoincrement())
+  dashboardViewId     BigInt
+  version             Int
+  name                String   @db.VarChar(255)
+  config              Json
+  createdById         String?
+  source              String   @db.VarChar(32)
+  restoredFromVersion Int?
+  createdAt           DateTime @default(now())
+
+  dashboardView DashboardView @relation(fields: [dashboardViewId], references: [id], onDelete: Cascade)
+  createdBy     User?         @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([dashboardViewId, version])
+  @@index([dashboardViewId, version(sort: Desc)])
+  @@map("dashboard_view_versions")
 }
 
 // Run Table Views for saved table column/filter/sorting configurations

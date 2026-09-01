@@ -13,6 +13,7 @@ import { allowedOrigins } from "./lib/origins";
 import healthRoutes from "./routes/health";
 import versionRoutes from "./routes/version";
 import runRoutes from "./routes/runs-openapi";
+import dashboardRoutes from "./routes/dashboards-openapi";
 import { FIELD_FILTER_OPERATORS } from "./trpc/routers/runs/procs/list-runs";
 import {
   RUN_FILTER_BOOLEAN_OPERATORS,
@@ -88,6 +89,7 @@ app.use("*", async (c, next) => {
 app.route("/api", healthRoutes);
 app.route("/api", versionRoutes);
 app.route("/api/runs", runRoutes);
+app.route("/api/dashboards", dashboardRoutes);
 app.route("/api/auth", authRoutes);
 app.route("/api/stripe", stripeWebhookRoutes);
 app.route("/api/integrations", linearOAuthRoutes);

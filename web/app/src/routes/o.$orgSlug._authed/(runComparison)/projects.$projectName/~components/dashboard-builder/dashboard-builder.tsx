@@ -1,9 +1,19 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { toast } from "sonner";
-import { PlusIcon } from "lucide-react";
+import {
+  ArchiveRestoreIcon,
+  HistoryIcon,
+  LoaderCircleIcon,
+  PlusIcon,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ChartFullscreenDialog } from "@/components/charts/chart-fullscreen-dialog";
-import { SectionContainer, FolderContainer, AddSectionButton, AddFolderButton } from "./section-container";
+import {
+  SectionContainer,
+  FolderContainer,
+  AddSectionButton,
+  AddFolderButton,
+} from "./section-container";
 import { WidgetGrid } from "./widget-grid";
 import { WidgetRenderer } from "./widget-renderer";
 import { AddWidgetModal } from "./add-widget-modal";
@@ -11,6 +21,7 @@ import { PanelEditorDialog } from "./panel-editor-dialog";
 import { createStarterPanelConfig } from "./panel-starter-template";
 import { DynamicSectionGrid } from "./dynamic-section-grid";
 import { DashboardToolbar } from "./dashboard-toolbar";
+import { DashboardVersionHistory } from "./dashboard-version-history";
 import {
   CancelConfirmDialog,
   DraftRestoreDialog,
@@ -21,6 +32,7 @@ import { useDraftSave } from "./use-auto-save";
 import { useNavigationGuard } from "./use-navigation-guard";
 import { useHiddenPatternWidgets } from "./use-hidden-pattern-widgets";
 import { useDashboardSave } from "./use-dashboard-save";
+import { useDashboardVersionHistory } from "./use-dashboard-version-history";
 import { useSectionDrag } from "./use-section-drag";
 import { useDistributionsEntryCallbacks } from "./use-distributions-entry-callbacks";
 import { DashboardStaleWarning } from "./dashboard-stale-warning";
@@ -62,7 +74,6 @@ interface DashboardBuilderProps {
   groupBy?: string[];
   hiddenRunIds?: Set<string>;
 }
-
 export function DashboardBuilder({
   view,
   groupedMetrics,
@@ -86,7 +97,9 @@ export function DashboardBuilder({
     configOps.migrateDashboardConfig(view.config),
   );
   const [hasChanges, setHasChanges] = useState(false);
-  const [addWidgetSectionId, setAddWidgetSectionId] = useState<string | null>(null);
+  const [addWidgetSectionId, setAddWidgetSectionId] = useState<string | null>(
+    null,
+  );
   const [editingWidget, setEditingWidget] = useState<Widget | null>(null);
   // Python panel authoring happens in the dedicated two-pane editor
   // dialog (code + live preview), NOT the AddWidgetModal config form.
@@ -100,11 +113,17 @@ export function DashboardBuilder({
   const [showDraftRestore, setShowDraftRestore] = useState(false);
   const [fullscreenWidget, setFullscreenWidget] = useState<Widget | null>(null);
   const { setFullscreen } = useFullscreenContext();
-  useEffect(() => { setFullscreen(!!fullscreenWidget); }, [fullscreenWidget, setFullscreen]);
+  useEffect(() => {
+    setFullscreen(!!fullscreenWidget);
+  }, [fullscreenWidget, setFullscreen]);
   // Y zoom ranges keyed by widget ID, shared between mini and fullscreen
-  const [widgetYZoomRanges, setWidgetYZoomRanges] = useState<Record<string, [number, number] | null>>({});
+  const [widgetYZoomRanges, setWidgetYZoomRanges] = useState<
+    Record<string, [number, number] | null>
+  >({});
   const [coarseMode, setCoarseMode] = useState(true);
-  const [dynamicWidgetCounts, setDynamicWidgetCounts] = useState<Record<string, number>>({});
+  const [dynamicWidgetCounts, setDynamicWidgetCounts] = useState<
+    Record<string, number>
+  >({});
   const [copiedWidget, setCopiedWidget] = useState<Widget | null>(null);
 
   // Staleness / optimistic concurrency state
@@ -113,7 +132,10 @@ export function DashboardBuilder({
   const [saveAsNewName, setSaveAsNewName] = useState("");
   const editStartUpdatedAtRef = useRef<string | null>(null);
 
-  const selectedRunIds = useMemo(() => Object.keys(selectedRuns), [selectedRuns]);
+  const selectedRunIds = useMemo(
+    () => Object.keys(selectedRuns),
+    [selectedRuns],
+  );
 
   const { hasDraft, restoreDraft, clearDraft } = useDraftSave({
     config,
@@ -151,13 +173,66 @@ export function DashboardBuilder({
     setIsEditing(false);
   }, [clearDraft]);
 
+  const handlePreviewLoaded = useCallback(
+    (previewConfig: DashboardViewConfig) => {
+      setConfig(configOps.migrateDashboardConfig(previewConfig));
+      setHasChanges(false);
+    },
+    [],
+  );
+
+  const handleReturnToCurrentConfig = useCallback(() => {
+    setConfig(configOps.migrateDashboardConfig(view.config));
+    setFullscreenWidget(null);
+  }, [view.config]);
+
+  const handleDiscardEditingForPreview = useCallback(() => {
+    resetEditState();
+    setAddWidgetSectionId(null);
+    setAddWidgetParentId(null);
+    setEditingWidget(null);
+    setFullscreenWidget(null);
+  }, [resetEditState]);
+
+  const handleRestoreSuccess = useCallback(
+    (restored: DashboardView) => {
+      resetEditState();
+      setConfig(configOps.migrateDashboardConfig(restored.config));
+    },
+    [resetEditState],
+  );
+
+  const {
+    isHistoryOpen,
+    setIsHistoryOpen,
+    previewVersion,
+    previewQuery,
+    restoreMutation: restoreVersionMutation,
+    currentVersion,
+    returnToCurrent: handleReturnToCurrent,
+    selectVersion: handleSelectVersion,
+    restoreVersion: handleRestoreVersion,
+  } = useDashboardVersionHistory({
+    view,
+    organizationId,
+    projectName,
+    isEditing,
+    hasChanges,
+    onDiscardEditing: handleDiscardEditingForPreview,
+    onPreviewLoaded: handlePreviewLoaded,
+    onReturnToCurrent: handleReturnToCurrentConfig,
+    onRestoreSuccess: handleRestoreSuccess,
+  });
+
   // Detection map for the save-time histogram auto-lift. Populated by
   // each static-section file-group widget once its file-types query
   // resolves; consumed by transformBeforeSave below to rewrite legacy
   // file-group HISTOGRAM entries into a sibling distributions widget
   // right before the save mutation. Dynamic-section widgets don't
   // populate this — their FileGroupWidget never receives the callback.
-  const [detectedHistograms, setDetectedHistograms] = useState<Record<string, string[]>>({});
+  const [detectedHistograms, setDetectedHistograms] = useState<
+    Record<string, string[]>
+  >({});
   const detectedHistogramsRef = useRef(detectedHistograms);
   detectedHistogramsRef.current = detectedHistograms;
   const handleFileGroupHistogramsDetected = useCallback(
@@ -196,13 +271,14 @@ export function DashboardBuilder({
     ),
   });
 
-  const { hidden: hiddenWidgetIds, resolved: resolvedPatternMetrics } = useHiddenPatternWidgets({
-    sections: config.sections,
-    selectedRunIds,
-    organizationId,
-    projectName,
-    isEditing,
-  });
+  const { hidden: hiddenWidgetIds, resolved: resolvedPatternMetrics } =
+    useHiddenPatternWidgets({
+      sections: config.sections,
+      selectedRunIds,
+      organizationId,
+      projectName,
+      isEditing,
+    });
 
   // Track container width for responsive grid
   useEffect(() => {
@@ -221,7 +297,7 @@ export function DashboardBuilder({
   // (e.g. window-focus refetch after another user saves). Staleness is detected separately via
   // the polling effect above and the server-side CONFLICT check on save.
   useEffect(() => {
-    if (isEditing) return;
+    if (isEditing || previewVersion !== null) return;
     setConfig((prev) => {
       // Build collapse state maps for both top-level and child sections
       const collapseState = new Map<string, boolean>();
@@ -249,7 +325,7 @@ export function DashboardBuilder({
       };
     });
     setHasChanges(false);
-  }, [view.config, isEditing]);
+  }, [view.config, isEditing, previewVersion]);
 
   // Filter sections/widgets based on search state (walks children too)
   const filteredSections = useMemo(() => {
@@ -273,43 +349,48 @@ export function DashboardBuilder({
     const filterSection = (section: Section): Section => ({
       ...section,
       widgets: section.widgets.filter((widget) =>
-        searchUtils.doesWidgetMatchSearch(widget, searchState, resolvedPatternMetrics)
+        searchUtils.doesWidgetMatchSearch(
+          widget,
+          searchState,
+          resolvedPatternMetrics,
+        ),
       ),
       ...(section.children
         ? {
-            children: section.children
-              .map(filterSection)
-              .filter((child) => {
-                if (child.dynamicPattern) {
-                  // Collapsed dynamic sections only have unfiltered counts.
-                  // Fall back to name/pattern match to avoid false positives.
-                  if (child.collapsed) {
-                    return doesDynamicSectionMatch(child);
-                  }
-                  return (dynamicWidgetCounts[child.id] ?? 0) > 0;
+            children: section.children.map(filterSection).filter((child) => {
+              if (child.dynamicPattern) {
+                // Collapsed dynamic sections only have unfiltered counts.
+                // Fall back to name/pattern match to avoid false positives.
+                if (child.collapsed) {
+                  return doesDynamicSectionMatch(child);
                 }
-                return child.widgets.length > 0;
-              }),
+                return (dynamicWidgetCounts[child.id] ?? 0) > 0;
+              }
+              return child.widgets.length > 0;
+            }),
           }
         : {}),
     });
 
-    return config.sections
-      .map(filterSection)
-      .filter((section) => {
-        if (section.dynamicPattern) {
-          if (section.collapsed) {
-            return doesDynamicSectionMatch(section);
-          }
-          return (dynamicWidgetCounts[section.id] ?? 0) > 0;
+    return config.sections.map(filterSection).filter((section) => {
+      if (section.dynamicPattern) {
+        if (section.collapsed) {
+          return doesDynamicSectionMatch(section);
         }
-        // Keep folders that still have children or direct widgets
-        if (section.children) {
-          return (section.children.length > 0) || (section.widgets.length > 0);
-        }
-        return section.widgets.length > 0;
-      });
-  }, [config.sections, searchState, dynamicWidgetCounts, resolvedPatternMetrics]);
+        return (dynamicWidgetCounts[section.id] ?? 0) > 0;
+      }
+      // Keep folders that still have children or direct widgets
+      if (section.children) {
+        return section.children.length > 0 || section.widgets.length > 0;
+      }
+      return section.widgets.length > 0;
+    });
+  }, [
+    config.sections,
+    searchState,
+    dynamicWidgetCounts,
+    resolvedPatternMetrics,
+  ]);
 
   const isSearching = !!searchState?.query.trim();
   const isSearchingRef = useRef(false);
@@ -386,9 +467,16 @@ export function DashboardBuilder({
             description: error.message || "An unexpected error occurred",
           });
         },
-      }
+      },
     );
-  }, [createMutation, organizationId, projectName, saveAsNewName, config, resetEditState]);
+  }, [
+    createMutation,
+    organizationId,
+    projectName,
+    saveAsNewName,
+    config,
+    resetEditState,
+  ]);
 
   // ─── Config mutation callbacks (delegate to pure functions) ──────────
 
@@ -406,19 +494,30 @@ export function DashboardBuilder({
     setHasChanges(true);
   }, []);
 
-  const addSection = useCallback((
-    name: string,
-    dynamicPattern?: string,
-    dynamicPatternMode?: "search" | "regex",
-    dynamicGroupBy?: string[],
-    dynamicGroupPrefixes?: string[],
-    dynamicGroupPrefixRegex?: string,
-  ) => {
-    setConfig((prev) =>
-      configOps.addSection(prev, name, dynamicPattern, dynamicPatternMode, dynamicGroupBy, dynamicGroupPrefixes, dynamicGroupPrefixRegex),
-    );
-    setHasChanges(true);
-  }, []);
+  const addSection = useCallback(
+    (
+      name: string,
+      dynamicPattern?: string,
+      dynamicPatternMode?: "search" | "regex",
+      dynamicGroupBy?: string[],
+      dynamicGroupPrefixes?: string[],
+      dynamicGroupPrefixRegex?: string,
+    ) => {
+      setConfig((prev) =>
+        configOps.addSection(
+          prev,
+          name,
+          dynamicPattern,
+          dynamicPatternMode,
+          dynamicGroupBy,
+          dynamicGroupPrefixes,
+          dynamicGroupPrefixRegex,
+        ),
+      );
+      setHasChanges(true);
+    },
+    [],
+  );
 
   // ─── Folder operations ───────────────────────────────────────────────
 
@@ -427,39 +526,71 @@ export function DashboardBuilder({
     setHasChanges(true);
   }, []);
 
-  const addChildSection = useCallback((
-    parentId: string,
-    name: string,
-    dynamicPattern?: string,
-    dynamicPatternMode?: "search" | "regex",
-    dynamicGroupBy?: string[],
-    dynamicGroupPrefixes?: string[],
-    dynamicGroupPrefixRegex?: string,
-  ) => {
-    setConfig((prev) =>
-      configOps.addChildSection(prev, parentId, name, dynamicPattern, dynamicPatternMode, dynamicGroupBy, dynamicGroupPrefixes, dynamicGroupPrefixRegex),
-    );
-    setHasChanges(true);
-  }, []);
+  const addChildSection = useCallback(
+    (
+      parentId: string,
+      name: string,
+      dynamicPattern?: string,
+      dynamicPatternMode?: "search" | "regex",
+      dynamicGroupBy?: string[],
+      dynamicGroupPrefixes?: string[],
+      dynamicGroupPrefixRegex?: string,
+    ) => {
+      setConfig((prev) =>
+        configOps.addChildSection(
+          prev,
+          parentId,
+          name,
+          dynamicPattern,
+          dynamicPatternMode,
+          dynamicGroupBy,
+          dynamicGroupPrefixes,
+          dynamicGroupPrefixRegex,
+        ),
+      );
+      setHasChanges(true);
+    },
+    [],
+  );
 
-  const deleteChildSection = useCallback((parentId: string, childId: string) => {
-    setConfig((prev) => configOps.deleteChildSection(prev, parentId, childId));
-    setHasChanges(true);
-  }, []);
+  const deleteChildSection = useCallback(
+    (parentId: string, childId: string) => {
+      setConfig((prev) =>
+        configOps.deleteChildSection(prev, parentId, childId),
+      );
+      setHasChanges(true);
+    },
+    [],
+  );
 
-  const updateChildSection = useCallback((parentId: string, childId: string, child: Section) => {
-    setConfig((prev) => configOps.updateChildSection(prev, parentId, childId, child));
-    setHasChanges(true);
-  }, []);
+  const updateChildSection = useCallback(
+    (parentId: string, childId: string, child: Section) => {
+      setConfig((prev) =>
+        configOps.updateChildSection(prev, parentId, childId, child),
+      );
+      setHasChanges(true);
+    },
+    [],
+  );
 
-  const toggleChildSectionCollapse = useCallback((parentId: string, childId: string) => {
-    setConfig((prev) => configOps.toggleChildSectionCollapse(prev, parentId, childId));
-  }, []);
+  const toggleChildSectionCollapse = useCallback(
+    (parentId: string, childId: string) => {
+      setConfig((prev) =>
+        configOps.toggleChildSectionCollapse(prev, parentId, childId),
+      );
+    },
+    [],
+  );
 
-  const reorderChildSections = useCallback((parentId: string, fromIndex: number, toIndex: number) => {
-    setConfig((prev) => configOps.reorderChildSections(prev, parentId, fromIndex, toIndex));
-    setHasChanges(true);
-  }, []);
+  const reorderChildSections = useCallback(
+    (parentId: string, fromIndex: number, toIndex: number) => {
+      setConfig((prev) =>
+        configOps.reorderChildSections(prev, parentId, fromIndex, toIndex),
+      );
+      setHasChanges(true);
+    },
+    [],
+  );
 
   const toggleAllChildSections = useCallback(() => {
     setConfig((prev) => configOps.toggleAllChildSections(prev));
@@ -470,66 +601,107 @@ export function DashboardBuilder({
     [config.sections],
   );
   const hasChildSections = allChildSections.length > 0;
-  const allChildrenCollapsed = hasChildSections && allChildSections.every((c) => c.collapsed);
+  const allChildrenCollapsed =
+    hasChildSections && allChildSections.every((c) => c.collapsed);
 
   // ─── Widget operations ──────────────────────────────────────────────
 
-  const [addWidgetParentId, setAddWidgetParentId] = useState<string | null>(null);
+  const [addWidgetParentId, setAddWidgetParentId] = useState<string | null>(
+    null,
+  );
 
-  const addWidget = useCallback((sectionId: string, widget: Omit<Widget, "id">, parentId?: string) => {
-    setConfig((prev) => configOps.addWidget(prev, sectionId, widget, parentId));
-    setHasChanges(true);
-    setAddWidgetSectionId(null);
-    setAddWidgetParentId(null);
-  }, []);
+  const addWidget = useCallback(
+    (sectionId: string, widget: Omit<Widget, "id">, parentId?: string) => {
+      setConfig((prev) =>
+        configOps.addWidget(prev, sectionId, widget, parentId),
+      );
+      setHasChanges(true);
+      setAddWidgetSectionId(null);
+      setAddWidgetParentId(null);
+    },
+    [],
+  );
 
-  const updateWidgetsInSection = useCallback((sectionId: string, widgets: Widget[], parentId?: string) => {
-    if (isSearchingRef.current) return;
-    setConfig((prev) => configOps.updateWidgets(prev, sectionId, widgets, parentId));
-    setHasChanges(true);
-  }, []);
+  const updateWidgetsInSection = useCallback(
+    (sectionId: string, widgets: Widget[], parentId?: string) => {
+      if (isSearchingRef.current) return;
+      setConfig((prev) =>
+        configOps.updateWidgets(prev, sectionId, widgets, parentId),
+      );
+      setHasChanges(true);
+    },
+    [],
+  );
 
-  const deleteWidget = useCallback((sectionId: string, widgetId: string, parentId?: string) => {
-    setConfig((prev) => configOps.deleteWidget(prev, sectionId, widgetId, parentId));
-    setHasChanges(true);
-  }, []);
+  const deleteWidget = useCallback(
+    (sectionId: string, widgetId: string, parentId?: string) => {
+      setConfig((prev) =>
+        configOps.deleteWidget(prev, sectionId, widgetId, parentId),
+      );
+      setHasChanges(true);
+    },
+    [],
+  );
 
-  const editWidget = useCallback((sectionId: string, widget: Widget, parentId?: string) => {
-    if (widget.type === "panel") {
-      // Panels are edited in the code editor dialog, not the config modal.
-      setPanelEditor({ sectionId, parentId, widget });
-      return;
-    }
-    setAddWidgetSectionId(sectionId);
-    setAddWidgetParentId(parentId ?? null);
-    setEditingWidget(widget);
-  }, []);
+  const editWidget = useCallback(
+    (sectionId: string, widget: Widget, parentId?: string) => {
+      if (widget.type === "panel") {
+        // Panels are edited in the code editor dialog, not the config modal.
+        setPanelEditor({ sectionId, parentId, widget });
+        return;
+      }
+      setAddWidgetSectionId(sectionId);
+      setAddWidgetParentId(parentId ?? null);
+      setEditingWidget(widget);
+    },
+    [],
+  );
 
   const handleCopyWidget = useCallback((widget: Widget) => {
     setCopiedWidget(widget);
     toast.success("Widget copied");
   }, []);
 
-  const pasteWidget = useCallback((sectionId: string, parentId?: string) => {
-    if (!copiedWidget) return;
-    setConfig((prev) => configOps.pasteWidget(prev, sectionId, copiedWidget, parentId));
-    setHasChanges(true);
-  }, [copiedWidget]);
+  const pasteWidget = useCallback(
+    (sectionId: string, parentId?: string) => {
+      if (!copiedWidget) return;
+      setConfig((prev) =>
+        configOps.pasteWidget(prev, sectionId, copiedWidget, parentId),
+      );
+      setHasChanges(true);
+    },
+    [copiedWidget],
+  );
 
-  const handleMoveWidget = useCallback((
-    widgetId: string,
-    fromSectionId: string,
-    fromParentId: string | undefined,
-    target: configOps.SectionLocation,
-  ) => {
-    setConfig((prev) => configOps.moveWidget(prev, widgetId, { sectionId: fromSectionId, parentId: fromParentId }, target));
-    setHasChanges(true);
-    toast.success("Widget moved");
-  }, []);
-  const updateWidgetScale = useCallback((widgetId: string, axis: "x" | "y", value: boolean) => {
-    setConfig((prev) => configOps.updateWidgetScale(prev, widgetId, axis, value));
-    setHasChanges(true);
-  }, []);
+  const handleMoveWidget = useCallback(
+    (
+      widgetId: string,
+      fromSectionId: string,
+      fromParentId: string | undefined,
+      target: configOps.SectionLocation,
+    ) => {
+      setConfig((prev) =>
+        configOps.moveWidget(
+          prev,
+          widgetId,
+          { sectionId: fromSectionId, parentId: fromParentId },
+          target,
+        ),
+      );
+      setHasChanges(true);
+      toast.success("Widget moved");
+    },
+    [],
+  );
+  const updateWidgetScale = useCallback(
+    (widgetId: string, axis: "x" | "y", value: boolean) => {
+      setConfig((prev) =>
+        configOps.updateWidgetScale(prev, widgetId, axis, value),
+      );
+      setHasChanges(true);
+    },
+    [],
+  );
 
   // Per-widget grouping override. Mutates the matching chart widget's
   // `groupingOverride` field — saved with the rest of the view config.
@@ -545,7 +717,10 @@ export function DashboardBuilder({
             w.id === widgetId && w.type === "chart"
               ? {
                   ...w,
-                  config: { ...w.config, groupingOverride: overridden ? "off" : "auto" },
+                  config: {
+                    ...w.config,
+                    groupingOverride: overridden ? "off" : "auto",
+                  },
                 }
               : w,
           ),
@@ -607,7 +782,8 @@ export function DashboardBuilder({
           const nextEntry: { maxGroups?: number; groupingOverride?: "off" } = {
             ...prevEntry,
           };
-          if (patch.maxGroups !== undefined) nextEntry.maxGroups = patch.maxGroups;
+          if (patch.maxGroups !== undefined)
+            nextEntry.maxGroups = patch.maxGroups;
           if (patch.groupingOverride !== undefined) {
             if (patch.groupingOverride === null) {
               delete nextEntry.groupingOverride;
@@ -648,18 +824,22 @@ export function DashboardBuilder({
     [],
   );
 
-  const allCollapsed = config.sections.length > 0 && config.sections.every((s) => s.collapsed);
+  const allCollapsed =
+    config.sections.length > 0 && config.sections.every((s) => s.collapsed);
 
   const toggleAllSections = useCallback(() => {
     setConfig((prev) => configOps.toggleAllSections(prev));
   }, []);
 
-  const handleDynamicWidgetCount = useCallback((sectionId: string, count: number) => {
-    setDynamicWidgetCounts((prev) => {
-      if (prev[sectionId] === count) return prev;
-      return { ...prev, [sectionId]: count };
-    });
-  }, []);
+  const handleDynamicWidgetCount = useCallback(
+    (sectionId: string, count: number) => {
+      setDynamicWidgetCounts((prev) => {
+        if (prev[sectionId] === count) return prev;
+        return { ...prev, [sectionId]: count };
+      });
+    },
+    [],
+  );
 
   const reorderSections = useCallback((fromIndex: number, toIndex: number) => {
     setConfig((prev) => configOps.reorderSections(prev, fromIndex, toIndex));
@@ -668,11 +848,12 @@ export function DashboardBuilder({
 
   const sectionIds = useMemo(
     () => filteredSections.map((s) => s.id),
-    [filteredSections]
+    [filteredSections],
   );
 
   const folderIds = useMemo(
-    () => filteredSections.filter((s) => configOps.isFolder(s)).map((s) => s.id),
+    () =>
+      filteredSections.filter((s) => configOps.isFolder(s)).map((s) => s.id),
     [filteredSections],
   );
 
@@ -701,9 +882,18 @@ export function DashboardBuilder({
   const handleDragMoveIntoFolder = useCallback(
     (sectionId: string, fromParentId: string | undefined, folderId: string) => {
       if (fromParentId) {
-        setConfig((prev) => configOps.moveSectionBetweenFolders(prev, sectionId, fromParentId, folderId));
+        setConfig((prev) =>
+          configOps.moveSectionBetweenFolders(
+            prev,
+            sectionId,
+            fromParentId,
+            folderId,
+          ),
+        );
       } else {
-        setConfig((prev) => configOps.moveSectionIntoFolder(prev, sectionId, folderId));
+        setConfig((prev) =>
+          configOps.moveSectionIntoFolder(prev, sectionId, folderId),
+        );
       }
       setHasChanges(true);
       toast.success("Section moved into folder");
@@ -712,8 +902,21 @@ export function DashboardBuilder({
   );
 
   const handleDragMoveOutOfFolder = useCallback(
-    (sectionId: string, fromParentId: string, targetSectionId: string, position: "above" | "below") => {
-      setConfig((prev) => configOps.moveSectionOutOfFolder(prev, sectionId, fromParentId, targetSectionId, position));
+    (
+      sectionId: string,
+      fromParentId: string,
+      targetSectionId: string,
+      position: "above" | "below",
+    ) => {
+      setConfig((prev) =>
+        configOps.moveSectionOutOfFolder(
+          prev,
+          sectionId,
+          fromParentId,
+          targetSectionId,
+          position,
+        ),
+      );
       setHasChanges(true);
       toast.success("Section moved to top level");
     },
@@ -721,8 +924,23 @@ export function DashboardBuilder({
   );
 
   const handleDropNearChild = useCallback(
-    (sectionId: string, fromParentId: string | undefined, targetParentId: string, targetChildId: string, position: "above" | "below") => {
-      setConfig((prev) => configOps.moveSectionIntoFolderAtPosition(prev, sectionId, fromParentId, targetParentId, targetChildId, position));
+    (
+      sectionId: string,
+      fromParentId: string | undefined,
+      targetParentId: string,
+      targetChildId: string,
+      position: "above" | "below",
+    ) => {
+      setConfig((prev) =>
+        configOps.moveSectionIntoFolderAtPosition(
+          prev,
+          sectionId,
+          fromParentId,
+          targetParentId,
+          targetChildId,
+          position,
+        ),
+      );
       setHasChanges(true);
       toast.success("Section moved into folder");
     },
@@ -731,37 +949,51 @@ export function DashboardBuilder({
 
   const handleReorderChildren = useCallback(
     (parentId: string, fromIndex: number, toIndex: number) => {
-      setConfig((prev) => configOps.reorderChildSections(prev, parentId, fromIndex, toIndex));
+      setConfig((prev) =>
+        configOps.reorderChildSections(prev, parentId, fromIndex, toIndex),
+      );
       setHasChanges(true);
     },
     [],
   );
 
-  const { dragState, handleDragStart, handleDragOver, handleDrop, handleDragEnd, handleDragLeave } =
-    useSectionDrag({
-      onReorder: reorderSections,
-      sectionIds,
-      onMoveIntoFolder: handleDragMoveIntoFolder,
-      onMoveOutOfFolder: handleDragMoveOutOfFolder,
-      onDropNearChild: handleDropNearChild,
-      onReorderChildren: handleReorderChildren,
-      folderIds,
-      childToParentMap,
-      folderChildIds,
-    });
+  const {
+    dragState,
+    handleDragStart,
+    handleDragOver,
+    handleDrop,
+    handleDragEnd,
+    handleDragLeave,
+  } = useSectionDrag({
+    onReorder: reorderSections,
+    sectionIds,
+    onMoveIntoFolder: handleDragMoveIntoFolder,
+    onMoveOutOfFolder: handleDragMoveOutOfFolder,
+    onDropNearChild: handleDropNearChild,
+    onReorderChildren: handleReorderChildren,
+    folderIds,
+    childToParentMap,
+    folderChildIds,
+  });
 
   const handleEditWidgetSave = useCallback(
     (widgetData: Omit<Widget, "id">) => {
       if (!editingWidget || !addWidgetSectionId) return;
       setConfig((prev) =>
-        configOps.handleEditWidgetSave(prev, addWidgetSectionId, editingWidget.id, widgetData, addWidgetParentId ?? undefined)
+        configOps.handleEditWidgetSave(
+          prev,
+          addWidgetSectionId,
+          editingWidget.id,
+          widgetData,
+          addWidgetParentId ?? undefined,
+        ),
       );
       setHasChanges(true);
       setAddWidgetSectionId(null);
       setAddWidgetParentId(null);
       setEditingWidget(null);
     },
-    [editingWidget, addWidgetSectionId, addWidgetParentId]
+    [editingWidget, addWidgetSectionId, addWidgetParentId],
   );
 
   // AddWidgetModal "Python Panel" card → swap the config modal for the
@@ -807,9 +1039,10 @@ export function DashboardBuilder({
 
   /** Render a widget grid or dynamic grid for a given section. */
   function renderSectionContent(section: Section, parentId?: string) {
-    const visibleWidgets = isEditing || section.dynamicPattern
-      ? section.widgets
-      : section.widgets.filter((w) => !hiddenWidgetIds.has(w.id));
+    const visibleWidgets =
+      isEditing || section.dynamicPattern
+        ? section.widgets
+        : section.widgets.filter((w) => !hiddenWidgetIds.has(w.id));
 
     if (section.dynamicPattern) {
       return (
@@ -826,7 +1059,9 @@ export function DashboardBuilder({
           groupedMetrics={groupedMetrics}
           selectedRuns={selectedRuns}
           searchState={searchState}
-          onWidgetCountChange={(count) => handleDynamicWidgetCount(section.id, count)}
+          onWidgetCountChange={(count) =>
+            handleDynamicWidgetCount(section.id, count)
+          }
           settingsRunId={settingsRunId}
           workspaceGroupBy={groupBy}
           initialWidgetOverrides={section.dynamicWidgetOverrides}
@@ -843,11 +1078,17 @@ export function DashboardBuilder({
     return (
       <WidgetGrid
         widgets={visibleWidgets}
-        onLayoutChange={(widgets) => updateWidgetsInSection(section.id, widgets, parentId)}
+        onLayoutChange={(widgets) =>
+          updateWidgetsInSection(section.id, widgets, parentId)
+        }
         onEditWidget={(widget) => editWidget(section.id, widget, parentId)}
-        onDeleteWidget={(widgetId) => deleteWidget(section.id, widgetId, parentId)}
+        onDeleteWidget={(widgetId) =>
+          deleteWidget(section.id, widgetId, parentId)
+        }
         onCopyWidget={handleCopyWidget}
-        onMoveWidget={(widgetId, target) => handleMoveWidget(widgetId, section.id, parentId, target)}
+        onMoveWidget={(widgetId, target) =>
+          handleMoveWidget(widgetId, section.id, parentId, target)
+        }
         moveTargets={sectionMoveTargets}
         onFullscreenWidget={setFullscreenWidget}
         onUpdateWidgetScale={updateWidgetScale}
@@ -867,14 +1108,26 @@ export function DashboardBuilder({
             settingsRunId={settingsRunId}
             isGridEditing={isEditing}
             yZoomRange={widgetYZoomRanges[widget.id] ?? null}
-            onYZoomRangeChange={(range) => setWidgetYZoomRanges((prev) => ({ ...prev, [widget.id]: range }))}
+            onYZoomRangeChange={(range) =>
+              setWidgetYZoomRanges((prev) => ({ ...prev, [widget.id]: range }))
+            }
             groupBy={groupBy}
             hiddenRunIds={hiddenRunIds}
-            onUpdateDistributionsEntryViewMode={updateWidgetDistributionsEntryViewMode}
-            onUpdateDistributionsEntryDepthAxis={updateWidgetDistributionsEntryDepthAxis}
-            onUpdateDistributionsEntryBinRange={updateWidgetDistributionsEntryBinRange}
-            onUpdateDistributionsEntryIgnoreOutliers={updateWidgetDistributionsEntryIgnoreOutliers}
-            onUpdateDistributionsEntryStepsOnX={updateWidgetDistributionsEntryStepsOnX}
+            onUpdateDistributionsEntryViewMode={
+              updateWidgetDistributionsEntryViewMode
+            }
+            onUpdateDistributionsEntryDepthAxis={
+              updateWidgetDistributionsEntryDepthAxis
+            }
+            onUpdateDistributionsEntryBinRange={
+              updateWidgetDistributionsEntryBinRange
+            }
+            onUpdateDistributionsEntryIgnoreOutliers={
+              updateWidgetDistributionsEntryIgnoreOutliers
+            }
+            onUpdateDistributionsEntryStepsOnX={
+              updateWidgetDistributionsEntryStepsOnX
+            }
             onFileGroupHistogramsDetected={handleFileGroupHistogramsDetected}
           />
         )}
@@ -906,33 +1159,54 @@ export function DashboardBuilder({
     return targets.length > 0 ? targets : undefined;
   }
 
-  function handleMoveSection(sectionId: string, parentId: string | undefined, targetFolderId: string | null) {
+  function handleMoveSection(
+    sectionId: string,
+    parentId: string | undefined,
+    targetFolderId: string | null,
+  ) {
     if (targetFolderId === "" || targetFolderId === null) {
       // Move out of folder to top level
       if (parentId) {
-        setConfig((prev) => configOps.moveSectionOutOfFolder(prev, sectionId, parentId));
+        setConfig((prev) =>
+          configOps.moveSectionOutOfFolder(prev, sectionId, parentId),
+        );
         setHasChanges(true);
         toast.success("Section moved to top level");
       }
     } else if (parentId) {
       // Move from one folder to another
-      setConfig((prev) => configOps.moveSectionBetweenFolders(prev, sectionId, parentId, targetFolderId));
+      setConfig((prev) =>
+        configOps.moveSectionBetweenFolders(
+          prev,
+          sectionId,
+          parentId,
+          targetFolderId,
+        ),
+      );
       setHasChanges(true);
       toast.success("Section moved");
     } else {
       // Move from top level into a folder
-      setConfig((prev) => configOps.moveSectionIntoFolder(prev, sectionId, targetFolderId));
+      setConfig((prev) =>
+        configOps.moveSectionIntoFolder(prev, sectionId, targetFolderId),
+      );
       setHasChanges(true);
       toast.success("Section moved into folder");
     }
   }
 
   function renderSection(section: Section, parentId?: string) {
-    const visibleWidgets = isEditing || section.dynamicPattern
-      ? section.widgets
-      : section.widgets.filter((w) => !hiddenWidgetIds.has(w.id));
+    const visibleWidgets =
+      isEditing || section.dynamicPattern
+        ? section.widgets
+        : section.widgets.filter((w) => !hiddenWidgetIds.has(w.id));
 
-    if (!isEditing && !section.dynamicPattern && visibleWidgets.length === 0 && section.widgets.length > 0) {
+    if (
+      !isEditing &&
+      !section.dynamicPattern &&
+      visibleWidgets.length === 0 &&
+      section.widgets.length > 0
+    ) {
       return null;
     }
 
@@ -942,36 +1216,63 @@ export function DashboardBuilder({
       <SectionContainer
         key={section.id}
         section={section}
-          visibleWidgetCount={section.dynamicPattern ? undefined : visibleWidgets.length}
-          onUpdate={(s) => parentId ? updateChildSection(parentId, section.id, s) : updateSection(section.id, s)}
-          onToggleCollapse={() => parentId ? toggleChildSectionCollapse(parentId, section.id) : toggleSectionCollapse(section.id)}
-          onDelete={() => parentId ? deleteChildSection(parentId, section.id) : deleteSection(section.id)}
-          onAddWidget={() => {
-            setAddWidgetSectionId(section.id);
-            setAddWidgetParentId(parentId ?? null);
-          }}
-          onPasteWidget={() => pasteWidget(section.id, parentId)}
-          hasCopiedWidget={!!copiedWidget}
-          onMoveToFolder={folderTargets ? (folderId) => handleMoveSection(section.id, parentId, folderId) : undefined}
-          moveFolderTargets={folderTargets}
-          isEditing={isEditing}
-          dynamicWidgetCount={dynamicWidgetCounts[section.id]}
-          onDynamicCountChange={handleDynamicWidgetCount}
-          organizationId={organizationId}
-          projectName={projectName}
-          selectedRunIds={selectedRunIds}
-          drag={isEditing && !isSearching ? {
-            onDragStart: (e) => handleDragStart(section.id, e, parentId),
-            onDragOver: (e) => handleDragOver(section.id, e),
-            onDrop: (e) => handleDrop(section.id, e),
-            onDragEnd: handleDragEnd,
-            onDragLeave: handleDragLeave,
-            isDragging: dragState.draggedId === section.id,
-            isDropTarget: dragState.dragOverId === section.id && dragState.draggedId !== section.id,
-            dropPosition: dragState.dragOverId === section.id ? dragState.dropPosition : null,
-          } : undefined}
-        >
-          {renderSectionContent(section, parentId)}
+        visibleWidgetCount={
+          section.dynamicPattern ? undefined : visibleWidgets.length
+        }
+        onUpdate={(s) =>
+          parentId
+            ? updateChildSection(parentId, section.id, s)
+            : updateSection(section.id, s)
+        }
+        onToggleCollapse={() =>
+          parentId
+            ? toggleChildSectionCollapse(parentId, section.id)
+            : toggleSectionCollapse(section.id)
+        }
+        onDelete={() =>
+          parentId
+            ? deleteChildSection(parentId, section.id)
+            : deleteSection(section.id)
+        }
+        onAddWidget={() => {
+          setAddWidgetSectionId(section.id);
+          setAddWidgetParentId(parentId ?? null);
+        }}
+        onPasteWidget={() => pasteWidget(section.id, parentId)}
+        hasCopiedWidget={!!copiedWidget}
+        onMoveToFolder={
+          folderTargets
+            ? (folderId) => handleMoveSection(section.id, parentId, folderId)
+            : undefined
+        }
+        moveFolderTargets={folderTargets}
+        isEditing={isEditing}
+        dynamicWidgetCount={dynamicWidgetCounts[section.id]}
+        onDynamicCountChange={handleDynamicWidgetCount}
+        organizationId={organizationId}
+        projectName={projectName}
+        selectedRunIds={selectedRunIds}
+        drag={
+          isEditing && !isSearching
+            ? {
+                onDragStart: (e) => handleDragStart(section.id, e, parentId),
+                onDragOver: (e) => handleDragOver(section.id, e),
+                onDrop: (e) => handleDrop(section.id, e),
+                onDragEnd: handleDragEnd,
+                onDragLeave: handleDragLeave,
+                isDragging: dragState.draggedId === section.id,
+                isDropTarget:
+                  dragState.dragOverId === section.id &&
+                  dragState.draggedId !== section.id,
+                dropPosition:
+                  dragState.dragOverId === section.id
+                    ? dragState.dropPosition
+                    : null,
+              }
+            : undefined
+        }
+      >
+        {renderSectionContent(section, parentId)}
       </SectionContainer>
     );
   }
@@ -985,7 +1286,9 @@ export function DashboardBuilder({
         onUpdate={(s) => updateSection(section.id, s)}
         onToggleCollapse={() => toggleSectionCollapse(section.id)}
         onDelete={() => deleteSection(section.id)}
-        onAddChildSection={(name, dp, dpm, dgb, dgp, dgpr) => addChildSection(section.id, name, dp, dpm, dgb, dgp, dgpr)}
+        onAddChildSection={(name, dp, dpm, dgb, dgp, dgpr) =>
+          addChildSection(section.id, name, dp, dpm, dgb, dgp, dgpr)
+        }
         organizationId={organizationId}
         projectName={projectName}
         selectedRunIds={selectedRunIds}
@@ -997,19 +1300,30 @@ export function DashboardBuilder({
         hasCopiedWidget={!!copiedWidget}
         dynamicWidgetCounts={dynamicWidgetCounts}
         isEditing={isEditing}
-        drag={isEditing && !isSearching ? {
-          onDragStart: (e) => handleDragStart(section.id, e),
-          onDragOver: (e) => handleDragOver(section.id, e),
-          onDrop: (e) => handleDrop(section.id, e),
-          onDragEnd: handleDragEnd,
-          onDragLeave: handleDragLeave,
-          isDragging: dragState.draggedId === section.id,
-          isDropTarget: dragState.dragOverId === section.id && dragState.draggedId !== section.id,
-          dropPosition: dragState.dragOverId === section.id ? dragState.dropPosition : null,
-        } : undefined}
+        drag={
+          isEditing && !isSearching
+            ? {
+                onDragStart: (e) => handleDragStart(section.id, e),
+                onDragOver: (e) => handleDragOver(section.id, e),
+                onDrop: (e) => handleDrop(section.id, e),
+                onDragEnd: handleDragEnd,
+                onDragLeave: handleDragLeave,
+                isDragging: dragState.draggedId === section.id,
+                isDropTarget:
+                  dragState.dragOverId === section.id &&
+                  dragState.draggedId !== section.id,
+                dropPosition:
+                  dragState.dragOverId === section.id
+                    ? dragState.dropPosition
+                    : null,
+              }
+            : undefined
+        }
       >
         {/* Child sections inside the folder */}
-        {(section.children ?? []).map((child) => renderSection(child, section.id))}
+        {(section.children ?? []).map((child) =>
+          renderSection(child, section.id),
+        )}
 
         {/* Folder's direct widgets (after sections) */}
         {section.widgets.length > 0 && renderSectionContent(section)}
@@ -1018,7 +1332,9 @@ export function DashboardBuilder({
         {isEditing && (
           <div className="flex items-center justify-center gap-2 py-2">
             <AddSectionButton
-              onAddSection={(name, dp, dpm, dgb, dgp, dgpr) => addChildSection(section.id, name, dp, dpm, dgb, dgp, dgpr)}
+              onAddSection={(name, dp, dpm, dgb, dgp, dgpr) =>
+                addChildSection(section.id, name, dp, dpm, dgb, dgp, dgpr)
+              }
               organizationId={organizationId}
               projectName={projectName}
               selectedRunIds={selectedRunIds}
@@ -1045,9 +1361,15 @@ export function DashboardBuilder({
     <div ref={containerRef} className="flex-1 space-y-4">
       {/* Toolbar */}
       <DashboardToolbar
-        viewName={view.name}
+        viewName={
+          previewVersion !== null
+            ? (previewQuery.data?.name ?? view.name)
+            : view.name
+        }
+        currentVersion={currentVersion}
         hasChanges={hasChanges}
         isEditing={isEditing}
+        isHistoricalPreview={previewVersion !== null}
         isSaving={isSaving}
         sectionCount={config.sections.length}
         allCollapsed={allCollapsed}
@@ -1060,7 +1382,47 @@ export function DashboardBuilder({
         onCancel={handleCancel}
         onSave={handleSave}
         onEnterEditMode={handleEnterEditMode}
+        onOpenHistory={() => setIsHistoryOpen(true)}
       />
+
+      {previewVersion !== null && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-blue-500/30 bg-blue-500/5 px-4 py-3">
+          <div className="flex items-center gap-2 text-sm">
+            {previewQuery.isPending ? (
+              <LoaderCircleIcon className="size-4 animate-spin text-blue-600" />
+            ) : (
+              <HistoryIcon className="size-4 text-blue-600" />
+            )}
+            <div>
+              <span className="font-medium">Viewing v{previewVersion}</span>
+              <span className="ml-2 text-muted-foreground">
+                {previewQuery.isPending
+                  ? "Loading saved dashboard…"
+                  : "Read-only preview"}
+              </span>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={handleReturnToCurrent}>
+              Return to current
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleRestoreVersion}
+              loading={restoreVersionMutation.isPending}
+              disabled={!previewQuery.data || previewQuery.isError}
+            >
+              <ArchiveRestoreIcon className="mr-1.5 size-4" />
+              Restore this version
+            </Button>
+          </div>
+          {previewQuery.isError && (
+            <p className="w-full text-sm text-destructive">
+              Couldn&apos;t load v{previewVersion}. {previewQuery.error.message}
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Stale dashboard warning */}
       {isStale && isEditing && (
@@ -1073,7 +1435,7 @@ export function DashboardBuilder({
       {/* Sections */}
       {filteredSections.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 text-center">
-          <p className="text-muted-foreground mb-4">
+          <p className="mb-4 text-muted-foreground">
             {isSearching
               ? "No widgets match your search."
               : "This dashboard is empty. Start by adding a section or folder."}
@@ -1123,7 +1485,13 @@ export function DashboardBuilder({
             setEditingWidget(null);
           }
         }}
-        onAdd={editingWidget ? handleEditWidgetSave : (w) => addWidgetSectionId && addWidget(addWidgetSectionId, w, addWidgetParentId ?? undefined)}
+        onAdd={
+          editingWidget
+            ? handleEditWidgetSave
+            : (w) =>
+                addWidgetSectionId &&
+                addWidget(addWidgetSectionId, w, addWidgetParentId ?? undefined)
+        }
         organizationId={organizationId}
         projectName={projectName}
         editWidget={editingWidget ?? undefined}
@@ -1162,12 +1530,15 @@ export function DashboardBuilder({
       {(() => {
         if (!fullscreenWidget || fullscreenWidget.type !== "chart") return null;
         const liveWidget =
-          configOps.findWidgetById(config, fullscreenWidget.id) ?? fullscreenWidget;
+          configOps.findWidgetById(config, fullscreenWidget.id) ??
+          fullscreenWidget;
         const liveCfg = liveWidget.config as ChartWidgetConfig;
         return (
           <ChartFullscreenDialog
             open={true}
-            onOpenChange={(open) => { if (!open) setFullscreenWidget(null); }}
+            onOpenChange={(open) => {
+              if (!open) setFullscreenWidget(null);
+            }}
             title={liveCfg.title || getWidgetTitle(liveWidget)}
             logXAxis={liveCfg.xAxisScale === "log"}
             logYAxis={liveCfg.yAxisScale === "log"}
@@ -1183,7 +1554,12 @@ export function DashboardBuilder({
               projectName={projectName}
               settingsRunId={settingsRunId}
               yZoomRange={widgetYZoomRanges[liveWidget.id] ?? null}
-              onYZoomRangeChange={(range) => setWidgetYZoomRanges((prev) => ({ ...prev, [liveWidget.id]: range }))}
+              onYZoomRangeChange={(range) =>
+                setWidgetYZoomRanges((prev) => ({
+                  ...prev,
+                  [liveWidget.id]: range,
+                }))
+              }
               groupBy={groupBy}
               hiddenRunIds={hiddenRunIds}
             />
@@ -1219,6 +1595,15 @@ export function DashboardBuilder({
         onNameChange={setSaveAsNewName}
         onConfirm={confirmSaveAsNew}
         isPending={createMutation.isPending}
+      />
+
+      <DashboardVersionHistory
+        open={isHistoryOpen}
+        onOpenChange={setIsHistoryOpen}
+        organizationId={organizationId}
+        viewId={view.id}
+        selectedVersion={previewVersion}
+        onSelectVersion={handleSelectVersion}
       />
     </div>
   );

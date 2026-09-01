@@ -6,12 +6,15 @@ import {
   SlidersHorizontalIcon,
   ChevronsUpDownIcon,
   ChevronsDownUpIcon,
+  HistoryIcon,
 } from "lucide-react";
 
 interface DashboardToolbarProps {
   viewName: string;
+  currentVersion: number;
   hasChanges: boolean;
   isEditing: boolean;
+  isHistoricalPreview: boolean;
   isSaving: boolean;
   sectionCount: number;
   allCollapsed: boolean;
@@ -27,12 +30,14 @@ interface DashboardToolbarProps {
   onCancel: () => void;
   onSave: () => void;
   onEnterEditMode: () => void;
+  onOpenHistory: () => void;
 }
-
 export function DashboardToolbar({
   viewName,
+  currentVersion,
   hasChanges,
   isEditing,
+  isHistoricalPreview,
   isSaving,
   sectionCount,
   allCollapsed,
@@ -45,23 +50,28 @@ export function DashboardToolbar({
   onCancel,
   onSave,
   onEnterEditMode,
+  onOpenHistory,
 }: DashboardToolbarProps) {
   return (
-    <div className="flex items-center justify-between gap-4 pb-2">
-      <div className="flex items-center gap-2">
-        <h2 className="text-lg font-semibold">{viewName}</h2>
+    <div className="flex flex-wrap items-center justify-between gap-3 pb-2">
+      <div className="flex min-w-0 items-center gap-2">
+        <h2 className="truncate text-lg font-semibold">{viewName}</h2>
         {hasChanges && (
-          <span className="text-xs text-muted-foreground">(unsaved changes)</span>
+          <span className="text-xs text-muted-foreground">
+            (unsaved changes)
+          </span>
         )}
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center justify-end gap-2">
         {sectionCount >= 2 && (
           <Button
             variant="ghost"
             size="sm"
             className="h-8 text-xs text-muted-foreground"
             onClick={onToggleAllSections}
-            title={allCollapsed ? "Expand all sections" : "Collapse all sections"}
+            title={
+              allCollapsed ? "Expand all sections" : "Collapse all sections"
+            }
           >
             {allCollapsed ? (
               <>
@@ -82,7 +92,11 @@ export function DashboardToolbar({
             size="sm"
             className="h-8 text-xs text-muted-foreground"
             onClick={onToggleAllChildSections}
-            title={allChildrenCollapsed ? "Expand all subsections" : "Collapse all subsections"}
+            title={
+              allChildrenCollapsed
+                ? "Expand all subsections"
+                : "Collapse all subsections"
+            }
           >
             {allChildrenCollapsed ? (
               <>
@@ -97,6 +111,18 @@ export function DashboardToolbar({
             )}
           </Button>
         )}
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onOpenHistory}
+          aria-label={`Open dashboard version history, current version v${currentVersion}`}
+        >
+          <HistoryIcon className="size-4 sm:mr-1.5" />
+          <span className="hidden sm:inline">History</span>
+          <span className="ml-1 text-xs text-muted-foreground">
+            v{currentVersion}
+          </span>
+        </Button>
         {isEditing ? (
           <>
             {/* Coarse / Fine toggle */}
@@ -135,11 +161,16 @@ export function DashboardToolbar({
               Save
             </Button>
           </>
-        ) : (
-          <Button variant="outline" size="sm" onClick={onEnterEditMode} data-testid="dashboard-edit-btn">
+        ) : !isHistoricalPreview ? (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onEnterEditMode}
+            data-testid="dashboard-edit-btn"
+          >
             Edit Dashboard
           </Button>
-        )}
+        ) : null}
       </div>
     </div>
   );

@@ -15,6 +15,7 @@ import crypto from 'crypto';
 import { deflateSync } from 'zlib';
 import { nanoid } from 'nanoid';
 import { extractAndUpsertColumnKeys } from '../lib/extract-column-keys';
+import { upsertSeedDashboardView } from '../lib/dashboard-view-service';
 
 const prisma = new PrismaClient();
 
@@ -1874,7 +1875,7 @@ async function main() {
     },
   };
 
-  await prisma.dashboardView.upsert({
+  await upsertSeedDashboardView(prisma, {
     where: {
       organizationId_projectId_name: {
         organizationId: org.id,
@@ -1929,7 +1930,7 @@ async function main() {
     },
   };
 
-  await prisma.dashboardView.upsert({
+  await upsertSeedDashboardView(prisma, {
     where: {
       organizationId_projectId_name: {
         organizationId: org.id,

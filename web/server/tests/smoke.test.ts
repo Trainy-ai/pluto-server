@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { PrismaClient } from '@prisma/client';
 // These two procs decode SQIDs directly rather than going through
 // resolveRunId, so the tests must address runs the way the app does.
 import { sqidEncode } from '../lib/sqid';
@@ -11141,6 +11142,660 @@ describe('SDK API Endpoints (with API Key)', () => {
       expect(body).not.toContain('too_big');
     });
   });
+
+  describe('Test Suite 42: Dashboards HTTP API (/api/dashboards)', () => {
+    const hasApiKey = TEST_API_KEY.length > 0;
+    const authHeaders = { 'Authorization': `Bearer ${TEST_API_KEY}` };
+
+    // Minimal config the MCP builder would produce for one chart section.
+    const chartConfig = (metric: string) => ({
+      version: 1,
+      sections: [
+        {
+          id: `sec-${Date.now()}`,
+          name: 'Training',
+          collapsed: false,
+          widgets: [
+            {
+              id: `w-${Date.now()}`,
+              type: 'chart',
+              config: {
+                metrics: [metric],
+                xAxis: 'step',
+                yAxisScale: 'linear',
+                xAxisScale: 'linear',
+                aggregation: 'LAST',
+                showOriginal: false,
+              },
+              layout: { x: 0, y: 0, w: 6, h: 4 },
+            },
+          ],
+        },
+      ],
+      settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
+    });
+
+    describe('Authentication', () => {
+      it('Test 42.1: list requires an API key', async () => {
+        const res = await makeRequest(
+          `/api/dashboards/list?projectName=${encodeURIComponent(TEST_PROJECT_NAME)}`,
+        );
+        expect(res.status).toBe(401);
+      });
+
+      it('Test 42.2: create requires an API key', async () => {
+        const res = await makeRequest('/api/dashboards/create', {
+          method: 'POST',
+          body: JSON.stringify({ projectName: TEST_PROJECT_NAME, name: 'Nope' }),
+        });
+        expect(res.status).toBe(401);
+      });
+
+      it('Test 42.3: update requires an API key', async () => {
+        const res = await makeRequest('/api/dashboards/update', {
+          method: 'POST',
+          body: JSON.stringify({ viewId: '1', name: 'Nope' }),
+        });
+        expect(res.status).toBe(401);
+      });
+
+      it('Test 42.4: rejects a malformed bearer token', async () => {
+        const res = await makeRequest(
+          `/api/dashboards/list?projectName=${encodeURIComponent(TEST_PROJECT_NAME)}`,
+          { headers: { 'Authorization': 'Bearer not-a-real-key' } },
+        );
+        expect(res.status).toBe(401);
+      });
+
+      it('Test 42.4b: details requires an API key', async () => {
+        const res = await makeRequest('/api/dashboards/details/1');
+        expect(res.status).toBe(401);
+      });
+    });
+
+    describe.skipIf(!hasApiKey)('CRUD with an API key', () => {
+      it('Test 42.5: creates, reads, and lists a dashboard', async () => {
+        const name = `smoke-dashboard-${Date.now()}`;
+
+        const createRes = await makeRequest('/api/dashboards/create', {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            name,
+            config: chartConfig('train/loss'),
+          }),
+        });
+        expect(createRes.status).toBe(200);
+        const created = await createRes.json();
+        expect(created.name).toBe(name);
+        expect(created.sectionCount).toBe(1);
+        expect(created.widgetCount).toBe(1);
+        expect(created.currentVersion).toBe(1);
+        expect(created.url).toContain(`chart=${created.id}`);
+
+        const getRes = await makeRequest(`/api/dashboards/details/${created.id}`, {
+          headers: authHeaders,
+        });
+        expect(getRes.status).toBe(200);
+        const fetched = await getRes.json();
+        expect(fetched.name).toBe(name);
+        expect(fetched.projectName).toBe(TEST_PROJECT_NAME);
+        expect(fetched.currentVersion).toBe(1);
+        expect(fetched.config.sections[0].widgets[0].config.metrics).toEqual(['train/loss']);
+
+        const versionsRes = await makeRequest(
+          `/api/dashboards/details/${created.id}/versions`,
+          { headers: authHeaders },
+        );
+        expect(versionsRes.status).toBe(200);
+        const history = await versionsRes.json();
+        expect(history.currentVersion).toBe(1);
+        expect(history.versions).toHaveLength(1);
+        expect(history.versions[0]).toMatchObject({
+          version: 1,
+          name,
+          source: 'api',
+          isCurrent: true,
+        });
+        expect(history.versions[0].config).toBeUndefined();
+
+        const versionRes = await makeRequest(
+          `/api/dashboards/details/${created.id}/versions/1`,
+          { headers: authHeaders },
+        );
+        expect(versionRes.status).toBe(200);
+        const version = await versionRes.json();
+        expect(version.config.sections[0].widgets[0].config.metrics).toEqual(['train/loss']);
+
+        const listRes = await makeRequest(
+          `/api/dashboards/list?projectName=${encodeURIComponent(TEST_PROJECT_NAME)}`,
+          { headers: authHeaders },
+        );
+        expect(listRes.status).toBe(200);
+        const { dashboards } = await listRes.json();
+        const listed = dashboards.find((d: { id: string }) => d.id === created.id);
+        expect(listed).toBeDefined();
+        expect(listed.widgetCount).toBe(1);
+        // The list view is a summary — it must not carry full widget configs.
+        expect(listed.config).toBeUndefined();
+        expect(listed.sections[0].name).toBe('Training');
+      });
+
+      it('Test 42.6: rejects racing duplicate dashboard names with 409', async () => {
+        const name = `smoke-dup-${Date.now()}`;
+        const body = JSON.stringify({
+          projectName: TEST_PROJECT_NAME,
+          name,
+          config: chartConfig('train/loss'),
+        });
+
+        const responses = await Promise.all([
+          makeRequest('/api/dashboards/create', { method: 'POST', headers: authHeaders, body }),
+          makeRequest('/api/dashboards/create', { method: 'POST', headers: authHeaders, body }),
+        ]);
+        expect(responses.map((response) => response.status).sort()).toEqual([200, 409]);
+        const conflict = responses.find((response) => response.status === 409);
+        expect((await conflict!.json()).error).toContain('already exists');
+      });
+
+      it('Test 42.7: rejects an invalid widget config with 400', async () => {
+        const res = await makeRequest('/api/dashboards/create', {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            name: `smoke-invalid-${Date.now()}`,
+            config: {
+              version: 1,
+              sections: [
+                {
+                  id: 's1',
+                  name: 'Bad',
+                  collapsed: false,
+                  widgets: [
+                    // A scatter widget without xMetric/yMetric must not be stored.
+                    { id: 'w1', type: 'scatter', config: {}, layout: { x: 0, y: 0, w: 6, h: 4 } },
+                  ],
+                },
+              ],
+              settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
+            },
+          }),
+        });
+        expect(res.status).toBe(400);
+      });
+
+      it('Test 42.8: 404s for an unknown project', async () => {
+        const res = await makeRequest(
+          `/api/dashboards/list?projectName=project-that-does-not-exist-${Date.now()}`,
+          { headers: authHeaders },
+        );
+        expect(res.status).toBe(404);
+      });
+
+      it('Test 42.9: 404s for an unknown or non-numeric dashboard id', async () => {
+        const missing = await makeRequest('/api/dashboards/details/999999999', {
+          headers: authHeaders,
+        });
+        expect(missing.status).toBe(404);
+
+        // A non-numeric id is a client error, not a 500 from BigInt().
+        const malformed = await makeRequest('/api/dashboards/details/not-a-number', {
+          headers: authHeaders,
+        });
+        expect(malformed.status).toBe(404);
+      });
+
+      it('Test 42.10: updates name and config, and reports new counts', async () => {
+        const createRes = await makeRequest('/api/dashboards/create', {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            name: `smoke-update-${Date.now()}`,
+            config: chartConfig('train/loss'),
+          }),
+        });
+        expect(createRes.status).toBe(200);
+        const created = await createRes.json();
+
+        const renamed = `smoke-renamed-${Date.now()}`;
+        const twoSections = chartConfig('val/loss');
+        twoSections.sections.push({
+          id: 'sec-2',
+          name: 'Validation',
+          collapsed: true,
+          widgets: [],
+        });
+
+        const updateRes = await makeRequest('/api/dashboards/update', {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({ viewId: created.id, name: renamed, config: twoSections }),
+        });
+        expect(updateRes.status).toBe(200);
+        const updated = await updateRes.json();
+        expect(updated.name).toBe(renamed);
+        expect(updated.currentVersion).toBe(2);
+        expect(updated.sectionCount).toBe(2);
+        expect(updated.widgetCount).toBe(1);
+
+        const getRes = await makeRequest(`/api/dashboards/details/${created.id}`, {
+          headers: authHeaders,
+        });
+        const fetched = await getRes.json();
+        expect(fetched.config.sections[0].widgets[0].config.metrics).toEqual(['val/loss']);
+        expect(fetched.config.sections[1].name).toBe('Validation');
+      });
+
+      it('Test 42.11: a name-only update preserves the stored config', async () => {
+        // Regression: reporting counts from the request body would show 0
+        // widgets (and, worse, could suggest the config was cleared).
+        const createRes = await makeRequest('/api/dashboards/create', {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            name: `smoke-nameonly-${Date.now()}`,
+            config: chartConfig('train/loss'),
+          }),
+        });
+        const created = await createRes.json();
+
+        const updateRes = await makeRequest('/api/dashboards/update', {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({ viewId: created.id, name: `smoke-renamed2-${Date.now()}` }),
+        });
+        expect(updateRes.status).toBe(200);
+        expect((await updateRes.json()).widgetCount).toBe(1);
+
+        const fetched = await (
+          await makeRequest(`/api/dashboards/details/${created.id}`, { headers: authHeaders })
+        ).json();
+        expect(fetched.config.sections[0].widgets).toHaveLength(1);
+      });
+
+      it('Test 42.11b: a valid full replacement repairs a legacy-invalid config', async () => {
+        const createRes = await makeRequest('/api/dashboards/create', {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            name: `smoke-repair-${Date.now()}`,
+            config: chartConfig('legacy/original'),
+          }),
+        });
+        expect(createRes.status).toBe(200);
+        const created = await createRes.json();
+
+        const prisma = new PrismaClient();
+        try {
+          await prisma.dashboardView.update({
+            where: { id: BigInt(created.id) },
+            data: { config: { version: 0, sections: 'invalid' } },
+          });
+        } finally {
+          await prisma.$disconnect();
+        }
+
+        const repairRes = await makeRequest('/api/dashboards/update', {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({
+            viewId: created.id,
+            config: chartConfig('legacy/repaired'),
+          }),
+        });
+        expect(repairRes.status).toBe(200);
+        const repaired = await repairRes.json();
+        expect(repaired.currentVersion).toBe(2);
+
+        const fetched = await (
+          await makeRequest(`/api/dashboards/details/${created.id}`, { headers: authHeaders })
+        ).json();
+        expect(fetched.config.sections[0].widgets[0].config.metrics).toEqual([
+          'legacy/repaired',
+        ]);
+      });
+
+      it('Test 42.12: expectedUpdatedAt rejects a stale write with 409', async () => {
+        const createRes = await makeRequest('/api/dashboards/create', {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            name: `smoke-concurrency-${Date.now()}`,
+            config: chartConfig('train/loss'),
+          }),
+        });
+        const created = await createRes.json();
+
+        // Someone else edits first.
+        const firstWrite = await makeRequest('/api/dashboards/update', {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({ viewId: created.id, config: chartConfig('other/metric') }),
+        });
+        expect(firstWrite.status).toBe(200);
+
+        // Our write still carries the pre-edit timestamp.
+        const staleWrite = await makeRequest('/api/dashboards/update', {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({
+            viewId: created.id,
+            config: chartConfig('stale/metric'),
+            expectedUpdatedAt: created.updatedAt,
+          }),
+        });
+        expect(staleWrite.status).toBe(409);
+
+        // The concurrent editor's write survived.
+        const fetched = await (
+          await makeRequest(`/api/dashboards/details/${created.id}`, { headers: authHeaders })
+        ).json();
+        expect(fetched.config.sections[0].widgets[0].config.metrics).toEqual(['other/metric']);
+      });
+
+      it('Test 42.12b: concurrent writes with one timestamp cannot both win', async () => {
+        const createRes = await makeRequest('/api/dashboards/create', {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            name: `smoke-race-${Date.now()}`,
+            config: chartConfig('train/loss'),
+          }),
+        });
+        const created = await createRes.json();
+
+        const responses = await Promise.all([
+          makeRequest('/api/dashboards/update', {
+            method: 'POST',
+            headers: authHeaders,
+            body: JSON.stringify({
+              viewId: created.id,
+              config: chartConfig('race/one'),
+              expectedUpdatedAt: created.updatedAt,
+            }),
+          }),
+          makeRequest('/api/dashboards/update', {
+            method: 'POST',
+            headers: authHeaders,
+            body: JSON.stringify({
+              viewId: created.id,
+              config: chartConfig('race/two'),
+              expectedUpdatedAt: created.updatedAt,
+            }),
+          }),
+        ]);
+
+        expect(responses.map((response) => response.status).sort()).toEqual([200, 409]);
+        const fetched = await (
+          await makeRequest(`/api/dashboards/details/${created.id}`, { headers: authHeaders })
+        ).json();
+        expect(['race/one', 'race/two']).toContain(
+          fetched.config.sections[0].widgets[0].config.metrics[0],
+        );
+      });
+
+      it('Test 42.13: 404s when updating a dashboard in another org', async () => {
+        const res = await makeRequest('/api/dashboards/update', {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({ viewId: '999999999', name: 'nope' }),
+        });
+        expect(res.status).toBe(404);
+      });
+
+      it('Test 42.13b: restores history as a new head and rejects a stale restore', async () => {
+        const originalName = `smoke-restore-${Date.now()}`;
+        const createRes = await makeRequest('/api/dashboards/create', {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            name: originalName,
+            config: chartConfig('original/metric'),
+          }),
+        });
+        expect(createRes.status).toBe(200);
+        const created = await createRes.json();
+
+        const editedName = `${originalName}-edited`;
+        const updateRes = await makeRequest('/api/dashboards/update', {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({
+            viewId: created.id,
+            name: editedName,
+            config: chartConfig('edited/metric'),
+            expectedUpdatedAt: created.updatedAt,
+          }),
+        });
+        expect(updateRes.status).toBe(200);
+        const updated = await updateRes.json();
+        expect(updated.currentVersion).toBe(2);
+
+        const historicalRes = await makeRequest(
+          `/api/dashboards/details/${created.id}/versions/1`,
+          { headers: authHeaders },
+        );
+        expect(historicalRes.status).toBe(200);
+        const historical = await historicalRes.json();
+        expect(historical.name).toBe(originalName);
+        expect(historical.config.sections[0].widgets[0].config.metrics).toEqual([
+          'original/metric',
+        ]);
+
+        const restoreRes = await makeRequest('/api/dashboards/restore', {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({
+            viewId: created.id,
+            version: 1,
+            expectedUpdatedAt: updated.updatedAt,
+          }),
+        });
+        expect(restoreRes.status).toBe(200);
+        const restored = await restoreRes.json();
+        expect(restored.name).toBe(originalName);
+        expect(restored.currentVersion).toBe(3);
+        expect(restored.restoredFromVersion).toBe(1);
+        expect(restored.config.sections[0].widgets[0].config.metrics).toEqual([
+          'original/metric',
+        ]);
+
+        const historyRes = await makeRequest(
+          `/api/dashboards/details/${created.id}/versions`,
+          { headers: authHeaders },
+        );
+        const history = await historyRes.json();
+        expect(history.versions.map((entry: { version: number }) => entry.version)).toEqual([
+          3, 2, 1,
+        ]);
+        expect(history.versions[0]).toMatchObject({
+          name: originalName,
+          source: 'restore',
+          restoredFromVersion: 1,
+          isCurrent: true,
+        });
+
+        const staleRestore = await makeRequest('/api/dashboards/restore', {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({
+            viewId: created.id,
+            version: 2,
+            expectedUpdatedAt: updated.updatedAt,
+          }),
+        });
+        expect(staleRestore.status).toBe(409);
+
+        const historyAfterStale = await (
+          await makeRequest(`/api/dashboards/details/${created.id}/versions`, {
+            headers: authHeaders,
+          })
+        ).json();
+        expect(historyAfterStale.versions).toHaveLength(3);
+      });
+
+      it('Test 42.13c: an isDefault-only update does not append history', async () => {
+        const createRes = await makeRequest('/api/dashboards/create', {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            name: `smoke-default-version-${Date.now()}`,
+            config: chartConfig('default/metric'),
+          }),
+        });
+        expect(createRes.status).toBe(200);
+        const created = await createRes.json();
+
+        const updateRes = await makeRequest('/api/dashboards/update', {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({ viewId: created.id, isDefault: true }),
+        });
+        expect(updateRes.status).toBe(200);
+        const updated = await updateRes.json();
+        expect(updated.isDefault).toBe(true);
+        expect(updated.currentVersion).toBe(1);
+
+        const history = await (
+          await makeRequest(`/api/dashboards/details/${created.id}/versions`, {
+            headers: authHeaders,
+          })
+        ).json();
+        expect(history.versions).toHaveLength(1);
+      });
+
+      it('Test 42.13d: simultaneous restores append exactly one new head', async () => {
+        const createRes = await makeRequest('/api/dashboards/create', {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            name: `smoke-restore-race-${Date.now()}`,
+            config: chartConfig('restore/original'),
+          }),
+        });
+        const created = await createRes.json();
+        const updateRes = await makeRequest('/api/dashboards/update', {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({
+            viewId: created.id,
+            config: chartConfig('restore/edited'),
+            expectedUpdatedAt: created.updatedAt,
+          }),
+        });
+        const updated = await updateRes.json();
+
+        const restoreBody = JSON.stringify({
+          viewId: created.id,
+          version: 1,
+          expectedUpdatedAt: updated.updatedAt,
+        });
+        const responses = await Promise.all([
+          makeRequest('/api/dashboards/restore', {
+            method: 'POST',
+            headers: authHeaders,
+            body: restoreBody,
+          }),
+          makeRequest('/api/dashboards/restore', {
+            method: 'POST',
+            headers: authHeaders,
+            body: restoreBody,
+          }),
+        ]);
+        expect(responses.map((response) => response.status).sort()).toEqual([200, 409]);
+
+        const history = await (
+          await makeRequest(`/api/dashboards/details/${created.id}/versions`, {
+            headers: authHeaders,
+          })
+        ).json();
+        expect(history.versions.map((entry: { version: number }) => entry.version)).toEqual([
+          3, 2, 1,
+        ]);
+        expect(
+          history.versions.filter((entry: { source: string }) => entry.source === 'restore'),
+        ).toHaveLength(1);
+      });
+
+      it('Test 42.13e: paginates version history without overlap', async () => {
+        const createRes = await makeRequest('/api/dashboards/create', {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({
+            projectName: TEST_PROJECT_NAME,
+            name: `smoke-version-pages-${Date.now()}`,
+            config: chartConfig('page/one'),
+          }),
+        });
+        const created = await createRes.json();
+        const second = await (
+          await makeRequest('/api/dashboards/update', {
+            method: 'POST',
+            headers: authHeaders,
+            body: JSON.stringify({ viewId: created.id, config: chartConfig('page/two') }),
+          })
+        ).json();
+        await makeRequest('/api/dashboards/update', {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({
+            viewId: created.id,
+            config: chartConfig('page/three'),
+            expectedUpdatedAt: second.updatedAt,
+          }),
+        });
+
+        const firstPage = await (
+          await makeRequest(`/api/dashboards/details/${created.id}/versions?limit=2`, {
+            headers: authHeaders,
+          })
+        ).json();
+        expect(firstPage.versions.map((entry: { version: number }) => entry.version)).toEqual([
+          3, 2,
+        ]);
+        expect(firstPage.nextCursor).toBe(2);
+
+        const secondPage = await (
+          await makeRequest(
+            `/api/dashboards/details/${created.id}/versions?limit=2&beforeVersion=${firstPage.nextCursor}`,
+            { headers: authHeaders },
+          )
+        ).json();
+        expect(secondPage.versions.map((entry: { version: number }) => entry.version)).toEqual([
+          1,
+        ]);
+        expect(secondPage.nextCursor).toBeNull();
+      });
+
+      it('Test 42.14: appears in the OpenAPI spec under the Dashboards tag', async () => {
+        const res = await makeRequest('/api/openapi.json');
+        expect(res.status).toBe(200);
+        const spec = await res.json();
+
+        expect(spec.paths['/api/dashboards/list']).toBeDefined();
+        expect(spec.paths['/api/dashboards/details/{viewId}']).toBeDefined();
+        expect(spec.paths['/api/dashboards/details/{viewId}/versions']).toBeDefined();
+        expect(spec.paths['/api/dashboards/details/{viewId}/versions/{version}']).toBeDefined();
+        expect(spec.paths['/api/dashboards/create']).toBeDefined();
+        expect(spec.paths['/api/dashboards/update']).toBeDefined();
+        expect(spec.paths['/api/dashboards/restore']).toBeDefined();
+        expect(spec.paths['/api/dashboards/create'].post.tags).toContain('Dashboards');
+        expect(spec.paths['/api/dashboards/create'].post.responses['400']).toBeDefined();
+        expect(spec.paths['/api/dashboards/update'].post.responses['400']).toBeDefined();
+      });
+    });
+  });
+
   // ---------------------------------------------------------------------
   // Section 41: runs.runIdsByLogName
   //

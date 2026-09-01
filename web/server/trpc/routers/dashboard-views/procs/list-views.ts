@@ -6,7 +6,7 @@ export const listViewsProcedure = protectedOrgProcedure
   .input(
     z.object({
       projectName: z.string(),
-    })
+    }),
   )
   .query(async ({ ctx, input }) => {
     const { organizationId, projectName } = input;
@@ -31,10 +31,7 @@ export const listViewsProcedure = protectedOrgProcedure
         organizationId,
         projectId: project.id,
       },
-      orderBy: [
-        { isDefault: "desc" },
-        { updatedAt: "desc" },
-      ],
+      orderBy: [{ isDefault: "desc" }, { updatedAt: "desc" }],
       include: {
         createdBy: {
           select: {
@@ -51,6 +48,7 @@ export const listViewsProcedure = protectedOrgProcedure
         id: view.id.toString(),
         name: view.name,
         isDefault: view.isDefault,
+        currentVersion: view.currentVersion,
         config: DashboardViewConfigSchema.parse(view.config),
         createdAt: view.createdAt,
         updatedAt: view.updatedAt,

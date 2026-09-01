@@ -17,6 +17,7 @@ import zlib from 'zlib';
 import { createClient, type ClickHouseClient } from '@clickhouse/client-web';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { extractAndUpsertColumnKeys } from '../lib/extract-column-keys';
+import { upsertSeedDashboardView } from '../lib/dashboard-view-service';
 
 // Bulk run seeding configuration for server-side search testing
 // Frontend loads 150 runs at a time, so we need >150 to expose pagination issues
@@ -3130,7 +3131,7 @@ async function setupTestData(): Promise<TestData> {
     ],
     settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
   };
-  await prisma.dashboardView.upsert({
+  await upsertSeedDashboardView(prisma, {
     where: {
       organizationId_projectId_name: {
         organizationId: org.id,
@@ -4325,7 +4326,7 @@ async function setupTestData(): Promise<TestData> {
     settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
   };
 
-  await prisma.dashboardView.upsert({
+  await upsertSeedDashboardView(prisma, {
     where: {
       organizationId_projectId_name: {
         organizationId: org.id,
@@ -6028,7 +6029,7 @@ async function setupTestData(): Promise<TestData> {
     },
   };
 
-  await prisma.dashboardView.upsert({
+  await upsertSeedDashboardView(prisma, {
     where: {
       organizationId_projectId_name: {
         organizationId: org.id,
@@ -6128,7 +6129,7 @@ async function setupTestData(): Promise<TestData> {
     },
   };
 
-  await prisma.dashboardView.upsert({
+  await upsertSeedDashboardView(prisma, {
     where: {
       organizationId_projectId_name: {
         organizationId: org.id,
@@ -6261,7 +6262,7 @@ async function setupTestData(): Promise<TestData> {
     },
   };
 
-  await prisma.dashboardView.upsert({
+  await upsertSeedDashboardView(prisma, {
     where: {
       organizationId_projectId_name: {
         organizationId: org.id,
@@ -6303,7 +6304,7 @@ async function setupTestData(): Promise<TestData> {
     },
   };
 
-  await prisma.dashboardView.upsert({
+  await upsertSeedDashboardView(prisma, {
     where: {
       organizationId_projectId_name: {
         organizationId: org.id,
@@ -6341,7 +6342,7 @@ async function setupTestData(): Promise<TestData> {
     ],
     settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
   };
-  await prisma.dashboardView.upsert({
+  await upsertSeedDashboardView(prisma, {
     where: {
       organizationId_projectId_name: {
         organizationId: org.id,
@@ -6380,7 +6381,7 @@ async function setupTestData(): Promise<TestData> {
     ],
     settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
   };
-  await prisma.dashboardView.upsert({
+  await upsertSeedDashboardView(prisma, {
     where: {
       organizationId_projectId_name: {
         organizationId: org.id,
@@ -6420,7 +6421,7 @@ async function setupTestData(): Promise<TestData> {
     ],
     settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
   };
-  await prisma.dashboardView.upsert({
+  await upsertSeedDashboardView(prisma, {
     where: {
       organizationId_projectId_name: {
         organizationId: org.id,
@@ -6474,7 +6475,7 @@ async function setupTestData(): Promise<TestData> {
     },
   };
 
-  await prisma.dashboardView.upsert({
+  await upsertSeedDashboardView(prisma, {
     where: {
       organizationId_projectId_name: {
         organizationId: org.id,
@@ -6745,7 +6746,7 @@ async function setupTestData(): Promise<TestData> {
     },
   };
 
-  await prisma.dashboardView.upsert({
+  await upsertSeedDashboardView(prisma, {
     where: {
       organizationId_projectId_name: {
         organizationId: org.id,
@@ -6868,7 +6869,7 @@ async function setupTestData(): Promise<TestData> {
     settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
   };
 
-  await prisma.dashboardView.upsert({
+  await upsertSeedDashboardView(prisma, {
     where: {
       organizationId_projectId_name: {
         organizationId: org.id,
@@ -6929,7 +6930,7 @@ async function setupTestData(): Promise<TestData> {
     settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
   };
 
-  await prisma.dashboardView.upsert({
+  await upsertSeedDashboardView(prisma, {
     where: {
       organizationId_projectId_name: {
         organizationId: org.id,
@@ -7001,7 +7002,7 @@ async function setupTestData(): Promise<TestData> {
     settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
   };
 
-  await prisma.dashboardView.upsert({
+  await upsertSeedDashboardView(prisma, {
     where: {
       organizationId_projectId_name: {
         organizationId: org.id,
@@ -7080,7 +7081,7 @@ async function setupTestData(): Promise<TestData> {
     settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
   };
 
-  await prisma.dashboardView.upsert({
+  await upsertSeedDashboardView(prisma, {
     where: {
       organizationId_projectId_name: {
         organizationId: org.id,
@@ -7174,7 +7175,7 @@ async function setupTestData(): Promise<TestData> {
 
   for (const { name, sections } of multiIndexDashboards) {
     const config = { version: 1, sections, settings: gridSettings };
-    await prisma.dashboardView.upsert({
+    await upsertSeedDashboardView(prisma, {
       where: {
         organizationId_projectId_name: {
           organizationId: org.id,
@@ -7526,7 +7527,7 @@ async function setupTestData(): Promise<TestData> {
     settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
   };
 
-  await prisma.dashboardView.upsert({
+  await upsertSeedDashboardView(prisma, {
     where: {
       organizationId_projectId_name: {
         organizationId: org.id,
@@ -7629,7 +7630,7 @@ async function setupTestData(): Promise<TestData> {
     settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
   };
 
-  await prisma.dashboardView.upsert({
+  await upsertSeedDashboardView(prisma, {
     where: {
       organizationId_projectId_name: {
         organizationId: org.id,
@@ -7993,7 +7994,7 @@ async function setupTestData(): Promise<TestData> {
     settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
   };
 
-  await prisma.dashboardView.upsert({
+  await upsertSeedDashboardView(prisma, {
     where: {
       organizationId_projectId_name: {
         organizationId: org.id,
@@ -8056,7 +8057,7 @@ async function setupTestData(): Promise<TestData> {
     settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
   };
 
-  await prisma.dashboardView.upsert({
+  await upsertSeedDashboardView(prisma, {
     where: {
       organizationId_projectId_name: {
         organizationId: org.id,
