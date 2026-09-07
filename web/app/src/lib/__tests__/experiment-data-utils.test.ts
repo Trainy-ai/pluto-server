@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
+  collapseLineageRows,
   computeExperimentSegments,
   filterDataToRange,
+  mapRunsToLineageTips,
   type RunSegmentInfo,
   type StepRange,
 } from "../experiment-data-utils";
@@ -173,5 +175,83 @@ describe("filterDataToRange", () => {
     const range: StepRange = { runId: "x", minStep: 300, maxStep: 300 };
     const filtered = filterDataToRange(data, range);
     expect(filtered.map((d) => d.step)).toEqual([300]);
+  });
+});
+
+describe("collapseLineageRows", () => {
+  const r = (id: string, name: string, forkedFromRunId: string | null = null) => ({
+    id,
+    name,
+    forkedFromRunId,
+  });
+
+  it("hides a run that has a continuation in the loaded set", () => {
+    const rows = collapseLineageRows([
+      r("b", "restart", "a"),
+      r("a", "crashed"),
+    ]);
+    expect(rows.map((x) => x.id)).toEqual(["b"]);
+  });
+
+  it("keeps unrelated runs and still dedupes by name (legacy behavior)", () => {
+    const rows = collapseLineageRows([
+      r("x", "exp-1"),
+      r("y", "exp-1"),
+      r("z", "exp-2"),
+    ]);
+    expect(rows.map((x) => x.id)).toEqual(["x", "z"]);
+  });
+
+  it("collapses a 3-run chain to its tip", () => {
+    const rows = collapseLineageRows([
+      r("c", "restart-2", "b"),
+      r("b", "restart-1", "a"),
+      r("a", "crashed"),
+    ]);
+    expect(rows.map((x) => x.id)).toEqual(["c"]);
+  });
+
+  it("keeps a parent whose child is not in the loaded set", () => {
+    const rows = collapseLineageRows([r("a", "crashed"), r("b", "other", "zz")]);
+    expect(rows.map((x) => x.id)).toEqual(["a", "b"]);
+  });
+});
+
+describe("mapRunsToLineageTips", () => {
+  it("maps every member of a merged chain to the tip, and standalone runs to themselves", () => {
+    const tips = mapRunsToLineageTips([
+      { id: "parent", forkedFromRunId: null },
+      { id: "restart", forkedFromRunId: "parent" },
+      { id: "other", forkedFromRunId: null },
+    ]);
+    expect(tips.get("parent")).toBe("restart");
+    expect(tips.get("restart")).toBe("restart");
+    expect(tips.get("other")).toBe("other");
+  });
+
+  it("walks multi-hop chains to the final tip", () => {
+    const tips = mapRunsToLineageTips([
+      { id: "a", forkedFromRunId: null },
+      { id: "b", forkedFromRunId: "a" },
+      { id: "c", forkedFromRunId: "b" },
+    ]);
+    expect(tips.get("a")).toBe("c");
+    expect(tips.get("b")).toBe("c");
+    expect(tips.get("c")).toBe("c");
+  });
+
+  it("ignores links to runs outside the given set (matches collapseLineageRows)", () => {
+    const tips = mapRunsToLineageTips([
+      { id: "child", forkedFromRunId: "unloaded-parent" },
+    ]);
+    expect(tips.get("child")).toBe("child");
+  });
+
+  it("terminates on a cyclic lineage instead of looping", () => {
+    const tips = mapRunsToLineageTips([
+      { id: "a", forkedFromRunId: "b" },
+      { id: "b", forkedFromRunId: "a" },
+    ]);
+    expect(tips.size).toBe(2);
   });
 });

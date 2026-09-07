@@ -9,6 +9,7 @@ import {
 import type { Run } from "../../../~queries/list-runs";
 import type { ColumnConfig } from "../../../~hooks/use-column-config";
 import type { RunFilter } from "@/lib/run-filters";
+import { collapseLineageRows } from "@/lib/experiment-data-utils";
 import { computeRowSelection, mergeSelectedRuns, ensureSelectedRunsIncluded, intersectWithServerFilter, partitionMatchingFirst } from "../selection-utils";
 import { columnTableId } from "../column-table-id";
 import { computeColumnOrder } from "../lib/pinned-columns";
@@ -296,21 +297,16 @@ export function useDataTableState({
     return sorted;
   }, [runs, showOnlySelected, searchQuery, isPinningActive, selectedRunsWithColors, sorting, customColumns, filters, serverFilteredRunIds]);
 
-  // In "experiments" mode, collapse same-name runs into one row per experiment.
-  // Keeps the first occurrence (most recent) as the representative.
+  // In "experiments" mode, collapse each fork/merge lineage to its tip run,
+  // then dedupe same-name runs (legacy resumed-run behavior).
   const finalDisplayedRuns = useMemo(() => {
     if (!isExperiments) return displayedRuns;
-    const seen = new Set<string>();
-    return displayedRuns.filter((r) => {
-      if (seen.has(r.name)) return false;
-      seen.add(r.name);
-      return true;
-    });
+    return collapseLineageRows(displayedRuns);
   }, [displayedRuns, isExperiments]);
 
-  // Total unique experiment count across all loaded runs
+  // Total experiment count across all loaded runs
   const totalExperimentCount = useMemo(() => {
-    return new Set(runs.map((r) => r.name)).size;
+    return collapseLineageRows(runs).length;
   }, [runs]);
 
 

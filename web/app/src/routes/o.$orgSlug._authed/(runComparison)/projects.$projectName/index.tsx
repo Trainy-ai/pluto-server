@@ -30,6 +30,7 @@ import { useRunCount } from "./~queries/run-count";
 import { useRunFilters } from "./~hooks/use-run-filters";
 import { SYSTEM_FILTERABLE_FIELDS, type FilterableField, type FieldFilterParam, type MetricFilterParam, type SystemFilterParam, type SortParam } from "@/lib/run-filters";
 import { generateUuid } from "@/lib/uuid";
+import { mapRunsToLineageTips } from "@/lib/experiment-data-utils";
 import { buildRefreshQueryFilters } from "./~lib/build-refresh-queries";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -1365,14 +1366,33 @@ function RouteComponent() {
       return result;
     }
     if (listMode !== "experiments") return selectedRunsWithColors;
+    // A lineage collapses to one row showing the TIP's color chip, so every
+    // member of the chain takes the tip's color — otherwise a merged pair
+    // renders as a mid-curve color switch and reads as two runs. Name-based
+    // unification (legacy resumed-run experiments) applies on top.
+    const entries = Object.entries(selectedRunsWithColors);
+    const tipOf = mapRunsToLineageTips(
+      entries.map(([id, entry]) => ({
+        id,
+        forkedFromRunId:
+          (entry.run as { forkedFromRunId?: unknown }).forkedFromRunId != null
+            ? String((entry.run as { forkedFromRunId?: unknown }).forkedFromRunId)
+            : null,
+      })),
+    );
     const nameToColor = new Map<string, string>();
     const result: typeof selectedRunsWithColors = {};
-    for (const [id, entry] of Object.entries(selectedRunsWithColors)) {
+    for (const [id, entry] of entries) {
+      const tipId = tipOf.get(id) ?? id;
+      const lineageColor = selectedRunsWithColors[tipId]?.color ?? entry.color;
       const name = entry.run.name;
       if (!nameToColor.has(name)) {
-        nameToColor.set(name, entry.color);
+        nameToColor.set(name, lineageColor);
       }
-      result[id] = { ...entry, color: nameToColor.get(name)! };
+      result[id] = {
+        ...entry,
+        color: tipId !== id ? lineageColor : nameToColor.get(name)!,
+      };
     }
     return result;
   }, [selectedRunsWithColors, listMode, groupBy]);
@@ -1385,19 +1405,39 @@ function RouteComponent() {
     return metrics;
   }, [effectiveRunsWithColors, logsByRunId, organizationId, projectName]);
 
-  // Build experiment run ID lookup: runId → all runIds with the same name.
-  // Used by chart sync context for experiment-level group highlighting.
+  // Build experiment run ID lookup: runId → all runIds in the same experiment
+  // (same name, or same fork/merge lineage — a collapsed lineage is one
+  // experiment). Used by chart sync context for group highlighting.
   const experimentRunIdsMap = useMemo(() => {
     if (listMode !== "experiments") return null;
-    const nameToIds = new Map<string, string[]>();
-    for (const [id, { run }] of Object.entries(selectedRunsWithColors)) {
-      const ids = nameToIds.get(run.name) ?? [];
+    const entries = Object.entries(selectedRunsWithColors);
+    const tipOf = mapRunsToLineageTips(
+      entries.map(([id, entry]) => ({
+        id,
+        forkedFromRunId:
+          (entry.run as { forkedFromRunId?: unknown }).forkedFromRunId != null
+            ? String((entry.run as { forkedFromRunId?: unknown }).forkedFromRunId)
+            : null,
+      })),
+    );
+    // Group by name first (legacy), then merge name groups that share a
+    // lineage tip so a merged pair with distinct names is one group.
+    const keyToIds = new Map<string, string[]>();
+    const groupKeyOf = new Map<string, string>(); // name or tipId → canonical key
+    for (const [id, { run }] of entries) {
+      const tipId = tipOf.get(id) ?? id;
+      const nameKey = `name:${run.name}`;
+      const tipKey = `tip:${tipId}`;
+      const key = groupKeyOf.get(nameKey) ?? groupKeyOf.get(tipKey) ?? nameKey;
+      groupKeyOf.set(nameKey, key);
+      groupKeyOf.set(tipKey, key);
+      const ids = keyToIds.get(key) ?? [];
       ids.push(id);
-      nameToIds.set(run.name, ids);
+      keyToIds.set(key, ids);
     }
     // Build reverse map: runId → all runIds in same experiment
     const map = new Map<string, string[]>();
-    for (const ids of nameToIds.values()) {
+    for (const ids of keyToIds.values()) {
       for (const id of ids) {
         map.set(id, ids);
       }
