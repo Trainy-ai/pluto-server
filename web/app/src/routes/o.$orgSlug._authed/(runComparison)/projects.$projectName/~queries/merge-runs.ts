@@ -3,6 +3,9 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { invalidateRunsQueries } from "@/lib/hooks/use-optimistic-list-update";
 
+// No optimistic update: unlike delete, merge doesn't remove rows from the
+// list, so a plain invalidate on settle is correct and simpler.
+
 export const useMergeRuns = () => {
   const queryClient = useQueryClient();
 
