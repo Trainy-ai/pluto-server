@@ -4639,6 +4639,90 @@ describe('SDK API Endpoints (with API Key)', () => {
       console.log(
         `   getByIds: ${running.length} running run(s); heartbeatAt: ${running.map((r: any) => r.heartbeatAt ?? 'null').join(', ') || '—'}`,
       );
+
+      // Same overlay contract for fork lineage: selected rows overwrite
+      // runs.list client-side, so omitting forkedFromRunId/forkStep here
+      // strips Unlink from the merge dialog.
+      for (const run of runs) {
+        expect('forkedFromRunId' in run).toBe(true);
+        expect('forkStep' in run).toBe(true);
+        const listRun = listById.get(run.id) as any;
+        expect(run.forkedFromRunId ?? null).toBe(listRun?.forkedFromRunId ?? null);
+        expect(run.forkStep ?? null).toBe(listRun?.forkStep ?? null);
+      }
+    });
+
+    it('Test 20.13: runs.getByIds returns SQID-encoded fork lineage (Unlink overlay regression)', async () => {
+      if (!sessionCookie || !TEST_API_KEY) {
+        console.log('   No session or API key - skipping');
+        return;
+      }
+
+      // Create a real parent→child fork so we assert encoding, not just
+      // field presence. getByIds used to omit these columns, and the
+      // allVisibleRuns overlay then hid Unlink on every selected run.
+      const stamp = Date.now();
+      const projectName = `getbyids-lineage-${stamp}`;
+      const parentRes = await makeRequest('/api/runs/create', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TEST_API_KEY}` },
+        body: JSON.stringify({
+          projectName,
+          runName: `parent-${stamp}`,
+        }),
+      });
+      expect(parentRes.status).toBe(200);
+      const parent = await parentRes.json();
+
+      const childRes = await makeRequest('/api/runs/create', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TEST_API_KEY}` },
+        body: JSON.stringify({
+          projectName,
+          runName: `child-${stamp}`,
+          forkRunId: parent.runId,
+          forkStep: 50,
+        }),
+      });
+      expect(childRes.status).toBe(200);
+      const child = await childRes.json();
+      expect(child.forkedFromRunId).toBe(parent.runId);
+
+      const auth = await (
+        await makeTrpcRequest('auth', {}, { Cookie: sessionCookie }, 'GET')
+      ).json();
+      const organizationId = auth.result?.data?.activeOrganization?.id ?? '';
+      if (!organizationId) {
+        console.log('   No active organization on session - skipping');
+        return;
+      }
+
+      const parentSqid = sqidEncode(parent.runId);
+      const childSqid = sqidEncode(child.runId);
+
+      const response = await makeTrpcRequest(
+        'runs.getByIds',
+        {
+          organizationId,
+          projectName,
+          runIds: [parentSqid, childSqid],
+        },
+        { Cookie: sessionCookie },
+        'GET',
+      );
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      const runs = data.result?.data?.runs;
+      expect(Array.isArray(runs)).toBe(true);
+
+      const byId = new Map(runs.map((r: any) => [r.id, r]));
+      const parentRow = byId.get(parentSqid) as any;
+      const childRow = byId.get(childSqid) as any;
+      expect(parentRow).toBeDefined();
+      expect(childRow).toBeDefined();
+      expect(parentRow.forkedFromRunId ?? null).toBeNull();
+      expect(childRow.forkedFromRunId).toBe(parentSqid);
+      expect(Number(childRow.forkStep)).toBe(50);
     });
   });
 

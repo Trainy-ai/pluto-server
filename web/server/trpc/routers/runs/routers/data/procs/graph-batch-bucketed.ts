@@ -4,7 +4,7 @@ import { resolveRunId } from "../../../../../../lib/resolve-run-id";
 import { queryRunMetricsBatchBucketedByLogName } from "../../../../../../lib/queries";
 import type { BucketedMetricDataPoint } from "../../../../../../lib/queries";
 import { withBatchCache } from "../../../../../../lib/cache";
-import { queryLineageBucketed } from "./lineage-helpers";
+import { queryLineageBucketed, getLineageFingerprint } from "./lineage-helpers";
 
 // Type for batch bucketed graph data: map of encoded runId → bucketed data points
 type GraphBatchBucketedData = Record<string, BucketedMetricDataPoint[]>;
@@ -82,10 +82,14 @@ export const graphBatchBucketedProcedure = protectedOrgProcedure
 
     // Normal path: lineage-aware queries per run so forked runs
     // include inherited metrics from parent runs.
+    // Keyed by lineage fingerprint: merge/unmerge change stitched output
+    // without changing any other cache-key input.
+    const lineage = await getLineageFingerprint(ctx.prisma, numericRunIds, organizationId);
+
     return withBatchCache(
       ctx,
       "graphBatchBucketedLineage",
-      { runIds: numericRunIds, organizationId, projectName, logName, buckets },
+      { runIds: numericRunIds, organizationId, projectName, logName, buckets, lineage },
       async () => {
         const result: GraphBatchBucketedData = {};
         await Promise.all(

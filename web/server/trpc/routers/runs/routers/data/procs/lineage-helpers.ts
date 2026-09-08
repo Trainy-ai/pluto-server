@@ -65,6 +65,47 @@ export async function resolveLineageChain(
   return segments;
 }
 
+/**
+ * Deterministic fingerprint of the lineage state relevant to the given runs:
+ * one `id>parent@forkStep` entry per run in the transitive ancestor closure,
+ * sorted. Cached chart procedures must include this in their cache key —
+ * runs.merge/runs.unmerge mutate forkedFromRunId/forkStep *after* data may
+ * already be cached, and without the fingerprint a warm cache keeps serving
+ * the pre-merge chart shape until the TTL lapses. Walks ancestors level by
+ * level (one indexed findMany per level, depth-capped) so changes anywhere
+ * up the chain — not just on the requested runs — change the key.
+ */
+export async function getLineageFingerprint(
+  prisma: any,
+  runIds: number[],
+  organizationId: string,
+): Promise<string[]> {
+  const seen = new Map<number, string>();
+  let frontier = [...new Set(runIds)];
+
+  for (let depth = 0; depth < MAX_LINEAGE_DEPTH && frontier.length > 0; depth++) {
+    const rows: Array<{ id: bigint; forkedFromRunId: bigint | null; forkStep: bigint | null }> =
+      await prisma.runs.findMany({
+        where: { id: { in: frontier.map((id) => BigInt(id)) }, organizationId },
+        select: { id: true, forkedFromRunId: true, forkStep: true },
+      });
+
+    const next = new Set<number>();
+    for (const row of rows) {
+      const id = Number(row.id);
+      const parent = row.forkedFromRunId != null ? Number(row.forkedFromRunId) : null;
+      const forkStep = row.forkStep != null ? Number(row.forkStep) : null;
+      seen.set(id, `${id}>${parent ?? ""}@${forkStep ?? ""}`);
+      if (parent != null && !seen.has(parent)) {
+        next.add(parent);
+      }
+    }
+    frontier = [...next];
+  }
+
+  return [...seen.values()].sort();
+}
+
 export async function queryLineageBucketed(
   ch: any,
   prisma: any,

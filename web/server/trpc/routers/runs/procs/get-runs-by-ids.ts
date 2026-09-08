@@ -53,6 +53,12 @@ export const getByIdsProcedure = protectedOrgProcedure
         tags: true,
         notes: true,
         externalId: true,
+        // Fork lineage — these rows overwrite runs.list rows client-side for
+        // SELECTED runs (allVisibleRuns overlay), and the merge-runs dialog
+        // renders its Unlink button from run.forkedFromRunId. Omitting them
+        // here silently strips lineage from every selected run.
+        forkedFromRunId: true,
+        forkStep: true,
         creator: { select: { name: true, email: true } },
         project: { select: { runPrefix: true } },
       },
@@ -89,6 +95,8 @@ export const getByIdsProcedure = protectedOrgProcedure
         return {
           ...r,
           id: sqidEncode(r.id),
+          // Same encoding as finalizeRuns in list-runs.ts.
+          forkedFromRunId: r.forkedFromRunId ? sqidEncode(r.forkedFromRunId) : null,
           ...(fv ? { _flatConfig: fv.config, _flatSystemMetadata: fv.systemMetadata } : {}),
         };
       }),

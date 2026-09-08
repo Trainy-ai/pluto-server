@@ -14,6 +14,7 @@ import type { Run } from "../../../~queries/list-runs";
 import type { ColumnConfig } from "../../../~hooks/use-column-config";
 import { VisibilityOptions } from "../visibility-options";
 import { DeleteRunsButton } from "./delete-runs-button";
+import { MergeRunsButton } from "./merge-runs-button";
 import { ColumnPicker } from "../column-picker";
 import { FilterButton } from "../filter-button";
 import { GroupByPicker } from "../group-by-picker";
@@ -403,12 +404,19 @@ export function TableToolbar({
           {searchOtherMatchesDropdown}
         </div>
         {organizationId && (
-          <DeleteRunsButton
-            organizationId={organizationId}
-            projectName={projectName}
-            selectedRunsWithColors={checkedRunsWithColors ?? {}}
-            onDeleted={onRunsDeleted}
-          />
+          <>
+            <MergeRunsButton
+              organizationId={organizationId}
+              projectName={projectName}
+              selectedRunsWithColors={checkedRunsWithColors ?? {}}
+            />
+            <DeleteRunsButton
+              organizationId={organizationId}
+              projectName={projectName}
+              selectedRunsWithColors={checkedRunsWithColors ?? {}}
+              onDeleted={onRunsDeleted}
+            />
+          </>
         )}
         <VisibilityOptions
           selectedRunsWithColors={selectedRunsWithColors}

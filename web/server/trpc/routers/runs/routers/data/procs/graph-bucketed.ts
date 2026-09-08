@@ -5,6 +5,7 @@ import { getLogGroupName } from "../../../../../../lib/utilts";
 import { withCache } from "../../../../../../lib/cache";
 import { queryRunMetricsBucketedByLogName, queryLineageMetricsBucketedByLogName } from "../../../../../../lib/queries";
 import type { BucketedMetricDataPoint } from "../../../../../../lib/queries";
+import { getLineageFingerprint } from "./lineage-helpers";
 
 export const graphBucketedProcedure = protectedOrgProcedure
   .input(
@@ -40,10 +41,14 @@ export const graphBucketedProcedure = protectedOrgProcedure
       });
     }
 
+    // Lineage-stitched output changes when runs.merge/unmerge rewires the
+    // chain, so the lineage state must be part of the cache key.
+    const lineage = (await getLineageFingerprint(ctx.prisma, [runId], organizationId)).join(",");
+
     return withCache<BucketedMetricDataPoint[]>(
       ctx,
       "graphBucketed",
-      { runId, organizationId, projectName, logName, logGroup, buckets, algorithm },
+      { runId, organizationId, projectName, logName, logGroup, buckets, algorithm, lineage },
       async () => {
         return queryLineageMetricsBucketedByLogName(ctx.clickhouse, ctx.prisma, {
           organizationId,

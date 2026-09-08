@@ -23,6 +23,8 @@ import { metricSummariesProcedure } from "./procs/metric-summaries";
 import { metricBestStepsProcedure } from "./procs/metric-best-steps";
 import { forkRunProcedure } from "./procs/fork-run";
 import { getLineageProcedure } from "./procs/get-lineage";
+import { mergeRunsProcedure } from "./procs/merge-runs";
+import { unmergeRunProcedure } from "./procs/unmerge-run";
 import { statusHistoryProcedure } from "./procs/status-history";
 
 export const runsRouter = router({
@@ -49,6 +51,8 @@ export const runsRouter = router({
   metricBestSteps: metricBestStepsProcedure,
   fork: forkRunProcedure,
   getLineage: getLineageProcedure,
+  merge: mergeRunsProcedure,
+  unmerge: unmergeRunProcedure,
   statusHistory: statusHistoryProcedure,
   // Routers
   data: dataRouter,

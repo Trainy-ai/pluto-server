@@ -4,7 +4,7 @@ import { resolveRunId } from "../../../../../../lib/resolve-run-id";
 import { queryRunMetricsMultiMetricBatchBucketed, toColumnar } from "../../../../../../lib/queries";
 import type { ColumnarBucketedSeries, DownsamplingAlgorithm } from "../../../../../../lib/queries";
 import { withBatchCache } from "../../../../../../lib/cache";
-import { queryLineageBucketed } from "./lineage-helpers";
+import { queryLineageBucketed, getLineageFingerprint } from "./lineage-helpers";
 
 // Type for multi-metric batch bucketed graph data: logName → encoded runId → columnar series
 type GraphMultiMetricBatchBucketedData = Record<string, Record<string, ColumnarBucketedSeries>>;
@@ -51,6 +51,14 @@ export const graphMultiMetricBatchBucketedProcedure = protectedOrgProcedure
     // For preview/zoom, use the fast batch query (no lineage stitching)
     const isZoomOrPreview = !includeLineage || preview || (stepMin !== undefined && stepMax !== undefined);
 
+    // Lineage-stitched output depends on forkedFromRunId/forkStep, which
+    // runs.merge/unmerge mutate after results may already be cached — the
+    // fingerprint keys the cache to the current lineage state. The fast path
+    // never stitches, so it skips the extra PG lookup.
+    const lineage = isZoomOrPreview
+      ? undefined
+      : await getLineageFingerprint(ctx.prisma, numericRunIds, organizationId);
+
     const result = await withBatchCache<GraphMultiMetricBatchBucketedData>(
       ctx,
       isZoomOrPreview ? "graphMultiMetricBatchBucketed" : "graphMultiMetricBatchBucketedLineage",
@@ -64,6 +72,7 @@ export const graphMultiMetricBatchBucketedProcedure = protectedOrgProcedure
         stepMax: stepMax ?? -1,
         preview: preview ?? false,
         algorithm: algorithm ?? "avg",
+        lineage,
       },
       async () => {
         if (isZoomOrPreview) {
