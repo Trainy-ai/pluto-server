@@ -50,6 +50,7 @@
       "axios": "^1.18.0",
       "better-call>zod": "^4.4.3",
       "brace-expansion@2": "^2.1.4",
+      "browserslist": "^4.28.9",
       "defu": "^6.1.5",
       "diff": "^8.0.3",
       "dompurify": "^3.4.13",
