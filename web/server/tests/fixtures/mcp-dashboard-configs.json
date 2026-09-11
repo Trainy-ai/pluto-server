@@ -39,12 +39,12 @@
         "version": 1,
         "sections": [
           {
-            "id": "39ade112-0ea0-41da-9a34-8eefb9311afa",
+            "id": "ff8b0470-571b-4612-abf2-db77f9b1d189",
             "name": "Training",
             "collapsed": false,
             "widgets": [
               {
-                "id": "933b6042-4a93-4091-affb-46ca443ccfb3",
+                "id": "23d8c72d-6127-41a1-a0e4-68c488d6ba3f",
                 "type": "chart",
                 "config": {
                   "metrics": [
@@ -64,7 +64,7 @@
                 }
               },
               {
-                "id": "bcb18072-ba0a-490b-92cf-c3fc68961603",
+                "id": "175a6a6e-f53f-4fe9-a261-958204c8a225",
                 "type": "chart",
                 "config": {
                   "metrics": [
@@ -86,12 +86,12 @@
             ]
           },
           {
-            "id": "c6c1c073-cd3f-401e-a03b-36039831d754",
+            "id": "502617ad-8871-472c-b24a-1e7e31193c92",
             "name": "Losses",
             "collapsed": false,
             "widgets": [
               {
-                "id": "0915edda-64b4-42d3-8193-22003ec891cb",
+                "id": "b81d73d1-4542-4f00-9f58-cc67305fb4da",
                 "type": "chart",
                 "config": {
                   "metrics": [
@@ -131,6 +131,7 @@
             {
               "type": "chart",
               "title": "Loss (log)",
+              "description": "Should fall smoothly; a plateau means the LR is too low.",
               "metrics": [
                 "train/loss"
               ],
@@ -210,15 +211,16 @@
         "version": 1,
         "sections": [
           {
-            "id": "23e614c6-3ddd-4b57-a5f6-d8e67c2401f1",
+            "id": "8295db26-25f3-40d7-be9e-3c37e7ec37ab",
             "name": "Everything",
             "collapsed": false,
             "widgets": [
               {
-                "id": "bec70fe8-0f02-415e-a008-d2c03f9b3466",
+                "id": "321f2300-4989-4175-862d-18aca80d6741",
                 "type": "chart",
                 "config": {
                   "title": "Loss (log)",
+                  "description": "Should fall smoothly; a plateau means the LR is too low.",
                   "metrics": [
                     "train/loss"
                   ],
@@ -241,7 +243,7 @@
                 }
               },
               {
-                "id": "93f50420-5f5a-436b-827b-58cd04b2370c",
+                "id": "5faeb5e5-393e-4d8f-902a-ef4991f4113c",
                 "type": "single-value",
                 "config": {
                   "metric": "val/accuracy",
@@ -258,7 +260,7 @@
                 }
               },
               {
-                "id": "5c99e4a1-4e12-46d9-b0a7-16c3b5aa6eed",
+                "id": "0bb6f8a8-a8b0-4de1-adf6-ccdad88cecd2",
                 "type": "scatter",
                 "config": {
                   "xMetric": "train/lr",
@@ -276,7 +278,7 @@
                 }
               },
               {
-                "id": "1a44c5b3-2415-485f-9b46-f6f7b8182caf",
+                "id": "63df00d5-62fe-43b6-95d1-e9d9da2a9c37",
                 "type": "logs",
                 "config": {
                   "logName": "stdout",
@@ -290,7 +292,7 @@
                 }
               },
               {
-                "id": "7a5e3b3f-1285-4799-a0f8-b475bc43a007",
+                "id": "d7b9ab88-38c1-407b-a707-f5bf4722f3c8",
                 "type": "file-series",
                 "config": {
                   "logName": "samples",
@@ -304,7 +306,7 @@
                 }
               },
               {
-                "id": "e7041e99-76d4-45ee-a05d-9a6a1a83b9a5",
+                "id": "5e667707-9fdc-4c62-860d-05b84b62b648",
                 "type": "file-group",
                 "config": {
                   "files": [
@@ -319,7 +321,7 @@
                 }
               },
               {
-                "id": "8fffe390-88fd-41ad-b645-cd5f98c578b9",
+                "id": "8d62c5f2-0141-437b-a50c-7993b278632c",
                 "type": "string-series",
                 "config": {
                   "metric": "phase"
@@ -332,7 +334,7 @@
                 }
               },
               {
-                "id": "f500e811-17c9-474d-965f-75ba97dc2661",
+                "id": "0ebede01-b2ef-4bb9-a0e4-7c74a0774ad7",
                 "type": "distributions",
                 "config": {
                   "entries": [
@@ -361,7 +363,7 @@
                 }
               },
               {
-                "id": "6b6496a3-312d-4cb3-8c8b-066195042153",
+                "id": "a09879e7-2697-4d91-b657-c944e8bfaf47",
                 "type": "panel",
                 "config": {
                   "title": "Custom summary",
@@ -423,7 +425,7 @@
         "version": 1,
         "sections": [
           {
-            "id": "2c2bf2c4-e3c6-49d4-8cc8-fcd051f2c751",
+            "id": "96c28952-1ec9-4947-afd6-353cf7dcc58f",
             "name": "All Train",
             "collapsed": false,
             "widgets": [],
@@ -431,7 +433,7 @@
             "dynamicPatternMode": "search"
           },
           {
-            "id": "b1d4d607-0d46-47c7-9b6a-ff1e657d96bc",
+            "id": "f89fef48-9165-4d14-b70e-5289bc40b4a6",
             "name": "By Regex",
             "collapsed": true,
             "widgets": [],
@@ -439,18 +441,18 @@
             "dynamicPatternMode": "regex"
           },
           {
-            "id": "a41535f4-135d-416c-a971-99a419eaf883",
+            "id": "22f98280-526a-4139-9fb1-68d0f30c187d",
             "name": "Folder",
             "collapsed": false,
             "widgets": [],
             "children": [
               {
-                "id": "9728ce9b-7f0f-43f0-beca-8f450895e3d7",
+                "id": "29ea8f2c-598e-4f9f-8101-b55584260231",
                 "name": "Child Charts",
                 "collapsed": false,
                 "widgets": [
                   {
-                    "id": "645914e5-f4b2-4324-b34b-49068ca7d1c7",
+                    "id": "36d5aa56-18ae-4bbb-9da3-ac705ab0d266",
                     "type": "chart",
                     "config": {
                       "metrics": [
@@ -470,7 +472,7 @@
                     }
                   },
                   {
-                    "id": "0c989c1d-84f9-4b32-9be7-1a995f62b045",
+                    "id": "16811644-7c15-4069-a9df-91516b24ac6f",
                     "type": "chart",
                     "config": {
                       "metrics": [
@@ -492,7 +494,7 @@
                 ]
               },
               {
-                "id": "ef0dc486-7422-46c1-b87f-53f1233dac13",
+                "id": "94991527-8a39-44de-a5ae-563a6a6a128a",
                 "name": "Child Dynamic",
                 "collapsed": false,
                 "widgets": [],
@@ -579,12 +581,12 @@
         "version": 1,
         "sections": [
           {
-            "id": "28cd2fbf-979f-4404-815a-d65578d4fd3b",
+            "id": "347369d6-be34-487d-b29c-6c2c426858a9",
             "name": "Key Metrics",
             "collapsed": false,
             "widgets": [
               {
-                "id": "8bb134d4-dc56-4843-b0d8-acc4463747cb",
+                "id": "edc47710-24b6-40f3-a07b-e9cf396348c2",
                 "type": "single-value",
                 "config": {
                   "metric": "val/loss",
@@ -598,7 +600,7 @@
                 }
               },
               {
-                "id": "32a541af-eba5-4ace-8534-7e9f808f0bfd",
+                "id": "a3db9e47-f8a8-49cc-b544-7f54335928f8",
                 "type": "single-value",
                 "config": {
                   "metric": "val/accuracy",
@@ -614,12 +616,12 @@
             ]
           },
           {
-            "id": "aad30e43-8108-4e9c-84d4-ad12c86d7802",
+            "id": "4d45c8f2-9a4a-470a-b58d-4b31c9f6263a",
             "name": "Train vs Validation",
             "collapsed": false,
             "widgets": [
               {
-                "id": "a8a25eef-1eec-450a-b60e-65bf8de07f11",
+                "id": "f0f5ee9b-9024-4cd5-9988-a80cac7269b5",
                 "type": "chart",
                 "config": {
                   "title": "accuracy",
@@ -641,7 +643,7 @@
                 }
               },
               {
-                "id": "386b85a9-bbae-4bf6-980f-6580e974d66f",
+                "id": "b5da521a-d89b-4de5-8fb5-6d79403d411d",
                 "type": "chart",
                 "config": {
                   "title": "loss",
@@ -665,12 +667,12 @@
             ]
           },
           {
-            "id": "a6583a67-ee96-467c-876f-20e72a77b7c1",
+            "id": "0d7c40aa-b22b-4f90-a327-7cf6f95c1442",
             "name": "Other Metrics",
             "collapsed": false,
             "widgets": [
               {
-                "id": "89e6f70f-b0a9-49d9-9349-0d5f7d27a7ca",
+                "id": "b649524e-ed4b-4879-b13b-4e7c12e85648",
                 "type": "chart",
                 "config": {
                   "metrics": [
@@ -692,7 +694,7 @@
             ]
           },
           {
-            "id": "0c0d6224-9e4c-4eb0-bff9-f24321189f8d",
+            "id": "08359dc5-3d62-47a5-a0c0-b65d9722fe82",
             "name": "Grads",
             "collapsed": false,
             "widgets": [],
@@ -700,12 +702,12 @@
             "dynamicPatternMode": "search"
           },
           {
-            "id": "891ff23d-58e5-45a8-a79e-698ba1cece3e",
+            "id": "747366d7-cf13-4ef3-bc67-cc279a020def",
             "name": "Train",
             "collapsed": false,
             "widgets": [
               {
-                "id": "09598de7-deb2-48bd-8ca0-a3b6792b00c9",
+                "id": "f58d71bc-2ebe-490b-94ce-e58d03a64bd9",
                 "type": "chart",
                 "config": {
                   "metrics": [
@@ -727,12 +729,12 @@
             ]
           },
           {
-            "id": "4ab7f8c2-d0cd-4698-80e2-94c694dd39db",
+            "id": "100d356d-25fe-4824-97ea-789b9521faf3",
             "name": "System",
             "collapsed": true,
             "widgets": [
               {
-                "id": "2a9719e1-4214-4f25-b96e-62cd556559b3",
+                "id": "1d601b5b-06d7-4814-a295-ffa42458a20e",
                 "type": "chart",
                 "config": {
                   "metrics": [
@@ -752,7 +754,7 @@
                 }
               },
               {
-                "id": "d21c7808-50fd-409f-94c7-d81f1e1c4d65",
+                "id": "70decd35-335d-4f3c-be5e-0c3eff7e0131",
                 "type": "chart",
                 "config": {
                   "metrics": [

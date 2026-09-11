@@ -69,6 +69,12 @@ export type SmoothingConfig = z.infer<typeof SmoothingConfigSchema>;
 // Base widget config (shared by all widget types)
 export const BaseWidgetConfigSchema = z.object({
   title: z.string().optional(),
+  // Authored semantics for the panel — what it means, and what healthy looks
+  // like ("flat under 1.0; spikes mean clipping is off"). The agent dashboard-
+  // reading tools surface this verbatim: it is the one signal neither a
+  // renderer nor a detector can infer from the metric name or the curve.
+  // Optional so every existing config keeps parsing.
+  description: z.string().max(500).optional(),
 });
 
 // Optional bar-rollup config carried inside a chart widget. When set,
