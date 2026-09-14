@@ -13,12 +13,13 @@ const latestRunsCache = new LocalCache<LatestRunsData>(
 
 const LIMIT = 25;
 
-export const useLatestRuns = (orgId: string) =>
+export const useLatestRuns = (orgId?: string) =>
   useLocalQuery<LatestRunsData>({
     queryKey: ["runs", "latest", orgId],
+    enabled: Boolean(orgId),
     queryFn: () =>
       trpcClient.runs.latest.query({
-        organizationId: orgId,
+        organizationId: orgId!,
         limit: LIMIT,
       }),
     localCache: latestRunsCache,

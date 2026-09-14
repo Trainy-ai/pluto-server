@@ -51,6 +51,7 @@
     "prebuild": "prisma generate && pnpm check-types"
   },
   "dependencies": {
+    "@ai-sdk/openai-compatible": "^3.0.20",
     "@aws-sdk/client-s3": "3.787.0",
     "@aws-sdk/s3-request-presigner": "3.787.0",
     "@clickhouse/client-web": "1.11.0",
@@ -59,9 +60,14 @@
     "@hono/trpc-server": "0.3.4",
     "@hono/zod-openapi": "0.18.3",
     "@hono/zod-validator": "0.4.3",
+    "@langfuse/client": "^5.10.0",
+    "@langfuse/otel": "^5.10.0",
+    "@langfuse/tracing": "^5.10.0",
+    "@opentelemetry/sdk-node": "^0.221.0",
     "@prisma/client": "5.2.0",
     "@trpc/server": "11.8.1",
     "@types/nanoid": "3.0.0",
+    "ai": "^7.0.47",
     "better-auth": "1.6.27",
     "dotenv-cli": "8.0.0",
     "drizzle-orm": "0.45.2",

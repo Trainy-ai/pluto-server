@@ -59,6 +59,24 @@ const envSchema = z.object({
   // Admin notifications (optional)
   ADMIN_NOTIFICATION_EMAIL: z.string().email().optional(), // Email to receive new signup notifications
 
+  // Chat with data (optional private preview)
+  OPENAI_COMPATIBLE_BASE_URL: z.string().url().optional(),
+  OPENAI_COMPATIBLE_API_KEY: z.string().min(1).optional(),
+  OPENAI_COMPATIBLE_MODEL: z.string().min(1).optional(),
+  CHAT_ENABLED_ORG_IDS: z.string().optional(), // Comma-separated org IDs, or "*"
+  CHAT_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(1200),
+  CHAT_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(120000),
+  CHAT_CAPTURE_CONTENT: z.preprocess(
+    (val) => val === "true",
+    z.boolean().default(false),
+  ),
+  CHAT_PROMPT_VERSION: z.string().min(1).default("project-context-v1"),
+
+  // Langfuse (optional; chat remains available when tracing is not configured)
+  LANGFUSE_BASE_URL: z.string().url().optional(),
+  LANGFUSE_PUBLIC_KEY: z.string().min(1).optional(),
+  LANGFUSE_SECRET_KEY: z.string().min(1).optional(),
+
   // Deployment/Environment Specific
   NODE_ENV: z.enum(["development", "production", "test"]).optional(),
   IS_DOCKER: z.string().optional(), // Could refine if specific values like "true" are expected
@@ -76,7 +94,7 @@ const envSchema = z.object({
   // Demo mode - skips authentication and uses a pre-seeded demo user
   SKIP_AUTH_DEMO: z.preprocess(
     (val) => val === "true",
-    z.boolean().default(false)
+    z.boolean().default(false),
   ),
 });
 
@@ -87,7 +105,7 @@ if (!parsedEnv.success) {
   console.log(parsedEnv);
   console.error(
     "❌ Invalid environment variables:",
-    JSON.stringify(parsedEnv.error.format(), null, 4)
+    JSON.stringify(parsedEnv.error.format(), null, 4),
   );
   process.exit(1);
 }

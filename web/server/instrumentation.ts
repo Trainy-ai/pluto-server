@@ -10,6 +10,8 @@
 export async function register() {
   // Only run on the server
   if (process.env.NEXT_RUNTIME === "nodejs") {
+    const { initializeLangfuse } = await import("./instrumentation.node");
+    await initializeLangfuse();
     const { initRedis } = await import("./lib/redis");
     await initRedis();
 
@@ -25,15 +27,15 @@ export async function register() {
     //   - Matches convention (kube-state-metrics on 8080, node-exporter on
     //     9100, etc.).
     const port = Number(process.env.METRICS_PORT) || 8080;
-    const [{ Hono }, { serve }, { default: metricsRoutes }] = await Promise.all([
-      import("hono"),
-      import("@hono/node-server"),
-      import("./routes/metrics"),
-    ]);
+    const [{ Hono }, { serve }, { default: metricsRoutes }] = await Promise.all(
+      [import("hono"), import("@hono/node-server"), import("./routes/metrics")],
+    );
     const metricsApp = new Hono();
     metricsApp.route("/", metricsRoutes);
     serve({ fetch: metricsApp.fetch, port, hostname: "0.0.0.0" }, (info) => {
-      console.log(`[Metrics] /metrics listening on :${info.port} (internal-only)`);
+      console.log(
+        `[Metrics] /metrics listening on :${info.port} (internal-only)`,
+      );
     });
   }
 }

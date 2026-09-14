@@ -23,6 +23,7 @@ import {
 } from "./lib/queries/run-filter-grammar";
 import authRoutes from "./routes/auth";
 import chartDataRoutes from "./routes/chart-data";
+import chatRoutes from "./routes/chat";
 import stripeWebhookRoutes from "./routes/stripe-webhook";
 import linearOAuthRoutes from "./routes/linear-oauth";
 import docsRoutes from "./routes/docs";
@@ -56,11 +57,16 @@ app.use(
     credentials: true,
     exposeHeaders: ["Content-Type", "Transfer-Encoding"],
     maxAge: 86400,
-  })
+  }),
 );
 
-// Apply gzip compression to reduce JSON payload sizes
-app.use("/*", compress());
+// Apply gzip compression to JSON responses. Streaming chat is deliberately
+// excluded: compression middleware can buffer token chunks until completion.
+const compressionMiddleware = compress();
+app.use("/*", async (c, next) => {
+  if (c.req.path.startsWith("/api/chat")) return next();
+  return compressionMiddleware(c, next);
+});
 
 // Global error handler — ensures CORS headers are present on error responses
 // so the browser doesn't mask the real error with an opaque CORS failure.
@@ -94,6 +100,7 @@ app.route("/api/auth", authRoutes);
 app.route("/api/stripe", stripeWebhookRoutes);
 app.route("/api/integrations", linearOAuthRoutes);
 app.route("/api/chart-data", chartDataRoutes);
+app.route("/api/chat", chatRoutes);
 
 app.use(
   "/trpc/*",
@@ -111,7 +118,7 @@ app.use(
         hono,
       });
     },
-  })
+  }),
 );
 
 app.post("/api/slug", withApiKey, async (c) => {
@@ -131,9 +138,7 @@ app.doc("/api/openapi.json", {
     version: "1.0.0",
     description: "API for mlop - ML experiment tracking platform",
   },
-  servers: [
-    { url: env.PUBLIC_URL, description: "API Server" },
-  ],
+  servers: [{ url: env.PUBLIC_URL, description: "API Server" }],
   security: [{ bearerAuth: [] }],
 });
 

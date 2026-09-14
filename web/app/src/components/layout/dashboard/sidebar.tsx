@@ -23,7 +23,7 @@ import {
   TooltipTrigger,
   UnstyledTooltipContent,
 } from "@/components/ui/tooltip";
-import { InfoIcon } from "lucide-react";
+import { InfoIcon, MessageSquareTextIcon } from "lucide-react";
 
 import { useAuth } from "@/lib/auth/client";
 import {
@@ -34,6 +34,7 @@ import {
 import { useLatestRuns } from "./queries";
 import { Separator } from "@/components/ui/separator";
 import { RunningIndicator } from "@/components/core/runs/running-indicator";
+import { useChatConfig } from "@/lib/chat-api";
 
 type Run = inferOutput<typeof trpc.runs.latest>[0];
 type RunStatus = Run["status"];
@@ -170,6 +171,12 @@ const mainNavItems = [
     icon: RiFolderFill,
   },
   {
+    title: "Chat",
+    href: "/chat",
+    description: "Ask questions about your experiment data",
+    icon: MessageSquareTextIcon,
+  },
+  {
     title: "Settings",
     href: "/settings",
     description: "Manage your organization and account settings",
@@ -182,6 +189,10 @@ export function DashboardSidebar(props: SidebarGroupProps): React.JSX.Element {
   const pathname = router.location.pathname;
   const { data: auth } = useAuth();
   const { state } = useSidebar();
+  const { data: chatConfig } = useChatConfig(auth?.activeOrganization?.id);
+  const { data: latestRuns, isLoading: isLatestRunsLoading } = useLatestRuns(
+    auth?.activeOrganization?.id,
+  );
 
   const slug = auth?.activeOrganization?.slug;
 
@@ -189,20 +200,62 @@ export function DashboardSidebar(props: SidebarGroupProps): React.JSX.Element {
     return <div>No active organization</div>;
   }
 
-  const { data: latestRuns, isLoading: isLatestRunsLoading } = useLatestRuns(
-    auth.activeOrganization.id,
-  );
-
   return (
     <SidebarGroup {...props}>
       <SidebarMenu>
-        {mainNavItems.map((item, index) => {
-          const isActive =
-            item.href === "/"
-              ? pathname.split("/").length == 3
-              : pathname.endsWith(item.href);
+        {mainNavItems
+          .filter((item) => item.title !== "Chat" || chatConfig?.enabled)
+          .map((item, index) => {
+            const isActive =
+              item.href === "/"
+                ? pathname.split("/").length == 3
+                : pathname.endsWith(item.href);
 
-          if (item.title === "Projects") {
+            if (item.title === "Projects") {
+              return (
+                <SidebarMenuItem key={index}>
+                  <SidebarMenuButton
+                    asChild
+                    isActive={isActive}
+                    tooltip={
+                      <DocsTooltip
+                        title={item.title}
+                        iconComponent={<item.icon className="size-4" />}
+                        description={item.description}
+                        link={item.link}
+                      />
+                    }
+                    className="flex-1"
+                  >
+                    <Link
+                      to={"/o/$orgSlug/projects"}
+                      params={{ orgSlug: slug }}
+                      preload="intent"
+                    >
+                      <item.icon
+                        className={cn(
+                          "size-4 shrink-0",
+                          isActive
+                            ? "text-foreground"
+                            : "text-muted-foreground",
+                        )}
+                      />
+                      <span
+                        className={cn(
+                          "font-medium",
+                          isActive
+                            ? "dark:text-foreground"
+                            : "dark:text-muted-foreground",
+                        )}
+                      >
+                        {item.title}
+                      </span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              );
+            }
+
             return (
               <SidebarMenuItem key={index}>
                 <SidebarMenuButton
@@ -216,10 +269,9 @@ export function DashboardSidebar(props: SidebarGroupProps): React.JSX.Element {
                       link={item.link}
                     />
                   }
-                  className="flex-1"
                 >
                   <Link
-                    to={"/o/$orgSlug/projects"}
+                    to={"/o/$orgSlug" + item.href}
                     params={{ orgSlug: slug }}
                     preload="intent"
                   >
@@ -243,48 +295,7 @@ export function DashboardSidebar(props: SidebarGroupProps): React.JSX.Element {
                 </SidebarMenuButton>
               </SidebarMenuItem>
             );
-          }
-
-          return (
-            <SidebarMenuItem key={index}>
-              <SidebarMenuButton
-                asChild
-                isActive={isActive}
-                tooltip={
-                  <DocsTooltip
-                    title={item.title}
-                    iconComponent={<item.icon className="size-4" />}
-                    description={item.description}
-                    link={item.link}
-                  />
-                }
-              >
-                <Link
-                  to={"/o/$orgSlug" + item.href}
-                  params={{ orgSlug: slug }}
-                  preload="intent"
-                >
-                  <item.icon
-                    className={cn(
-                      "size-4 shrink-0",
-                      isActive ? "text-foreground" : "text-muted-foreground",
-                    )}
-                  />
-                  <span
-                    className={cn(
-                      "font-medium",
-                      isActive
-                        ? "dark:text-foreground"
-                        : "dark:text-muted-foreground",
-                    )}
-                  >
-                    {item.title}
-                  </span>
-                </Link>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          );
-        })}
+          })}
         {state === "expanded" && (
           <>
             <Separator className="my-2 w-[90%] self-center" />

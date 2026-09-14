@@ -28,6 +28,7 @@ import { Route as OnboardUserIndexImport } from './routes/onboard/user/index'
 import { Route as OnboardOrgIndexImport } from './routes/onboard/org/index'
 import { Route as OOrgSlugAuthedImport } from './routes/o.$orgSlug._authed'
 import { Route as indexAuthedSettingsIndexImport } from './routes/(index)/_authed.settings/index'
+import { Route as OOrgSlugAuthedChatImport } from './routes/o.$orgSlug._authed/chat'
 import { Route as OOrgSlugAuthedSettingsIndexImport } from './routes/o.$orgSlug._authed/settings/index'
 import { Route as OOrgSlugAuthedProjectsIndexImport } from './routes/o.$orgSlug._authed/projects/index'
 import { Route as OOrgSlugAuthedindexIndexImport } from './routes/o.$orgSlug._authed/(index)/index'
@@ -155,6 +156,12 @@ const indexAuthedSettingsIndexRoute = indexAuthedSettingsIndexImport.update({
   id: '/settings/',
   path: '/settings/',
   getParentRoute: () => indexAuthedRoute,
+} as any)
+
+const OOrgSlugAuthedChatRoute = OOrgSlugAuthedChatImport.update({
+  id: '/chat',
+  path: '/chat',
+  getParentRoute: () => OOrgSlugAuthedRoute,
 } as any)
 
 const OOrgSlugAuthedSettingsIndexRoute =
@@ -426,6 +433,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OnboardUserIndexImport
       parentRoute: typeof rootRoute
     }
+    '/o/$orgSlug/_authed/chat': {
+      id: '/o/$orgSlug/_authed/chat'
+      path: '/chat'
+      fullPath: '/o/$orgSlug/chat'
+      preLoaderRoute: typeof OOrgSlugAuthedChatImport
+      parentRoute: typeof OOrgSlugAuthedImport
+    }
     '/(index)/_authed/settings/': {
       id: '/(index)/_authed/settings/'
       path: '/settings'
@@ -622,6 +636,7 @@ const indexRouteChildren: indexRouteChildren = {
 const indexRouteWithChildren = indexRoute._addFileChildren(indexRouteChildren)
 
 interface OOrgSlugAuthedRouteChildren {
+  OOrgSlugAuthedChatRoute: typeof OOrgSlugAuthedChatRoute
   OOrgSlugAuthedindexIndexRoute: typeof OOrgSlugAuthedindexIndexRoute
   OOrgSlugAuthedProjectsIndexRoute: typeof OOrgSlugAuthedProjectsIndexRoute
   OOrgSlugAuthedSettingsIndexRoute: typeof OOrgSlugAuthedSettingsIndexRoute
@@ -645,6 +660,7 @@ interface OOrgSlugAuthedRouteChildren {
 }
 
 const OOrgSlugAuthedRouteChildren: OOrgSlugAuthedRouteChildren = {
+  OOrgSlugAuthedChatRoute: OOrgSlugAuthedChatRoute,
   OOrgSlugAuthedindexIndexRoute: OOrgSlugAuthedindexIndexRoute,
   OOrgSlugAuthedProjectsIndexRoute: OOrgSlugAuthedProjectsIndexRoute,
   OOrgSlugAuthedSettingsIndexRoute: OOrgSlugAuthedSettingsIndexRoute,
@@ -711,6 +727,7 @@ export interface FileRoutesByFullPath {
   '/o/$orgSlug': typeof OOrgSlugAuthedRouteWithChildren
   '/onboard/org': typeof OnboardOrgIndexRoute
   '/onboard/user': typeof OnboardUserIndexRoute
+  '/o/$orgSlug/chat': typeof OOrgSlugAuthedChatRoute
   '/settings': typeof indexAuthedSettingsIndexRoute
   '/settings/account/preferences': typeof indexAuthedSettingsAccountPreferencesRoute
   '/settings/account': typeof indexAuthedSettingsAccountIndexRoute
@@ -750,6 +767,7 @@ export interface FileRoutesByTo {
   '/o/$orgSlug': typeof OOrgSlugAuthedindexIndexRoute
   '/onboard/org': typeof OnboardOrgIndexRoute
   '/onboard/user': typeof OnboardUserIndexRoute
+  '/o/$orgSlug/chat': typeof OOrgSlugAuthedChatRoute
   '/settings': typeof indexAuthedSettingsIndexRoute
   '/settings/account/preferences': typeof indexAuthedSettingsAccountPreferencesRoute
   '/settings/account': typeof indexAuthedSettingsAccountIndexRoute
@@ -792,6 +810,7 @@ export interface FileRoutesById {
   '/o/$orgSlug/_authed': typeof OOrgSlugAuthedRouteWithChildren
   '/onboard/org/': typeof OnboardOrgIndexRoute
   '/onboard/user/': typeof OnboardUserIndexRoute
+  '/o/$orgSlug/_authed/chat': typeof OOrgSlugAuthedChatRoute
   '/(index)/_authed/settings/': typeof indexAuthedSettingsIndexRoute
   '/(index)/_authed/settings/account/preferences': typeof indexAuthedSettingsAccountPreferencesRoute
   '/(index)/_authed/settings/account/': typeof indexAuthedSettingsAccountIndexRoute
@@ -833,6 +852,7 @@ export interface FileRouteTypes {
     | '/o/$orgSlug'
     | '/onboard/org'
     | '/onboard/user'
+    | '/o/$orgSlug/chat'
     | '/settings'
     | '/settings/account/preferences'
     | '/settings/account'
@@ -871,6 +891,7 @@ export interface FileRouteTypes {
     | '/o/$orgSlug'
     | '/onboard/org'
     | '/onboard/user'
+    | '/o/$orgSlug/chat'
     | '/settings'
     | '/settings/account/preferences'
     | '/settings/account'
@@ -911,6 +932,7 @@ export interface FileRouteTypes {
     | '/o/$orgSlug/_authed'
     | '/onboard/org/'
     | '/onboard/user/'
+    | '/o/$orgSlug/_authed/chat'
     | '/(index)/_authed/settings/'
     | '/(index)/_authed/settings/account/preferences'
     | '/(index)/_authed/settings/account/'
@@ -1051,6 +1073,7 @@ export const routeTree = rootRoute
       "filePath": "o.$orgSlug._authed.tsx",
       "parent": "/o/$orgSlug",
       "children": [
+        "/o/$orgSlug/_authed/chat",
         "/o/$orgSlug/_authed/(index)/",
         "/o/$orgSlug/_authed/projects/",
         "/o/$orgSlug/_authed/settings/",
@@ -1078,6 +1101,10 @@ export const routeTree = rootRoute
     },
     "/onboard/user/": {
       "filePath": "onboard/user/index.tsx"
+    },
+    "/o/$orgSlug/_authed/chat": {
+      "filePath": "o.$orgSlug._authed/chat.tsx",
+      "parent": "/o/$orgSlug/_authed"
     },
     "/(index)/_authed/settings/": {
       "filePath": "(index)/_authed.settings/index.tsx",
