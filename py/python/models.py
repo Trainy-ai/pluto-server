@@ -214,6 +214,7 @@ class ApiKey(Base):
     isHashed = Column(Boolean, default=True)
     lastUsed = Column(DateTime, nullable=True)
     expiresAt = Column(DateTime, nullable=True)
+    revokedAt = Column(DateTime, nullable=True)
     
     organization = relationship("Organization", backref="api_keys")
     user = relationship("User", backref="api_keys")

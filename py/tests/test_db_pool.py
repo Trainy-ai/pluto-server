@@ -65,7 +65,15 @@ def test_db_endpoints_are_sync_to_avoid_blocking_event_loop():
     """
     routes = {r.path: r.endpoint for r in server_module.app.routes if hasattr(r, "endpoint")}
 
-    for path in ("/api/runs/trigger", "/api/runs/alert", "/api/stale-runs/trigger"):
+    for path in (
+        "/api/runs/trigger",
+        "/api/runs/alert",
+        "/api/stale-runs/trigger",
+        "/api/compat/w/viewer",
+        "/api/compat/w/list-runs",
+        "/api/compat/w/migrate-all",
+        "/api/compat/w/migrate-run",
+    ):
         endpoint = routes[path]
         assert not inspect.iscoroutinefunction(endpoint), (
             f"{path} must be a sync `def` so FastAPI offloads its blocking DB "

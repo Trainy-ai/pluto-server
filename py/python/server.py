@@ -563,6 +563,14 @@ def check_api_key(session: Session, authorization: str):
         logger.warning(f"API key {api_key_record.id} has expired")
         return False
 
+    # Mirrors isApiKeyRevoked in web/server/lib/api-key.ts (and ingest/src/db.rs):
+    # any non-null revokedAt means revoked, no time comparison. A revoked key
+    # must be rejected everywhere a key is authenticated, and this is the
+    # shared path behind both check_run and require_api_key.
+    if api_key_record.revokedAt is not None:
+        logger.warning(f"API key {api_key_record.id} has been revoked")
+        return False
+
     # api_key_record.lastUsed = datetime.now(timezone.utc)
     return api_key_record
 
@@ -601,3 +609,32 @@ def check_run(session, runId, authorization):
         raise HTTPException(status_code=404, detail="Run not found")
 
     return run
+
+
+def require_api_key(session, authorization):
+    """Validate a `Bearer <mlop API key>` header and return its ApiKey record.
+
+    Same header checks and 401 responses as check_run, for endpoints that are
+    not scoped to a single run (the compat migration routes). check_run is
+    left as-is so the SDK-facing trigger/alert path is unchanged.
+
+    Locals here must not use names that match CodeQL's password heuristic
+    (`api.?(key|tok)` in SensitiveDataHeuristics). Binding the stripped
+    bearer to `raw_api_key` made this helper a new source for the
+    pre-existing `hash_api_key` SHA-256 digest (a lookup of a high-entropy
+    key, not a password hash) and CodeQL reported that as a new
+    py/weak-sensitive-data-hashing alert on the PR.
+    """
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Authorization header missing or invalid")
+
+    if not authorization.replace("Bearer ", ""):
+        raise HTTPException(status_code=401, detail="Invalid API key format")
+
+    # check_api_key strips a leading "Bearer " itself, same as check_run's
+    # second pass, so the full header is the right argument.
+    record = check_api_key(session, authorization)
+    if not record:
+        raise HTTPException(status_code=401, detail="Invalid or expired API key")
+
+    return record

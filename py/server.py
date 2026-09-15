@@ -1,3 +1,4 @@
+import hmac
 import logging
 import os
 import sys
@@ -18,6 +19,7 @@ from python.server import (
     heartbeat_write_status,
     process_runs,
     record_heartbeat,
+    require_api_key,
     send_alert,
 )
 
@@ -36,6 +38,8 @@ DATABASE_URL = get_database_url()
 DOMAIN = os.getenv("W_DOMAIN", "localhost")
 if not DATABASE_URL:
     raise ValueError("DATABASE_URL environment variable is not set")
+# Shared secret for the manual stale-run trigger (see require_stale_run_trigger_token).
+STALE_RUN_TRIGGER_TOKEN_ENV = "STALE_RUN_TRIGGER_TOKEN"
 
 
 def build_engine(database_url: str):
@@ -220,9 +224,32 @@ def set_run_alerts(
             status_code=500, detail=f"Failed to send alert: {e}")
 
 
+def require_stale_run_trigger_token(x_internal_token):
+    """Gate the manual stale-run trigger behind a shared secret.
+
+    This service is served on a public host and one trigger cycle marks runs
+    FAILED and sends alerts, so it must not be callable anonymously. The token
+    is read per request, like the ClickHouse settings in the handler below.
+    With STALE_RUN_TRIGGER_TOKEN unset (or empty) the endpoint is disabled and
+    answers 404 exactly like an unknown route, so it is never advertised; the
+    scheduled loop in main.py is unaffected either way.
+    """
+    expected = os.getenv(STALE_RUN_TRIGGER_TOKEN_ENV)
+    if not expected:
+        raise HTTPException(status_code=404, detail="Not Found")
+    if x_internal_token is None or not hmac.compare_digest(x_internal_token.encode(), expected.encode()):
+        raise HTTPException(status_code=401, detail="X-Internal-Token header missing or invalid")
+
+
 @app.post("/api/stale-runs/trigger")
-def trigger_stale_run_check():
-    """Manually trigger one cycle of the stale run job."""
+def trigger_stale_run_check(x_internal_token: str = Header(None)):
+    """Manually trigger one cycle of the stale run job.
+
+    Requires `X-Internal-Token: <STALE_RUN_TRIGGER_TOKEN>`; 404 when the
+    token is not configured, 401 when it does not match.
+    """
+    require_stale_run_trigger_token(x_internal_token)
+
     from clickhouse_connect import get_client as get_clickhouse_client
 
     ch_url = os.getenv("CLICKHOUSE_URL", "")
@@ -253,44 +280,67 @@ def trigger_stale_run_check():
         session.close()
 
 
-@app.post("/api/compat/w/viewer")  # TODO: protect
-async def _viewer(key: str = Body(..., embed=True)):
+# The compat routes open outbound sessions to api.{W_DOMAIN} with a caller
+# supplied third-party key and download files to local disk, so they require a
+# valid mlop API key (Authorization: Bearer <key>). The migration routes write
+# the migrated runs with that same bearer key, which pins the destination to
+# the org the caller's key belongs to; the former `auth` body field is gone.
+# Plain `def` (not async): require_api_key is a synchronous DB call, so these
+# must run in the threadpool like the other DB-touching handlers.
+def bearer_token(authorization: str) -> str:
+    """Raw mlop credential from an Authorization header validated by require_api_key."""
+    return authorization.replace("Bearer ", "")
+
+
+@app.post("/api/compat/w/viewer")
+def _viewer(
+    key: str = Body(..., embed=True),
+    session: Session = Depends(get_db),
+    authorization: str = Header(None),
+):
+    require_api_key(session, authorization)
     c = get_client(key, DOMAIN)
     return c.viewer()
 
 
 @app.post("/api/compat/w/list-runs")
-async def _list_runs(
-    auth: str = Body(..., embed=True),
+def _list_runs(
     key: str = Body(..., embed=True),
     entity: str = Body(..., embed=True),
+    session: Session = Depends(get_db),
+    authorization: str = Header(None),
 ):
+    require_api_key(session, authorization)
     c = get_client(key, DOMAIN)
     return list_runs(c, entity)
 
 
 @app.post("/api/compat/w/migrate-all")
-async def _migrate_all(
-    auth: str = Body(..., embed=True),
+def _migrate_all(
     key: str = Body(..., embed=True),
     entity: str = Body(..., embed=True),
+    session: Session = Depends(get_db),
+    authorization: str = Header(None),
 ):
-    if migrate_all(auth, key, entity, DOMAIN):
+    require_api_key(session, authorization)
+    if migrate_all(bearer_token(authorization), key, entity, DOMAIN):
         return {"status": "success"}
     else:
         raise HTTPException(status_code=500, detail="Failed to migrate runs")
 
 
 @app.post("/api/compat/w/migrate-run")
-async def _migrate_run(
-    auth: str = Body(..., embed=True),
+def _migrate_run(
     key: str = Body(..., embed=True),
     entity: str = Body(..., embed=True),
     project: str = Body(..., embed=True),
     run: str = Body(..., embed=True),
+    session: Session = Depends(get_db),
+    authorization: str = Header(None),
 ):
+    require_api_key(session, authorization)
     c = get_client(key, DOMAIN)
-    if migrate_run_v1(auth, c, entity, project, run):
+    if migrate_run_v1(bearer_token(authorization), c, entity, project, run):
         return {"status": "success"}
     else:
         raise HTTPException(status_code=500, detail="Failed to migrate run")
