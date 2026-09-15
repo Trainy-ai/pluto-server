@@ -8,7 +8,8 @@ import { z } from "zod";
 import { auth } from "../lib/auth";
 import { prisma } from "../lib/prisma";
 import { clickhouse } from "../lib/clickhouse";
-import { resolveRunId } from "../lib/resolve-run-id";
+import { TRPCError } from "@trpc/server";
+import { resolveRunIds } from "../lib/resolve-run-id";
 import { queryRunMetricsMultiMetricBatchBucketed, toColumnar } from "../lib/queries";
 import { getCached, setCached, getTTLForStatus, type RunStatus } from "../lib/cache";
 import { resolveApiKey } from "./middleware";
@@ -87,10 +88,22 @@ app.get("/multi-metric-batch-bucketed", async (c) => {
     });
   }
 
-  // Resolve run IDs
-  const numericRunIds = await Promise.all(
-    encodedRunIds.map((id) => resolveRunId(prisma, id, organizationId, projectName))
-  );
+  // Resolve run IDs. The resolver is the ownership gate: a run outside
+  // (organizationId, projectName) is NOT_FOUND. Map its errors to JSON
+  // statuses here — this is a Hono route, so the global onError would
+  // otherwise turn a TRPCError into a 500.
+  let numericRunIds: number[];
+  try {
+    numericRunIds = await resolveRunIds(prisma, encodedRunIds, organizationId, projectName);
+  } catch (e) {
+    if (e instanceof TRPCError && e.code === "NOT_FOUND") {
+      return c.json({ error: e.message }, 404);
+    }
+    if (e instanceof TRPCError && e.code === "BAD_REQUEST") {
+      return c.json({ error: e.message }, 400);
+    }
+    throw e;
+  }
 
   const numericToEncoded = new Map<number, string>();
   encodedRunIds.forEach((encoded, i) => {

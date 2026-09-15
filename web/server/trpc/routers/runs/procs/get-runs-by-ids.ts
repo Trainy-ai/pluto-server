@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { protectedOrgProcedure } from "../../../../lib/trpc";
-import { resolveRunId } from "../../../../lib/resolve-run-id";
+import { resolveRunIdsResilient } from "../../../../lib/resolve-run-id";
 import { sqidEncode } from "../../../../lib/sqid";
 import { attachHeartbeat } from "./list-runs";
 
@@ -22,15 +22,11 @@ export const getByIdsProcedure = protectedOrgProcedure
       return { runs: [] };
     }
 
-    // Resolve all IDs (handles both SQID and display ID formats)
-    const numericIds = await Promise.all(
-      runIds.map((id) =>
-        resolveRunId(ctx.prisma, id, organizationId, projectName).catch(
-          () => null,
-        ),
-      ),
-    );
-    const validIds = numericIds.filter((id): id is number => id !== null);
+    // Resolve all IDs (handles both SQID and display ID formats), dropping
+    // any that don't resolve in this org/project.
+    const validIds = (
+      await resolveRunIdsResilient(ctx.prisma, runIds, organizationId, projectName)
+    ).map((r) => r.num);
 
     if (validIds.length === 0) {
       return { runs: [] };

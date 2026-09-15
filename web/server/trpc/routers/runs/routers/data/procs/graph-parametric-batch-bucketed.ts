@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { protectedOrgProcedure } from "../../../../../../lib/trpc";
-import { resolveRunId } from "../../../../../../lib/resolve-run-id";
+import { resolveRunIds } from "../../../../../../lib/resolve-run-id";
 import {
   queryRunMetricsParametricBatchBucketed,
   queryRunsWithMetric,
@@ -55,9 +55,7 @@ export const graphParametricBatchBucketedProcedure = protectedOrgProcedure
     } = input;
 
     // Resolve run identifiers (display IDs like "MMP-7" or SQIDs) → numeric IDs
-    const numericRunIds = await Promise.all(
-      encodedRunIds.map((id) => resolveRunId(ctx.prisma, id, organizationId, projectName))
-    );
+    const numericRunIds = await resolveRunIds(ctx.prisma, encodedRunIds, organizationId, projectName);
 
     const numericToEncoded = new Map<number, string>();
     encodedRunIds.forEach((encoded, i) => {

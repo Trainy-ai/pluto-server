@@ -7420,6 +7420,151 @@ describe('SDK API Endpoints (with API Key)', () => {
   });
 
   // ============================================================================
+  // Test Suite 24.8: Tenant Isolation — run ids are scoped to organizationId
+  // ============================================================================
+  // Pentest finding 3.1: a member of org A could read (`runs.get`,
+  // `runs.trigger.getTrigger`) and cancel (`runs.trigger.createTrigger`) a run
+  // in org B by sending organizationId = A together with B's project name and
+  // the run's SQID — `resolveRunId` decoded the SQID with no ownership check.
+  //
+  // The smoke user is a member of BOTH seeded orgs. That is fine: the property
+  // under test is that a run must belong to the organizationId IN THE REQUEST,
+  // regardless of the caller's other memberships.
+  describe('Test Suite 24.8: Tenant Isolation (run ids scoped to organizationId)', () => {
+    const TEST_EMAIL = process.env.TEST_USER_EMAIL || 'test-smoke@mlop.local';
+    const TEST_PASSWORD = 'TestPassword123!';
+    // Seeded by tests/setup.ts alongside the primary org.
+    const ORG2_SLUG = 'smoke-test-org-2';
+    const ORG2_PROJECT = 'org2-test-project';
+    const ORG2_RUN_NAME = 'org2-unique-run';
+    let sessionCookie: string | null = null;
+    let org1Id = '';
+    let org2Id = '';
+    let org2RunId = ''; // SQID of org2's run
+
+    // Unwrap a non-batch tRPC success envelope (with or without the
+    // transformer's `json` wrapper).
+    const trpcData = (body: any) => body.result?.data?.json ?? body.result?.data;
+    const trpcErrorCode = (body: any) => body.error?.json?.data?.code ?? body.error?.data?.code;
+
+    beforeAll(async () => {
+      try {
+        const signInResponse = await makeRequest('/api/auth/sign-in/email', {
+          method: 'POST',
+          body: JSON.stringify({ email: TEST_EMAIL, password: TEST_PASSWORD }),
+        });
+        const match = signInResponse.headers.get('set-cookie')?.match(/better_auth\.session_token=([^;]+)/);
+        if (match) {
+          sessionCookie = `better_auth.session_token=${match[1]}`;
+        }
+      } catch (e) {
+        console.log('   Sign in failed:', e);
+      }
+      if (!sessionCookie) return;
+
+      org1Id = await orgIdForApiKey();
+
+      const authResp = await makeTrpcRequest('auth', {}, { 'Cookie': sessionCookie }, 'GET');
+      if (authResp.status === 200) {
+        const orgs = (trpcData(await authResp.json())?.allOrgs ?? []) as Array<{ id: string; slug: string }>;
+        org2Id = orgs.find((o) => o.slug === ORG2_SLUG)?.id ?? '';
+      }
+      if (!org2Id) return;
+
+      // Address org2's run the way the app does: by the SQID runs.list hands out.
+      const listResp = await makeTrpcRequest('runs.list', {
+        organizationId: org2Id,
+        projectName: ORG2_PROJECT,
+        limit: 1,
+      }, { 'Cookie': sessionCookie }, 'GET');
+      if (listResp.status === 200) {
+        const runs = (trpcData(await listResp.json())?.runs ?? []) as Array<{ id: string }>;
+        org2RunId = runs[0]?.id ?? '';
+      }
+    });
+
+    function ready(): boolean {
+      if (!sessionCookie || !org1Id || !org2Id || !org2RunId) {
+        console.log('   No session / org2 fixtures - skipping');
+        return false;
+      }
+      return true;
+    }
+
+    // The attacker's request: THEIR organizationId, the victim's project name
+    // and the victim run's SQID.
+    const crossTenantInput = () => ({
+      organizationId: org1Id,
+      projectName: ORG2_PROJECT,
+      runId: org2RunId,
+    });
+    const ownerInput = () => ({
+      organizationId: org2Id,
+      projectName: ORG2_PROJECT,
+      runId: org2RunId,
+    });
+
+    async function cancelTriggerCount(): Promise<number> {
+      const response = await makeTrpcRequest('runs.trigger.getTrigger', ownerInput(), { 'Cookie': sessionCookie! }, 'GET');
+      expect(response.status).toBe(200);
+      const triggers = (trpcData(await response.json()) ?? []) as Array<{ triggerType: string }>;
+      return triggers.filter((t) => t.triggerType === 'CANCEL').length;
+    }
+
+    it('Test 24.8.1: fixtures resolve to two distinct organizations', () => {
+      if (!ready()) return;
+      expect(org1Id).not.toBe(org2Id);
+    });
+
+    it("Test 24.8.2: runs.get with another org's organizationId returns NOT_FOUND", async () => {
+      if (!ready()) return;
+      const response = await makeTrpcRequest('runs.get', crossTenantInput(), { 'Cookie': sessionCookie! }, 'GET');
+      expect(response.status).toBe(404);
+      const body = await response.json();
+      expect(trpcErrorCode(body)).toBe('NOT_FOUND');
+      expect(body.result).toBeUndefined();
+    });
+
+    it("Test 24.8.3: runs.trigger.getTrigger with another org's organizationId returns NOT_FOUND", async () => {
+      if (!ready()) return;
+      const response = await makeTrpcRequest('runs.trigger.getTrigger', crossTenantInput(), { 'Cookie': sessionCookie! }, 'GET');
+      expect(response.status).toBe(404);
+      const body = await response.json();
+      expect(trpcErrorCode(body)).toBe('NOT_FOUND');
+      expect(body.result).toBeUndefined();
+    });
+
+    it("Test 24.8.4: runs.trigger.createTrigger with another org's organizationId is rejected and writes nothing", async () => {
+      if (!ready()) return;
+      const before = await cancelTriggerCount();
+
+      const response = await makeTrpcRequest('runs.trigger.createTrigger', {
+        ...crossTenantInput(),
+        triggerType: 'CANCEL',
+      }, { 'Cookie': sessionCookie! }, 'POST');
+      expect(response.status).toBe(404);
+      expect(trpcErrorCode(await response.json())).toBe('NOT_FOUND');
+
+      // The victim run must not have picked up a CANCEL trigger — that is what
+      // its SDK would poll for and act on.
+      expect(await cancelTriggerCount()).toBe(before);
+    });
+
+    it('Test 24.8.5: the same run still resolves under its own organizationId', async () => {
+      if (!ready()) return;
+      const getResp = await makeTrpcRequest('runs.get', ownerInput(), { 'Cookie': sessionCookie! }, 'GET');
+      expect(getResp.status).toBe(200);
+      const run = trpcData(await getResp.json());
+      expect(run?.name).toBe(ORG2_RUN_NAME);
+      expect(run?.encodedId).toBe(org2RunId);
+
+      const trigResp = await makeTrpcRequest('runs.trigger.getTrigger', ownerInput(), { 'Cookie': sessionCookie! }, 'GET');
+      expect(trigResp.status).toBe(200);
+      expect(Array.isArray(trpcData(await trigResp.json()))).toBe(true);
+    });
+  });
+
+  // ============================================================================
   // Test Suite 25: Performance Regression — Payload Size Guards
   // ============================================================================
   describe('Test Suite 25: Performance Regression Guards', () => {

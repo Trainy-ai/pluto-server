@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { protectedOrgProcedure } from "../../../../../../lib/trpc";
-import { resolveRunId } from "../../../../../../lib/resolve-run-id";
+import { resolveRunIdsResilient } from "../../../../../../lib/resolve-run-id";
 import { getLogGroupName } from "../../../../../../lib/utilts";
 import { withCache } from "../../../../../../lib/cache";
 import { queryRunFilesByLogName } from "../../../../../../lib/queries";
@@ -32,22 +32,18 @@ export const filesBatchProcedure = protectedOrgProcedure
     const { runIds: encodedRunIds, projectName, organizationId, logName } = input;
     const logGroup = getLogGroupName(logName);
 
+    // Resolve resiliently: a deleted/unauthorized run is skipped, not fatal
+    // to the whole batch — one bad id must not 500 the media widget for every
+    // other run.
+    const resolved = await resolveRunIdsResilient(
+      ctx.prisma,
+      encodedRunIds,
+      organizationId,
+      projectName,
+    );
+
     const entries = await Promise.all(
-      encodedRunIds.map(async (enc) => {
-        // Resolve resiliently: a deleted/unauthorized run is skipped (returns
-        // null here, filtered out below), not fatal to the whole batch — one
-        // bad id must not 500 the media widget for every other run.
-        let runId: number;
-        try {
-          runId = await resolveRunId(
-            ctx.prisma,
-            enc,
-            organizationId,
-            projectName,
-          );
-        } catch {
-          return [enc, null] as const;
-        }
+      resolved.map(async ({ enc, num: runId }) => {
         const data = await withCache<FileData>(
           ctx,
           // Must stay in step with files.ts — the shared namespace is what

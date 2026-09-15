@@ -16,6 +16,9 @@ export const getTrigger = protectedOrgProcedure
     const triggers = await ctx.prisma.runTriggers.findMany({
       where: {
         runId,
+        // resolveRunId already verified ownership; the relation filter keeps
+        // this read org-scoped even if a caller ever bypasses the resolver.
+        run: { organizationId },
       },
       orderBy: {
         createdAt: "desc",

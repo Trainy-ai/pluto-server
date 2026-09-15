@@ -14,6 +14,9 @@ export const createTrigger = protectedOrgProcedure
   .mutation(async ({ ctx, input }) => {
     const { runId: encodedRunId, projectName, triggerType, organizationId } = input;
 
+    // resolveRunId is the ownership gate: it throws NOT_FOUND unless the run
+    // belongs to (organizationId, projectName), so the insert below can only
+    // ever target a run in the caller's own org.
     const runId = await resolveRunId(ctx.prisma, encodedRunId, organizationId, projectName);
 
     await ctx.prisma.runTriggers.create({

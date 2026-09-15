@@ -2,7 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { OrganizationRole } from "@prisma/client";
 import { protectedOrgProcedure } from "../../../../lib/trpc";
-import { resolveRunId } from "../../../../lib/resolve-run-id";
+import { resolveRunIdsResilient } from "../../../../lib/resolve-run-id";
 
 // ClickHouse tables that store per-run data keyed by (tenantId, projectName, runId).
 // Postgres cascades handle relational children (RunLogs, RunFieldValue, etc.), but
@@ -40,25 +40,16 @@ export const deleteRunsProcedure = protectedOrgProcedure
 
     // Resolve each identifier (SQID or display ID) to a numeric run ID,
     // ignoring ones that don't resolve so a single bad id doesn't fail the batch.
-    // Resolve in parallel: SQIDs are pure computation, but display IDs hit the DB,
-    // so a sequential loop over a 1000-id batch would be an N+1 bottleneck.
+    // Batched: SQID ownership is verified in one query, so a 1000-id batch
+    // is not an N+1 bottleneck.
     const numericIds = (
-      await Promise.all(
-        encodedRunIds.map(async (encoded) => {
-          try {
-            return await resolveRunId(
-              ctx.prisma,
-              encoded,
-              organizationId,
-              projectName
-            );
-          } catch {
-            // Skip unresolvable identifiers.
-            return null;
-          }
-        })
+      await resolveRunIdsResilient(
+        ctx.prisma,
+        encodedRunIds,
+        organizationId,
+        projectName
       )
-    ).filter((id): id is number => id !== null);
+    ).map((r) => r.num);
 
     if (numericIds.length === 0) {
       throw new TRPCError({

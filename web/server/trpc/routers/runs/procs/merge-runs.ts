@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { protectedOrgProcedure } from "../../../../lib/trpc";
-import { resolveRunId } from "../../../../lib/resolve-run-id";
+import { resolveRunIds } from "../../../../lib/resolve-run-id";
 import { sqidEncode } from "../../../../lib/sqid";
 import {
   planMergeChain,
@@ -21,10 +21,11 @@ export const mergeRunsProcedure = protectedOrgProcedure
   .mutation(async ({ ctx, input }) => {
     const { projectName, organizationId } = input;
 
-    const numericIds = await Promise.all(
-      input.runIds.map((id) =>
-        resolveRunId(ctx.prisma, id, organizationId, projectName)
-      )
+    const numericIds = await resolveRunIds(
+      ctx.prisma,
+      input.runIds,
+      organizationId,
+      projectName
     );
     const uniqueIds = [...new Set(numericIds.map((id) => BigInt(id)))];
     if (uniqueIds.length < 2) {

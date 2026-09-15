@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { protectedOrgProcedure } from "../../../../../../lib/trpc";
-import { resolveRunId } from "../../../../../../lib/resolve-run-id";
+import { resolveRunIds } from "../../../../../../lib/resolve-run-id";
 import { queryRunMetricsBatchByLogName } from "../../../../../../lib/queries";
 
 // Type for batch graph data: map of encoded runId → data points
@@ -34,9 +34,7 @@ export const graphBatchProcedure = protectedOrgProcedure
     } = input;
 
     // Resolve run identifiers (display IDs like "MMP-7" or SQIDs) → numeric IDs
-    const numericRunIds = await Promise.all(
-      encodedRunIds.map((id) => resolveRunId(ctx.prisma, id, organizationId, projectName))
-    );
+    const numericRunIds = await resolveRunIds(ctx.prisma, encodedRunIds, organizationId, projectName);
 
     // Build reverse map: numeric → encoded ID
     const numericToEncoded = new Map<number, string>();
