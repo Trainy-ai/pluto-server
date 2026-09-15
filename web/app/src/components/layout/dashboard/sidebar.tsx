@@ -34,7 +34,6 @@ import {
 import { useLatestRuns } from "./queries";
 import { Separator } from "@/components/ui/separator";
 import { RunningIndicator } from "@/components/core/runs/running-indicator";
-import { useChatConfig } from "@/lib/chat-api";
 
 type Run = inferOutput<typeof trpc.runs.latest>[0];
 type RunStatus = Run["status"];
@@ -189,7 +188,6 @@ export function DashboardSidebar(props: SidebarGroupProps): React.JSX.Element {
   const pathname = router.location.pathname;
   const { data: auth } = useAuth();
   const { state } = useSidebar();
-  const { data: chatConfig } = useChatConfig(auth?.activeOrganization?.id);
   const { data: latestRuns, isLoading: isLatestRunsLoading } = useLatestRuns(
     auth?.activeOrganization?.id,
   );
@@ -203,59 +201,18 @@ export function DashboardSidebar(props: SidebarGroupProps): React.JSX.Element {
   return (
     <SidebarGroup {...props}>
       <SidebarMenu>
-        {mainNavItems
-          .filter((item) => item.title !== "Chat" || chatConfig?.enabled)
-          .map((item, index) => {
-            const isActive =
-              item.href === "/"
-                ? pathname.split("/").length == 3
-                : pathname.endsWith(item.href);
+        {/* Chat is always listed. Gating it on `chatConfig.enabled` or a saved
+            bridge pairing deadlocked local-agent mode: the pairing is only
+            saved from the connect popover on the Chat page — the very page the
+            gate hid. The page explains every state it can be in, so listing it
+            unconditionally costs nothing. */}
+        {mainNavItems.map((item, index) => {
+          const isActive =
+            item.href === "/"
+              ? pathname.split("/").length == 3
+              : pathname.endsWith(item.href);
 
-            if (item.title === "Projects") {
-              return (
-                <SidebarMenuItem key={index}>
-                  <SidebarMenuButton
-                    asChild
-                    isActive={isActive}
-                    tooltip={
-                      <DocsTooltip
-                        title={item.title}
-                        iconComponent={<item.icon className="size-4" />}
-                        description={item.description}
-                        link={item.link}
-                      />
-                    }
-                    className="flex-1"
-                  >
-                    <Link
-                      to={"/o/$orgSlug/projects"}
-                      params={{ orgSlug: slug }}
-                      preload="intent"
-                    >
-                      <item.icon
-                        className={cn(
-                          "size-4 shrink-0",
-                          isActive
-                            ? "text-foreground"
-                            : "text-muted-foreground",
-                        )}
-                      />
-                      <span
-                        className={cn(
-                          "font-medium",
-                          isActive
-                            ? "dark:text-foreground"
-                            : "dark:text-muted-foreground",
-                        )}
-                      >
-                        {item.title}
-                      </span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              );
-            }
-
+          if (item.title === "Projects") {
             return (
               <SidebarMenuItem key={index}>
                 <SidebarMenuButton
@@ -269,9 +226,10 @@ export function DashboardSidebar(props: SidebarGroupProps): React.JSX.Element {
                       link={item.link}
                     />
                   }
+                  className="flex-1"
                 >
                   <Link
-                    to={"/o/$orgSlug" + item.href}
+                    to={"/o/$orgSlug/projects"}
                     params={{ orgSlug: slug }}
                     preload="intent"
                   >
@@ -295,7 +253,48 @@ export function DashboardSidebar(props: SidebarGroupProps): React.JSX.Element {
                 </SidebarMenuButton>
               </SidebarMenuItem>
             );
-          })}
+          }
+
+          return (
+            <SidebarMenuItem key={index}>
+              <SidebarMenuButton
+                asChild
+                isActive={isActive}
+                tooltip={
+                  <DocsTooltip
+                    title={item.title}
+                    iconComponent={<item.icon className="size-4" />}
+                    description={item.description}
+                    link={item.link}
+                  />
+                }
+              >
+                <Link
+                  to={"/o/$orgSlug" + item.href}
+                  params={{ orgSlug: slug }}
+                  preload="intent"
+                >
+                  <item.icon
+                    className={cn(
+                      "size-4 shrink-0",
+                      isActive ? "text-foreground" : "text-muted-foreground",
+                    )}
+                  />
+                  <span
+                    className={cn(
+                      "font-medium",
+                      isActive
+                        ? "dark:text-foreground"
+                        : "dark:text-muted-foreground",
+                    )}
+                  >
+                    {item.title}
+                  </span>
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          );
+        })}
         {state === "expanded" && (
           <>
             <Separator className="my-2 w-[90%] self-center" />

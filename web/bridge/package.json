@@ -1,0 +1,19 @@
+{
+  "name": "@mlop/agent-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local bridge that lets Claude Code or Codex power the mlop chat UI",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/cli.ts",
+    "check-types": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/node": "22.14.1",
+    "tsx": "4.19.3",
+    "typescript": "5.8.3",
+    "vitest": "3.2.6"
+  }
+}

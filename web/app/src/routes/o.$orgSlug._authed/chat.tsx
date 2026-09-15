@@ -1,16 +1,12 @@
 import { useChat } from "@ai-sdk/react";
 import { useQuery } from "@tanstack/react-query";
-import { createFileRoute, Link } from "@tanstack/react-router";
-import { DefaultChatTransport, type UIMessage } from "ai";
+import { createFileRoute } from "@tanstack/react-router";
+import { DefaultChatTransport } from "ai";
 import {
-  BotIcon,
   CircleStopIcon,
   MessageSquareTextIcon,
   PlusIcon,
   SendIcon,
-  ThumbsDownIcon,
-  ThumbsUpIcon,
-  UserIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
@@ -27,105 +23,90 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/components/ui/sonner";
+import { ChatMessageItem } from "@/components/chat/chat-message-item";
+import { type ChatMessage, type ChatMode } from "@/components/chat/chat-types";
+import { LocalAgentConnect } from "@/components/chat/local-agent-connect";
 import { getChatApiUrl, useChatConfig } from "@/lib/chat-api";
-import { parseRunCitations } from "@/lib/chat-citations";
-import { cn } from "@/lib/utils";
+import {
+  getLocalBridgeUrl,
+  type LocalBridgeSettings,
+} from "@/lib/local-bridge";
 import { useDocumentTitle } from "@/hooks/use-document-title";
+import { useLocalBridge } from "@/hooks/use-local-bridge";
 import { trpc } from "@/utils/trpc";
-
-type ChatMessage = UIMessage<{ feedbackToken?: string }>;
 
 export const Route = createFileRoute("/o/$orgSlug/_authed/chat")({
   component: RouteComponent,
 });
-
-function messageText(message: ChatMessage): string {
-  return message.parts
-    .filter(
-      (part): part is Extract<typeof part, { type: "text" }> =>
-        part.type === "text",
-    )
-    .map((part) => part.text)
-    .join("");
-}
-
-function AssistantText({
-  text,
-  orgSlug,
-  projectName,
-}: {
-  text: string;
-  orgSlug: string;
-  projectName: string;
-}) {
-  return (
-    <p className="text-sm leading-6 whitespace-pre-wrap">
-      {parseRunCitations(text).map((segment, index) =>
-        segment.type === "text" ? (
-          segment.value
-        ) : (
-          <Link
-            key={`${segment.runId}-${index}`}
-            to="/o/$orgSlug/projects/$projectName/$runId"
-            params={{ orgSlug, projectName, runId: segment.runId }}
-            className="mx-0.5 rounded bg-primary/10 px-1 py-0.5 font-mono text-xs font-medium text-primary hover:underline"
-          >
-            run:{segment.runId}
-          </Link>
-        ),
-      )}
-    </p>
-  );
-}
 
 function ChatWorkspace({
   organizationId,
   orgSlug,
   projectName,
   conversationId,
+  mode,
+  bridgeSettings,
 }: {
   organizationId: string;
   orgSlug: string;
   projectName: string;
   conversationId: string;
+  mode: ChatMode;
+  bridgeSettings: LocalBridgeSettings | null;
 }) {
   const [input, setInput] = useState("");
   const [ratings, setRatings] = useState<Record<string, boolean>>({});
   const [pendingRating, setPendingRating] = useState<string>();
   const endRef = useRef<HTMLDivElement>(null);
-  const transport = useMemo(
-    () =>
-      new DefaultChatTransport<ChatMessage>({
-        api: getChatApiUrl(),
-        credentials: "include",
+  const bridgePort = bridgeSettings?.port;
+  const bridgeToken = bridgeSettings?.token;
+  const transport = useMemo(() => {
+    // Turns with no text are dropped. Stop, and a generation that fails
+    // before its first token, both leave an assistant turn behind with no
+    // text parts — and sanitizeChatMessages rejects any empty message, so
+    // forwarding one bricks the thread: every later send 400s until the user
+    // starts a New chat.
+    const textOnly = (messages: ChatMessage[]) =>
+      messages
+        .map((message) => ({
+          id: message.id,
+          role: message.role,
+          parts: message.parts
+            .filter((part) => part.type === "text")
+            .map((part) => ({ type: "text", text: part.text })),
+        }))
+        .filter((message) =>
+          message.parts.some((part) => part.text.trim().length > 0),
+        );
+    if (mode === "local" && bridgePort && bridgeToken) {
+      // The user's own loopback bridge (Claude Code / Codex) answers; it
+      // pulls data itself through the pluto MCP server.
+      return new DefaultChatTransport<ChatMessage>({
+        api: getLocalBridgeUrl(bridgePort, "/chat"),
+        headers: { "x-bridge-token": bridgeToken },
         prepareSendMessagesRequest: ({ id, messages }) => ({
           body: {
-            organizationId,
+            orgSlug,
             projectName,
             conversationId: id,
-            // Turns with no text are dropped. Stop, and a generation that
-            // fails before its first token, both leave an assistant turn
-            // behind with no text parts — and sanitizeChatMessages rejects
-            // any empty message, so forwarding one bricks the thread: every
-            // later send 400s until the user starts a New chat. Stop is a
-            // primary control in this preview, so that is a routine way to
-            // lose a conversation, not an edge case.
-            messages: messages
-              .map((message) => ({
-                id: message.id,
-                role: message.role,
-                parts: message.parts
-                  .filter((part) => part.type === "text")
-                  .map((part) => ({ type: "text", text: part.text })),
-              }))
-              .filter((message) =>
-                message.parts.some((part) => part.text.trim().length > 0),
-              ),
+            messages: textOnly(messages),
           },
         }),
+      });
+    }
+    return new DefaultChatTransport<ChatMessage>({
+      api: getChatApiUrl(),
+      credentials: "include",
+      prepareSendMessagesRequest: ({ id, messages }) => ({
+        body: {
+          organizationId,
+          projectName,
+          conversationId: id,
+          messages: textOnly(messages),
+        },
       }),
-    [organizationId, projectName],
-  );
+    });
+  }, [mode, bridgePort, bridgeToken, organizationId, orgSlug, projectName]);
   const { messages, sendMessage, status, stop, error } = useChat<ChatMessage>({
     id: conversationId,
     transport,
@@ -188,94 +169,29 @@ function ChatWorkspace({
                   Ask about {projectName}
                 </h2>
                 <p className="max-w-md text-sm text-muted-foreground">
-                  Answers use a bounded snapshot of the 12 most recently updated
-                  runs and up to 240 metric summaries.
+                  {mode === "local"
+                    ? "Answers come from your local agent, which queries this project through the pluto MCP tools."
+                    : "Answers use a bounded snapshot of the 12 most recently updated runs and up to 240 metric summaries."}
                 </p>
               </div>
             </div>
           )}
 
           {messages.map((message) => {
-            const text = messageText(message);
             const feedbackToken = message.metadata?.feedbackToken;
             return (
-              <div
+              <ChatMessageItem
                 key={message.id}
-                className={cn(
-                  "flex gap-3",
-                  message.role === "user" && "justify-end",
-                )}
-              >
-                {message.role === "assistant" && (
-                  <div className="mt-1 flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
-                    <BotIcon className="size-4" />
-                  </div>
-                )}
-                <div
-                  className={cn(
-                    "max-w-[85%] rounded-xl px-4 py-3",
-                    message.role === "user"
-                      ? "bg-primary text-primary-foreground"
-                      : "border bg-card",
-                  )}
-                >
-                  {message.role === "assistant" ? (
-                    <AssistantText
-                      text={text}
-                      orgSlug={orgSlug}
-                      projectName={projectName}
-                    />
-                  ) : (
-                    <p className="text-sm leading-6 whitespace-pre-wrap">
-                      {text}
-                    </p>
-                  )}
-                  {message.role === "assistant" && feedbackToken && text && (
-                    <div className="mt-2 flex gap-1 border-t pt-2">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className={cn(
-                          "size-7",
-                          ratings[feedbackToken] === true && "text-emerald-600",
-                        )}
-                        aria-label="Helpful answer"
-                        disabled={
-                          Boolean(pendingRating) || feedbackToken in ratings
-                        }
-                        onClick={() => void submitFeedback(feedbackToken, true)}
-                      >
-                        <ThumbsUpIcon className="size-3.5" />
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className={cn(
-                          "size-7",
-                          ratings[feedbackToken] === false &&
-                            "text-destructive",
-                        )}
-                        aria-label="Unhelpful answer"
-                        disabled={
-                          Boolean(pendingRating) || feedbackToken in ratings
-                        }
-                        onClick={() =>
-                          void submitFeedback(feedbackToken, false)
-                        }
-                      >
-                        <ThumbsDownIcon className="size-3.5" />
-                      </Button>
-                    </div>
-                  )}
-                </div>
-                {message.role === "user" && (
-                  <div className="mt-1 flex size-7 shrink-0 items-center justify-center rounded-full bg-muted">
-                    <UserIcon className="size-4" />
-                  </div>
-                )}
-              </div>
+                message={message}
+                orgSlug={orgSlug}
+                projectName={projectName}
+                rating={feedbackToken ? ratings[feedbackToken] : undefined}
+                feedbackDisabled={
+                  Boolean(pendingRating) ||
+                  Boolean(feedbackToken && feedbackToken in ratings)
+                }
+                onFeedback={(token, value) => void submitFeedback(token, value)}
+              />
             );
           })}
           {error && (
@@ -329,8 +245,9 @@ function ChatWorkspace({
           )}
         </form>
         <p className="mx-auto mt-2 max-w-3xl text-center text-xs text-muted-foreground">
-          Verify important conclusions against the cited runs. Chat history is
-          not retained in this preview.
+          {mode === "local"
+            ? "Verify important conclusions against the cited runs. Conversations stay on your machine."
+            : "Verify important conclusions against the cited runs. Chat history is not retained in this preview."}
         </p>
       </div>
     </div>
@@ -356,6 +273,10 @@ function RouteComponent() {
   const [conversationId, setConversationId] = useState(() =>
     crypto.randomUUID(),
   );
+  const bridge = useLocalBridge();
+  const serverEnabled = Boolean(chatConfig?.enabled);
+  const [modeChoice, setModeChoice] = useState<ChatMode>();
+  const mode: ChatMode = modeChoice ?? (serverEnabled ? "server" : "local");
   useDocumentTitle("Chat");
 
   useEffect(() => {
@@ -373,6 +294,24 @@ function RouteComponent() {
         headerLeft={<OrganizationPageTitle title="Chat" />}
         headerRight={
           <div className="flex items-center gap-2">
+            <Select
+              value={mode}
+              onValueChange={(value) => {
+                setModeChoice(value as ChatMode);
+                setConversationId(crypto.randomUUID());
+              }}
+            >
+              <SelectTrigger className="w-36" aria-label="Chat backend">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="server" disabled={!serverEnabled}>
+                  Server model
+                </SelectItem>
+                <SelectItem value="local">Local agent</SelectItem>
+              </SelectContent>
+            </Select>
+            {mode === "local" && <LocalAgentConnect bridge={bridge} />}
             <Select
               value={projectName}
               onValueChange={(value) => {
@@ -410,13 +349,32 @@ function RouteComponent() {
             <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
               Loading chat…
             </div>
-          ) : !chatConfig?.enabled ? (
+          ) : mode === "server" && !serverEnabled ? (
             <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
               <MessageSquareTextIcon className="size-8 text-muted-foreground" />
               <h2 className="font-semibold">Chat is not enabled</h2>
               <p className="max-w-md text-sm text-muted-foreground">
                 This organization is not part of the private preview, or the
-                model endpoint is not configured.
+                model endpoint is not configured. You can still switch to “Local
+                agent” and answer with your own Claude Code or Codex.
+              </p>
+            </div>
+          ) : mode === "local" &&
+            !bridge.isConnected &&
+            !bridge.hasConnected ? (
+            <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
+              <MessageSquareTextIcon className="size-8 text-muted-foreground" />
+              <h2 className="font-semibold">Connect your local agent</h2>
+              <p className="max-w-md text-sm text-muted-foreground">
+                Run{" "}
+                <code className="rounded bg-muted px-1 py-0.5">
+                  pnpm --filter @mlop/agent-bridge start
+                </code>{" "}
+                on your machine, then use “Connect agent” above to pair the port
+                and token it prints.
+                {bridge.settings && !bridge.isProbing
+                  ? " The saved bridge is not reachable right now."
+                  : ""}
               </p>
             </div>
           ) : !projectName ? (
@@ -427,13 +385,31 @@ function RouteComponent() {
               </p>
             </div>
           ) : (
-            <ChatWorkspace
-              key={`${projectName}:${conversationId}`}
-              organizationId={organizationId}
-              orgSlug={orgSlug}
-              projectName={projectName}
-              conversationId={conversationId}
-            />
+            <>
+              {mode === "local" && !bridge.isConnected ? (
+                // The bridge stopped answering, but the conversation is still
+                // here. Unmounting the workspace would discard it — chat
+                // history is in-memory only — so a dropped probe is a banner,
+                // not a teardown.
+                <div className="border-b bg-muted/40 px-4 py-2 text-sm text-muted-foreground">
+                  Lost contact with the local agent bridge. Your conversation is
+                  still here; restart{" "}
+                  <code className="rounded bg-muted px-1 py-0.5">
+                    pnpm --filter @mlop/agent-bridge start
+                  </code>{" "}
+                  and it will reconnect automatically.
+                </div>
+              ) : null}
+              <ChatWorkspace
+                key={`${mode}:${projectName}:${conversationId}`}
+                organizationId={organizationId}
+                orgSlug={orgSlug}
+                projectName={projectName}
+                conversationId={conversationId}
+                mode={mode}
+                bridgeSettings={bridge.settings}
+              />
+            </>
           )}
         </div>
       </PageLayout>
