@@ -133,6 +133,9 @@ RUN set -eu; \
     rm -rf /tmp/prev1 /tmp/prev2
 
 COPY app/nginx.conf /etc/nginx/conf.d/default.conf
+# Shared security-header snippet, included by nginx.conf. Kept out of
+# conf.d/, whose *.conf files the base image includes at http level.
+COPY app/nginx-security-headers.conf /etc/nginx/snippets/security-headers.conf
 COPY app/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 

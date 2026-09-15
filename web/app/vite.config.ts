@@ -20,6 +20,7 @@ const PANEL_HOST_CSP = [
   "img-src blob: data: *",
   "style-src 'self' 'unsafe-inline'",
   "font-src 'self' data:",
+  "frame-ancestors 'self'",
 ].join("; ");
 
 /**

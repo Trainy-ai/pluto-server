@@ -74,6 +74,26 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 app = FastAPI()
 
+# Browser security headers on every response. This service only ever returns
+# JSON, so the strictest CSP costs nothing. Set centrally here, and repeated
+# on the 500 handler below, which Starlette runs outside the middleware
+# stack.
+SECURITY_HEADERS = {
+    "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+}
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.update(SECURITY_HEADERS)
+    return response
+
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
@@ -89,7 +109,9 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
         request.url,
     )
     return JSONResponse(
-        status_code=500, content={"detail": "Internal Server Error"}
+        status_code=500,
+        content={"detail": "Internal Server Error"},
+        headers=SECURITY_HEADERS,
     )
 
 
@@ -278,4 +300,5 @@ if __name__ == "__main__":
     import uvicorn
     offset = int(os.getenv("PORT_OFFSET", "0"))
     port = int(os.getenv("PORT", str(3004 + offset)))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    # server_header=False: do not announce the server software (Server: uvicorn).
+    uvicorn.run(app, host="0.0.0.0", port=port, server_header=False)

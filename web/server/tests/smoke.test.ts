@@ -108,6 +108,51 @@ describe('Backend Smoke Tests', () => {
     });
   });
 
+  describe('Test Suite 1b: Browser Security Headers', () => {
+    // Set once in index.ts (hono secureHeaders) for every route, so a single
+    // REST, tRPC and error response each stand in for their whole surface.
+    function expectApiSecurityHeaders(response: Response) {
+      expect(response.headers.get('strict-transport-security')).toBe('max-age=31536000; includeSubDomains');
+      expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+      expect(response.headers.get('x-frame-options')).toBe('DENY');
+      expect(response.headers.get('referrer-policy')).toBe('strict-origin-when-cross-origin');
+      expect(response.headers.get('permissions-policy')).toBe('camera=(), microphone=(), geolocation=()');
+      expect(response.headers.get('content-security-policy')).toBe("default-src 'none'; frame-ancestors 'none'");
+    }
+
+    it('Test 1.5: REST responses carry security headers', async () => {
+      const response = await makeRequest('/api/health');
+      expect(response.status).toBe(200);
+      expectApiSecurityHeaders(response);
+    });
+
+    it('Test 1.6: tRPC responses carry security headers', async () => {
+      const response = await makeTrpcRequest('auth');
+      expect([200, 401]).toContain(response.status);
+      expectApiSecurityHeaders(response);
+    });
+
+    it('Test 1.7: Error responses carry security headers', async () => {
+      const response = await makeTrpcRequest('organization.listMembers', {}, {}, 'GET');
+      expect(response.status).toBe(401);
+      expectApiSecurityHeaders(response);
+    });
+
+    it('Test 1.8: Swagger UI keeps a page-compatible CSP', async () => {
+      // Session-gated: unauthenticated callers get the sign-in page (401),
+      // which is rendered under the same docs policy as the UI itself.
+      const response = await makeRequest('/api/docs');
+      expect(response.status).toBe(401);
+      expect(response.headers.get('strict-transport-security')).toBe('max-age=31536000; includeSubDomains');
+      expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+      expect(response.headers.get('x-frame-options')).toBe('DENY');
+      const csp = response.headers.get('content-security-policy') ?? '';
+      expect(csp).not.toContain("default-src 'none'");
+      expect(csp).toContain("script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net");
+      expect(csp).toContain("frame-ancestors 'none'");
+    });
+  });
+
   describe('Test Suite 2: Authentication (better-auth)', () => {
     it('Test 2.2: Session Validation - No Session', async () => {
       const response = await makeTrpcRequest('auth');

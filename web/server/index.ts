@@ -2,6 +2,7 @@ import { trpcServer } from "@hono/trpc-server";
 import { OpenAPIHono, z } from "@hono/zod-openapi";
 import { cors } from "hono/cors";
 import { compress } from "hono/compress";
+import { secureHeaders } from "hono/secure-headers";
 import { HTTPException } from "hono/http-exception";
 
 import { createContext } from "./lib/context";
@@ -59,6 +60,61 @@ app.use(
     maxAge: 86400,
   }),
 );
+
+// Browser security headers on every response, set here once rather than per
+// route. Only adds headers — the CORS behaviour above is untouched.
+// Cross-Origin-Resource-Policy / -Opener-Policy are deliberately left off:
+// the web app on its own origin reads this API through CORS, and COOP on the
+// OAuth callback documents would cut popup/opener flows; on a JSON API they
+// could only break things, not protect anything.
+const secureHeaderBase = {
+  strictTransportSecurity: "max-age=31536000; includeSubDomains",
+  xFrameOptions: "DENY",
+  referrerPolicy: "strict-origin-when-cross-origin",
+  permissionsPolicy: { camera: [], microphone: [], geolocation: [] },
+  crossOriginResourcePolicy: false,
+  crossOriginOpenerPolicy: false,
+};
+
+// JSON never renders anything, so the strictest CSP is free.
+const apiSecureHeaders = secureHeaders({
+  ...secureHeaderBase,
+  contentSecurityPolicy: {
+    defaultSrc: ["'none'"],
+    frameAncestors: ["'none'"],
+  },
+});
+
+// Swagger UI (/api/docs) is the one HTML page this server renders: it pulls
+// its bundle and stylesheet from jsdelivr (see @hono/swagger-ui), bootstraps
+// with an inline script and Swagger injects inline styles, so it needs a
+// CSP of its own. connect-src also names PUBLIC_URL — the server the spec
+// points "Try it out" at — so the page keeps working when it is reached
+// through the frontend's nginx proxy (docker compose) rather than directly.
+const docsSecureHeaders = secureHeaders({
+  ...secureHeaderBase,
+  contentSecurityPolicy: {
+    defaultSrc: ["'self'"],
+    scriptSrc: ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net"],
+    styleSrc: ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net"],
+    imgSrc: ["'self'", "data:"],
+    connectSrc: ["'self'", env.PUBLIC_URL],
+    objectSrc: ["'none'"],
+    baseUri: ["'self'"],
+    frameAncestors: ["'none'"],
+  },
+});
+
+// One dispatcher rather than two app.use() calls: secureHeaders sets its
+// headers after `next()` with Headers.set, so of two stacked instances the
+// OUTER one (registered first) would always win. Branching here means
+// exactly one policy applies to each request.
+app.use("/*", async (c, next) => {
+  if (c.req.path.startsWith("/api/docs")) {
+    return docsSecureHeaders(c, next);
+  }
+  return apiSecureHeaders(c, next);
+});
 
 // Apply gzip compression to JSON responses. Streaming chat is deliberately
 // excluded: compression middleware can buffer token chunks until completion.
