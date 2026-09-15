@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildSystemPrompt, buildTurnPrompt } from "../prompt";
+import { buildSystemPrompt, buildTurnPrompt } from "../prompt.js";
 
 describe("buildSystemPrompt", () => {
   it("names the org and project and asks for run citations", () => {
@@ -7,7 +7,23 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("dev-org");
     expect(prompt).toContain("mnist");
     expect(prompt).toContain("[run:");
+  });
+
+  it("describes a read-only session by default", () => {
+    const prompt = buildSystemPrompt({ orgSlug: "o", projectName: "p" });
     expect(prompt.toLowerCase()).toContain("read-only");
+    expect(prompt).not.toContain("update_dashboard");
+  });
+
+  it("allows changes only on explicit request when writes are granted", () => {
+    const prompt = buildSystemPrompt({
+      orgSlug: "o",
+      projectName: "p",
+      allowWrites: true,
+    });
+    expect(prompt.toLowerCase()).not.toContain("read-only");
+    expect(prompt).toContain("update_dashboard");
+    expect(prompt.toLowerCase()).toContain("explicitly");
   });
 });
 

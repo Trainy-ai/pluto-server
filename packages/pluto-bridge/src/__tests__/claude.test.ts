@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { buildClaudeArgs, parseClaudeLine } from "../agents/claude";
+import { buildClaudeArgs, parseClaudeLine } from "../agents/claude.js";
+import { claudeMcpConfig } from "../mcp.js";
+import { READ_TOOLS, WRITE_TOOLS } from "../tool-policy.js";
 
 describe("buildClaudeArgs", () => {
-  it("builds a first-turn command with system prompt and print streaming", () => {
-    const args = buildClaudeArgs({
-      systemPrompt: "Project context",
-      allowedTools: ["mcp__pluto"],
-    });
+  const MCP = claudeMcpConfig("https://mcp.example.com/mcp/");
+  const pluto = (tools: readonly string[]) =>
+    tools.map((tool) => `mcp__pluto__${tool}`).join(",");
+
+  it("builds a read-only first turn scoped to the bridge's own MCP config", () => {
+    const args = buildClaudeArgs({ systemPrompt: "Project context", mcpConfig: MCP });
     expect(args).toEqual([
       "-p",
       "--output-format",
@@ -14,27 +17,53 @@ describe("buildClaudeArgs", () => {
       "--verbose",
       "--append-system-prompt",
       "Project context",
+      "--strict-mcp-config",
+      "--mcp-config",
+      MCP,
       "--allowedTools",
-      "mcp__pluto",
+      pluto(READ_TOOLS),
+      "--disallowedTools",
+      pluto(WRITE_TOOLS),
     ]);
   });
 
-  it("never puts a positional prompt on argv (variadic flags would eat it)", () => {
-    const args = buildClaudeArgs({ systemPrompt: "ctx" });
-    expect(args[args.length - 1]).toBe("mcp__pluto");
+  it("grants no write tool and denies all six by default", () => {
+    const args = buildClaudeArgs({ systemPrompt: "ctx", mcpConfig: MCP });
+    const allowed = args[args.indexOf("--allowedTools") + 1]!.split(",");
+    const denied = args[args.indexOf("--disallowedTools") + 1]!.split(",");
+    for (const tool of WRITE_TOOLS) {
+      expect(allowed).not.toContain(`mcp__pluto__${tool}`);
+      expect(denied).toContain(`mcp__pluto__${tool}`);
+    }
+    // A bare server prefix would grant every tool on it, writes included.
+    expect(allowed).not.toContain("mcp__pluto");
   });
 
-  it("resumes a known session and passes an MCP config when provided", () => {
+  it("grants the write tools and denies nothing with allowWrites", () => {
+    const args = buildClaudeArgs({
+      systemPrompt: "ctx",
+      mcpConfig: MCP,
+      allowWrites: true,
+    });
+    expect(args[args.indexOf("--allowedTools") + 1]).toBe(
+      pluto([...READ_TOOLS, ...WRITE_TOOLS]),
+    );
+    expect(args).not.toContain("--disallowedTools");
+  });
+
+  it("never puts a positional prompt on argv (variadic flags would eat it)", () => {
+    const args = buildClaudeArgs({ systemPrompt: "ctx", mcpConfig: MCP });
+    expect(args[args.length - 1]).toBe(pluto(WRITE_TOOLS));
+  });
+
+  it("resumes a known session", () => {
     const args = buildClaudeArgs({
       systemPrompt: "ctx",
       resumeSessionId: "sess-1",
-      mcpConfigPath: "/tmp/mcp.json",
-      allowedTools: [],
+      mcpConfig: "/tmp/mcp.json",
     });
-    expect(args).toContain("--resume");
     expect(args[args.indexOf("--resume") + 1]).toBe("sess-1");
     expect(args[args.indexOf("--mcp-config") + 1]).toBe("/tmp/mcp.json");
-    expect(args).not.toContain("--allowedTools");
   });
 });
 

@@ -1,0 +1,36 @@
+{
+  "name": "@trainy/pluto-bridge",
+  "version": "1.0.0",
+  "description": "Local bridge that lets Claude Code or Codex power the Pluto chat UI",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "pluto-bridge": "dist/bin.js"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20.10"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Trainy-ai/server-private.git",
+    "directory": "packages/pluto-bridge"
+  },
+  "scripts": {
+    "start": "tsx src/bin.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "check-types": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/node": "22.14.1",
+    "tsx": "4.19.3",
+    "typescript": "5.8.3",
+    "vitest": "3.2.6"
+  }
+}

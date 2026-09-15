@@ -1,5 +1,5 @@
 /**
- * Settings and probing for the local agent bridge (`@mlop/agent-bridge`),
+ * Settings and probing for the local agent bridge (`@trainy/pluto-bridge`),
  * a loopback server the user runs so their own Claude Code or Codex can
  * power the chat UI.
  */
@@ -11,6 +11,27 @@ export interface LocalBridgeSettings {
 
 export const LOCAL_BRIDGE_STORAGE_KEY = "mlop.chat.local-bridge";
 export const LOCAL_BRIDGE_DEFAULT_PORT = 8377;
+
+/**
+ * Exact bridge version customers are told to run. Pinned, not `latest`, so a
+ * bad publish never reaches anyone automatically: moving to a new version is
+ * a deliberate PR. Must equal packages/pluto-bridge/package.json (tested).
+ */
+export const LOCAL_BRIDGE_VERSION = "1.0.0";
+
+/** Origin the bridge accepts without an --origin flag. */
+const LOCAL_BRIDGE_DEFAULT_ORIGIN = "https://pluto.trainy.ai";
+
+/**
+ * The command that starts a bridge this web app can talk to. Deployments on
+ * any other origin (self-hosted, local dev) must be allowlisted explicitly.
+ */
+export function getLocalBridgeCommand(origin: string): string {
+  const command = `npx @trainy/pluto-bridge@${LOCAL_BRIDGE_VERSION}`;
+  return origin === LOCAL_BRIDGE_DEFAULT_ORIGIN
+    ? command
+    : `${command} --origin ${origin}`;
+}
 
 export function getLocalBridgeUrl(port: number, path: string): string {
   return `http://127.0.0.1:${port}${path}`;

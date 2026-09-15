@@ -1,29 +1,40 @@
-import { runProcessLines } from "../process";
-import type { AgentEvent, AgentRunner, AgentTurnOptions } from "../types";
+import { runProcessLines } from "../process.js";
+import {
+  grantedTools,
+  PLUTO_MCP_SERVER,
+  withheldTools,
+} from "../tool-policy.js";
+import type { AgentEvent, AgentRunner, AgentTurnOptions } from "../types.js";
 
 export interface ClaudeRunnerOptions {
   /** Binary to invoke; defaults to `claude` on PATH. */
   command?: string;
-  /** Optional MCP config file passed through to the CLI. */
-  mcpConfigPath?: string;
   /**
-   * Tool patterns pre-approved for headless runs. Defaults to the pluto MCP
-   * server so data lookups don't stall on permission prompts.
+   * MCP config (JSON string or file path) defining the `pluto` server. It is
+   * loaded with --strict-mcp-config, so no other MCP server the user has
+   * configured is reachable from a chat turn.
    */
-  allowedTools?: string[];
+  mcpConfig: string;
+  /** Grant the pluto write tools; read-only when false. */
+  allowWrites?: boolean;
+}
+
+function plutoToolIds(tools: string[]): string {
+  return tools.map((tool) => `mcp__${PLUTO_MCP_SERVER}__${tool}`).join(",");
 }
 
 export function buildClaudeArgs({
   systemPrompt,
   resumeSessionId,
-  mcpConfigPath,
-  allowedTools = ["mcp__pluto"],
+  mcpConfig,
+  allowWrites = false,
 }: {
   systemPrompt: string;
   resumeSessionId?: string;
-  mcpConfigPath?: string;
-  allowedTools?: string[];
+  mcpConfig: string;
+  allowWrites?: boolean;
 }): string[] {
+  const withheld = withheldTools(allowWrites);
   // The prompt goes in via stdin, not argv: --allowedTools is variadic and
   // would swallow a trailing positional, and prompts can start with "-".
   return [
@@ -34,10 +45,15 @@ export function buildClaudeArgs({
     "--append-system-prompt",
     systemPrompt,
     ...(resumeSessionId ? ["--resume", resumeSessionId] : []),
-    ...(mcpConfigPath ? ["--mcp-config", mcpConfigPath] : []),
-    ...(allowedTools.length > 0
-      ? ["--allowedTools", allowedTools.join(",")]
-      : []),
+    "--strict-mcp-config",
+    "--mcp-config",
+    mcpConfig,
+    // Tools are listed individually: the bare `mcp__pluto` prefix would also
+    // grant every write tool. Deny rules win over the user's own allow rules,
+    // so withheld tools stay unavailable whatever their settings say.
+    "--allowedTools",
+    plutoToolIds(grantedTools(allowWrites)),
+    ...(withheld.length > 0 ? ["--disallowedTools", plutoToolIds(withheld)] : []),
   ];
 }
 
@@ -85,9 +101,7 @@ export function parseClaudeLine(line: string): AgentEvent[] {
   return [];
 }
 
-export function createClaudeRunner(
-  options: ClaudeRunnerOptions = {},
-): AgentRunner {
+export function createClaudeRunner(options: ClaudeRunnerOptions): AgentRunner {
   const command = options.command ?? "claude";
   return {
     name: "claude",
@@ -95,8 +109,8 @@ export function createClaudeRunner(
       const args = buildClaudeArgs({
         systemPrompt: turn.systemPrompt,
         resumeSessionId: turn.resumeSessionId,
-        mcpConfigPath: options.mcpConfigPath,
-        allowedTools: options.allowedTools,
+        mcpConfig: options.mcpConfig,
+        allowWrites: options.allowWrites,
       });
       for await (const line of runProcessLines(command, args, {
         signal: turn.signal,

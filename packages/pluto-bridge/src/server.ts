@@ -1,13 +1,19 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Server } from "node:http";
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import { buildSystemPrompt, buildTurnPrompt } from "./prompt";
-import type { AgentRunner, BridgeChatRequest, BridgeMessage } from "./types";
-import { DONE_EVENT, encodeUiChunk, UI_STREAM_HEADERS } from "./ui-stream";
+import { buildSystemPrompt, buildTurnPrompt } from "./prompt.js";
+import type { AgentRunner, BridgeChatRequest, BridgeMessage } from "./types.js";
+import { DONE_EVENT, encodeUiChunk, UI_STREAM_HEADERS } from "./ui-stream.js";
 
 export interface BridgeServerOptions {
   token: string;
   runner: AgentRunner;
+  /** Whether the runner was granted pluto write tools; shapes the system prompt. */
+  allowWrites?: boolean;
+  /** Browser origins (e.g. "https://pluto.trainy.ai") allowed to call the bridge. */
+  allowedOrigins: string[];
+  /** Called for each request refused because of its origin. */
+  onRejectedOrigin?: (origin: string) => void;
 }
 
 export interface BridgeServer {
@@ -33,10 +39,24 @@ function extractToken(request: IncomingMessage): string | undefined {
   return undefined;
 }
 
+/**
+ * Requests without an Origin come from local non-browser clients, which the
+ * token alone gates. Browsers always send Origin cross-origin, so a page on a
+ * disallowed site cannot use a token leaked into a screenshot or chat log.
+ */
+function isOriginAllowed(
+  request: IncomingMessage,
+  options: BridgeServerOptions,
+): boolean {
+  const origin = request.headers.origin;
+  if (origin === undefined) return true;
+  if (options.allowedOrigins.includes(origin)) return true;
+  options.onRejectedOrigin?.(origin);
+  return false;
+}
+
 function applyCors(request: IncomingMessage, response: ServerResponse): void {
   const origin = request.headers.origin;
-  // The token is the actual gate; reflecting the origin lets any mlop
-  // deployment (localhost or hosted) talk to the user's own bridge.
   if (origin) {
     response.setHeader("access-control-allow-origin", origin);
     response.setHeader("vary", "Origin");
@@ -176,7 +196,7 @@ async function handleChat(
   try {
     for await (const event of options.runner.runTurn({
       prompt,
-      systemPrompt: buildSystemPrompt(chat),
+      systemPrompt: buildSystemPrompt({ ...chat, allowWrites: options.allowWrites }),
       resumeSessionId,
       signal: abort.signal,
     })) {
@@ -226,6 +246,10 @@ async function handleChat(
 export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
   const sessions = new Map<string, string>();
   const server = createServer((request, response) => {
+    if (!isOriginAllowed(request, options)) {
+      json(response, 403, { error: "Origin not allowed" });
+      return;
+    }
     if (request.method === "OPTIONS") {
       handlePreflight(request, response);
       return;

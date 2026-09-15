@@ -9,7 +9,10 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { LOCAL_BRIDGE_DEFAULT_PORT } from "@/lib/local-bridge";
+import {
+  getLocalBridgeCommand,
+  LOCAL_BRIDGE_DEFAULT_PORT,
+} from "@/lib/local-bridge";
 import type { UseLocalBridgeResult } from "@/hooks/use-local-bridge";
 import { cn } from "@/lib/utils";
 
@@ -60,7 +63,7 @@ export function LocalAgentConnect({ bridge }: LocalAgentConnectProps) {
             <p className="text-xs text-muted-foreground">
               Run{" "}
               <code className="rounded bg-muted px-1 py-0.5">
-                pnpm --filter @mlop/agent-bridge start
+                {getLocalBridgeCommand(window.location.origin)}
               </code>{" "}
               on your machine, then enter the port and token it prints.
             </p>

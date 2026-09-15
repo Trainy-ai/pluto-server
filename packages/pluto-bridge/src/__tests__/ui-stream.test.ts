@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { encodeUiChunk, DONE_EVENT, UI_STREAM_HEADERS } from "../ui-stream";
+import { encodeUiChunk, DONE_EVENT, UI_STREAM_HEADERS } from "../ui-stream.js";
 
 describe("ui message stream encoding", () => {
   it("encodes chunks as SSE data lines", () => {

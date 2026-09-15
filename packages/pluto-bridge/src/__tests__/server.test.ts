@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AddressInfo } from "node:net";
-import { createBridgeServer, type BridgeServer } from "../server";
-import type { AgentEvent, AgentRunner, AgentTurnOptions } from "../types";
+import { createBridgeServer, type BridgeServer } from "../server.js";
+import type { AgentEvent, AgentRunner, AgentTurnOptions } from "../types.js";
 
 const TOKEN = "test-token";
+const ALLOWED_ORIGIN = "https://app.example.com";
 
 function fakeRunner(
   events: AgentEvent[],
@@ -32,11 +33,15 @@ describe("bridge server", () => {
   let bridge: BridgeServer;
   let baseUrl: string;
   let seenTurns: AgentTurnOptions[];
+  let rejectedOrigins: string[];
 
   function start(events?: AgentEvent[]) {
     seenTurns = [];
+    rejectedOrigins = [];
     bridge = createBridgeServer({
       token: TOKEN,
+      allowedOrigins: [ALLOWED_ORIGIN],
+      onRejectedOrigin: (origin) => rejectedOrigins.push(origin),
       runner: fakeRunner(
         events ?? [
           { type: "session", sessionId: "sess-1" },
@@ -100,6 +105,54 @@ describe("bridge server", () => {
     ).toBe("true");
   });
 
+  it("rejects a browser origin that is not allowlisted, even with the token", async () => {
+    const evil = "https://evil.example.net";
+    const health = await fetch(`${baseUrl}/health`, {
+      headers: { origin: evil, "x-bridge-token": TOKEN },
+    });
+    expect(health.status).toBe(403);
+    expect(health.headers.get("access-control-allow-origin")).toBeNull();
+
+    const chat = await fetch(`${baseUrl}/chat`, {
+      method: "POST",
+      headers: {
+        origin: evil,
+        "content-type": "application/json",
+        "x-bridge-token": TOKEN,
+      },
+      body: chatBody(),
+    });
+    expect(chat.status).toBe(403);
+    expect(seenTurns).toEqual([]);
+    expect(rejectedOrigins).toEqual([evil, evil]);
+  });
+
+  it("refuses CORS preflights from a disallowed origin", async () => {
+    const response = await fetch(`${baseUrl}/chat`, {
+      method: "OPTIONS",
+      headers: {
+        origin: "https://evil.example.net",
+        "access-control-request-method": "POST",
+        "access-control-request-private-network": "true",
+      },
+    });
+    expect(response.status).toBe(403);
+    expect(response.headers.get("access-control-allow-origin")).toBeNull();
+    expect(
+      response.headers.get("access-control-allow-private-network"),
+    ).toBeNull();
+  });
+
+  it("still requires the token from an allowed origin", async () => {
+    const response = await fetch(`${baseUrl}/health`, {
+      headers: { origin: ALLOWED_ORIGIN },
+    });
+    expect(response.status).toBe(401);
+    expect(response.headers.get("access-control-allow-origin")).toBe(
+      ALLOWED_ORIGIN,
+    );
+  });
+
   it("streams a ui message stream for a chat turn", async () => {
     const response = await fetch(`${baseUrl}/chat`, {
       method: "POST",
@@ -134,6 +187,7 @@ describe("bridge server", () => {
     await first.text();
     expect(seenTurns[0]?.resumeSessionId).toBeUndefined();
     expect(seenTurns[0]?.systemPrompt).toContain("mnist");
+    expect(seenTurns[0]?.systemPrompt.toLowerCase()).toContain("read-only");
 
     const second = await fetch(`${baseUrl}/chat`, {
       method: "POST",

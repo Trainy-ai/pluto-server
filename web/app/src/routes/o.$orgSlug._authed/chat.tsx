@@ -28,6 +28,7 @@ import { type ChatMessage, type ChatMode } from "@/components/chat/chat-types";
 import { LocalAgentConnect } from "@/components/chat/local-agent-connect";
 import { getChatApiUrl, useChatConfig } from "@/lib/chat-api";
 import {
+  getLocalBridgeCommand,
   getLocalBridgeUrl,
   type LocalBridgeSettings,
 } from "@/lib/local-bridge";
@@ -274,6 +275,7 @@ function RouteComponent() {
     crypto.randomUUID(),
   );
   const bridge = useLocalBridge();
+  const bridgeCommand = getLocalBridgeCommand(window.location.origin);
   const serverEnabled = Boolean(chatConfig?.enabled);
   const [modeChoice, setModeChoice] = useState<ChatMode>();
   const mode: ChatMode = modeChoice ?? (serverEnabled ? "server" : "local");
@@ -368,7 +370,7 @@ function RouteComponent() {
               <p className="max-w-md text-sm text-muted-foreground">
                 Run{" "}
                 <code className="rounded bg-muted px-1 py-0.5">
-                  pnpm --filter @mlop/agent-bridge start
+                  {bridgeCommand}
                 </code>{" "}
                 on your machine, then use “Connect agent” above to pair the port
                 and token it prints.
@@ -395,7 +397,7 @@ function RouteComponent() {
                   Lost contact with the local agent bridge. Your conversation is
                   still here; restart{" "}
                   <code className="rounded bg-muted px-1 py-0.5">
-                    pnpm --filter @mlop/agent-bridge start
+                    {bridgeCommand}
                   </code>{" "}
                   and it will reconnect automatically.
                 </div>

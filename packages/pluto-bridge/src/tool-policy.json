@@ -1,0 +1,34 @@
+{
+  "$comment": "Pluto MCP tools the bridge grants. Reads are always granted; writes only with --allow-writes. mcp/tests/test_bridge_tool_policy.py fails if the MCP registers a tool on neither list.",
+  "server": "pluto",
+  "read": [
+    "list_projects",
+    "list_runs",
+    "get_run",
+    "query_logs",
+    "query_metrics",
+    "get_files",
+    "get_statistics",
+    "compare_runs",
+    "generate_comparison_url",
+    "list_metric_names",
+    "get_leaderboard",
+    "visualize_metrics",
+    "visualize_comparison",
+    "list_dashboards",
+    "get_dashboard",
+    "list_dashboard_versions",
+    "get_dashboard_version",
+    "suggest_dashboard",
+    "read_dashboard",
+    "render_panels"
+  ],
+  "write": [
+    "add_tags",
+    "remove_tags",
+    "update_notes",
+    "create_dashboard",
+    "update_dashboard",
+    "restore_dashboard_version"
+  ]
+}

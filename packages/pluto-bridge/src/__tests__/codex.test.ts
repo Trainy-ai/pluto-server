@@ -1,21 +1,63 @@
 import { describe, expect, it } from "vitest";
-import { buildCodexArgs, parseCodexLine } from "../agents/codex";
+import { buildCodexArgs, parseCodexLine } from "../agents/codex.js";
+import { codexMcpOverrides } from "../mcp.js";
+import { READ_TOOLS, WRITE_TOOLS } from "../tool-policy.js";
 
 describe("buildCodexArgs", () => {
-  it("starts a fresh exec turn with JSON output", () => {
+  const URL = "https://mcp.example.com/mcp/";
+  const isolation = [
+    "--json",
+    "--ignore-user-config",
+    "--skip-git-repo-check",
+    "-c",
+    'sandbox_mode="read-only"',
+  ];
+
+  it("starts a fresh exec turn isolated from user config, with read tools only", () => {
     expect(
-      buildCodexArgs({ prompt: "hello", systemPrompt: "ctx" }),
-    ).toEqual(["exec", "--json", "ctx\n\nhello"]);
+      buildCodexArgs({ prompt: "hello", systemPrompt: "ctx", mcpUrl: URL }),
+    ).toEqual([
+      "exec",
+      ...isolation,
+      ...codexMcpOverrides(URL, [...READ_TOOLS]),
+      "ctx\n\nhello",
+    ]);
   });
 
-  it("resumes a known thread", () => {
+  it("resumes a known thread with the same isolation", () => {
     expect(
       buildCodexArgs({
         prompt: "next question",
         systemPrompt: "ctx",
         resumeSessionId: "thread-1",
+        mcpUrl: URL,
       }),
-    ).toEqual(["exec", "resume", "thread-1", "--json", "next question"]);
+    ).toEqual([
+      "exec",
+      "resume",
+      "thread-1",
+      ...isolation,
+      ...codexMcpOverrides(URL, [...READ_TOOLS]),
+      "next question",
+    ]);
+  });
+
+  it("enables the write tools only with allowWrites", () => {
+    const readOnly = buildCodexArgs({ prompt: "p", systemPrompt: "s", mcpUrl: URL });
+    const writable = buildCodexArgs({
+      prompt: "p",
+      systemPrompt: "s",
+      mcpUrl: URL,
+      allowWrites: true,
+    });
+    const enabled = (args: string[]) =>
+      args.find((arg) => arg.startsWith("mcp_servers.pluto.enabled_tools="));
+    for (const tool of WRITE_TOOLS) {
+      expect(enabled(readOnly)).not.toContain(`"${tool}"`);
+      expect(enabled(writable)).toContain(`"${tool}"`);
+    }
+    // Pluto writes are MCP calls; shell commands stay read-only regardless.
+    expect(writable).toContain('sandbox_mode="read-only"');
   });
 });
 

@@ -15,6 +15,10 @@ export async function* runProcessLines(
     stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
     env: process.env,
   });
+  const { stdout, stderr } = child;
+  if (!stdout || !stderr) {
+    throw new Error(`Could not capture output of "${command}"`);
+  }
   if (input !== undefined && child.stdin) {
     child.stdin.on("error", () => {});
     child.stdin.end(input);
@@ -24,8 +28,8 @@ export async function* runProcessLines(
   signal.addEventListener("abort", onAbort, { once: true });
 
   let stderrTail = "";
-  child.stderr.setEncoding("utf8");
-  child.stderr.on("data", (chunk: string) => {
+  stderr.setEncoding("utf8");
+  stderr.on("data", (chunk: string) => {
     stderrTail = (stderrTail + chunk).slice(-2000);
   });
 
@@ -39,8 +43,8 @@ export async function* runProcessLines(
     wake = undefined;
   };
 
-  child.stdout.setEncoding("utf8");
-  child.stdout.on("data", (chunk: string) => {
+  stdout.setEncoding("utf8");
+  stdout.on("data", (chunk: string) => {
     buffered += chunk;
     const parts = buffered.split("\n");
     buffered = parts.pop() ?? "";
