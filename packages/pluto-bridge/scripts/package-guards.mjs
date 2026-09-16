@@ -41,6 +41,12 @@ const LIFECYCLE_SCRIPTS = [
 
 const ALLOWED_FILES = new Set(["package.json", "LICENSE", "README.md"]);
 
+// Counsel signed off on MIT for this package (2026-09-16). A published npm
+// version is immutable, so a wrong license here is a permanent grant to
+// everyone who downloads it — fail the build instead.
+const LICENSE_ID = "MIT";
+const LICENSE_FIRST_LINE = "MIT License";
+
 /** @param {Record<string, unknown>} manifest */
 export function checkManifest(manifest) {
   const problems = [];
@@ -54,6 +60,11 @@ export function checkManifest(manifest) {
     if (count > 0) {
       problems.push(`package.json must not declare ${field}`);
     }
+  }
+  if (manifest.license !== LICENSE_ID) {
+    problems.push(
+      `package.json license must be "${LICENSE_ID}", got ${JSON.stringify(manifest.license)}`,
+    );
   }
   const scripts =
     manifest.scripts && typeof manifest.scripts === "object"
@@ -89,6 +100,12 @@ export function checkPackedFiles(files) {
 function main() {
   const manifest = JSON.parse(readFileSync("package.json", "utf8"));
   const problems = checkManifest(manifest);
+
+  if (!existsSync("LICENSE")) {
+    problems.push("LICENSE is missing");
+  } else if (!readFileSync("LICENSE", "utf8").trim().startsWith(LICENSE_FIRST_LINE)) {
+    problems.push(`LICENSE must be the ${LICENSE_ID} text`);
+  }
 
   if (!existsSync("package-lock.json")) {
     problems.push("package-lock.json is missing; the build must use npm ci");

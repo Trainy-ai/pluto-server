@@ -3,6 +3,7 @@ import { checkManifest, checkPackedFiles } from "./package-guards.mjs";
 
 const clean = {
   name: "@trainy/pluto-bridge",
+  license: "MIT",
   scripts: { build: "tsc", test: "vitest run" },
   devDependencies: { typescript: "5.8.3" },
 };
@@ -63,5 +64,14 @@ describe("checkPackedFiles", () => {
       "package is missing LICENSE",
       "package is missing dist/bin.js",
     ]);
+  });
+});
+
+describe("license", () => {
+  it("fails on any license but MIT", () => {
+    expect(checkManifest({ ...clean, license: "Apache-2.0" })).toEqual([
+      'package.json license must be "MIT", got "Apache-2.0"',
+    ]);
+    expect(checkManifest({ ...clean, license: undefined })).toHaveLength(1);
   });
 });
