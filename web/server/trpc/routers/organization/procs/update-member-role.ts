@@ -49,6 +49,7 @@ export const updateMemberRoleProcedure = protectedOrgProcedure
     }
 
     const updatedMember = await ctx.prisma.member.update({
+      // eslint-disable-next-line @mlop/require-org-scope -- targetMember was found by the org-scoped findFirst above
       where: {
         id: input.memberId,
       },

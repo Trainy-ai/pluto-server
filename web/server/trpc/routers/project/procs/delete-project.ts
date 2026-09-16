@@ -69,6 +69,7 @@ export const deleteProjectProcedure = protectedOrgProcedure
         where: { projectId: project.id, organizationId },
       }),
       ctx.prisma.projects.delete({
+        // eslint-disable-next-line @mlop/require-org-scope -- project came from the org-scoped findUnique above
         where: { id: project.id },
       }),
     ]);

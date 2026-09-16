@@ -175,6 +175,7 @@ router.openapi(createRunRoute, async (c) => {
   let projectRunPrefix = project.runPrefix;
   if (!projectRunPrefix) {
     await ctx.prisma.projects.update({
+      // eslint-disable-next-line @mlop/require-org-scope -- project.id came from the upsert keyed by organizationId_name above
       where: { id: project.id },
       data: { runPrefix: generatedPrefix },
     });
@@ -283,6 +284,7 @@ router.openapi(createRunRoute, async (c) => {
 
       // Atomically increment the project's run counter and create the run
       const updatedProject = await ctx.prisma.projects.update({
+        // eslint-disable-next-line @mlop/require-org-scope -- project.id came from the upsert keyed by organizationId_name above
         where: { id: project.id },
         data: { nextRunNumber: { increment: 1 } },
         select: { nextRunNumber: true },
@@ -421,6 +423,7 @@ router.openapi(createRunRoute, async (c) => {
     const parsedCfg = config && config !== "null" ? JSON.parse(config) : null;
     if (parsedCfg && typeof parsedCfg === "object" && !Array.isArray(parsedCfg)) {
       const existingRun = await ctx.prisma.runs.findUnique({
+        // eslint-disable-next-line @mlop/require-org-scope -- run.id came from the org-scoped externalId lookup or the creation above
         where: { id: run.id },
         select: { config: true, systemMetadata: true, projectId: true },
       });
@@ -428,6 +431,7 @@ router.openapi(createRunRoute, async (c) => {
         const existingConfig = (existingRun.config || {}) as Record<string, unknown>;
         const mergedConfig = deepMerge(existingConfig, parsedCfg);
         ctx.prisma.runs.update({
+          // eslint-disable-next-line @mlop/require-org-scope -- run.id came from the org-scoped externalId lookup or the creation above
           where: { id: run.id },
           data: { config: mergedConfig as Prisma.InputJsonValue },
         }).then(() => {
@@ -1614,6 +1618,7 @@ router.openapi(listRunsRoute, async (c) => {
     }
 
     const fetched = await prisma.runs.findMany({
+      // eslint-disable-next-line @mlop/require-org-scope -- pageIds are a subset of candidateIds, produced by the org-scoped query above
       where: { id: { in: pageIds } },
       select: runSelect,
     });
@@ -2914,6 +2919,7 @@ router.openapi(leaderboardRoute, async (c) => {
   // Fetch run metadata from PostgreSQL
   const runIds = sortedRuns.map((r) => r.runId);
   const runs = await prisma.runs.findMany({
+    // eslint-disable-next-line @mlop/require-org-scope -- runIds come from the tenant-scoped ClickHouse summaries query above
     where: {
       id: { in: runIds },
     },

@@ -127,6 +127,7 @@ export async function attachFieldValues(
   }
 
   const rows = await prisma.runFieldValue.findMany({
+    // eslint-disable-next-line @mlop/require-org-scope -- runs were produced by the org-scoped listing that calls this helper
     where: {
       runId: { in: runs.map((r) => r.id) },
       // When visibleColumns is provided, restrict to the requested
@@ -586,6 +587,7 @@ async function defaultCursorQueryWithFieldFilters(
     // of the previous page; fetch rows after it). Look up the cursor
     // row's createdAt so we can build the compound keyset.
     const cursorRow = await ctx.prisma.runs.findUnique({
+      // eslint-disable-next-line @mlop/require-org-scope -- TODO(tenancy): cursor is a caller-supplied numeric run id read without an organization scope; it only positions the (org-scoped) page, but it lets a caller probe whether a run id exists in another organization
       where: { id: BigInt(input.cursor) },
       select: { createdAt: true },
     });
@@ -614,6 +616,7 @@ async function defaultCursorQueryWithFieldFilters(
   if (rows.length === 0) return { runs: [], nextCursor: null, nextOffset: null };
 
   const runs = await ctx.prisma.runs.findMany({
+    // eslint-disable-next-line @mlop/require-org-scope -- ids come from the org-scoped raw SQL above
     where: { id: { in: rows.map((r) => r.id) } },
     select: {
       id: true, name: true, number: true, status: true, statusUpdated: true,
@@ -803,6 +806,7 @@ async function durationSortQuery(
   }
 
   const runs = await ctx.prisma.runs.findMany({
+    // eslint-disable-next-line @mlop/require-org-scope -- ids come from the org-scoped raw SQL above
     where: { id: { in: pageIds } },
     select: {
       id: true, name: true, number: true, status: true, statusUpdated: true,
@@ -988,6 +992,7 @@ async function systemColumnSortQuery(
 
   // Fetch full records
   const runs = await ctx.prisma.runs.findMany({
+    // eslint-disable-next-line @mlop/require-org-scope -- ids come from the org-scoped raw SQL above
     where: { id: { in: rows.map((r) => r.id) } },
     select: {
       id: true, name: true, number: true, status: true, statusUpdated: true,
@@ -1161,6 +1166,7 @@ async function jsonFieldSortQuery(
 
   // Fetch full records
   const runs = await ctx.prisma.runs.findMany({
+    // eslint-disable-next-line @mlop/require-org-scope -- ids come from queryFieldSortedRunIds, which is scoped by organizationId
     where: { id: { in: sortedIds.map((r) => r.id) } },
     select: {
       id: true, name: true, number: true, status: true, statusUpdated: true,
@@ -1249,6 +1255,7 @@ async function metricSortQuery(
   // Phase 3: Fetch full records from PostgreSQL
   const sortedRunIds = sortedRows.map((r) => BigInt(r.runId));
   const runs = await ctx.prisma.runs.findMany({
+    // eslint-disable-next-line @mlop/require-org-scope -- ids come from the tenant-scoped ClickHouse sort above
     where: { id: { in: sortedRunIds } },
     select: {
       id: true, name: true, number: true, status: true, statusUpdated: true,

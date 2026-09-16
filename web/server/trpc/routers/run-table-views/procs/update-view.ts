@@ -51,6 +51,7 @@ export const updateViewProcedure = protectedOrgProcedure
 
     // Update the view
     const updatedView = await ctx.prisma.runTableView.update({
+      // eslint-disable-next-line @mlop/require-org-scope -- existingView came from the org-scoped findFirst above
       where: {
         id: existingView.id,
       },

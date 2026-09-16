@@ -75,6 +75,7 @@ export const forkRunProcedure = protectedOrgProcedure
 
     // Atomically increment project run counter
     const updatedProject = await ctx.prisma.projects.update({
+      // eslint-disable-next-line @mlop/require-org-scope -- requestedParent came from resolveRunId and the org-scoped lookup above
       where: { id: requestedParent.project.id },
       data: { nextRunNumber: { increment: 1 } },
       select: { nextRunNumber: true },

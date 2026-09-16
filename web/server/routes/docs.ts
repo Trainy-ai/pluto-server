@@ -96,6 +96,7 @@ async function getSessionUser(
 
 async function listMemberships(userId: string): Promise<Membership[]> {
   return prisma.member.findMany({
+    // eslint-disable-next-line @mlop/require-org-scope -- user-scoped by design: the caller's own memberships across organizations
     where: { userId },
     select: {
       organizationId: true,
@@ -151,6 +152,7 @@ async function readJsonBody(c: Context): Promise<Record<string, unknown>> {
  */
 async function sweepExpiredDocsKeys(userId: string) {
   const { count } = await prisma.apiKey.updateMany({
+    // eslint-disable-next-line @mlop/require-org-scope -- user-scoped by design: sweeps only the caller's own expired docs keys
     where: {
       userId,
       name: DOCS_KEY_NAME,

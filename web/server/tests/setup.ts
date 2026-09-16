@@ -691,6 +691,37 @@ async function ensureTestOrg(
   return { org };
 }
 
+/**
+ * Make `userId` a MEMBER of `organizationId` and of none of `notIn`. Re-runs
+ * converge: a stray membership in a forbidden org is removed rather than
+ * tolerated, because the tenant-isolation suite depends on its absence.
+ */
+async function ensureMembershipOnlyIn(userId: string, organizationId: string, notIn: string[]): Promise<void> {
+  const membership = await prisma.member.findFirst({
+    where: { userId, organizationId },
+  });
+  if (!membership) {
+    await prisma.member.create({
+      data: {
+        id: nanoid(),
+        userId,
+        organizationId,
+        role: 'MEMBER',
+        createdAt: new Date(),
+      },
+    });
+    console.log(`   ✓ Added user as MEMBER of ${organizationId}`);
+  } else {
+    console.log(`   ✓ User is already a member of ${organizationId}`);
+  }
+  const { count } = await prisma.member.deleteMany({
+    where: { userId, organizationId: { in: notIn } },
+  });
+  if (count > 0) {
+    console.log(`   ✓ Removed ${count} stray membership(s) from other test orgs`);
+  }
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // Native rich-media / rich-data fixtures (setup step 5j).
 //
@@ -1842,24 +1873,21 @@ const WM_CHART_TABLES: Record<string, { step: number; data: Record<string, unkno
   }
 };
 
-async function setupTestData(): Promise<TestData> {
-  console.log('🔧 Setting up test database...\n');
-
-  // 1. Create or get test user
-  console.log('1️⃣  Creating test user...');
-  const testEmail = 'test-smoke@mlop.local';
-  const testPassword = 'TestPassword123!';
-
+/**
+ * Create (or refresh) a user who can sign in with email + password. Each call
+ * re-hashes the password so a re-run repairs a drifted credential row.
+ */
+async function ensureUserWithPassword(email: string, name: string, password: string) {
   let user = await prisma.user.findUnique({
-    where: { email: testEmail },
+    where: { email },
   });
 
   if (!user) {
     user = await prisma.user.create({
       data: {
         id: nanoid(),
-        email: testEmail,
-        name: 'Smoke Test User',
+        email,
+        name,
         emailVerified: true,
         finishedOnboarding: true,
         createdAt: new Date(),
@@ -1877,7 +1905,7 @@ async function setupTestData(): Promise<TestData> {
   const { randomBytes } = crypto;
 
   const salt = randomBytes(16).toString('hex');
-  const key = await scryptAsync(testPassword.normalize('NFKC'), salt, {
+  const key = await scryptAsync(password.normalize('NFKC'), salt, {
     N: 16384,
     r: 16,
     p: 1,
@@ -1915,6 +1943,18 @@ async function setupTestData(): Promise<TestData> {
     console.log(`   ✓ Updated password for user`);
   }
 
+  return user;
+}
+
+async function setupTestData(): Promise<TestData> {
+  console.log('🔧 Setting up test database...\n');
+
+  // 1. Create or get test user
+  console.log('1️⃣  Creating test user...');
+  const testEmail = 'test-smoke@mlop.local';
+  const testPassword = 'TestPassword123!';
+  const user = await ensureUserWithPassword(testEmail, 'Smoke Test User', testPassword);
+
   // 2. Create or get test organization
   console.log('\n2️⃣  Creating test organization...');
   const orgSlug = 'smoke-test-org';
@@ -1944,6 +1984,14 @@ async function setupTestData(): Promise<TestData> {
     });
     console.log(`   ✓ Created project in org 2: ${project2.name}`);
   }
+
+  // 2c. A user who belongs to org 2 ONLY. tests/tenant-isolation.test.ts signs
+  //     in as this user and calls every org-scoped procedure with org 1's id:
+  //     the smoke user cannot play that part because it is a member of both.
+  console.log('\n2️⃣c Creating org2-only test user...');
+  const org2OnlyEmail = 'smoke-org2-only@example.com';
+  const org2OnlyUser = await ensureUserWithPassword(org2OnlyEmail, 'Smoke Org2-Only User', testPassword);
+  await ensureMembershipOnlyIn(org2OnlyUser.id, org2.id, [org.id]);
 
   // 3. Create or get test API key
   console.log('\n3️⃣  Creating test API key...');
@@ -5819,14 +5867,18 @@ async function setupTestData(): Promise<TestData> {
 
   // 6. Create a run in org 2 for org-switching tests
   console.log('\n6️⃣  Creating test run in org 2...');
-  const existingOrg2Runs = await prisma.runs.findMany({
+  // Ensure the NAMED run exists: section 6b addresses it by name, so the
+  // check cannot be "org 2 has no runs at all" (a partial earlier setup or
+  // the org-switch smoke tests can leave other org 2 runs behind).
+  const existingOrg2Run = await prisma.runs.findFirst({
     where: {
       projectId: project2.id,
       organizationId: org2.id,
+      name: 'org2-unique-run',
     },
   });
 
-  if (existingOrg2Runs.length === 0) {
+  if (!existingOrg2Run) {
     await prisma.runs.create({
       data: {
         name: 'org2-unique-run',
@@ -5841,8 +5893,247 @@ async function setupTestData(): Promise<TestData> {
     });
     console.log(`   ✓ Created test run in org 2 (with org2's API key)`);
   } else {
-    console.log(`   ✓ Org 2 runs already exist (${existingOrg2Runs.length} runs found)`);
+    console.log(`   ✓ Org 2 run org2-unique-run already exists`);
   }
+
+  // 6b. Tenant-isolation fixtures in org 2 (tests/tenant-isolation.test.ts).
+  //     One of every resource an org-scoped procedure can address, each
+  //     carrying a marker string that must never appear in a response to a
+  //     request made under org 1's organizationId. The metric's constant
+  //     value is a marker too, so a leaked series is visible even when the
+  //     response carries only numbers.
+  console.log('\n6️⃣b Creating tenant-isolation fixtures in org 2...');
+  const org2Run = await prisma.runs.findFirst({
+    where: { projectId: project2.id, organizationId: org2.id, name: 'org2-unique-run' },
+  });
+  if (!org2Run) {
+    throw new Error('org2-unique-run must exist before the tenant-isolation fixtures are seeded');
+  }
+  await prisma.runs.update({
+    where: { id: org2Run.id },
+    data: {
+      tags: ['org2-only-tag'],
+      notes: 'org2-only-notes',
+      config: { framework: 'tensorflow', org2OnlyKey: 'org2-only-config-value' },
+    },
+  });
+  await extractAndUpsertColumnKeys(
+    prisma,
+    org2.id,
+    project2.id,
+    { framework: 'tensorflow', org2OnlyKey: 'org2-only-config-value' },
+    { hostname: 'test-host-2' },
+    org2Run.id,
+  );
+  await prisma.runLogs.createMany({
+    data: [
+      { runId: org2Run.id, logName: 'org2/only-metric', logGroup: 'org2', logType: 'METRIC' as const },
+      // Never used as a request parameter by the tenant-isolation suite, so its
+      // NAME is a leak marker too: a metric-name listing answered under org 1
+      // that includes it has crossed tenants (org2/only-metric cannot serve,
+      // because responses legitimately echo the requested logName).
+      { runId: org2Run.id, logName: 'org2/leak-canary-metric', logGroup: 'org2', logType: 'METRIC' as const },
+    ],
+    skipDuplicates: true,
+  });
+  // A display id (`OTP-1`) so the REST by-display-id route can be crossed too.
+  if (!project2.runPrefix) {
+    project2 = await prisma.projects.update({ where: { id: project2.id }, data: { runPrefix: 'OTP' } });
+  }
+  if (org2Run.number == null) {
+    await prisma.runs.update({ where: { id: org2Run.id }, data: { number: 1 } });
+  }
+  // Numbers 1 and 2 are taken by hand here; move the project's counter past
+  // them so a run created through the API later cannot collide.
+  if (project2.nextRunNumber < 3) {
+    project2 = await prisma.projects.update({ where: { id: project2.id }, data: { nextRunNumber: 3 } });
+  }
+
+  // A sweep is exactly a set of runs tagged `sweep:<id>` (see 5i above).
+  let org2SweepRun = await prisma.runs.findFirst({
+    where: { projectId: project2.id, organizationId: org2.id, name: 'org2-sweep-run' },
+  });
+  if (!org2SweepRun) {
+    org2SweepRun = await prisma.runs.create({
+      data: {
+        name: 'org2-sweep-run',
+        organizationId: org2.id,
+        projectId: project2.id,
+        createdById: user.id,
+        creatorApiKeyId: apiKey2.id,
+        status: 'COMPLETED',
+        number: 2,
+        tags: ['sweep:org2sweep1'],
+        config: { sweep: { id: 'org2sweep1' }, lr: 0.01 },
+        systemMetadata: { hostname: 'test-host-2' },
+      },
+    });
+    await prisma.runLogs.createMany({
+      data: [{ runId: org2SweepRun.id, logName: 'val_loss', logGroup: '', logType: 'METRIC' as const }],
+      skipDuplicates: true,
+    });
+    console.log('   ✓ Created org2-sweep-run (sweep:org2sweep1)');
+  }
+
+  if (process.env.CLICKHOUSE_URL) {
+    const org2Ch = createClient({
+      url: process.env.CLICKHOUSE_URL,
+      username: process.env.CLICKHOUSE_USER || 'default',
+      password: process.env.CLICKHOUSE_PASSWORD || '',
+    });
+    const existing = await org2Ch.query({
+      query: `SELECT count() AS c FROM mlop_metrics WHERE tenantId = {tenantId: String} AND runId = {runId: UInt64} AND logName = {logName: String}`,
+      query_params: { tenantId: org2.id, runId: Number(org2Run.id), logName: 'org2/only-metric' },
+      format: 'JSONEachRow',
+    });
+    const [{ c }] = (await existing.json()) as Array<{ c: string | number }>;
+    if (Number(c) === 0) {
+      const rows = Array.from({ length: 20 }, (_, step) => ({
+        tenantId: org2.id,
+        projectName: project2.name,
+        runId: Number(org2Run.id),
+        logGroup: 'org2',
+        logName: 'org2/only-metric',
+        time: new Date(org2Run.createdAt.getTime() + step * 1000).toISOString().replace('T', ' ').replace('Z', ''),
+        step,
+        value: 424242.42,
+      }));
+      await org2Ch.insert({ table: 'mlop_metrics', values: rows, format: 'JSONEachRow' });
+      console.log(`   ✓ Seeded ${rows.length} org2/only-metric datapoints (value 424242.42)`);
+    }
+    const existingCanary = await org2Ch.query({
+      query: `SELECT count() AS c FROM mlop_metrics WHERE tenantId = {tenantId: String} AND runId = {runId: UInt64} AND logName = {logName: String}`,
+      query_params: { tenantId: org2.id, runId: Number(org2Run.id), logName: 'org2/leak-canary-metric' },
+      format: 'JSONEachRow',
+    });
+    const [{ c: canaryCount }] = (await existingCanary.json()) as Array<{ c: string | number }>;
+    if (Number(canaryCount) === 0) {
+      const canaryRows = Array.from({ length: 5 }, (_, step) => ({
+        tenantId: org2.id,
+        projectName: project2.name,
+        runId: Number(org2Run.id),
+        logGroup: 'org2',
+        logName: 'org2/leak-canary-metric',
+        time: new Date(org2Run.createdAt.getTime() + step * 1000).toISOString().replace('T', ' ').replace('Z', ''),
+        step,
+        value: 313131.31,
+      }));
+      await org2Ch.insert({ table: 'mlop_metrics', values: canaryRows, format: 'JSONEachRow' });
+      console.log(`   ✓ Seeded ${canaryRows.length} org2/leak-canary-metric datapoints (value 313131.31)`);
+    }
+    await org2Ch.close();
+  }
+
+  const org2DashboardConfig = {
+    version: 1,
+    sections: [
+      {
+        id: 'org2-tenant-section',
+        name: 'Org2 Tenant Section',
+        collapsed: false,
+        widgets: [
+          {
+            id: 'org2-tenant-widget',
+            type: 'chart',
+            config: { title: 'org2/only-metric', metrics: ['org2/only-metric'], xAxis: 'step' },
+            layout: { x: 0, y: 0, w: 6, h: 4 },
+          },
+        ],
+      },
+    ],
+    settings: { gridCols: 12, rowHeight: 80, compactType: 'vertical' },
+  };
+  await upsertSeedDashboardView(prisma, {
+    where: {
+      organizationId_projectId_name: {
+        organizationId: org2.id,
+        projectId: project2.id,
+        name: 'Org2 Tenant Dashboard',
+      },
+    },
+    update: { config: org2DashboardConfig },
+    create: {
+      name: 'Org2 Tenant Dashboard',
+      organizationId: org2.id,
+      projectId: project2.id,
+      createdById: user.id,
+      isDefault: false,
+      config: org2DashboardConfig,
+    },
+  });
+
+  const org2TableViewConfig = {
+    version: 1,
+    columns: [{ id: 'org2-only-column', source: 'config', label: 'org2OnlyKey' }],
+    baseOverrides: {},
+    filters: [],
+    sorting: [],
+  };
+  await prisma.runTableView.upsert({
+    where: {
+      organizationId_projectId_name: {
+        organizationId: org2.id,
+        projectId: project2.id,
+        name: 'Org2 Tenant Table View',
+      },
+    },
+    update: { config: org2TableViewConfig },
+    create: {
+      name: 'Org2 Tenant Table View',
+      organizationId: org2.id,
+      projectId: project2.id,
+      createdById: user.id,
+      config: org2TableViewConfig,
+    },
+  });
+
+  const org2ChartsLayout = {
+    version: 2,
+    order: ['org2/only-metric'],
+    hidden: [],
+    metricOrder: {},
+    customSections: [{ key: 'org2-only-section', name: 'Org2 Only Section' }],
+    membership: {},
+  };
+  await prisma.chartsLayout.upsert({
+    where: { organizationId_projectId: { organizationId: org2.id, projectId: project2.id } },
+    update: { config: org2ChartsLayout },
+    create: { organizationId: org2.id, projectId: project2.id, updatedById: user.id, config: org2ChartsLayout },
+  });
+
+  const org2InviteEmail = 'org2-only-invitee@example.com';
+  const org2Invite = await prisma.invitation.findFirst({
+    where: { organizationId: org2.id, email: org2InviteEmail },
+  });
+  if (!org2Invite) {
+    await prisma.invitation.create({
+      data: {
+        id: nanoid(),
+        organizationId: org2.id,
+        email: org2InviteEmail,
+        role: 'MEMBER',
+        status: 'PENDING',
+        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        inviterId: user.id,
+      },
+    });
+  }
+
+  const org2Notification = await prisma.notification.findFirst({
+    where: { organizationId: org2.id, runId: org2Run.id },
+  });
+  if (!org2Notification) {
+    await prisma.notification.create({
+      data: {
+        organizationId: org2.id,
+        runId: org2Run.id,
+        type: 'INFO',
+        content: 'org2-only-notification',
+        read: false,
+      },
+    });
+  }
+  console.log('   ✓ Org 2 tenant-isolation fixtures ready');
 
   // 7. Create "Auto-Hide Test" dashboard view for pattern-widget visibility E2E tests
   console.log('\n7️⃣  Creating Auto-Hide Test dashboard view...');
@@ -8822,6 +9113,10 @@ TEST_PROJECT_NAME="${testData.projectName}"
 TEST_USER_EMAIL="${testEmail}"
 TEST_BASE_URL="http://localhost:3001"
 TEST_PY_URL="http://localhost:3004"
+TEST_ORG2_SLUG="${testData.organization2Slug}"
+TEST_ORG2_PROJECT_NAME="${project2.name}"
+TEST_ORG2_API_KEY="${fullApiKey2}"
+TEST_ORG2_ONLY_USER_EMAIL="${org2OnlyEmail}"
 `;
 
   const fs = await import('fs/promises');
@@ -8870,14 +9165,15 @@ async function cleanupTestData() {
     }
   }
 
-  const testEmail = 'test-smoke@mlop.local';
-  const user = await prisma.user.findUnique({
-    where: { email: testEmail },
-  });
+  for (const testEmail of ['test-smoke@mlop.local', 'smoke-org2-only@example.com']) {
+    const user = await prisma.user.findUnique({
+      where: { email: testEmail },
+    });
 
-  if (user) {
-    await prisma.user.delete({ where: { id: user.id } });
-    console.log('   ✓ Deleted test user');
+    if (user) {
+      await prisma.user.delete({ where: { id: user.id } });
+      console.log(`   ✓ Deleted test user ${testEmail}`);
+    }
   }
 
   console.log('\n✅ Cleanup complete!\n');

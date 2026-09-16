@@ -70,6 +70,7 @@ export const getByIdsProcedure = protectedOrgProcedure
 
     // Enrich with field values so custom columns render immediately
     const fieldRows = await ctx.prisma.runFieldValue.findMany({
+      // eslint-disable-next-line @mlop/require-org-scope -- runs came from the org-scoped findMany above
       where: { runId: { in: runs.map((r) => r.id) } },
       select: { runId: true, source: true, key: true, textValue: true, numericValue: true },
     });

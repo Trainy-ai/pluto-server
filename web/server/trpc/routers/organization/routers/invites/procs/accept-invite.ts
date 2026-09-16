@@ -11,6 +11,7 @@ export const acceptInviteProcedure = protectedProcedure
   .input(z.object({ invitationId: z.string() }))
   .mutation(async ({ ctx, input }) => {
     const invitation = await ctx.prisma.invitation.findFirst({
+      // eslint-disable-next-line @mlop/require-org-scope -- user-scoped by design: an invitation is addressed to the caller's email
       where: {
         id: input.invitationId,
         email: ctx.user.email,
@@ -66,6 +67,7 @@ export const acceptInviteProcedure = protectedProcedure
         },
       }),
       ctx.prisma.invitation.update({
+        // eslint-disable-next-line @mlop/require-org-scope -- invitation came from the email-scoped lookup above
         where: { id: invitation.id },
         data: { status: InvitationStatus.ACCEPTED },
       }),

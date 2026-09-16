@@ -37,6 +37,7 @@ export const deleteViewProcedure = protectedOrgProcedure
 
     // Delete the view
     await ctx.prisma.runTableView.delete({
+      // eslint-disable-next-line @mlop/require-org-scope -- existingView came from the org-scoped findFirst above
       where: {
         id: existingView.id,
       },

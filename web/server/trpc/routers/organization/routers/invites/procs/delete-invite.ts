@@ -50,6 +50,7 @@ export const deleteInviteProcedure = protectedOrgProcedure
 
     // Delete the invitation
     await ctx.prisma.invitation.delete({
+      // eslint-disable-next-line @mlop/require-org-scope -- invitation was found by the org-scoped findFirst above
       where: {
         id: input.invitationId,
       },

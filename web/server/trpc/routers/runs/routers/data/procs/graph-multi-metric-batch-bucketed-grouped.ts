@@ -241,6 +241,7 @@ export const graphMultiMetricBatchBucketedGroupedProcedure = protectedOrgProcedu
     const fieldValuesByRun = new Map<bigint, Map<string, string | null>>();
     if (neededKeys.length > 0) {
       const fvRows = await ctx.prisma.runFieldValue.findMany({
+        // eslint-disable-next-line @mlop/require-org-scope -- runs came from the org-scoped findMany above
         where: {
           runId: { in: runs.map((r) => r.id) },
           OR: neededKeys.map((k) => ({ source: k.source, key: k.key })),

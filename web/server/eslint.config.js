@@ -7,6 +7,7 @@
 
 import tseslint from 'typescript-eslint';
 import noUnboundedPrismaInclude from './eslint-rules/no-unbounded-prisma-include.js';
+import requireOrgScope from './eslint-rules/require-org-scope.js';
 
 /** @type {import('eslint').Linter.Config[]} */
 export default [
@@ -33,6 +34,7 @@ export default [
       '@mlop': {
         rules: {
           'no-unbounded-prisma-include': noUnboundedPrismaInclude,
+          'require-org-scope': requireOrgScope,
         },
       },
     },
@@ -57,6 +59,16 @@ export default [
           ],
         },
       ],
+    },
+  },
+  // Tenant isolation: every Prisma query on an organization-owned model in the
+  // request handlers must be scoped to an organization. See
+  // eslint-rules/require-org-scope.js for what counts as scoped and for the
+  // escape hatch.
+  {
+    files: ['trpc/**/*.ts', 'routes/**/*.ts'],
+    rules: {
+      '@mlop/require-org-scope': 'error',
     },
   },
 ];

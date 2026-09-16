@@ -181,6 +181,7 @@ async function handleSubscriptionUpdated(subscription: Stripe.Subscription) {
 
   if (!targetOrgId) {
     const orgSub = await prisma.organizationSubscription.findFirst({
+      // eslint-disable-next-line @mlop/require-org-scope -- Stripe webhook: the subscription id is the tenant key; no organization is in the request
       where: { stripeSubscriptionId: subscription.id },
     });
 
@@ -219,6 +220,7 @@ async function handleSubscriptionUpdated(subscription: Stripe.Subscription) {
 async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
   // Find organization by subscription ID
   const orgSub = await prisma.organizationSubscription.findFirst({
+    // eslint-disable-next-line @mlop/require-org-scope -- Stripe webhook: the subscription id is the tenant key; no organization is in the request
     where: { stripeSubscriptionId: subscription.id },
     include: { organization: true },
   });
@@ -264,6 +266,7 @@ async function handlePaymentFailed(invoice: Stripe.Invoice) {
   }
 
   const orgSub = await prisma.organizationSubscription.findFirst({
+    // eslint-disable-next-line @mlop/require-org-scope -- Stripe webhook: the subscription id is the tenant key; no organization is in the request
     where: { stripeSubscriptionId: subscriptionId },
     include: { organization: true },
   });

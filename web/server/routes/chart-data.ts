@@ -138,6 +138,7 @@ app.get("/multi-metric-batch-bucketed", async (c) => {
 
   // Cache the raw JSON string
   const runs = await prisma.runs.findMany({
+    // eslint-disable-next-line @mlop/require-org-scope -- ids came from resolveRunIds, which verified ownership under organizationId
     where: { id: { in: numericRunIds } },
     select: { status: true },
   });

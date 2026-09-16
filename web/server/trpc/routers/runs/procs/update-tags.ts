@@ -57,6 +57,7 @@ export const updateTagsProcedure = protectedOrgProcedure
 
     // updateMany doesn't return the updated record, so we fetch it again
     const updatedRun = await ctx.prisma.runs.findUnique({
+      // eslint-disable-next-line @mlop/require-org-scope -- re-read after the org-scoped updateMany above
       where: { id: runId },
     });
 

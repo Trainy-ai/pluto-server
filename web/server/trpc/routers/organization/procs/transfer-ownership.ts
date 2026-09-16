@@ -56,6 +56,7 @@ export const transferOwnershipProcedure = protectedOrgProcedure
       const [formerOwner, newOwnerUpdated] = await Promise.all([
         // Demote current owner to admin
         tx.member.update({
+          // eslint-disable-next-line @mlop/require-org-scope -- currentOwner came from the org-scoped findFirst above
           where: {
             id: currentOwner.id,
           },
@@ -68,6 +69,7 @@ export const transferOwnershipProcedure = protectedOrgProcedure
         }),
         // Promote new owner
         tx.member.update({
+          // eslint-disable-next-line @mlop/require-org-scope -- newOwner came from the org-scoped findFirst above
           where: {
             id: newOwner.id,
           },

@@ -296,6 +296,7 @@ export const distinctGroupValuesProcedure = protectedOrgProcedure
       (input.sortSource === "config" || input.sortSource === "systemMetadata")
     ) {
       const row = await ctx.prisma.projectColumnKey.findUnique({
+        // eslint-disable-next-line @mlop/require-org-scope -- projectId came from the org-scoped project lookup above
         where: {
           projectId_source_key: {
             projectId,
@@ -1257,6 +1258,7 @@ async function buildBucketColumnAggregateFragments(
   let probedDataTypes = new Map<string, "text" | "number" | "date" | "option">();
   if (probeKeys.length > 0) {
     const rows = await ctx.prisma.projectColumnKey.findMany({
+      // eslint-disable-next-line @mlop/require-org-scope -- projectId came from the org-scoped project lookup in the caller
       where: {
         projectId,
         OR: probeKeys.map((k: { source: string; key: string }) => ({ source: k.source, key: k.key })),

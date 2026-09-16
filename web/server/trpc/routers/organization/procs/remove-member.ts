@@ -62,6 +62,7 @@ export const removeMemberProcedure = protectedOrgProcedure
     }
 
     await ctx.prisma.member.delete({
+      // eslint-disable-next-line @mlop/require-org-scope -- targetMember was found by the org-scoped findFirst above
       where: {
         id: input.memberId,
       },
