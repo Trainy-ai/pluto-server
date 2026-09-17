@@ -3,8 +3,11 @@ import { z } from "zod";
 const envSchema = z.object({
   // Storage
   STORAGE_ENDPOINT: z.string().url(),
-  STORAGE_ACCESS_KEY_ID: z.string().min(1),
-  STORAGE_SECRET_ACCESS_KEY: z.string().min(1),
+  // Optional: when both are unset the S3 client falls back to the AWS SDK
+  // default credential provider chain, which is how IRSA / web-identity works
+  // on EKS. Self-hosted, MinIO and CI deployments keep setting these.
+  STORAGE_ACCESS_KEY_ID: z.string().min(1).optional(),
+  STORAGE_SECRET_ACCESS_KEY: z.string().min(1).optional(),
   STORAGE_BUCKET: z.string().min(1),
   STORAGE_REGION: z.string().min(1),
 

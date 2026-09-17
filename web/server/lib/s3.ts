@@ -28,10 +28,24 @@ const s3Client = new S3Client({
   region: env.STORAGE_REGION,
   endpoint: env.STORAGE_ENDPOINT,
   forcePathStyle: true,
-  credentials: {
-    accessKeyId: env.STORAGE_ACCESS_KEY_ID,
-    secretAccessKey: env.STORAGE_SECRET_ACCESS_KEY,
-  },
+  // Static credentials are OPTIONAL. Passing `credentials` explicitly pins the
+  // client to that key and bypasses the AWS SDK's default credential provider
+  // chain entirely. Leaving it `undefined` lets the SDK resolve credentials
+  // itself — which is how IRSA (EKS web identity, via AWS_ROLE_ARN +
+  // AWS_WEB_IDENTITY_TOKEN_FILE) engages, with short-lived STS credentials that
+  // rotate automatically instead of a long-lived static key.
+  //
+  // Behavior is unchanged when both vars ARE set: MinIO in CI and self-hosted
+  // deployments simply keep setting STORAGE_ACCESS_KEY_ID /
+  // STORAGE_SECRET_ACCESS_KEY and get the exact same explicit-credential client
+  // as before.
+  credentials:
+    env.STORAGE_ACCESS_KEY_ID && env.STORAGE_SECRET_ACCESS_KEY
+      ? {
+          accessKeyId: env.STORAGE_ACCESS_KEY_ID,
+          secretAccessKey: env.STORAGE_SECRET_ACCESS_KEY,
+        }
+      : undefined,
 });
 
 // Read-through memo TTL for presigned URLs. The underlying URL is valid for
