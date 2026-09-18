@@ -318,15 +318,32 @@ pub async fn generate_presigned_urls(
     // Setup S3/R2 client configuration using credentials from app config
     let region_provider =
         RegionProviderChain::first_try(Region::new(state.config.storage_region.clone()));
-    let mut config_builder = aws_config::defaults(BehaviorVersion::latest())
-        .region(region_provider)
-        .credentials_provider(Credentials::new(
-            state.config.storage_access_key_id.as_str(),
-            state.config.storage_secret_access_key.as_str(),
+    let mut config_builder =
+        aws_config::defaults(BehaviorVersion::latest()).region(region_provider);
+
+    // Static credentials are OPTIONAL. Setting `credentials_provider` explicitly
+    // pins the client to that key and bypasses the AWS SDK's default credential
+    // provider chain entirely. Leaving it unset lets the SDK resolve credentials
+    // itself -- which is how IRSA (EKS web identity, via AWS_ROLE_ARN +
+    // AWS_WEB_IDENTITY_TOKEN_FILE) engages, with short-lived STS credentials
+    // that rotate automatically instead of a long-lived static key.
+    //
+    // Behavior is unchanged when both vars ARE set: MinIO in CI and self-hosted
+    // deployments simply keep setting STORAGE_ACCESS_KEY_ID /
+    // STORAGE_SECRET_ACCESS_KEY and get the exact same explicit-credential
+    // client as before. Mirrors web/server/lib/s3.ts (PR #624).
+    if let (Some(access_key_id), Some(secret_access_key)) = (
+        state.config.storage_access_key_id.as_deref(),
+        state.config.storage_secret_access_key.as_deref(),
+    ) {
+        config_builder = config_builder.credentials_provider(Credentials::new(
+            access_key_id,
+            secret_access_key,
             None,
             None,
             "storage_config",
         ));
+    }
 
     // Only set endpoint_url for non-AWS S3 (MinIO, R2, etc.)
     // AWS S3 handles virtual-hosted style automatically; setting endpoint_url

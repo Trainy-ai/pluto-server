@@ -7,9 +7,13 @@ pub struct Config {
     pub clickhouse_url: String,
     pub clickhouse_user: String,
     pub clickhouse_password: String,
-    // S3-compatible storage credentials and settings
-    pub storage_access_key_id: String,
-    pub storage_secret_access_key: String,
+    // S3-compatible storage credentials and settings.
+    // Static credentials are OPTIONAL: when unset, the AWS SDK's default
+    // credential provider chain resolves credentials itself, which is how IRSA
+    // (EKS web identity, via AWS_ROLE_ARN + AWS_WEB_IDENTITY_TOKEN_FILE)
+    // engages. MinIO in CI and self-hosted deployments keep setting both.
+    pub storage_access_key_id: Option<String>,
+    pub storage_secret_access_key: Option<String>,
     pub storage_bucket: String,
     pub storage_region: String,
     pub storage_endpoint: String, // e.g., "https://<accountid>.r2.cloudflarestorage.com" or "s3.us-west-2.amazonaws.com"
@@ -36,10 +40,8 @@ impl Config {
             clickhouse_user: std::env::var("CLICKHOUSE_USER").expect("CLICKHOUSE_USER is not set"),
             clickhouse_password: std::env::var("CLICKHOUSE_PASSWORD")
                 .expect("CLICKHOUSE_PASSWORD is not set"),
-            storage_access_key_id: std::env::var("STORAGE_ACCESS_KEY_ID")
-                .expect("STORAGE_ACCESS_KEY_ID is not set"),
-            storage_secret_access_key: std::env::var("STORAGE_SECRET_ACCESS_KEY")
-                .expect("STORAGE_SECRET_ACCESS_KEY is not set"),
+            storage_access_key_id: std::env::var("STORAGE_ACCESS_KEY_ID").ok(),
+            storage_secret_access_key: std::env::var("STORAGE_SECRET_ACCESS_KEY").ok(),
             storage_bucket: std::env::var("STORAGE_BUCKET").expect("STORAGE_BUCKET is not set"),
             storage_region: std::env::var("STORAGE_REGION").expect("STORAGE_REGION is not set"),
             storage_endpoint: std::env::var("STORAGE_ENDPOINT")
@@ -57,8 +59,8 @@ impl Config {
             clickhouse_url: "http://localhost:8123".to_string(),
             clickhouse_user: "default".to_string(),
             clickhouse_password: "".to_string(),
-            storage_access_key_id: "test".to_string(),
-            storage_secret_access_key: "test".to_string(),
+            storage_access_key_id: Some("test".to_string()),
+            storage_secret_access_key: Some("test".to_string()),
             storage_bucket: "test-bucket".to_string(),
             storage_region: "us-east-1".to_string(),
             storage_endpoint: "http://localhost:9000".to_string(),
