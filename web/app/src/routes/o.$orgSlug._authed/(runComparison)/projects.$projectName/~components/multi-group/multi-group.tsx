@@ -16,6 +16,7 @@ import { Card } from "@/components/ui/card";
 import { useMemo, useCallback, memo } from "react";
 import { useHiddenRunIds } from "@/hooks/use-hidden-run-ids";
 import { filterRunsByLog } from "@/lib/filter-runs-by-log";
+import { isExperimentsListMode, keepLineageTips } from "@/lib/experiment-data-utils";
 import { useRunIdsByLogName } from "../../~queries/file-log-names";
 import { cn } from "@/lib/utils";
 import type { RunLogType, RunStatus } from "@/lib/grouping/types";
@@ -26,6 +27,17 @@ import { formatRunLabel } from "@/lib/format-run-label";
 
 // Re-export for backwards compatibility
 export { arePropsEqual } from "./props-comparison";
+
+/** Widget types whose data procs stitch a run's lineage (`includeLineage`). */
+const LINEAGE_STITCHED_TYPES = new Set<RunLogType>([
+  "HISTOGRAM",
+  "AUDIO",
+  "IMAGE",
+  "VIDEO",
+  "FILE",
+  "TEXT",
+  "ARTIFACT",
+]);
 
 interface MultiGroupProps {
   title: string;
@@ -221,8 +233,17 @@ export const MultiGroup = ({
         // render callbacks that a memoized parent captures, so flipping a
         // loading flag here doesn't re-render them. Over the 200 cap the
         // widget's own guard blocks that first request anyway.
+        //
+        // Experiments mode: the lineage-aware widgets read each tip's stitched
+        // lineage, so drop the ancestors before they get cells of their own.
+        // Collapse before the hidden filter — hiding a tip must not bring its
+        // ancestors back.
+        const mediaRuns =
+          LINEAGE_STITCHED_TYPES.has(metric.type) && isExperimentsListMode()
+            ? keepLineageTips(metric.data)
+            : metric.data;
         const formattedRuns = filterRunsByLog(
-          metric.data
+          mediaRuns
             .filter((d) => !hiddenRunIds.has(d.runId))
             .map((d) => ({
               ...d,

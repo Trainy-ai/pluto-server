@@ -13,6 +13,7 @@ import { filterRunsByLog } from "@/lib/filter-runs-by-log";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useRunIdsByLogName } from "../../~queries/file-log-names";
 import { formatRunLabel } from "@/lib/format-run-label";
+import { keepLineageTipEntries } from "@/lib/experiment-data-utils";
 import { getDisplayIdForRun } from "../../~lib/metrics-utils";
 
 interface DistributionsWidgetProps {
@@ -75,7 +76,8 @@ export function DistributionsWidget({
   // identical to the old standalone widget.
   const histogramRuns = useMemo(() => {
     if (entries.length === 0) return [];
-    return Object.entries(selectedRuns).map(([runId, { run, color }]) => ({
+    // Experiments mode: one histogram per lineage tip (stitched server-side).
+    return Object.entries(keepLineageTipEntries(selectedRuns)).map(([runId, { run, color }]) => ({
       runId,
       runName: formatRunLabel(run.name, getDisplayIdForRun(run)),
       color,

@@ -131,6 +131,50 @@ export function collapseLineageRows<
   });
 }
 
+/**
+ * Keep only the lineage tips of a media widget's runs: drop every run that
+ * another run in the set continues (forked or merged from it).
+ *
+ * In Experiments mode media widgets query each run with `includeLineage`, so
+ * a tip already returns its ancestors' files up to each fork step. An
+ * ancestor's own cell would repeat those files, unclipped, as if it were a
+ * separate experiment. Only apply in Experiments mode; Runs mode shows each
+ * run's raw data.
+ */
+export function keepLineageTips<
+  T extends { runId: string; forkedFromRunId?: string | null },
+>(runs: T[]): T[] {
+  const continuedIds = new Set<string>();
+  for (const run of runs) {
+    if (run.forkedFromRunId != null) continuedIds.add(run.forkedFromRunId);
+  }
+  if (continuedIds.size === 0) return runs;
+  return runs.filter((run) => !continuedIds.has(run.runId));
+}
+
+/**
+ * `keepLineageTips` for a dashboard widget's `selectedRuns` record (keyed by
+ * run id). Returns the input unchanged outside Experiments mode or when no
+ * run is dropped, so memoized consumers keep a stable reference.
+ */
+export function keepLineageTipEntries<T extends { run: object }>(
+  selectedRuns: Record<string, T>,
+): Record<string, T> {
+  if (!isExperimentsListMode()) return selectedRuns;
+  const runIds = Object.keys(selectedRuns);
+  const kept = keepLineageTips(
+    runIds.map((runId) => {
+      const parent = (selectedRuns[runId].run as { forkedFromRunId?: unknown })
+        .forkedFromRunId;
+      return { runId, forkedFromRunId: parent != null ? String(parent) : null };
+    }),
+  );
+  if (kept.length === runIds.length) return selectedRuns;
+  return Object.fromEntries(
+    kept.map(({ runId }) => [runId, selectedRuns[runId]]),
+  );
+}
+
 const MAX_CHAIN_WALK = 10; // mirrors MAX_LINEAGE_DEPTH on the server
 
 /**

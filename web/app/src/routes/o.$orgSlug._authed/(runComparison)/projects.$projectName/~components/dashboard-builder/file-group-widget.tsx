@@ -1,6 +1,7 @@
 import { useMemo, useState, useEffect, useRef } from "react";
 import { useHiddenRunIds } from "@/hooks/use-hidden-run-ids";
 import { filterRunsByLog } from "@/lib/filter-runs-by-log";
+import { keepLineageTipEntries } from "@/lib/experiment-data-utils";
 import { Skeleton } from "@/components/ui/skeleton";
 
 /** Stable empty list: a fresh [] each render would churn the query key. */
@@ -67,8 +68,11 @@ export function FileGroupWidget({
 }: FileGroupWidgetProps) {
   const hiddenRunIds = useHiddenRunIds();
 
+  // Experiments mode: one cell per lineage tip (the tip's files are stitched
+  // across its ancestors). Collapse before the hidden filter so hiding a tip
+  // doesn't bring its ancestors back.
   const runs = useMemo(() => {
-    return Object.entries(selectedRuns)
+    return Object.entries(keepLineageTipEntries(selectedRuns))
       .filter(([runId]) => !hiddenRunIds.has(runId))
       .map(([runId, { run, color }]) => ({
         runId,

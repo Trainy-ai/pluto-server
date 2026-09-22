@@ -3,6 +3,7 @@ import {
   collapseLineageRows,
   computeExperimentSegments,
   filterDataToRange,
+  keepLineageTips,
   mapRunsToLineageTips,
   type RunSegmentInfo,
   type StepRange,
@@ -253,5 +254,39 @@ describe("mapRunsToLineageTips", () => {
       { id: "b", forkedFromRunId: "a" },
     ]);
     expect(tips.size).toBe(2);
+  });
+});
+
+describe("keepLineageTips", () => {
+  it("keeps only the tip of a merged chain", () => {
+    // crash → restart → restart: one experiment, one media cell
+    const runs = [
+      { runId: "a", forkedFromRunId: null },
+      { runId: "b", forkedFromRunId: "a" },
+      { runId: "c", forkedFromRunId: "b" },
+    ];
+    expect(keepLineageTips(runs).map((r) => r.runId)).toEqual(["c"]);
+  });
+
+  it("keeps both branches when a parent was forked twice", () => {
+    const runs = [
+      { runId: "root", forkedFromRunId: null },
+      { runId: "x", forkedFromRunId: "root" },
+      { runId: "y", forkedFromRunId: "root" },
+    ];
+    expect(keepLineageTips(runs).map((r) => r.runId)).toEqual(["x", "y"]);
+  });
+
+  it("keeps a fork whose parent is not in the set", () => {
+    const runs = [
+      { runId: "child", forkedFromRunId: "unselected-parent" },
+      { runId: "solo", forkedFromRunId: null },
+    ];
+    expect(keepLineageTips(runs).map((r) => r.runId)).toEqual(["child", "solo"]);
+  });
+
+  it("returns the same array when there is no lineage", () => {
+    const runs = [{ runId: "a" }, { runId: "b", forkedFromRunId: null }];
+    expect(keepLineageTips(runs)).toBe(runs);
   });
 });

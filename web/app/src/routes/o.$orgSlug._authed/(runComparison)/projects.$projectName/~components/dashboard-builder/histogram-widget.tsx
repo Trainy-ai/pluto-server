@@ -17,6 +17,7 @@ import { MultiHistogramView } from "../multi-group/histogram-view";
 import { formatRunLabel } from "@/lib/format-run-label";
 import { getDisplayIdForRun } from "../../~lib/metrics-utils";
 import { filterRunsByLog } from "@/lib/filter-runs-by-log";
+import { keepLineageTipEntries } from "@/lib/experiment-data-utils";
 import { useRunIdsByLogName } from "../../~queries/file-log-names";
 
 interface HistogramWidgetProps {
@@ -39,7 +40,8 @@ export function HistogramWidget({
   onIgnoreOutliersChange,
 }: HistogramWidgetProps) {
   const allRuns = useMemo(() => {
-    return Object.entries(selectedRuns).map(([runId, { run, color }]) => ({
+    // Experiments mode: one histogram per lineage tip (stitched server-side).
+    return Object.entries(keepLineageTipEntries(selectedRuns)).map(([runId, { run, color }]) => ({
       runId,
       runName: formatRunLabel(run.name, getDisplayIdForRun(run)),
       color,
