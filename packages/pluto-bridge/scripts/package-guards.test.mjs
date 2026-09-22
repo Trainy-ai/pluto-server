@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { checkManifest, checkPackedFiles } from "./package-guards.mjs";
 
 const clean = {
-  name: "@trainy/pluto-bridge",
+  name: "@trainy-ai/pluto-bridge",
   license: "MIT",
   scripts: { build: "tsc", test: "vitest run" },
   devDependencies: { typescript: "5.8.3" },

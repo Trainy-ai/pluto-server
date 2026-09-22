@@ -1,5 +1,5 @@
 /**
- * Settings and probing for the local agent bridge (`@trainy/pluto-bridge`),
+ * Settings and probing for the local agent bridge (`@trainy-ai/pluto-bridge`),
  * a loopback server the user runs so their own Claude Code or Codex can
  * power the chat UI.
  */
@@ -27,7 +27,7 @@ const LOCAL_BRIDGE_DEFAULT_ORIGIN = "https://pluto.trainy.ai";
  * any other origin (self-hosted, local dev) must be allowlisted explicitly.
  */
 export function getLocalBridgeCommand(origin: string): string {
-  const command = `npx @trainy/pluto-bridge@${LOCAL_BRIDGE_VERSION}`;
+  const command = `npx @trainy-ai/pluto-bridge@${LOCAL_BRIDGE_VERSION}`;
   return origin === LOCAL_BRIDGE_DEFAULT_ORIGIN
     ? command
     : `${command} --origin ${origin}`;

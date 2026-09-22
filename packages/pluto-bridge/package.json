@@ -1,5 +1,5 @@
 {
-  "name": "@trainy/pluto-bridge",
+  "name": "@trainy-ai/pluto-bridge",
   "version": "1.0.0",
   "description": "Local bridge that lets Claude Code or Codex power the Pluto chat UI",
   "license": "MIT",

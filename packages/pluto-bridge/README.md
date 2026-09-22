@@ -1,4 +1,4 @@
-# @trainy/pluto-bridge
+# @trainy-ai/pluto-bridge
 
 Use your own **Claude Code** or **Codex** to power the chat in
 [Pluto](https://pluto.trainy.ai). The bridge is a small server on your
@@ -22,7 +22,7 @@ Pluto Chat (browser) ──▶ pluto-bridge (127.0.0.1) ──▶ claude / codex
 ## Start
 
 ```bash
-PLUTO_API_KEY=mlpi_... npx @trainy/pluto-bridge@1.0.0
+PLUTO_API_KEY=mlpi_... npx @trainy-ai/pluto-bridge@1.0.0
 ```
 
 Use the exact command shown on the Pluto Chat page, because it pins the
@@ -60,7 +60,7 @@ enter that port and token. The token is saved in
 ### Self-hosted Pluto
 
 ```bash
-PLUTO_API_KEY=mlpi_... npx @trainy/pluto-bridge@1.0.0 \
+PLUTO_API_KEY=mlpi_... npx @trainy-ai/pluto-bridge@1.0.0 \
   --origin https://pluto.example.com \
   --mcp-url https://pluto-mcp.example.com/mcp/
 ```

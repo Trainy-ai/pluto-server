@@ -52,10 +52,10 @@ describe("local bridge command", () => {
         "utf8",
       ),
     ) as { name: string; version: string };
-    expect(packageJson.name).toBe("@trainy/pluto-bridge");
+    expect(packageJson.name).toBe("@trainy-ai/pluto-bridge");
     expect(LOCAL_BRIDGE_VERSION).toBe(packageJson.version);
     expect(getLocalBridgeCommand("https://pluto.trainy.ai")).toBe(
-      `npx @trainy/pluto-bridge@${packageJson.version}`,
+      `npx @trainy-ai/pluto-bridge@${packageJson.version}`,
     );
   });
 
@@ -65,7 +65,7 @@ describe("local bridge command", () => {
 
   it("allowlists any other origin the app is served from", () => {
     expect(getLocalBridgeCommand("http://localhost:3000")).toBe(
-      `npx @trainy/pluto-bridge@${LOCAL_BRIDGE_VERSION} --origin http://localhost:3000`,
+      `npx @trainy-ai/pluto-bridge@${LOCAL_BRIDGE_VERSION} --origin http://localhost:3000`,
     );
   });
 });

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Supply-chain guards for @trainy/pluto-bridge, run in PR CI and in the
+// Supply-chain guards for @trainy-ai/pluto-bridge, run in PR CI and in the
 // release build job. Customers run this package with npx as a local server
 // over their Pluto data, so it must stay small and inert to install:
 //

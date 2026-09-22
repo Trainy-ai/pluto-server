@@ -216,7 +216,7 @@ export async function preflightMcp(
         "Create an API key at https://pluto.trainy.ai/api-keys (self-hosted: <your Pluto URL>/api-keys),",
         "then start the bridge with it:",
         "",
-        `  ${API_KEY_ENV}=mlpi_... npx @trainy/pluto-bridge@${packageVersion()}`,
+        `  ${API_KEY_ENV}=mlpi_... npx @trainy-ai/pluto-bridge@${packageVersion()}`,
       ].join("\n"),
     };
   }
