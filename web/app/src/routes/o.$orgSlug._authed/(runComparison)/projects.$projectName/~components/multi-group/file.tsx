@@ -5,6 +5,7 @@ import { ExternalLink, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { WidgetLimitNotice } from "@/components/shared/widget-limit-notice";
 import { MAX_RUNS_PER_BATCH } from "@/lib/batch-limits";
+import { isExperimentsListMode } from "@/lib/experiment-data-utils";
 import { trpc } from "@/utils/trpc";
 import { buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -73,7 +74,7 @@ export const MultiGroupFile = ({
   // file bodies. One batched request for every run, matching the media widgets.
   const { data: byRun, isLoading } = useQuery(
     trpc.runs.data.filesBatch.queryOptions(
-      { organizationId, projectName, logName, runIds },
+      { organizationId, projectName, logName, runIds , includeLineage: isExperimentsListMode() },
       {
         enabled: runIds.length > 0 && !overRunCap && logName.length > 0,
       },

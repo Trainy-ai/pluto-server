@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { PrismaClient } from "@prisma/client";
 import { protectedOrgProcedure } from "../../../../lib/trpc";
 import { sqidDecode, sqidEncode } from "../../../../lib/sqid";
 
@@ -34,6 +35,48 @@ export function buildLineageLogUnion<T extends { logName: string }>(
   return result;
 }
 
+/**
+ * Each run's ancestor chain, child-first (`[run, parent, grandparent, ...]`),
+ * walked upward in batched rounds — one findMany per level. Ancestors are
+ * org-scoped and the walk is depth-capped like the metric stitcher. Exported
+ * so other lineage-aware lookups cover exactly the same chain.
+ */
+export async function resolveAncestorChains(
+  prisma: PrismaClient,
+  runs: { id: bigint; forkedFromRunId: bigint | null }[],
+  organizationId: string,
+): Promise<Map<bigint, bigint[]>> {
+  const chains = new Map<bigint, bigint[]>(runs.map((r) => [r.id, [r.id]]));
+  let pending = new Map<bigint, bigint>(
+    runs.flatMap((r) => (r.forkedFromRunId ? [[r.id, r.forkedFromRunId] as const] : []))
+  );
+  for (let depth = 0; depth < MAX_LINEAGE_DEPTH && pending.size > 0; depth++) {
+    const ancestorIds = [...new Set(pending.values())];
+    const ancestors = await prisma.runs.findMany({
+      where: { id: { in: ancestorIds }, organizationId },
+      select: { id: true, forkedFromRunId: true },
+    });
+    const byId = new Map(ancestors.map((a) => [a.id, a]));
+    const next = new Map<bigint, bigint>();
+    for (const [requestedId, ancestorId] of pending) {
+      const ancestor = byId.get(ancestorId);
+      if (!ancestor) {
+        continue;
+      }
+      const chain = chains.get(requestedId);
+      if (!chain || chain.includes(ancestor.id)) {
+        continue; // defensive: cycle
+      }
+      chain.push(ancestor.id);
+      if (ancestor.forkedFromRunId) {
+        next.set(requestedId, ancestor.forkedFromRunId);
+      }
+    }
+    pending = next;
+  }
+  return chains;
+}
+
 export const getLogsByRunIdsProcedure = protectedOrgProcedure
   .input(
     z.object({
@@ -66,40 +109,8 @@ export const getLogsByRunIdsProcedure = protectedOrgProcedure
     }
 
     // Walk each run's lineage upward in batched rounds so a forked/merged
-    // run also surfaces metrics only its ancestors logged. Ancestors stay
-    // org-scoped; depth-capped like the metric stitcher.
-    const chains = new Map<bigint, bigint[]>(
-      validRuns.map((r) => [r.id, [r.id]])
-    );
-    let pending = new Map<bigint, bigint>(
-      validRuns.flatMap((r) =>
-        r.forkedFromRunId ? [[r.id, r.forkedFromRunId] as const] : []
-      )
-    );
-    for (let depth = 0; depth < MAX_LINEAGE_DEPTH && pending.size > 0; depth++) {
-      const ancestorIds = [...new Set(pending.values())];
-      const ancestors = await ctx.prisma.runs.findMany({
-        where: { id: { in: ancestorIds }, organizationId: input.organizationId },
-        select: { id: true, forkedFromRunId: true },
-      });
-      const byId = new Map(ancestors.map((a) => [a.id, a]));
-      const next = new Map<bigint, bigint>();
-      for (const [requestedId, ancestorId] of pending) {
-        const ancestor = byId.get(ancestorId);
-        if (!ancestor) {
-          continue;
-        }
-        const chain = chains.get(requestedId);
-        if (!chain || chain.includes(ancestor.id)) {
-          continue; // defensive: cycle
-        }
-        chain.push(ancestor.id);
-        if (ancestor.forkedFromRunId) {
-          next.set(requestedId, ancestor.forkedFromRunId);
-        }
-      }
-      pending = next;
-    }
+    // run also surfaces metrics only its ancestors logged.
+    const chains = await resolveAncestorChains(ctx.prisma, validRuns, input.organizationId);
 
     const allInvolvedIds = [...new Set([...chains.values()].flat())];
 

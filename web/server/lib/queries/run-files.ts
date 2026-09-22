@@ -125,6 +125,11 @@ export async function queryRunFiles(
  * Query files for a specific logName (used by tRPC files procedure).
  * Returns files with presigned URLs.
  * Note: Limited to 10,000 files to prevent resource exhaustion from parallel URL generation.
+ *
+ * `stepMin`/`stepMax` (inclusive) bound the query to one segment of a fork
+ * lineage, so a stitched experiment reads each ancestor only up to the step
+ * its child forked at. Presigned URLs are built from `runId` — the run that
+ * logged the file — which is what the S3 path is keyed on.
  */
 export async function queryRunFilesByLogName(
   ch: typeof clickhouse,
@@ -133,6 +138,8 @@ export async function queryRunFilesByLogName(
     projectName: string;
     runId: number;
     logName: string;
+    stepMin?: number;
+    stepMax?: number;
   }
 ): Promise<
   {
@@ -145,11 +152,19 @@ export async function queryRunFilesByLogName(
     annotations: string | null;
   }[]
 > {
-  const { organizationId, projectName, runId, logName } = params;
+  const { organizationId, projectName, runId, logName, stepMin, stepMax } = params;
   const logGroup = getLogGroupName(logName);
 
   // Safety limit to prevent resource exhaustion - runs can have thousands of artifacts
   const MAX_FILES = 10000;
+
+  let stepFilter = "";
+  if (stepMin !== undefined) {
+    stepFilter += " AND step >= {stepMin: UInt64}";
+  }
+  if (stepMax !== undefined) {
+    stepFilter += " AND step <= {stepMax: UInt64}";
+  }
 
   const query = `
     SELECT time, step, fileName, fileType, caption, annotations
@@ -158,7 +173,7 @@ export async function queryRunFilesByLogName(
     AND projectName = {projectName: String}
     AND runId = {runId: UInt64}
     AND logName = {logName: String}
-    AND logGroup = {logGroup: String}
+    AND logGroup = {logGroup: String}${stepFilter}
     -- sampleIndex (SDK-supplied list position) is the real order for
     -- multi-sample-per-step list logging; fileName is only a stable
     -- tiebreak for legacy rows where every sampleIndex defaults to 0.
@@ -175,6 +190,8 @@ export async function queryRunFilesByLogName(
       logName,
       logGroup,
       maxFiles: MAX_FILES,
+      ...(stepMin !== undefined && { stepMin }),
+      ...(stepMax !== undefined && { stepMax }),
     },
     { label: "queryRunFilesByLogName" }
   );

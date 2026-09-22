@@ -21,4 +21,7 @@ export const runIdsByLogNameInput = z.object({
   projectName: z.string(),
   logNames: z.array(z.string()).min(1).max(MAX_LOG_NAMES_FOR_LOOKUP),
   runIds: z.array(z.string()).min(1).max(MAX_RUNS_FOR_LOOKUP),
+  // Count a run as having a log when any run in its fork lineage logged it
+  // (the Experiments view, where media widgets stitch the lineage).
+  includeLineage: z.boolean().optional(),
 });

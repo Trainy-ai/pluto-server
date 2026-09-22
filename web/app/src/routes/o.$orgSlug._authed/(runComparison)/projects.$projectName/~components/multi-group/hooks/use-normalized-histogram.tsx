@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import type { inferOutput } from "@trpc/tanstack-react-query";
 import { trpc, trpcClient } from "@/utils/trpc";
 import { useRunBatchAccumulator } from "@/hooks/use-run-batch-accumulator";
+import { isExperimentsListMode } from "@/lib/experiment-data-utils";
 import type { MetricData } from "../types";
 
 export interface NormalizedHistogramData {
@@ -28,6 +29,7 @@ export function useNormalizedHistogramData(
   }: { tenantId: string; projectName: string; logName: string },
 ): { data: NormalizedHistogramData; isLoading: boolean; hasError: boolean } {
   const selectedRunIds = useMemo(() => runs.map((run) => run.runId), [runs]);
+  const includeLineage = isExperimentsListMode();
 
   // Batched + incremental fetch. Replaces the previous per-run useQueries
   // fan-out (one runs.data.histogram per run) — which bloated the batched GET
@@ -36,15 +38,17 @@ export function useNormalizedHistogramData(
   const { data: byRun, isLoading, isError } =
     useRunBatchAccumulator<HistogramRunResult>({
       selectedRunIds,
-      // Switching the metric (or project/tenant) resets the accumulator.
-      wipeKey: `${tenantId}|${projectName}|${logName}`,
-      queryKeyBase: ["runs.data.histogramBatch", tenantId, projectName, logName],
+      // Switching the metric (or project/tenant, or in/out of the stitched
+      // Experiments view) resets the accumulator.
+      wipeKey: `${tenantId}|${projectName}|${logName}|${includeLineage}`,
+      queryKeyBase: ["runs.data.histogramBatch", tenantId, projectName, logName, includeLineage],
       fetchMissing: (missingRunIds) =>
         trpcClient.runs.data.histogramBatch.query({
           organizationId: tenantId,
           projectName,
           logName,
           runIds: missingRunIds,
+          includeLineage,
         }),
       enabled: selectedRunIds.length > 0 && (logName?.length ?? 0) > 0,
     });

@@ -2,6 +2,7 @@ import { protectedOrgProcedure } from "../../../../lib/trpc";
 import { sqidDecode, sqidEncode } from "../../../../lib/sqid";
 import { getCached, setCached, buildBatchCacheKey } from "../../../../lib/cache";
 import { runIdsByLogNameInput } from "./run-ids-by-log-name.schema";
+import { resolveAncestorChains } from "./get-logs-by-run-ids";
 
 /** Fixed 30s TTL — mirrors distinctFileLogNamesProcedure, whose rows this
  *  reads. Dedupes the burst of identical calls each dashboard widget makes
@@ -39,6 +40,7 @@ export const runIdsByLogNameProcedure = protectedOrgProcedure
       projectName: input.projectName,
       logNames: input.logNames,
       runIds: numericRunIds,
+      includeLineage: input.includeLineage || undefined,
     });
 
     const cached =
@@ -63,14 +65,31 @@ export const runIdsByLogNameProcedure = protectedOrgProcedure
       };
     }
 
-    const rows = await ctx.prisma.runLogs.findMany({
-      where: {
-        logName: { in: input.logNames },
-        runId: { in: numericRunIds.map((id) => BigInt(id)) },
-        run: {
+    // Without lineage every run is its own chain. With it, the requested runs
+    // are checked against the project first — ancestors are then reached
+    // through them, org-scoped, exactly as the media procs stitch them.
+    let chains: Map<bigint, bigint[]>;
+    if (input.includeLineage) {
+      const validRuns = await ctx.prisma.runs.findMany({
+        where: {
+          id: { in: numericRunIds.map((id) => BigInt(id)) },
           projectId: project.id,
           organizationId: input.organizationId,
         },
+        select: { id: true, forkedFromRunId: true },
+      });
+      chains = await resolveAncestorChains(ctx.prisma, validRuns, input.organizationId);
+    } else {
+      chains = new Map(numericRunIds.map((id) => [BigInt(id), [BigInt(id)]]));
+    }
+
+    const rows = await ctx.prisma.runLogs.findMany({
+      where: {
+        logName: { in: input.logNames },
+        runId: { in: [...new Set([...chains.values()].flat())] },
+        run: input.includeLineage
+          ? { organizationId: input.organizationId }
+          : { projectId: project.id, organizationId: input.organizationId },
       },
       select: { logName: true, runId: true },
     });
@@ -86,12 +105,39 @@ export const runIdsByLogNameProcedure = protectedOrgProcedure
     const runIdsByLogName: Record<string, string[]> = Object.fromEntries(
       input.logNames.map((logName) => [logName, [] as string[]]),
     );
-    for (const row of rows) {
-      const encoded = sqidEncode(row.runId);
-      runIdsByLogName[row.logName]?.push(encoded);
+    for (const [logName, runIds] of attributeLogsToChains(chains, rows)) {
+      runIdsByLogName[logName]?.push(...runIds.map((id) => sqidEncode(id)));
     }
 
     const result = { runIdsByLogName };
     await setCached(cacheKey, result, RUN_IDS_BY_LOG_TTL);
     return result;
   });
+
+/**
+ * For each log name, the requested runs whose chain (the run itself, then its
+ * ancestors) contains a run that logged it. Each requested run appears at
+ * most once per name. Exported for unit tests.
+ */
+export function attributeLogsToChains(
+  chains: Map<bigint, bigint[]>,
+  rows: { logName: string; runId: bigint }[],
+): Map<string, bigint[]> {
+  const loggedBy = new Map<string, Set<bigint>>();
+  for (const row of rows) {
+    const owners = loggedBy.get(row.logName) ?? new Set<bigint>();
+    owners.add(row.runId);
+    loggedBy.set(row.logName, owners);
+  }
+  const result = new Map<string, bigint[]>();
+  for (const [logName, owners] of loggedBy) {
+    const requested: bigint[] = [];
+    for (const [requestedId, chain] of chains) {
+      if (chain.some((id) => owners.has(id))) {
+        requested.push(requestedId);
+      }
+    }
+    result.set(logName, requested);
+  }
+  return result;
+}

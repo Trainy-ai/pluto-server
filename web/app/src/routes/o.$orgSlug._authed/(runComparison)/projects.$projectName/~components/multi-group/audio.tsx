@@ -15,6 +15,7 @@ import { pinRingClass } from "@/components/core/image-viewer/pin-styles";
 import { useMediaPins } from "./use-media-pins";
 import { WidgetLimitNotice } from "@/components/shared/widget-limit-notice";
 import { MAX_RUNS_PER_BATCH } from "@/lib/batch-limits";
+import { isExperimentsListMode } from "@/lib/experiment-data-utils";
 
 interface MultiGroupAudioProps {
   logName: string;
@@ -50,7 +51,7 @@ export const MultiGroupAudio = ({
   // so normal staleTime + refetch on selection change keeps URLs fresh.
   const { data: byRun, isLoading } = useQuery(
     trpc.runs.data.filesBatch.queryOptions(
-      { organizationId, projectName, logName, runIds: selectedRunIds },
+      { organizationId, projectName, logName, runIds: selectedRunIds , includeLineage: isExperimentsListMode() },
       {
         enabled:
           selectedRunIds.length > 0 && !overRunCap && (logName?.length ?? 0) > 0,

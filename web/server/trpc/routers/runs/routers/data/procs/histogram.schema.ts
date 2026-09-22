@@ -29,6 +29,8 @@ export const histogramBatchInput = z.object({
   projectName: z.string(),
   logName: z.string(),
   stepCap: z.number().int().positive().max(HISTOGRAM_STEP_CAP_HARD_MAX).optional(),
+  // Stitch each run's fork lineage (Experiments view), like the line charts.
+  includeLineage: z.boolean().optional(),
 });
 
 // Existing uniform/numeric histogram payload (from `pluto.Histogram(samples)`

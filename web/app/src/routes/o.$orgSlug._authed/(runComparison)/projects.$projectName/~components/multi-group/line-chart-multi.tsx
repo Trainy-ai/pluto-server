@@ -3,7 +3,7 @@
 import { default as LineChart } from "@/components/charts/line-wrapper";
 import { ChartLoadingSkeleton } from "@/components/charts/chart-loading-skeleton";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
-import { computeExperimentSegments } from "@/lib/experiment-data-utils";
+import { computeExperimentSegments, isExperimentsListMode } from "@/lib/experiment-data-utils";
 import { useQueries, useQuery, keepPreviousData } from "@tanstack/react-query";
 import { trpc, trpcClient } from "@/utils/trpc";
 import { useCheckDatabaseSize } from "@/lib/db/local-cache";
@@ -154,7 +154,7 @@ const MultiLineChartInner = memo(
     // Read view settings from URL params, falling back to persisted settings.
     const urlParams = typeof window !== "undefined"
       ? new URLSearchParams(window.location.search) : null;
-    const isExperimentsMode = urlParams?.get("listMode") === "experiments";
+    const isExperimentsMode = isExperimentsListMode();
     // In experiments mode, enable lineage so forks inherit parent data to fill gaps.
     // The experiment segment filter will then truncate each run to its exclusive range.
     const showInheritedMetrics = isExperimentsMode ? true : (() => {

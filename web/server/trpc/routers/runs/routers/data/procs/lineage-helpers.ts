@@ -10,7 +10,7 @@ import { getLogGroupName } from "../../../../../../lib/utilts";
 
 const MAX_LINEAGE_DEPTH = 10;
 
-interface LineageSegment {
+export interface LineageSegment {
   runId: number;
   maxStep: number | null;
   minStep: number;

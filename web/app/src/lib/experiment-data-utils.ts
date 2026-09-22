@@ -182,3 +182,17 @@ export function filterDataToRange<T extends { step: number }>(
     return true;
   });
 }
+
+/**
+ * Whether the project page is in Experiments mode (`?listMode=experiments`),
+ * where each row is a whole fork lineage and every widget — line charts and
+ * media alike — should read the stitched lineage rather than the tip run's
+ * own data. Read from the URL so deeply nested widgets (including dashboard
+ * widgets on the same page) don't need the mode threaded through props.
+ */
+export function isExperimentsListMode(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  return new URLSearchParams(window.location.search).get("listMode") === "experiments";
+}

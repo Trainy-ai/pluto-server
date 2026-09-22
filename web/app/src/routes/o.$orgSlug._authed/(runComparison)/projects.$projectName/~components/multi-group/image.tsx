@@ -13,6 +13,7 @@ import { useSampleIndexSync } from "./use-sample-index-sync";
 import { useMediaPins } from "./use-media-pins";
 import { WidgetLimitNotice } from "@/components/shared/widget-limit-notice";
 import { MAX_RUNS_PER_BATCH } from "@/lib/batch-limits";
+import { isExperimentsListMode } from "@/lib/experiment-data-utils";
 
 interface MultiGroupImageProps {
   logName: string;
@@ -48,7 +49,7 @@ export const MultiGroupImage = ({
   // selection change to keep URLs fresh.
   const { data: byRun, isLoading } = useQuery(
     trpc.runs.data.filesBatch.queryOptions(
-      { organizationId, projectName, logName, runIds: selectedRunIds },
+      { organizationId, projectName, logName, runIds: selectedRunIds , includeLineage: isExperimentsListMode() },
       {
         enabled:
           selectedRunIds.length > 0 && !overRunCap && (logName?.length ?? 0) > 0,

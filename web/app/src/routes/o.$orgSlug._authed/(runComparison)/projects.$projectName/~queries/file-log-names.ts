@@ -1,6 +1,7 @@
 import { trpc } from "@/utils/trpc";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
+import { isExperimentsListMode } from "@/lib/experiment-data-utils";
 
 export interface EligiblePrefixEntry {
   prefix: string;
@@ -211,6 +212,8 @@ export function useRunIdsByLogName(
         projectName,
         logNames,
         runIds,
+        // Match the media widgets, which stitch the lineage in this view.
+        includeLineage: isExperimentsListMode(),
       },
       {
         enabled: logNames.length > 0 && runIds.length > 0,
