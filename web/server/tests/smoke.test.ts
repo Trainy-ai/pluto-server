@@ -1585,6 +1585,13 @@ describe('SDK API Endpoints (with API Key)', () => {
 
     describe.skipIf(!hasApiKey)('Ordering & pagination via HTTP API', () => {
       const auth = { headers: { 'Authorization': `Bearer ${TEST_API_KEY}` } };
+      // Other test files create runs in the shared project while this file
+      // runs (vitest runs files in parallel), so a `total` read by one request
+      // is not guaranteed to hold for the next. Assertions that compare totals
+      // across requests are scoped to the seeded bulk runs (setup.ts), the
+      // only runs whose names contain "bulk-run", so the set cannot change
+      // underneath them.
+      const bulkScope = '&search=bulk-run';
 
       it('Test 12b.1: sort=name returns names in ascending order', async () => {
         const response = await makeRequest(
@@ -1638,11 +1645,11 @@ describe('SDK API Endpoints (with API Key)', () => {
 
       it('Test 12b.5: offset pagination yields disjoint, continuous pages under a stable sort', async () => {
         const page1Res = await makeRequest(
-          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&sort=name&limit=10&offset=0`,
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}${bulkScope}&sort=name&limit=10&offset=0`,
           auth
         );
         const page2Res = await makeRequest(
-          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&sort=name&limit=10&offset=10`,
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}${bulkScope}&sort=name&limit=10&offset=10`,
           auth
         );
         expect(page1Res.status).toBe(200);
@@ -1672,12 +1679,12 @@ describe('SDK API Endpoints (with API Key)', () => {
 
       it('Test 12b.7: offset beyond total returns an empty page with unchanged total', async () => {
         const baseRes = await makeRequest(
-          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&limit=1`,
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}${bulkScope}&limit=1`,
           auth
         );
         const total = (await baseRes.json()).total;
         const response = await makeRequest(
-          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&limit=10&offset=${total + 50}`,
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}${bulkScope}&limit=10&offset=${total + 50}`,
           auth
         );
         expect(response.status).toBe(200);
@@ -1729,12 +1736,12 @@ describe('SDK API Endpoints (with API Key)', () => {
 
       it('Test 12b.10: sort=-config.batch_size.value returns runs and preserves total', async () => {
         const baseRes = await makeRequest(
-          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&limit=1`,
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}${bulkScope}&limit=1`,
           auth
         );
         const total = (await baseRes.json()).total;
         const response = await makeRequest(
-          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&sort=-config.batch_size.value&limit=20`,
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}${bulkScope}&sort=-config.batch_size.value&limit=20`,
           auth
         );
         expect(response.status).toBe(200);
@@ -1746,12 +1753,12 @@ describe('SDK API Endpoints (with API Key)', () => {
 
       it('Test 12b.11: sort=summary_metrics.train/metric_00 orders by metric and preserves total', async () => {
         const baseRes = await makeRequest(
-          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&limit=1`,
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}${bulkScope}&limit=1`,
           auth
         );
         const total = (await baseRes.json()).total;
         const response = await makeRequest(
-          `/api/runs/list?projectName=${TEST_PROJECT_NAME}&sort=${encodeURIComponent('summary_metrics.train/metric_00')}&limit=10`,
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}${bulkScope}&sort=${encodeURIComponent('summary_metrics.train/metric_00')}&limit=10`,
           auth
         );
         expect(response.status).toBe(200);
@@ -1815,7 +1822,15 @@ describe('SDK API Endpoints (with API Key)', () => {
         expect(asc.runs.length).toBeGreaterThan(0);
         expect(desc.runs.length).toBeGreaterThan(0);
         // total reflects the full filtered set, stable across directions
-        expect(asc.total).toBe(desc.total);
+        const ascScoped = await (await makeRequest(
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}${bulkScope}&sort=heartbeat_at&limit=5`,
+          auth
+        )).json();
+        const descScoped = await (await makeRequest(
+          `/api/runs/list?projectName=${TEST_PROJECT_NAME}${bulkScope}&sort=-heartbeat_at&limit=5`,
+          auth
+        )).json();
+        expect(ascScoped.total).toBe(descScoped.total);
         // oldest-heartbeat-first vs newest-first differ at the top
         expect(asc.runs[0].id).not.toBe(desc.runs[0].id);
       });

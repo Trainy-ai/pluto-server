@@ -62,7 +62,7 @@ class TestStaleRunIntegration:
 
     def test_stale_run_detected_and_marked(self):
         """A RUNNING run with no recent activity is marked FAILED."""
-        from python.models import Run
+        from python.models import Run, RunStatus
         from python.server import process_runs
 
         db_url = get_test_db_url()
@@ -81,6 +81,8 @@ class TestStaleRunIntegration:
             # Create a RUNNING run with old updatedAt (no CH metrics → falls back to updatedAt)
             stale_run = Run(
                 name="integration-test-stale",
+                createdById=existing_run.createdById,
+                creatorApiKeyId=existing_run.creatorApiKeyId,
                 projectId=project_id,
                 organizationId=org_id,
                 status="RUNNING",
@@ -97,7 +99,7 @@ class TestStaleRunIntegration:
 
             # Refresh from DB to see the committed state
             session.refresh(stale_run)
-            assert stale_run.status == "FAILED", (
+            assert stale_run.status == RunStatus.FAILED, (
                 f"Expected FAILED, got {stale_run.status}"
             )
             assert stale_run_id in (failed_ids or [])
@@ -123,7 +125,7 @@ class TestStaleRunIntegration:
         tight heartbeat grace, exercising the full heartbeat read path."""
         from sqlalchemy import text
 
-        from python.models import Run
+        from python.models import Run, RunStatus
         from python.server import process_runs
 
         import time
@@ -146,6 +148,8 @@ class TestStaleRunIntegration:
 
             run = Run(
                 name="integration-test-heartbeat",
+                createdById=existing_run.createdById,
+                creatorApiKeyId=existing_run.creatorApiKeyId,
                 projectId=existing_run.projectId,
                 organizationId=existing_run.organizationId,
                 status="RUNNING",
@@ -170,7 +174,7 @@ class TestStaleRunIntegration:
             )
 
             session.refresh(run)
-            assert run.status == "FAILED", f"Expected FAILED, got {run.status}"
+            assert run.status == RunStatus.FAILED, f"Expected FAILED, got {run.status}"
             assert run_id in (failed_ids or [])
 
         finally:
@@ -191,7 +195,7 @@ class TestStaleRunIntegration:
 
     def test_active_run_not_marked_with_fresh_session(self):
         """A RUNNING run with recent updatedAt stays RUNNING (validates session caching fix)."""
-        from python.models import Run
+        from python.models import Run, RunStatus
         from python.server import process_runs
 
         db_url = get_test_db_url()
@@ -209,6 +213,8 @@ class TestStaleRunIntegration:
             # Create a RUNNING run with fresh updatedAt
             active_run = Run(
                 name="integration-test-active",
+                createdById=existing_run.createdById,
+                creatorApiKeyId=existing_run.creatorApiKeyId,
                 projectId=project_id,
                 organizationId=org_id,
                 status="RUNNING",
@@ -228,7 +234,7 @@ class TestStaleRunIntegration:
                 # Refresh from the new session
                 refreshed = session2.query(Run).filter(Run.id == active_run_id).first()
                 assert refreshed is not None
-                assert refreshed.status == "RUNNING", (
+                assert refreshed.status == RunStatus.RUNNING, (
                     f"Expected RUNNING, got {refreshed.status}"
                 )
                 assert active_run_id not in (failed_ids or [])

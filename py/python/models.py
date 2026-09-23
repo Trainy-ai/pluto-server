@@ -55,6 +55,10 @@ class Run(Base):
     projectId = Column(BigInteger, ForeignKey("projects.id"))
     organizationId = Column(String, ForeignKey("organization.id"))
     loggerSettings = Column(JSON)
+    # NOT NULL in the Prisma schema (web/server/prisma/schema.prisma); the
+    # service never inserts runs, but tests that do must supply them.
+    createdById = Column(String)
+    creatorApiKeyId = Column(String)
     status = Column(Enum(RunStatus))
     statusUpdated = Column(DateTime(timezone=True))
     updatedAt = Column(

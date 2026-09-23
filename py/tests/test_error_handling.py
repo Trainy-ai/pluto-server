@@ -72,7 +72,9 @@ def test_http_exception_passes_through(caplog):
 def test_healthz_still_works():
     response = client.get("/healthz")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    body = response.json()
+    assert body["status"] == "ok"
+    assert "heartbeatWrites" in body
 
 
 if __name__ == "__main__":

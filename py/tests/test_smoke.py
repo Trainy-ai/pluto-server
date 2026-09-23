@@ -13,6 +13,9 @@ from typing import Optional
 # Configuration
 BASE_URL = os.getenv("TEST_PY_URL", "http://localhost:3004")
 TEST_API_KEY = os.getenv("TEST_API_KEY", "")
+# /api/runs/trigger validates `runId` as an int before it checks the key, so a
+# non-numeric id is a 422 regardless of auth. Use an id that cannot exist.
+NONEXISTENT_RUN_ID = 2**53
 
 
 class TestHealthAndConnectivity:
@@ -60,8 +63,8 @@ class TestAPIKeyAuthentication:
 
         response = httpx.post(
             f"{BASE_URL}/api/runs/trigger",
-            headers={"Authorization": TEST_API_KEY},
-            json={"runId": "test-run-id"}
+            headers={"Authorization": f"Bearer {TEST_API_KEY}"},
+            json={"runId": NONEXISTENT_RUN_ID}
         )
 
         # May return 200 or 404 (if run doesn't exist), but not 401
@@ -71,8 +74,8 @@ class TestAPIKeyAuthentication:
         """Test 2.2: Invalid API Key"""
         response = httpx.post(
             f"{BASE_URL}/api/runs/trigger",
-            headers={"Authorization": "invalid_key"},
-            json={"runId": "test-run-id"}
+            headers={"Authorization": "Bearer invalid_key"},
+            json={"runId": NONEXISTENT_RUN_ID}
         )
 
         assert response.status_code == 401
@@ -83,7 +86,7 @@ class TestAPIKeyAuthentication:
         """Test 2.3: Missing API Key"""
         response = httpx.post(
             f"{BASE_URL}/api/runs/trigger",
-            json={"runId": "test-run-id"}
+            json={"runId": NONEXISTENT_RUN_ID}
         )
 
         assert response.status_code == 401
@@ -97,8 +100,8 @@ class TestRunTriggerEndpoint:
         """Test 3.1: Check Run Triggers"""
         response = httpx.post(
             f"{BASE_URL}/api/runs/trigger",
-            headers={"Authorization": TEST_API_KEY},
-            json={"runId": "test-run-id"}
+            headers={"Authorization": f"Bearer {TEST_API_KEY}"},
+            json={"runId": NONEXISTENT_RUN_ID}
         )
 
         # Should either succeed or fail with 404 (run not found), not auth error
