@@ -1,7 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import type { ColumnDef, Row, SortingState } from "@tanstack/react-table";
 import { Eye, EyeOff } from "lucide-react";
-import { Skeleton } from "@/components/ui/skeleton";
 import { ColorPicker } from "@/components/ui/color-picker";
 import { Checkbox } from "@/components/ui/checkbox";
 import { SELECTED_RUNS_LIMIT } from "./config";
@@ -20,10 +19,10 @@ import { memo } from "react";
 import { useHiddenRunIds } from "@/hooks/use-hidden-run-ids";
 import { ColumnHeaderMenu } from "./column-header-menu";
 import { StatusColumnHeader } from "./status-column-header";
-import { cn } from "@/lib/utils";
 import { TruncatedLabel } from "@/components/shared/truncated-label";
 import { columnTableId } from "./column-table-id";
-import { getRowRange, getCustomColumnValue, formatCellValue } from "./columns-utils";
+import { getRowRange, getCustomColumnValue } from "./columns-utils";
+import { CustomColumnCell } from "./components/custom-column-cell";
 
 type RunId = string;
 type RunColor = string;
@@ -620,33 +619,7 @@ export const columns = ({
       size: 120,
       minSize: 80,
       enableSorting: canSort,
-      cell: ({ row }: { row: Row<Run> }) => {
-        const value = getCustomColumnValue(row.original, col);
-        // Metric columns: distinguish "still fetching" from "value is
-        // genuinely null/NaN". Both used to render as "-", which made
-        // it impossible to tell whether to wait or accept the empty.
-        if (
-          col.source === "metric" &&
-          value == null &&
-          (row.original as { _metricsLoading?: boolean })._metricsLoading
-        ) {
-          return <Skeleton className="h-3 w-12" />;
-        }
-        const display = formatCellValue(value, col);
-        // TruncatedLabel measures scrollWidth vs clientWidth (with a
-        // ResizeObserver) so the tooltip appears ONLY when the cell
-        // is actually visually truncated — no arbitrary length gate,
-        // no tooltip on fully-visible short text. The Radix content
-        // is capped at max-w-[28rem] with `text-wrap break-all` so
-        // long dependency lists wrap inside the box instead of
-        // running off the viewport into a corner.
-        return (
-          <TruncatedLabel
-            text={display}
-            className={cn("text-xs", display === "-" && "text-muted-foreground/50")}
-          />
-        );
-      },
+      cell: ({ row }: { row: Row<Run> }) => <CustomColumnCell run={row.original} col={col} />,
     };
   });
 

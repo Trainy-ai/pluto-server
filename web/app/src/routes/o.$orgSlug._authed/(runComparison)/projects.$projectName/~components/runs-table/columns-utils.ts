@@ -92,13 +92,18 @@ export function getCustomColumnValue(run: Run, col: ColumnConfig): unknown {
   return flat?.[col.id];
 }
 
+/** System timestamp columns (rendered as dates, sorted chronologically). */
+function isDateColumn(col: ColumnConfig): boolean {
+  return col.source === "system" && (col.id === "createdAt" || col.id === "updatedAt" || col.id === "statusUpdated");
+}
+
 /** Formats a custom column value for display as a string */
 export function formatCellValue(value: unknown, col: ColumnConfig): string {
   if (value === null || value === undefined) return "-";
   if (col.source === "system" && col.id === "duration") {
     return typeof value === "number" ? formatDuration(value) : "-";
   }
-  if (col.source === "system" && (col.id === "createdAt" || col.id === "updatedAt" || col.id === "statusUpdated")) {
+  if (isDateColumn(col)) {
     try {
       return new Date(value as string).toLocaleString(undefined, {
         month: "short",
@@ -111,4 +116,31 @@ export function formatCellValue(value: unknown, col: ColumnConfig): string {
     }
   }
   return formatValue(value);
+}
+
+let cellTitleDateFormat: Intl.DateTimeFormat | undefined;
+
+/**
+ * Full, unambiguous timestamp (year, seconds, time zone) for a date cell's
+ * hover tooltip. The cell text drops the year to stay compact, so without
+ * this a run from last December is indistinguishable from next December.
+ * Returns undefined for non-date columns and missing/invalid dates.
+ */
+export function formatCellTitle(value: unknown, col: ColumnConfig): string | undefined {
+  if (value == null) return undefined;
+  if (!isDateColumn(col)) return undefined;
+  const date = new Date(value as string);
+  if (Number.isNaN(date.getTime())) return undefined;
+  // Reuse one formatter: toLocaleString builds a new Intl.DateTimeFormat per
+  // call (~100µs), and this runs for every date cell on every table render.
+  cellTitleDateFormat ??= new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    timeZoneName: "short",
+  });
+  return cellTitleDateFormat.format(date);
 }

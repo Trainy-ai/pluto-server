@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { getRowRange, getCustomColumnValue, formatCellValue } from "../columns-utils";
+import { getRowRange, getCustomColumnValue, formatCellValue, formatCellTitle } from "../columns-utils";
 import type { Row } from "@tanstack/react-table";
 import type { Run } from "../../../~queries/list-runs";
 import type { ColumnConfig } from "../../../~hooks/use-column-config";
@@ -165,6 +165,47 @@ describe("formatCellValue", () => {
     // but the catch block returns String(value)
     const result = formatCellValue("not-a-date", col);
     expect(typeof result).toBe("string");
+  });
+});
+
+// ── formatCellTitle ──────────────────────────────────────────────────────
+
+describe("formatCellTitle", () => {
+  const createdCol: ColumnConfig = { id: "createdAt", source: "system", label: "Created" };
+
+  it("gives date columns a full timestamp that includes the year", () => {
+    for (const id of ["createdAt", "updatedAt", "statusUpdated"]) {
+      const col: ColumnConfig = { id, source: "system", label: id };
+      expect(formatCellTitle("2025-06-15T12:34:56.000Z", col)).toContain("2025");
+    }
+  });
+
+  it("accepts Date objects (superjson-deserialized) as well as ISO strings", () => {
+    const iso = "2025-06-15T12:34:56.000Z";
+    expect(formatCellTitle(new Date(iso), createdCol)).toBe(formatCellTitle(iso, createdCol));
+  });
+
+  it("tells apart dates the compact cell text renders identically", () => {
+    // Same month/day/time a year apart: the cell (no year) can't distinguish
+    // them, which is exactly why the hover title exists.
+    const a = "2025-12-18T20:14:00.000Z";
+    const b = "2026-12-18T20:14:00.000Z";
+    expect(formatCellValue(a, createdCol)).toBe(formatCellValue(b, createdCol));
+    expect(formatCellTitle(a, createdCol)).toContain("2025");
+    expect(formatCellTitle(b, createdCol)).toContain("2026");
+  });
+
+  it("returns undefined for null, undefined and invalid dates", () => {
+    expect(formatCellTitle(null, createdCol)).toBeUndefined();
+    expect(formatCellTitle(undefined, createdCol)).toBeUndefined();
+    expect(formatCellTitle("not-a-date", createdCol)).toBeUndefined();
+  });
+
+  it("returns undefined for non-date columns", () => {
+    const configCol: ColumnConfig = { id: "createdAt", source: "config", label: "createdAt" };
+    const durationCol: ColumnConfig = { id: "duration", source: "system", label: "Duration" };
+    expect(formatCellTitle("2025-06-15T12:34:56.000Z", configCol)).toBeUndefined();
+    expect(formatCellTitle(95_400_000, durationCol)).toBeUndefined();
   });
 });
 

@@ -11,6 +11,12 @@ interface TruncatedLabelProps {
   text: string;
   /** Full text for the hover tooltip; defaults to `text`. */
   title?: string;
+  /**
+   * Show `title` on hover even when the text isn't truncated — for labels
+   * whose title carries detail the visible text leaves out (e.g. the year of
+   * a compact date). No effect without a `title`.
+   */
+  alwaysShowTitle?: boolean;
   className?: string;
   style?: CSSProperties;
   /** Element to render — "span" (default, inline) or "p" (block). */
@@ -29,7 +35,7 @@ interface TruncatedLabelProps {
  * Label that truncates with an ellipsis and reveals the full text in a fast
  * Radix tooltip on hover — replaces the slow native `title=` attribute. The
  * tooltip is shown ONLY when the text is actually truncated (overflowing), so
- * fully-visible labels get no tooltip.
+ * fully-visible labels get no tooltip — unless `alwaysShowTitle` is set.
  *
  * By default it is single-line and needs a width-constrained parent (e.g. a
  * flex row) for truncation to engage. Pass `clampLines` to instead let the text
@@ -38,6 +44,7 @@ interface TruncatedLabelProps {
 export function TruncatedLabel({
   text,
   title,
+  alwaysShowTitle = false,
   className,
   style,
   as: Tag = "span",
@@ -101,7 +108,7 @@ export function TruncatedLabel({
           {text}
         </Tag>
       </TooltipTrigger>
-      {isTruncated && (
+      {(isTruncated || (alwaysShowTitle && title != null)) && (
         // `text-wrap` overrides TooltipContent's base `text-balance` (which
         // balances lines short and leaves dead space on the right for long
         // no-space strings); with `break-all` each line fills to the box edge.
