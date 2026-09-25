@@ -5,6 +5,7 @@ import {
   PutObjectCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { getSignedUrl as getCloudFrontSignedUrl } from "@aws-sdk/cloudfront-signer";
 import { env } from "./env"; // Import the validated env
 import { getCached, setCached, buildCacheKey } from "./cache";
 
@@ -56,26 +57,69 @@ const s3Client = new S3Client({
 // refresh and forcing redownloads of identical bytes.
 const PRESIGN_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
-// Endpoint hashing keeps the key compact and invalidates the cache cleanly if
-// a deployment switches storage backend (S3 ↔ R2 ↔ MinIO). The hash is not
-// security-sensitive (it's just a key-compaction hash), but we use SHA-256 to
-// avoid SHA-1 warnings from security scanners.
-const endpointHash = createHash("sha256")
-  .update(env.STORAGE_ENDPOINT)
+// CloudFront signing is all-or-nothing: a partial config is a deploy mistake,
+// and silently falling back to S3 presigning would hide it, so fail at startup.
+const cdnVars = {
+  STORAGE_CDN_URL: env.STORAGE_CDN_URL,
+  CLOUDFRONT_KEY_PAIR_ID: env.CLOUDFRONT_KEY_PAIR_ID,
+  CLOUDFRONT_PRIVATE_KEY: env.CLOUDFRONT_PRIVATE_KEY,
+};
+const cdnVarsSet = Object.values(cdnVars).filter(Boolean).length;
+if (cdnVarsSet !== 0 && cdnVarsSet !== 3) {
+  const missing = Object.entries(cdnVars)
+    .filter(([, v]) => !v)
+    .map(([k]) => k);
+  throw new Error(
+    `Incomplete CloudFront config: set all of STORAGE_CDN_URL, CLOUDFRONT_KEY_PAIR_ID, CLOUDFRONT_PRIVATE_KEY or none (missing: ${missing.join(", ")})`
+  );
+}
+const cdn =
+  cdnVarsSet === 3
+    ? {
+        baseUrl: env.STORAGE_CDN_URL!.replace(/\/+$/, ""),
+        keyPairId: env.CLOUDFRONT_KEY_PAIR_ID!,
+        // Secrets injected via env often carry the PEM with literal "\n".
+        privateKey: env.CLOUDFRONT_PRIVATE_KEY!.replace(/\\n/g, "\n"),
+      }
+    : null;
+
+// The memo key identifies who signed the URL, so URLs from one signer are
+// never served by a process using another: switching backend (S3 ↔ R2 ↔
+// MinIO ↔ CloudFront) or credential source (static key vs. the default chain,
+// i.e. IRSA) must not reuse cached URLs. That matters because prod and dev
+// share a Redis: without this, dev on IRSA could serve prod's static-key URLs
+// and mask expiry problems. Hashed for compactness only; SHA-256 avoids
+// scanner warnings about SHA-1.
+const signerHash = createHash("sha256")
+  .update(
+    cdn
+      ? `cloudfront:${cdn.baseUrl}:${cdn.keyPairId}`
+      : `s3:${env.STORAGE_ENDPOINT}:${env.STORAGE_ACCESS_KEY_ID ? "static" : "default-chain"}`
+  )
   .digest("hex");
 
 /**
- * Generates a presigned URL for viewing an R2 image
+ * Builds the CloudFront URL for an object key. Each path segment is
+ * percent-encoded (spaces, '+', '#', '?', unicode in user file names);
+ * CloudFront forwards the encoded path and S3 decodes it back to the key.
+ */
+export function cdnObjectUrl(baseUrl: string, key: string): string {
+  return `${baseUrl}/${key.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+/**
+ * Generates a signed download URL for an object: a CloudFront signed URL
+ * when the CDN is configured, otherwise an S3 presigned URL.
  * @param key - The object key (path) in the bucket
  * @param expiresIn - URL expiration time in seconds (default: 5 days)
- * @returns Promise<string> - The presigned URL
+ * @returns Promise<string> - The signed URL
  */
 async function getS3Url(
   key: string,
   expiresIn: number = 3600 * 24 * 5
 ): Promise<string> {
   const cacheKey = buildCacheKey("presign", {
-    endpoint: endpointHash,
+    signer: signerHash,
     bucket: env.STORAGE_BUCKET,
     key,
     expires: expiresIn,
@@ -85,14 +129,25 @@ async function getS3Url(
 
   let signedUrl: string;
   try {
-    const command = new GetObjectCommand({
-      Bucket: env.STORAGE_BUCKET,
-      Key: key,
-    });
+    if (cdn) {
+      // Canned policy: CloudFront's default cache policy ignores the query
+      // string, so every signed variant of a URL shares one edge cache entry.
+      signedUrl = getCloudFrontSignedUrl({
+        url: cdnObjectUrl(cdn.baseUrl, key),
+        keyPairId: cdn.keyPairId,
+        privateKey: cdn.privateKey,
+        dateLessThan: new Date(Date.now() + expiresIn * 1000).toISOString(),
+      });
+    } else {
+      const command = new GetObjectCommand({
+        Bucket: env.STORAGE_BUCKET,
+        Key: key,
+      });
 
-    signedUrl = await getSignedUrl(s3Client, command, {
-      expiresIn: expiresIn,
-    });
+      signedUrl = await getSignedUrl(s3Client, command, {
+        expiresIn: expiresIn,
+      });
+    }
   } catch (error) {
     console.error("Error generating R2 presigned URL:", error);
     throw new Error("Failed to generate R2 image URL");

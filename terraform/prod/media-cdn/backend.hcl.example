@@ -1,0 +1,5 @@
+bucket       = "<state-bucket>"
+key          = "server-private/prod/media-cdn.tfstate"
+region       = "us-east-1"
+encrypt      = true
+use_lockfile = true

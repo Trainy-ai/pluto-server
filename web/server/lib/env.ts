@@ -11,6 +11,14 @@ const envSchema = z.object({
   STORAGE_BUCKET: z.string().min(1),
   STORAGE_REGION: z.string().min(1),
 
+  // Optional CloudFront CDN for file downloads. When all three are set,
+  // download URLs are CloudFront signed URLs (edge-cached, signed with a
+  // CloudFront key pair instead of IAM credentials) rather than S3 presigned
+  // URLs. Unset = S3 presigning as before (MinIO, CI, self-hosted, demo).
+  STORAGE_CDN_URL: z.string().url().optional(), // e.g. https://pluto-media.trainy.ai
+  CLOUDFRONT_KEY_PAIR_ID: z.string().min(1).optional(),
+  CLOUDFRONT_PRIVATE_KEY: z.string().min(1).optional(), // PEM; literal \n accepted
+
   // Clickhouse
   CLICKHOUSE_URL: z.string().url(),
   CLICKHOUSE_USER: z.string().min(1),

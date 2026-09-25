@@ -1,0 +1,7 @@
+public_keys = {
+  "2026-09" = <<-EOT
+    -----BEGIN PUBLIC KEY-----
+    <contents of cf.pub.pem>
+    -----END PUBLIC KEY-----
+  EOT
+}

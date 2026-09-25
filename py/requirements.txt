@@ -3,7 +3,7 @@ dotenv
 fastapi
 psycopg2-binary
 sqids
-sqlalchemy
+sqlalchemy>=2.0,<2.1  # 2.1 maps postgresql:// to psycopg 3; we ship psycopg2
 uvicorn
 gql
 requests-toolbelt
