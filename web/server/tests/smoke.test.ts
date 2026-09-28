@@ -138,6 +138,16 @@ describe('Backend Smoke Tests', () => {
       expectApiSecurityHeaders(response);
     });
 
+    it('Test 1.7b: The Next-served root carries the same security headers', async () => {
+      // "/" is the one path the app/[...route] catch-all does not match, so it
+      // is answered by Next's own 404 document rather than by Hono. Its headers
+      // come from next.config.ts and must not drift from the API tier's.
+      const response = await makeRequest('/');
+      expect(response.status).toBe(404);
+      expect(response.headers.get('x-powered-by')).toBeNull();
+      expectApiSecurityHeaders(response);
+    });
+
     it('Test 1.8: Swagger UI keeps a page-compatible CSP', async () => {
       // Session-gated: unauthenticated callers get the sign-in page (401),
       // which is rendered under the same docs policy as the UI itself.
