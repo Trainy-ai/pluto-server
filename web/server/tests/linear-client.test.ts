@@ -16,6 +16,9 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  // Vitest 4's restoreAllMocks no longer clears vi.fn() call history, so
+  // reset explicitly or mock.calls[0] points at an earlier test's request.
+  mockFetch.mockReset();
 });
 
 function mockGraphQLResponse(data: unknown, status = 200) {
