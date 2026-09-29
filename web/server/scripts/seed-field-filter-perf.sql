@@ -1,4 +1,4 @@
--- Seed for the "Field-Filter Query Perf Test" Buildkite step.
+-- Seed for the "Field-Filter Query Perf Test" CI job.
 --
 -- Self-contained tenant sized like the largest real project (testing-ci,
 -- ~170K runs): 170K runs in one project, five config keys per run in

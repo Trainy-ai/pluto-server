@@ -1,5 +1,5 @@
 /**
- * Perf regression gate for negated field filters (Buildkite: "Field-Filter
+ * Perf regression gate for negated field filters (CI job: "Field-Filter
  * Query Perf Test").
  *
  * Executes queryFieldFilteredRunIds — the exact code path behind

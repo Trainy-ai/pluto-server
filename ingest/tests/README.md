@@ -40,8 +40,9 @@ cargo test --release
 
 ## CI Integration
 
-Tests run automatically in Buildkite on:
-- Pull requests to main
+Tests run automatically in GitHub Actions (the `Rust Integration Tests` job in
+`.github/workflows/e2e-tests.yml`) on:
+- Pull requests
 - Pushes to main branch
 
 ## Test Database Cleanup

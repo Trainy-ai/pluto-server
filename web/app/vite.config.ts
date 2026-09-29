@@ -104,10 +104,9 @@ function panelAssets(): Plugin {
     configureServer(server) {
       // Kick the fetch off at server start but DO NOT await it. Vite has to
       // listen immediately — CI's readiness probe allows the dev server
-      // roughly 2s before declaring "Frontend failed to start", and
-      // .buildkite/pipeline.yml is a rule-protected path we cannot widen
-      // that budget in — while the ~45MB cold download overlaps the minutes
-      // of Playwright install and auth setup that follow it.
+      // roughly 2s before declaring "Frontend failed to start" — while the
+      // ~45MB cold download overlaps the minutes of Playwright install and
+      // auth setup that follow it.
       //
       // Fetching only on the first /stlite/ hit is too late: the panel
       // iframe's `import("./stlite/stlite.js")` fails with "Failed to fetch
