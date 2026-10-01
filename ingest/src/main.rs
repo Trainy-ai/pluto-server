@@ -374,6 +374,9 @@ async fn main() {
         info!("DLQ replay loops spawned for all tables");
     }
 
+    // Build the S3 client once; it caches (and refreshes) its credentials.
+    let s3_client = Arc::new(routes::files::build_s3_client(&config).await);
+
     // Create the application state, wrapping shared resources in Arc
     let state = Arc::new(AppState {
         metrics_record_sender,
@@ -384,6 +387,7 @@ async fn main() {
         db: db.clone(),
         dlq_config: dlq_config.clone(),
         config: config.clone(),
+        s3_client,
     });
 
     // Define the Axum application router, merging routes from different modules

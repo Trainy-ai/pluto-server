@@ -27,4 +27,6 @@ pub struct AppState {
     pub dlq_config: Arc<crate::dlq::DlqConfig>,
     // Arc-wrapped application configuration
     pub config: Arc<Config>,
+    // S3/R2 client for presigning uploads, built once so credentials are cached
+    pub s3_client: Arc<aws_sdk_s3::Client>,
 }

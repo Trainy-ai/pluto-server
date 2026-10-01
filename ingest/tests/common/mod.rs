@@ -221,7 +221,7 @@ impl TestContainers {
 
 // Create a test AppState without background processors
 // Returns AppState and receivers (receivers must be kept alive to prevent channel closure)
-pub fn create_test_app_state(
+pub async fn create_test_app_state(
     db: Arc<server_rs::db::Database>,
     clickhouse_client: clickhouse::Client,
     config: Arc<server_rs::config::Config>,
@@ -256,6 +256,7 @@ pub fn create_test_app_state(
         clickhouse_client,
         db,
         dlq_config,
+        s3_client: Arc::new(server_rs::routes::files::build_s3_client(&config).await),
         config,
     });
 
@@ -359,7 +360,7 @@ impl TestFixture {
 
         // Create test app state and get channel receivers
         let (app_state, metrics_receiver, log_receiver, data_receiver, files_receiver) =
-            create_test_app_state(db, clickhouse_client, config);
+            create_test_app_state(db, clickhouse_client, config).await;
 
         // Get API key and tenant ID from containers
         let api_key = containers.api_key.clone();

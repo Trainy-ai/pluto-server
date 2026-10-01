@@ -648,6 +648,7 @@ async fn test_dlq_persists_and_replays_on_clickhouse_failure() {
         clickhouse_client: clickhouse_client.clone(),
         db,
         dlq_config: dlq_config.clone(),
+        s3_client: std::sync::Arc::new(server_rs::routes::files::build_s3_client(&config).await),
         config,
     });
 

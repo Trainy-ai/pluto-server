@@ -1,4 +1,5 @@
 use aws_config::meta::region::RegionProviderChain;
+use aws_config::identity::IdentityCache;
 use aws_config::BehaviorVersion;
 use aws_sdk_s3::config::Credentials;
 use aws_sdk_s3::presigning::PresigningConfig;
@@ -262,6 +263,84 @@ pub struct PresignedUrlResponse {
     pub log_files: HashMap<String, Vec<HashMap<String, String>>>,
 }
 
+// How long before expiry cached credentials are refreshed. Presigned URLs
+// cannot outlive the credentials that signed them, so this is also the minimum
+// lifetime of every upload URL when credentials are temporary (IRSA/STS, ~1h).
+// Static keys never expire and are unaffected.
+const CREDENTIAL_REFRESH_BUFFER: Duration = Duration::from_secs(30 * 60);
+
+// Builds the S3/R2 client used to presign uploads. Called once at startup: the
+// client caches its credentials, so under IRSA the STS AssumeRoleWithWebIdentity
+// call happens roughly every 30 minutes rather than on every /files request.
+pub async fn build_s3_client(config: &crate::config::Config) -> Client {
+    let region_provider =
+        RegionProviderChain::first_try(Region::new(config.storage_region.clone()));
+    let mut config_builder = aws_config::defaults(BehaviorVersion::latest())
+        .region(region_provider)
+        .identity_cache(
+            IdentityCache::lazy()
+                .buffer_time(CREDENTIAL_REFRESH_BUFFER)
+                .build(),
+        );
+
+    // Static credentials are OPTIONAL. Setting `credentials_provider` explicitly
+    // pins the client to that key and bypasses the AWS SDK's default credential
+    // provider chain entirely. Leaving it unset lets the SDK resolve credentials
+    // itself -- which is how IRSA (EKS web identity, via AWS_ROLE_ARN +
+    // AWS_WEB_IDENTITY_TOKEN_FILE) engages, with short-lived STS credentials
+    // that rotate automatically instead of a long-lived static key.
+    //
+    // Behavior is unchanged when both vars ARE set: MinIO in CI and self-hosted
+    // deployments simply keep setting STORAGE_ACCESS_KEY_ID /
+    // STORAGE_SECRET_ACCESS_KEY and get the exact same explicit-credential
+    // client as before. Mirrors web/server/lib/s3.ts (PR #624).
+    if let (Some(access_key_id), Some(secret_access_key)) = (
+        config.storage_access_key_id.as_deref(),
+        config.storage_secret_access_key.as_deref(),
+    ) {
+        config_builder = config_builder.credentials_provider(Credentials::new(
+            access_key_id,
+            secret_access_key,
+            None,
+            None,
+            "storage_config",
+        ));
+    }
+
+    // Only set endpoint_url for non-AWS S3 (MinIO, R2, etc.)
+    // AWS S3 handles virtual-hosted style automatically; setting endpoint_url
+    // causes signature mismatch between path-style and virtual-hosted URLs
+    let is_custom_endpoint = !config
+        .storage_endpoint
+        .to_lowercase()
+        .contains("amazonaws.com");
+
+    if is_custom_endpoint {
+        config_builder = config_builder.endpoint_url(config.storage_endpoint.as_str());
+    }
+
+    let shared_config = config_builder.load().await;
+
+    // Non-AWS endpoints given as a hostname need path-style addressing. The SDK
+    // otherwise signs virtual-host URLs like `http://<bucket>.minio:9000/<key>`,
+    // and `<bucket>.minio` is not a resolvable host, so the presigned URL is
+    // unusable (this is what `deployments/demo` uses). Path-style instead gives
+    // `http://minio:9000/<bucket>/<key>`. An endpoint that is a bare IP already
+    // forces path-style, which is why local dev never hit this.
+    //
+    // Mirrors `forcePathStyle: true` in web/server/lib/s3.ts, which documents the
+    // same failure. R2 accepts both styles. AWS S3 keeps virtual-host addressing.
+    if is_custom_endpoint {
+        Client::from_conf(
+            aws_sdk_s3::config::Builder::from(&shared_config)
+                .force_path_style(true)
+                .build(),
+        )
+    } else {
+        Client::new(&shared_config)
+    }
+}
+
 // Handler for the POST /files endpoint
 // Generates presigned URLs for S3/R2 uploads
 pub async fn generate_presigned_urls(
@@ -315,69 +394,9 @@ pub async fn generate_presigned_urls(
 
     println!("[FILES] Send time: {:?}", send_start.elapsed());
 
-    // Setup S3/R2 client configuration using credentials from app config
-    let region_provider =
-        RegionProviderChain::first_try(Region::new(state.config.storage_region.clone()));
-    let mut config_builder =
-        aws_config::defaults(BehaviorVersion::latest()).region(region_provider);
-
-    // Static credentials are OPTIONAL. Setting `credentials_provider` explicitly
-    // pins the client to that key and bypasses the AWS SDK's default credential
-    // provider chain entirely. Leaving it unset lets the SDK resolve credentials
-    // itself -- which is how IRSA (EKS web identity, via AWS_ROLE_ARN +
-    // AWS_WEB_IDENTITY_TOKEN_FILE) engages, with short-lived STS credentials
-    // that rotate automatically instead of a long-lived static key.
-    //
-    // Behavior is unchanged when both vars ARE set: MinIO in CI and self-hosted
-    // deployments simply keep setting STORAGE_ACCESS_KEY_ID /
-    // STORAGE_SECRET_ACCESS_KEY and get the exact same explicit-credential
-    // client as before. Mirrors web/server/lib/s3.ts (PR #624).
-    if let (Some(access_key_id), Some(secret_access_key)) = (
-        state.config.storage_access_key_id.as_deref(),
-        state.config.storage_secret_access_key.as_deref(),
-    ) {
-        config_builder = config_builder.credentials_provider(Credentials::new(
-            access_key_id,
-            secret_access_key,
-            None,
-            None,
-            "storage_config",
-        ));
-    }
-
-    // Only set endpoint_url for non-AWS S3 (MinIO, R2, etc.)
-    // AWS S3 handles virtual-hosted style automatically; setting endpoint_url
-    // causes signature mismatch between path-style and virtual-hosted URLs
-    let is_custom_endpoint = !state
-        .config
-        .storage_endpoint
-        .to_lowercase()
-        .contains("amazonaws.com");
-
-    if is_custom_endpoint {
-        config_builder = config_builder.endpoint_url(state.config.storage_endpoint.as_str());
-    }
-
-    let shared_config = config_builder.load().await;
-
-    // Non-AWS endpoints given as a hostname need path-style addressing. The SDK
-    // otherwise signs virtual-host URLs like `http://<bucket>.minio:9000/<key>`,
-    // and `<bucket>.minio` is not a resolvable host, so the presigned URL is
-    // unusable (this is what `deployments/demo` uses). Path-style instead gives
-    // `http://minio:9000/<bucket>/<key>`. An endpoint that is a bare IP already
-    // forces path-style, which is why local dev never hit this.
-    //
-    // Mirrors `forcePathStyle: true` in web/server/lib/s3.ts, which documents the
-    // same failure. R2 accepts both styles. AWS S3 keeps virtual-host addressing.
-    let s3_client: Arc<Client> = Arc::new(if is_custom_endpoint {
-        Client::from_conf(
-            aws_sdk_s3::config::Builder::from(&shared_config)
-                .force_path_style(true)
-                .build(),
-        )
-    } else {
-        Client::new(&shared_config)
-    });
+    // The S3 client is built once at startup (see build_s3_client) so its
+    // credentials are cached across requests instead of re-resolved per call.
+    let s3_client: Arc<Client> = Arc::clone(&state.s3_client);
 
     // Build a presigning config with a defined expiry and explicit start time
     // Using explicit start_time helps mitigate potential clock skew issues
