@@ -166,7 +166,7 @@ export function buildTrpcOpenApiDocument(serverUrl: string) {
   return {
     openapi: "3.0.0",
     info: {
-      title: "mlop tRPC (session-authenticated)",
+      title: "Pluto tRPC (session-authenticated)",
       version: "1.0.0",
       description: DESCRIPTION,
     },

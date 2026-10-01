@@ -32,7 +32,7 @@ async function notifyAdminOfNewSignup(user: { email: string; name: string; id: s
 
   const html = `
     <h2>New User Signup</h2>
-    <p>A new user has signed up for mlop:</p>
+    <p>A new user has signed up for Pluto:</p>
     <ul>
       <li><strong>Name:</strong> ${safeName}</li>
       <li><strong>Email:</strong> ${safeEmail}</li>
@@ -45,7 +45,7 @@ async function notifyAdminOfNewSignup(user: { email: string; name: string; id: s
 
   await sendEmail({
     to: env.ADMIN_NOTIFICATION_EMAIL,
-    subject: `[mlop] New signup: ${safeEmail}`,
+    subject: `[Pluto] New signup: ${safeEmail}`,
     html,
     text,
   });
@@ -55,7 +55,7 @@ export const auth = betterAuth({
   database: prismaAdapter(prisma, {
     provider: "postgresql",
   }),
-  appName: env.NODE_ENV === "development" ? "mlop-dev" : "mlop",
+  appName: env.NODE_ENV === "development" ? "Pluto (dev)" : "Pluto",
   emailAndPassword: {
     enabled: env.IS_DOCKER === "true" || env.NODE_ENV === "test" || env.NODE_ENV === "development",
   },
@@ -165,8 +165,8 @@ export const auth = betterAuth({
     <md:AssertionConsumerService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="http://localhost:3001/api/auth/sso/saml2/sp/acs/dummyidp-test" index="1"/>
   </md:SPSSODescriptor>
   <md:Organization>
-    <md:OrganizationName xml:lang="en-US">MLOP</md:OrganizationName>
-    <md:OrganizationDisplayName xml:lang="en-US">MLOP Platform</md:OrganizationDisplayName>
+    <md:OrganizationName xml:lang="en-US">Pluto</md:OrganizationName>
+    <md:OrganizationDisplayName xml:lang="en-US">Pluto by Trainy</md:OrganizationDisplayName>
     <md:OrganizationURL xml:lang="en-US">http://localhost:3001/</md:OrganizationURL>
   </md:Organization>
   <md:ContactPerson contactType="technical">

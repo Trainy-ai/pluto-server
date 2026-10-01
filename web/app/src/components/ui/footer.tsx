@@ -21,7 +21,7 @@ export function Footer({ className = "" }: FooterProps) {
               rel="noopener noreferrer"
               target="_blank"
             >
-              Trainy's fork of MLOP - 🪐 Pluto
+            Trainy's fork of MLOP -   🪐 Pluto
             </a>
           </span>
           <div className="flex items-center gap-4">
