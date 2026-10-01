@@ -7,7 +7,7 @@
 // code — templates are seeds, not linked references.
 //
 // RULES for template code:
-//   • Only the documented `mlop` SDK surface (src/lib/panels/mlop_sdk.py)
+//   • Only the documented `pluto` SDK surface (src/lib/panels/pluto_sdk.py)
 //     — data methods are async and require top-level `await`.
 //   • Only packages available offline: the vendored Pyodide distribution
 //     (numpy/pandas/matplotlib/…) plus the pure wheels injected into the
@@ -30,30 +30,30 @@ export interface PanelTemplate {
 }
 
 const METRIC_LINE_CHART = `import streamlit as st
-import mlop
+import pluto
 
-ctx = mlop.get_context()
+ctx = pluto.get_context()
 st.title("My Panel")
 st.caption(f"Project: {ctx.project} — {len(ctx.runs)} run(s) selected")
 
-names = await mlop.get_metric_names()
+names = await pluto.get_metric_names()
 if not names or not ctx.runs:
     st.info("Select at least one run in a project with logged metrics.")
     st.stop()
 
 metric = st.selectbox("Metric", names)
-df = await mlop.get_metrics(metrics=[metric])
+df = await pluto.get_metrics(metrics=[metric])
 st.line_chart(df, x="step", y="value", color="run_name")
 `;
 
 const RUN_COMPARISON_TABLE = `import pandas as pd
 import streamlit as st
-import mlop
+import pluto
 
-ctx = mlop.get_context()
+ctx = pluto.get_context()
 st.subheader("Run comparison")
 
-names = await mlop.get_metric_names()
+names = await pluto.get_metric_names()
 if not names or not ctx.runs:
     st.info("Select at least one run in a project with logged metrics.")
     st.stop()
@@ -63,7 +63,7 @@ if not metrics:
     st.info("Pick at least one metric.")
     st.stop()
 
-summaries = await mlop.get_metric_summaries(metrics, aggregation="LAST")
+summaries = await pluto.get_metric_summaries(metrics, aggregation="LAST")
 rows = []
 for run in ctx.runs:
     values = summaries.get(run.id, {})
@@ -74,12 +74,12 @@ st.dataframe(pd.DataFrame(rows).set_index("run"))
 const CORRELATION_HEATMAP = `import streamlit as st
 import matplotlib.pyplot as plt
 import seaborn as sns
-import mlop
+import pluto
 
 st.subheader("Metric correlation")
 
-ctx = mlop.get_context()
-names = await mlop.get_metric_names()
+ctx = pluto.get_context()
+names = await pluto.get_metric_names()
 if len(names) < 2 or not ctx.runs:
     st.info("Select at least one run in a project with two or more metrics.")
     st.stop()
@@ -91,7 +91,7 @@ if len(metrics) < 2:
     st.info("Pick at least two metrics.")
     st.stop()
 
-df = await mlop.get_metrics(metrics=metrics)
+df = await pluto.get_metrics(metrics=metrics)
 if df.empty:
     st.info("No data points for the selected runs.")
     st.stop()
@@ -111,18 +111,18 @@ const PER_RUN_SUBPLOTS = `import math
 
 import streamlit as st
 import matplotlib.pyplot as plt
-import mlop
+import pluto
 
-ctx = mlop.get_context()
+ctx = pluto.get_context()
 st.subheader("Per-run subplots")
 
-names = await mlop.get_metric_names()
+names = await pluto.get_metric_names()
 if not names or not ctx.runs:
     st.info("Select at least one run in a project with logged metrics.")
     st.stop()
 
 metric = st.selectbox("Metric", names)
-df = await mlop.get_metrics(metrics=[metric])
+df = await pluto.get_metrics(metrics=[metric])
 
 cols = min(3, len(ctx.runs))
 rows = math.ceil(len(ctx.runs) / cols)
@@ -142,9 +142,9 @@ st.pyplot(fig)
 `;
 
 const LOGS_VIEWER = `import streamlit as st
-import mlop
+import pluto
 
-ctx = mlop.get_context()
+ctx = pluto.get_context()
 st.subheader("Console logs")
 
 if not ctx.runs:
@@ -152,7 +152,7 @@ if not ctx.runs:
     st.stop()
 
 run = st.selectbox("Run", ctx.runs, format_func=lambda r: r.name)
-logs = await mlop.get_logs(run.id)
+logs = await pluto.get_logs(run.id)
 if not logs:
     st.info("No logs recorded for this run.")
     st.stop()
@@ -163,12 +163,12 @@ st.code("\\n".join(entry["message"] for entry in logs[-500:]), language="text")
 
 const LEADERBOARD = `import streamlit as st
 import matplotlib.pyplot as plt
-import mlop
+import pluto
 
-ctx = mlop.get_context()
+ctx = pluto.get_context()
 st.subheader("Leaderboard")
 
-names = await mlop.get_metric_names()
+names = await pluto.get_metric_names()
 if not names or not ctx.runs:
     st.info("Select at least one run in a project with logged metrics.")
     st.stop()
@@ -176,7 +176,7 @@ if not names or not ctx.runs:
 metric = st.selectbox("Metric", names)
 lower_is_better = st.toggle("Lower is better", value=True)
 
-summaries = await mlop.get_metric_summaries([metric], aggregation="LAST")
+summaries = await pluto.get_metric_summaries([metric], aggregation="LAST")
 scored = []
 for run in ctx.runs:
     value = summaries.get(run.id, {}).get(metric)

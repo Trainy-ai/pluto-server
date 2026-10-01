@@ -11,7 +11,7 @@
 //      resolves against this host — CSP connect-src blocks the rest)
 //   4. relay `mlop:rpc` worker messages → parent `rpc`, and parent
 //      `rpc-result` → worker `mlop:res`
-//   5. handle `context-update` (rewrite mlop_context.json), `rerun`
+//   5. handle `context-update` (rewrite pluto_context.json), `rerun`
 //      (rewrite code + clear script cache + synthetic "r" hotkey — the
 //      spike-verified recipe; kernel.reboot() orphans the frontend),
 //      and `dispose`
@@ -34,6 +34,21 @@ const token = new URLSearchParams(document.location.hash.slice(1)).get("t");
 // working, and PyCF_ALLOW_TOP_LEVEL_AWAIT so top-level `await mlop.*`
 // still runs. Reruns rewrite panel_code.py; this wrapper re-reads it
 // on every script run.
+// `mlop` was the SDK's name before the rename to `pluto`. Panels saved
+// then still say `import mlop`, and their code is stored verbatim in the
+// dashboard config, so the old name has to keep working. Rebinding
+// sys.modules makes `import mlop` hand back the *same module object* as
+// `import pluto` — one set of pending requests, one listener, no second
+// copy of the bridge.
+const SDK_ALIAS_MODULE = [
+  "import sys",
+  "",
+  "import pluto",
+  "",
+  "sys.modules[__name__] = pluto",
+  "",
+].join("\n");
+
 const PANEL_ENTRYPOINT = `import ast
 
 import streamlit as st
@@ -131,8 +146,9 @@ async function boot(init) {
       files: {
         "streamlit_app.py": PANEL_ENTRYPOINT,
         "panel_code.py": init.code,
-        "mlop.py": init.sdk,
-        "mlop_context.json": JSON.stringify(init.context),
+        "pluto.py": init.sdk,
+        "mlop.py": SDK_ALIAS_MODULE,
+        "pluto_context.json": JSON.stringify(init.context),
       },
       requirements,
       pyodideUrl: new URL("./pyodide/pyodide.mjs", document.location.href).href,
@@ -235,7 +251,7 @@ window.addEventListener("message", (ev) => {
     }
     case "context-update": {
       queueFsOp(
-        () => app.writeFile("mlop_context.json", JSON.stringify(d.context)),
+        () => app.writeFile("pluto_context.json", JSON.stringify(d.context)),
         "context-update",
       );
       break;

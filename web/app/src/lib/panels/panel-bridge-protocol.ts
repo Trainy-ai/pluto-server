@@ -136,7 +136,7 @@ export const PanelInitMessageSchema = z
     code: z.string(),
     requirements: z.array(z.string()),
     /**
-     * Source of the `mlop` Python SDK (src/lib/panels/mlop_sdk.py,
+     * Source of the `pluto` Python SDK (src/lib/panels/pluto_sdk.py,
      * bundled into the parent via Vite `?raw`). Delivered over the
      * bridge because the iframe host page is a static file that must
      * not depend on the app bundle's hashed asset names.

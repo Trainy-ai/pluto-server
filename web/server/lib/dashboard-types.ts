@@ -610,24 +610,24 @@ export const createDefaultWidgetConfig = (type: WidgetType): WidgetConfig => {
   }
 };
 
-// Starter template for new panel widgets. Uses the `mlop` bridge SDK
+// Starter template for new panel widgets. Uses the `pluto` bridge SDK
 // mounted into the stlite runtime (async-first; stlite supports
 // top-level await). Kept short — it should render something useful
 // against any project with at least one logged metric.
 const DEFAULT_PANEL_CODE = `import streamlit as st
-import mlop
+import pluto
 
-ctx = mlop.get_context()
+ctx = pluto.get_context()
 st.title("My Panel")
 st.caption(f"Project: {ctx.project} — {len(ctx.runs)} run(s) selected")
 
-names = await mlop.get_metric_names()
+names = await pluto.get_metric_names()
 if not names or not ctx.runs:
     st.info("Select at least one run in a project with logged metrics.")
     st.stop()
 
 metric = st.selectbox("Metric", names)
-df = await mlop.get_metrics(metrics=[metric])
+df = await pluto.get_metrics(metrics=[metric])
 st.line_chart(df, x="step", y="value", color="run_name")
 `;
 

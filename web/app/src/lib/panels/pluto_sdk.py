@@ -1,8 +1,15 @@
-# mlop — Python Panels SDK.
+# pluto — Python Panels SDK.
 #
-# Mounted into the stlite (Pyodide) kernel as `mlop.py` by the sandbox
+# Mounted into the stlite (Pyodide) kernel as `pluto.py` by the sandbox
 # host page (public/stlite/panel-host.js); the source travels over the
-# `init` bridge message (bundled into the app via Vite `?raw`).
+# `init` bridge message (bundled into the app via Vite `?raw`). The host
+# also mounts an `mlop.py` alias, the SDK's former name, so panels saved
+# before the rename keep running; it binds the same module object.
+#
+# The postMessage wire protocol (`mlop:rpc` / `mlop:res`, the `mlop`
+# version field) keeps its old names on purpose: it is an internal
+# contract with panel-host.js, and renaming it would break a panel
+# iframe mid-flight during a deploy for no user-visible gain.
 #
 # The sandboxed iframe has no network access: every data call marshals a
 # JSON request over postMessage to the parent app, which executes ONLY
@@ -13,10 +20,10 @@
 # top-level await in panel scripts):
 #
 #     import streamlit as st
-#     import mlop
+#     import pluto
 #
-#     ctx = mlop.get_context()
-#     df = await mlop.get_metrics(metrics=["train/loss"])
+#     ctx = pluto.get_context()
+#     df = await pluto.get_metrics(metrics=["train/loss"])
 #     st.line_chart(df.pivot(index="step", columns="run_name", values="value"))
 
 import asyncio
@@ -26,13 +33,13 @@ import js
 from pyodide.ffi import create_proxy
 
 _TIMEOUT_SECONDS = 60
-_CONTEXT_FILE = "mlop_context.json"
+_CONTEXT_FILE = "pluto_context.json"
 
 _pending = {}
 _counter = 0
 
 
-class MlopError(Exception):
+class PlutoError(Exception):
     """Bridge request failure.
 
     `code` is one of: FORBIDDEN_METHOD, BAD_PARAMS, UPSTREAM, TIMEOUT.
@@ -42,6 +49,10 @@ class MlopError(Exception):
         self.code = code
         self.message = message
         super().__init__(f"[{code}] {message}")
+
+
+#: Former name of PlutoError, kept so `except mlop.MlopError` still catches.
+MlopError = PlutoError
 
 
 # ─── postMessage plumbing ────────────────────────────────────────────
@@ -61,13 +72,13 @@ def _on_message(event):
         else:
             payload = payload if isinstance(payload, dict) else {}
             future.set_exception(
-                MlopError(
+                PlutoError(
                     payload.get("code", "UPSTREAM"),
                     payload.get("message", "bridge request failed"),
                 )
             )
     except Exception as exc:  # never break the worker's message loop
-        js.console.error("mlop bridge listener error: " + repr(exc))
+        js.console.error("pluto bridge listener error: " + repr(exc))
 
 
 js.self.addEventListener("message", create_proxy(_on_message))
@@ -96,9 +107,9 @@ async def _request(method, params):
         return await asyncio.wait_for(future, _TIMEOUT_SECONDS)
     except asyncio.TimeoutError:
         _pending.pop(request_id, None)
-        raise MlopError(
+        raise PlutoError(
             "TIMEOUT",
-            "mlop.%s timed out after %ds waiting for the host app"
+            "pluto.%s timed out after %ds waiting for the host app"
             % (method, _TIMEOUT_SECONDS),
         ) from None
 

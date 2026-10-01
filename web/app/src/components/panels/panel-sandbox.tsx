@@ -3,7 +3,7 @@
 // Renders the /stlite/panel-host.html host page in an
 // <iframe sandbox="allow-scripts"> (opaque origin: no cookies, no
 // storage, network fenced by CSP). Boot is lazy (IntersectionObserver),
-// the ready→init handshake delivers the user code + mlop SDK + host
+// the ready→init handshake delivers the user code + pluto SDK + host
 // context, and usePanelBridge services the panel's data RPCs.
 
 import {
@@ -24,7 +24,7 @@ import {
   type ParentToPanelMessage,
 } from "@/lib/panels/panel-bridge-protocol";
 import type { PanelHostContext } from "@/lib/panels/panel-bridge-allowlist";
-import mlopSdkSource from "@/lib/panels/mlop_sdk.py?raw";
+import plutoSdkSource from "@/lib/panels/pluto_sdk.py?raw";
 import { usePanelBridge, type PanelStatusPhase } from "./use-panel-bridge";
 
 export interface PanelSandboxHandle {
@@ -116,7 +116,7 @@ export function PanelSandbox({
         token,
         code: current.code,
         requirements: current.requirements,
-        sdk: mlopSdkSource,
+        sdk: plutoSdkSource,
         context: current.context,
       });
       initSentRef.current = true;

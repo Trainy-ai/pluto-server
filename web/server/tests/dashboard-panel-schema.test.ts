@@ -183,9 +183,9 @@ describe('Panel Widget Schema', () => {
     const config = createDefaultWidgetConfig('panel');
     expect(PanelWidgetConfigSchema.safeParse(config).success).toBe(true);
     const code = (config as { code: string }).code;
-    expect(code).toContain('import mlop');
-    expect(code).toContain('mlop.get_context()');
-    expect(code).toContain('await mlop.get_metrics(');
+    expect(code).toContain('import pluto');
+    expect(code).toContain('pluto.get_context()');
+    expect(code).toContain('await pluto.get_metrics(');
     expect(code).toContain('st.line_chart');
     expect(
       WidgetSchema.safeParse({ id: 'w', type: 'panel', config, layout }).success,

@@ -5,7 +5,7 @@ import { validateRequirements } from "../panel-requirements";
 /** Mirror of PanelWidgetConfigSchema's code cap (dashboard-types.ts). */
 const MAX_CODE_LENGTH = 65_536;
 
-/** Async data methods exposed by src/lib/panels/mlop_sdk.py. */
+/** Async data methods exposed by src/lib/panels/pluto_sdk.py. */
 const SDK_ASYNC_METHODS = new Set([
   "get_runs",
   "get_metric_names",
@@ -27,6 +27,8 @@ const SDK_SYNC_METHODS = new Set(["get_context", "colors"]);
  */
 const OFFLINE_IMPORTABLE = new Set([
   "streamlit",
+  "pluto",
+  // Former SDK name, still mounted as an alias module for saved panels.
   "mlop",
   "pandas",
   "numpy",
@@ -64,26 +66,34 @@ describe("PANEL_TEMPLATES", () => {
   );
 
   it.each(PANEL_TEMPLATES.map((t) => [t.id, t] as const))(
-    "%s only calls the documented mlop SDK surface",
+    "%s only calls the documented pluto SDK surface",
     (_id, template) => {
-      const calls = [...template.code.matchAll(/\bmlop\.(\w+)\(/g)].map(
+      const calls = [...template.code.matchAll(/\bpluto\.(\w+)\(/g)].map(
         (match) => match[1],
       );
       expect(calls.length).toBeGreaterThan(0);
       for (const call of calls) {
         expect(
           SDK_ASYNC_METHODS.has(call) || SDK_SYNC_METHODS.has(call),
-          `mlop.${call} is not part of the SDK`,
+          `pluto.${call} is not part of the SDK`,
         ).toBe(true);
       }
       // Async SDK calls must be awaited (worker cannot sync-block).
       for (const method of SDK_ASYNC_METHODS) {
-        const bare = new RegExp(`(?<!await )\\bmlop\\.${method}\\(`);
+        const bare = new RegExp(`(?<!await )\\bpluto\\.${method}\\(`);
         expect(
           bare.test(template.code),
-          `mlop.${method} must be awaited`,
+          `pluto.${method} must be awaited`,
         ).toBe(false);
       }
+    },
+  );
+
+  it.each(PANEL_TEMPLATES.map((t) => [t.id, t] as const))(
+    "%s teaches the current SDK name, not the mlop alias",
+    (_id, template) => {
+      expect(template.code).not.toMatch(/\bimport mlop\b/);
+      expect(template.code).not.toMatch(/\bmlop\./);
     },
   );
 
