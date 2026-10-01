@@ -10,6 +10,7 @@ import React, { useState } from "react";
 import { InviteUser } from "@/components/layout/common/invite-user-button";
 import { NotificationsDropdown } from "@/components/layout/common/notifications-list";
 import { Feedback } from "@/components/layout/common/feedback";
+import { CopilotToggle } from "@/components/copilot/copilot-toggle";
 import { useAuth } from "@/lib/auth/client";
 import { useQuery } from "@tanstack/react-query";
 import { trpc } from "@/utils/trpc";
@@ -172,6 +173,7 @@ const PageLayout = ({
             <div className="sm:hidden">
               <InviteUser size="icon" variant="outline" />
             </div>
+            <CopilotToggle />
             <Feedback showText={false} className="size-9" />
             <NotificationsDropdown />
           </PageActions>

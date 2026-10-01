@@ -26,6 +26,7 @@ import {
 import { AlertTriangle, Check, Copy } from "lucide-react";
 import { RunTags } from "./run-tags";
 import { useUpdateTags } from "../~queries/update-tags";
+import { useRunCopilotContext } from "../~hooks/use-run-copilot-context";
 
 type Run = inferOutput<typeof trpc.runs.get>;
 
@@ -150,6 +151,11 @@ export const Layout = ({
   // (e.g. "MMP-1"), fall back to the route id so runs without a number /
   // project runPrefix still show and copy something in the header.
   const headerId = displayId ?? runId;
+  useRunCopilotContext(projectName, runId, {
+    name: run.name,
+    status: run.status,
+    displayId,
+  });
 
   return (
     <RunsLayout>

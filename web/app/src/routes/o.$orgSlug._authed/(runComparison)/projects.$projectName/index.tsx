@@ -9,6 +9,8 @@ import { useBestStepTolerance } from "@/hooks/use-best-step-tolerance";
 import type { ExpandedState, SortingState } from "@tanstack/react-table";
 import { useQuery } from "@tanstack/react-query";
 import { useSelectedRuns } from "./~hooks/use-selected-runs";
+import { usePanelLayout } from "./~hooks/use-panel-layout";
+import { useProjectCopilot } from "./~hooks/use-project-copilot";
 import { useRunListAssembly, useTableViewPartition } from "./~hooks/use-run-list-model";
 import { prefetchListRuns, useListRuns, type Run } from "./~queries/list-runs";
 import { useSelectedRunLogs } from "./~queries/selected-run-logs";
@@ -38,7 +40,6 @@ import {
   ResizablePanel,
   ResizableHandle,
 } from "@/components/ui/resizable";
-import type { PanelImperativeHandle } from "react-resizable-panels";
 import { useDebouncedCallback } from "@/lib/hooks/use-debounced-callback";
 import { RunTableViewSelector } from "./~components/runs-table/run-table-view-selector";
 import { DEFAULT_PAGE_SIZE, SELECTED_RUNS_LIMIT } from "./~components/runs-table/config";
@@ -256,67 +257,15 @@ function RouteComponent() {
     });
   }, [navigate]);
 
-  // Panel layout state - which panels are visible
-  type PanelLayout = "both" | "list-only" | "graphs-only";
-  const [panelLayout, setPanelLayout] = useState<PanelLayout>("both");
-  const listPanelRef = useRef<PanelImperativeHandle | null>(null);
-  const graphsPanelRef = useRef<PanelImperativeHandle | null>(null);
-
-  const toggleListPanel = useCallback(() => {
-    setPanelLayout((prev) => {
-      if (prev === "graphs-only") {
-        // List is hidden — expand it to show both
-        listPanelRef.current?.expand();
-        return "both";
-      }
-      if (prev === "list-only") {
-        // List is the only visible panel — expand graphs to show both
-        graphsPanelRef.current?.expand();
-        return "both";
-      }
-      // Both visible — collapse list
-      listPanelRef.current?.collapse();
-      return "graphs-only";
-    });
-  }, []);
-
-  const toggleGraphsPanel = useCallback(() => {
-    setPanelLayout((prev) => {
-      if (prev === "list-only") {
-        // Graphs hidden — expand to show both
-        graphsPanelRef.current?.expand();
-        return "both";
-      }
-      if (prev === "graphs-only") {
-        // Graphs is the only visible panel — expand list to show both
-        listPanelRef.current?.expand();
-        return "both";
-      }
-      // Both visible — collapse graphs
-      graphsPanelRef.current?.collapse();
-      return "list-only";
-    });
-  }, []);
-
-  // Keyboard shortcuts for panel toggle
-  useEffect(() => {
-    function handleKeyDown(e: KeyboardEvent) {
-      // Don't trigger if user is typing in an input/textarea
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (e.target as HTMLElement)?.isContentEditable) {
-        return;
-      }
-      if (e.key === "[") {
-        e.preventDefault();
-        toggleListPanel();
-      } else if (e.key === "]") {
-        e.preventDefault();
-        toggleGraphsPanel();
-      }
-    }
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [toggleListPanel, toggleGraphsPanel]);
+  const {
+    panelLayout,
+    listPanelRef,
+    graphsPanelRef,
+    toggleListPanel,
+    toggleGraphsPanel,
+    onListPanelResize,
+    onGraphsPanelResize,
+  } = usePanelLayout();
 
   // Table hover → chart highlighting is handled entirely via DOM events
   // ("run-table-hover" dispatched by data-table.tsx, consumed by chart-sync-context.tsx)
@@ -1066,6 +1015,21 @@ function RouteComponent() {
     onHiddenChange: debouncedHiddenChange,
   });
 
+  useProjectCopilot({
+    projectName,
+    selectedRunsWithColors,
+    runs,
+    viewLabel:
+      viewMode === "side-by-side"
+        ? "Side-by-side"
+        : activeViewId
+          ? "Custom dashboard"
+          : "All metrics",
+    onToggleRun: handleRunSelection,
+    panelLayout,
+    toggleListPanel,
+  });
+
   // Intersection count: how many of the CURRENTLY SELECTED runs also
   // match the toolbar filter. Powers the toolbar's third status line
   // ("N of your S selected runs match the filter"). Only fires when
@@ -1488,13 +1452,7 @@ function RouteComponent() {
             minSize={15}
             collapsible
             collapsedSize={0}
-            onResize={(size) => {
-              if (size.asPercentage === 0) {
-                setPanelLayout("graphs-only");
-              } else {
-                setPanelLayout((prev) => prev === "graphs-only" ? "both" : prev);
-              }
-            }}
+            onResize={onListPanelResize}
             className="overflow-hidden"
           >
             <div className="flex h-full min-h-0 flex-col overflow-hidden pr-2">
@@ -1656,13 +1614,7 @@ function RouteComponent() {
             defaultSize={70}
             collapsible
             collapsedSize={0}
-            onResize={(size) => {
-              if (size.asPercentage === 0) {
-                setPanelLayout("list-only");
-              } else {
-                setPanelLayout((prev) => prev === "list-only" ? "both" : prev);
-              }
-            }}
+            onResize={onGraphsPanelResize}
           >
             <div className="flex h-full flex-col overflow-y-auto overscroll-y-contain pl-2">
               {(isLoading || runCountLoading) && runs.length === 0 ? (

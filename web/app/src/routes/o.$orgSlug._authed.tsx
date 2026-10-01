@@ -1,5 +1,6 @@
 import { orgAuthCheck } from "@/lib/auth/check";
-import { createFileRoute, redirect } from "@tanstack/react-router";
+import { CopilotProvider } from "@/components/copilot/copilot-provider";
+import { Outlet, createFileRoute, redirect } from "@tanstack/react-router";
 import { z } from "zod";
 
 const searchParamsSchema = z.object({
@@ -21,4 +22,17 @@ export const Route = createFileRoute("/o/$orgSlug/_authed")({
 
     return auth;
   },
+  component: AuthedLayout,
 });
+
+/**
+ * The copilot provider sits here, above every page's own layout, so the
+ * open panel and its conversation survive navigation between pages.
+ */
+function AuthedLayout() {
+  return (
+    <CopilotProvider>
+      <Outlet />
+    </CopilotProvider>
+  );
+}

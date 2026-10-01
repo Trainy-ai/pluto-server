@@ -1,4 +1,5 @@
 import { SidebarInset } from "@/components/ui/sidebar";
+import { CopilotDock } from "@/components/copilot/copilot-dock";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { OrgDetails } from "@/components/layout/common/org-details";
 import {
@@ -64,10 +65,11 @@ const RunsLayout = ({ children }: RunsLayoutProps) => {
         </Sidebar>
         <SidebarInset
           id="skip"
-          className="size-full lg:peer-data-[state=collapsed]:max-w-[calc(100svw-var(--sidebar-width-icon))] lg:peer-data-[state=expanded]:max-w-[calc(100svw-var(--sidebar-width))]"
+          className="size-full min-w-0 lg:peer-data-[state=collapsed]:max-w-[calc(100svw-var(--sidebar-width-icon))] lg:peer-data-[state=expanded]:max-w-[calc(100svw-var(--sidebar-width))]"
         >
           {children}
         </SidebarInset>
+        <CopilotDock />
       </SidebarProvider>
     </div>
   );
