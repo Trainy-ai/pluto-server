@@ -1,4 +1,5 @@
 import { useMemo, useRef, useEffect, useState, memo } from "react";
+import { CopilotZoomBridge } from "@/components/copilot/copilot-zoom-bridge";
 import { RefreshButton } from "@/components/core/refresh-button";
 import { LogSearch } from "./run-comparison/search";
 import { MemoizedMultiGroup } from "./multi-group/multi-group";
@@ -352,6 +353,7 @@ export const MetricsDisplay = memo(function MetricsDisplay({
   if (selectedViewId && selectedView) {
     return (
       <ChartSyncProvider syncKey={`dashboard-${selectedViewId}`} experimentRunIdsMap={experimentRunIdsMap} hiddenRunIds={hiddenRunIds}>
+        <CopilotZoomBridge />
         <FullscreenProvider>
         <div className="flex-1 space-y-4">
           <div className="sticky top-0 z-20 flex items-center gap-4 bg-background pb-2">
@@ -407,6 +409,7 @@ export const MetricsDisplay = memo(function MetricsDisplay({
   // Default "All Metrics" view
   return (
     <ChartSyncProvider syncKey={`all-metrics-${projectName}`} experimentRunIdsMap={experimentRunIdsMap} hiddenRunIds={hiddenRunIds}>
+        <CopilotZoomBridge />
       <FullscreenProvider>
       <div className="flex-1 space-y-4">
         <div className="sticky top-0 z-20 space-y-3 bg-background pb-2">

@@ -1,4 +1,9 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import {
+  dashboardPanelNames,
+  resolvedDashboardView,
+} from "@/lib/copilot-visible-panels";
+import { CopilotZoomBridge } from "@/components/copilot/copilot-zoom-bridge";
 import { RunNotFound } from "@/components/layout/run/not-found";
 import { DataGroup } from "./~components/group/group";
 import { RefreshButton } from "@/components/core/refresh-button";
@@ -327,6 +332,31 @@ function RouteComponent() {
       ));
   }, [filteredLogGroups, renderableFileLogNames, chartsLayout, organizationId, projectName, runId, runCreatedAtStr, runData?.name]);
 
+  // What the copilot should say is on screen: the dashboard it can read by
+  // id, or the metric names the All-metrics tab is rendering.
+  // Gated on the fetched view's id: the query serves the previous dashboard
+  // as placeholder data while loading the next, and publishing from that
+  // would pair the new id with the old name and panels.
+  const resolvedView = resolvedDashboardView(selectedViewId, selectedView);
+  const copilotDashboard = useMemo(
+    () =>
+      selectedViewId
+        ? { id: selectedViewId, name: resolvedView?.name }
+        : undefined,
+    [selectedViewId, resolvedView?.name],
+  );
+  const copilotPanels = useMemo(() => {
+    if (!selectedViewId) {
+      return filteredLogGroups.flatMap((group) =>
+        group.logs.map((log) => log.logName),
+      );
+    }
+    // Omitted, not empty, until the right view arrives.
+    return resolvedView
+      ? dashboardPanelNames(resolvedView.config?.sections)
+      : undefined;
+  }, [selectedViewId, resolvedView, filteredLogGroups]);
+
   if (isLoading || !runData) {
     return (
       <SkeletonLayout title={`${runData?.name}`} projectName={projectName} />
@@ -343,6 +373,8 @@ function RouteComponent() {
       title={`${runData.name}`}
       organizationId={organizationId}
       disableScroll
+      copilotDashboard={copilotDashboard}
+      copilotPanels={copilotPanels}
     >
       <div className="flex h-full flex-col overflow-y-auto overscroll-y-contain">
         <div className="sticky top-0 z-20 flex items-center gap-4 bg-background px-4 pt-4 pb-2">
@@ -380,6 +412,7 @@ function RouteComponent() {
         <div className="flex flex-col gap-4 px-4 pb-4">
           {isDashboardView ? (
             <ChartSyncProvider syncKey={`run-dashboard-${selectedViewId}`}>
+              <CopilotZoomBridge />
               <DashboardBuilder
                 view={selectedView}
                 groupedMetrics={groupedMetrics}
@@ -392,6 +425,7 @@ function RouteComponent() {
             </ChartSyncProvider>
           ) : (
             <ChartSyncProvider syncKey={`run-all-metrics-${runId}`}>
+              <CopilotZoomBridge />
               {/* One shared step-sync provider so media steppers sync across
                   every section in the All-Metrics view (each DataGroup reuses
                   this instead of creating its own per-section provider). */}

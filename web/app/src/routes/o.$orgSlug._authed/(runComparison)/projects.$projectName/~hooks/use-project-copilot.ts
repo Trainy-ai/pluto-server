@@ -6,6 +6,7 @@ import {
 } from "@/components/copilot/copilot-provider";
 import { nextAutoCollapse } from "@/lib/copilot-auto-collapse";
 import type {
+  CopilotDashboardRef,
   CopilotPageContext,
   CopilotRunRef,
 } from "@/lib/copilot-page-context";
@@ -20,6 +21,10 @@ interface UseProjectCopilotOptions {
   /** Runs loaded in the table; offered by the copilot's run picker. */
   runs: Run[];
   viewLabel: string;
+  /** Set when a saved dashboard is on screen. */
+  dashboard?: CopilotDashboardRef;
+  /** Panels the active view renders; omitted for views without charts. */
+  visiblePanels?: string[];
   onToggleRun: (runId: string, selected: boolean) => void;
   panelLayout: PanelLayout;
   toggleListPanel: () => void;
@@ -35,6 +40,8 @@ export function useProjectCopilot({
   selectedRunsWithColors,
   runs,
   viewLabel,
+  dashboard,
+  visiblePanels,
   onToggleRun,
   panelLayout,
   toggleListPanel,
@@ -54,13 +61,23 @@ export function useProjectCopilot({
       projectName,
       view: viewLabel,
       runs: selected,
+      dashboard,
+      visiblePanels,
       runPicker: {
         candidates,
         onToggle: onToggleRun,
         limit: SELECTED_RUNS_LIMIT,
       },
     }),
-    [projectName, viewLabel, selected, candidates, onToggleRun],
+    [
+      projectName,
+      viewLabel,
+      selected,
+      dashboard,
+      visiblePanels,
+      candidates,
+      onToggleRun,
+    ],
   );
   useCopilotPageContext(ctx);
 

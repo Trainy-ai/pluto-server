@@ -1,4 +1,5 @@
 import { RunStatusBadge } from "@/components/core/runs/run-status-badge";
+import type { CopilotDashboardRef } from "@/lib/copilot-page-context";
 import PageLayout from "@/components/layout/page-layout";
 import { OrganizationPageTitle } from "@/components/layout/page-title";
 import RunsLayout from "@/components/layout/run/layout";
@@ -37,6 +38,10 @@ interface LayoutProps extends PropsWithChildren {
   title: string;
   organizationId: string;
   disableScroll?: boolean;
+  /** Dashboard on screen, for the copilot's page context (index route only). */
+  copilotDashboard?: CopilotDashboardRef;
+  /** Panels on screen, for the copilot's page context (index route only). */
+  copilotPanels?: string[];
 }
 
 const CancelRunButton = ({
@@ -127,6 +132,8 @@ export const Layout = ({
   title,
   organizationId,
   disableScroll = false,
+  copilotDashboard,
+  copilotPanels,
 }: LayoutProps) => {
   const updateTagsMutation = useUpdateTags(organizationId, projectName, runId);
 
@@ -151,11 +158,12 @@ export const Layout = ({
   // (e.g. "MMP-1"), fall back to the route id so runs without a number /
   // project runPrefix still show and copy something in the header.
   const headerId = displayId ?? runId;
-  useRunCopilotContext(projectName, runId, {
-    name: run.name,
-    status: run.status,
-    displayId,
-  });
+  useRunCopilotContext(
+    projectName,
+    runId,
+    { name: run.name, status: run.status, displayId },
+    { dashboard: copilotDashboard, visiblePanels: copilotPanels },
+  );
 
   return (
     <RunsLayout>

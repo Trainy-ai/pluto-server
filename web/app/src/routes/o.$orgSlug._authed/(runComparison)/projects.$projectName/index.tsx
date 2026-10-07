@@ -14,6 +14,12 @@ import { useProjectCopilot } from "./~hooks/use-project-copilot";
 import { useRunListAssembly, useTableViewPartition } from "./~hooks/use-run-list-model";
 import { prefetchListRuns, useListRuns, type Run } from "./~queries/list-runs";
 import { useSelectedRunLogs } from "./~queries/selected-run-logs";
+import { useDashboardView } from "./~queries/dashboard-views";
+import {
+  dashboardPanelNames,
+  groupedMetricNames,
+  resolvedDashboardView,
+} from "@/lib/copilot-visible-panels";
 import { useUpdateTags } from "./~queries/update-tags";
 import { useUpdateNotes } from "./~queries/update-notes";
 import { useDistinctColumnKeys, useSearchColumnKeys } from "./~queries/distinct-column-keys";
@@ -126,6 +132,11 @@ function RouteComponent() {
   const { chart, runs: urlRunsParam, hidden: urlHiddenParam, listMode: urlListMode, inherited: urlInherited } = Route.useSearch();
   const navigate = useNavigate();
   useDocumentTitle(projectName);
+
+  // Name + section config of the dashboard on screen, for the copilot's
+  // page context. Already fetched by the dashboard selector, so this is a
+  // cache hit rather than a second request.
+  const selectedDashboardView = useDashboardView(organizationId, chart ?? null);
 
   // Parse hidden run IDs from URL
   const urlHiddenIds = useMemo(() => {
@@ -1015,21 +1026,6 @@ function RouteComponent() {
     onHiddenChange: debouncedHiddenChange,
   });
 
-  useProjectCopilot({
-    projectName,
-    selectedRunsWithColors,
-    runs,
-    viewLabel:
-      viewMode === "side-by-side"
-        ? "Side-by-side"
-        : activeViewId
-          ? "Custom dashboard"
-          : "All metrics",
-    onToggleRun: handleRunSelection,
-    panelLayout,
-    toggleListPanel,
-  });
-
   // Intersection count: how many of the CURRENTLY SELECTED runs also
   // match the toolbar filter. Powers the toolbar's third status line
   // ("N of your S selected runs match the filter"). Only fires when
@@ -1368,6 +1364,53 @@ function RouteComponent() {
     const metrics = groupMetrics(effectiveRunsWithColors, logsByRunId, organizationId, projectName);
     return metrics;
   }, [effectiveRunsWithColors, logsByRunId, organizationId, projectName]);
+
+  // Published after groupedMetrics so the copilot can name the panels on
+  // screen. `chart` is the dashboard the user is looking at; activeViewId is
+  // the saved *table* view (columns/filters) and says nothing about charts.
+  // The query keeps the previous view as placeholder data while it fetches
+  // the next one, so its id is checked before anything from it is published:
+  // pairing the new view's id with the old view's name and panels would tell
+  // the model to read one dashboard while describing another.
+  const resolvedView = resolvedDashboardView(
+    chart,
+    selectedDashboardView.data,
+  );
+  const copilotDashboard = useMemo(
+    () =>
+      // Side-by-side renders no charts, so a leftover ?chart= in the URL is
+      // not something on screen.
+      chart && viewMode !== "side-by-side"
+        ? { id: chart, name: resolvedView?.name }
+        : undefined,
+    [chart, viewMode, resolvedView?.name],
+  );
+  const copilotPanels = useMemo(() => {
+    if (viewMode === "side-by-side") return undefined;
+    if (!chart) return groupedMetricNames(groupedMetrics);
+    // Omitted rather than empty until the right view arrives: "Visible
+    // panels: none" would otherwise claim an empty dashboard mid-load.
+    return resolvedView
+      ? dashboardPanelNames(resolvedView.config?.sections)
+      : undefined;
+  }, [viewMode, chart, resolvedView, groupedMetrics]);
+
+  useProjectCopilot({
+    projectName,
+    selectedRunsWithColors,
+    runs,
+    viewLabel:
+      viewMode === "side-by-side"
+        ? "Side-by-side"
+        : chart
+          ? "Custom dashboard"
+          : "All metrics",
+    dashboard: copilotDashboard,
+    visiblePanels: copilotPanels,
+    onToggleRun: handleRunSelection,
+    panelLayout,
+    toggleListPanel,
+  });
 
   // Build experiment run ID lookup: runId → all runIds in the same experiment
   // (same name, or same fork/merge lineage — a collapsed lineage is one

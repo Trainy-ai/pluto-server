@@ -4,6 +4,8 @@ import type { WireMessage } from "@/lib/chat-transport";
 export const MAX_CONTEXT_CHARS = 2_000;
 /** Runs listed by name; the rest are summarized as "…and N more". */
 export const MAX_CONTEXT_RUNS = 20;
+/** Visible panels listed by name; the rest are summarized as "…and N more". */
+export const MAX_CONTEXT_PANELS = 24;
 /** Mirrors MAX_MESSAGE_CHARS in web/server/lib/chat/messages.ts. */
 const MAX_MESSAGE_CHARS = 8_000;
 const MAX_FIELD_CHARS = 80;
@@ -29,6 +31,27 @@ export interface CopilotRunPicker {
   limit: number;
 }
 
+/**
+ * The saved dashboard a project page is showing. `id` is what the MCP
+ * `read_dashboard` / `render_panels` tools take as `view_id`, so passing it
+ * saves the model a `list_dashboards` guess at which dashboard is on screen.
+ */
+export interface CopilotDashboardRef {
+  id: string;
+  name?: string;
+}
+
+/**
+ * The step range the charts are currently showing, when the user has zoomed
+ * in. Mirrors the `step_min` / `step_max` arguments of `read_dashboard`, so
+ * the model reads the window the user is actually looking at rather than the
+ * whole run.
+ */
+export interface CopilotStepWindow {
+  min: number;
+  max: number;
+}
+
 /** What the current page tells the copilot about what is on screen. */
 export interface CopilotPageContext {
   page: "project" | "run";
@@ -38,6 +61,16 @@ export interface CopilotPageContext {
   /** Selected runs on a project page; the single run on a run page. */
   runs?: CopilotRunRef[];
   runPicker?: CopilotRunPicker;
+  /** Set when the active view is a saved dashboard. */
+  dashboard?: CopilotDashboardRef;
+  /**
+   * Metric / panel names rendered in the active view, in display order —
+   * what "this chart" refers to. Omitted (rather than empty) while the
+   * page is still resolving them.
+   */
+  visiblePanels?: string[];
+  /** Only set when the user has zoomed; absent means the full step range. */
+  stepWindow?: CopilotStepWindow;
 }
 
 export type ContextChipKey = "project" | "runs" | "view";
@@ -85,17 +118,27 @@ export function formatPageContext(
 ): string | null {
   if (!ctx) return null;
 
+  // The dashboard, panel list and step window all describe the active view,
+  // so removing the View chip drops them with it.
+  const viewIncluded = !excluded.has("view");
   const head = [
     OPEN_TAG,
     "The user is asking from the Pluto web app. This is what they have on screen; use it to resolve references like “these runs” or “this chart”.",
     `Project: ${clean(ctx.projectName)}`,
   ];
-  if (ctx.view && !excluded.has("view")) {
+  if (ctx.view && viewIncluded) {
     head.push(`View: ${clean(ctx.view)}`);
+  }
+  if (ctx.dashboard && viewIncluded) {
+    const name = ctx.dashboard.name ? `${clean(ctx.dashboard.name)} ` : "";
+    head.push(
+      `Dashboard: ${name}(view_id: ${clean(ctx.dashboard.id)}) — read it with this id rather than searching for it`,
+    );
   }
 
   const runs = ctx.runs && !excluded.has("runs") ? ctx.runs : undefined;
-  const build = (listed: number): string => {
+  const panels = ctx.visiblePanels && viewIncluded ? ctx.visiblePanels : undefined;
+  const build = (listedRuns: number, listedPanels: number): string => {
     const lines = [...head];
     if (runs && ctx.page === "run" && runs.length === 1) {
       lines.push(`Viewing run: ${describeRun(runs[0])}`);
@@ -103,22 +146,44 @@ export function formatPageContext(
       lines.push("Selected runs: none");
     } else if (runs) {
       lines.push(`Selected runs (${runs.length}):`);
-      for (const run of runs.slice(0, listed)) {
+      for (const run of runs.slice(0, listedRuns)) {
         lines.push(`- ${describeRun(run)}`);
       }
-      if (runs.length > listed) {
-        lines.push(`…and ${runs.length - listed} more`);
+      if (runs.length > listedRuns) {
+        lines.push(`…and ${runs.length - listedRuns} more`);
       }
+    }
+    if (panels && panels.length === 0) {
+      lines.push("Visible panels: none");
+    } else if (panels && listedPanels > 0) {
+      const shown = panels.slice(0, listedPanels).map(clean).join(", ");
+      const more =
+        panels.length > listedPanels
+          ? ` …and ${panels.length - listedPanels} more`
+          : "";
+      lines.push(`Visible panels (${panels.length}): ${shown}${more}`);
+    }
+    if (ctx.stepWindow && viewIncluded) {
+      lines.push(
+        `Step window: ${ctx.stepWindow.min}–${ctx.stepWindow.max} (the user has zoomed in; steps outside this range are off screen)`,
+      );
     }
     lines.push(CLOSE_TAG);
     return lines.join("\n");
   };
 
-  let listed = Math.min(runs?.length ?? 0, MAX_CONTEXT_RUNS);
-  let text = build(listed);
-  while (text.length > MAX_CONTEXT_CHARS && listed > 0) {
-    listed -= 1;
-    text = build(listed);
+  // Shed panel names before run names: the runs are what questions are
+  // usually about, and a truncated panel list still carries the count.
+  let listedRuns = Math.min(runs?.length ?? 0, MAX_CONTEXT_RUNS);
+  let listedPanels = Math.min(panels?.length ?? 0, MAX_CONTEXT_PANELS);
+  let text = build(listedRuns, listedPanels);
+  while (text.length > MAX_CONTEXT_CHARS && listedPanels > 0) {
+    listedPanels -= 1;
+    text = build(listedRuns, listedPanels);
+  }
+  while (text.length > MAX_CONTEXT_CHARS && listedRuns > 0) {
+    listedRuns -= 1;
+    text = build(listedRuns, listedPanels);
   }
   return text.length > MAX_CONTEXT_CHARS ? null : text;
 }

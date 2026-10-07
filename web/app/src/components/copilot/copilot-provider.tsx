@@ -14,6 +14,7 @@ import type { ChatMessage, ChatMode } from "@/components/chat/chat-types";
 import type {
   ContextChipKey,
   CopilotPageContext,
+  CopilotStepWindow,
 } from "@/lib/copilot-page-context";
 
 export const COPILOT_DEFAULT_WIDTH = 380;
@@ -38,6 +39,13 @@ interface CopilotActions {
   setOpen: (open: boolean | ((prev: boolean) => boolean)) => void;
   setWidth: (width: number) => void;
   publishPageContext: (ctx: CopilotPageContext | null) => void;
+  /**
+   * The step range the charts are zoomed to. Published separately from the
+   * page context because it comes from inside the chart tree, while the page
+   * publishes the whole context object — a single merged setter would let
+   * either side wipe the other's half.
+   */
+  publishStepWindow: (window: CopilotStepWindow | null) => void;
   /** Leaves a context chip out of (or back into) what the model sees. */
   toggleChip: (key: ContextChipKey) => void;
   setModeChoice: (mode: ChatMode) => void;
@@ -68,6 +76,7 @@ export function CopilotProvider({ children }: PropsWithChildren) {
   const [pageContext, setPageContext] = useState<CopilotPageContext | null>(
     null,
   );
+  const [stepWindow, setStepWindow] = useState<CopilotStepWindow | null>(null);
   const [excludedChips, setExcludedChips] = useState<
     ReadonlySet<ContextChipKey>
   >(() => new Set());
@@ -110,6 +119,9 @@ export function CopilotProvider({ children }: PropsWithChildren) {
     : "";
   useEffect(() => {
     setExcludedChips(new Set());
+    // A zoom belongs to the charts that were on screen; the next page's
+    // charts start unzoomed until their own bridge says otherwise.
+    setStepWindow(null);
   }, [contextKey]);
 
   const setOpen = useCallback<CopilotActions["setOpen"]>((open) => {
@@ -131,6 +143,7 @@ export function CopilotProvider({ children }: PropsWithChildren) {
       setOpen,
       setWidth,
       publishPageContext: setPageContext,
+      publishStepWindow: setStepWindow,
       toggleChip: (key) =>
         setExcludedChips((prev) => {
           const next = new Set(prev);
@@ -152,13 +165,25 @@ export function CopilotProvider({ children }: PropsWithChildren) {
     () => ({
       isOpen,
       width,
-      pageContext,
+      pageContext:
+        pageContext && stepWindow
+          ? { ...pageContext, stepWindow }
+          : pageContext,
       excludedChips,
       modeChoice,
       fallbackProject,
       chat,
     }),
-    [isOpen, width, pageContext, excludedChips, modeChoice, fallbackProject, chat],
+    [
+      isOpen,
+      width,
+      pageContext,
+      stepWindow,
+      excludedChips,
+      modeChoice,
+      fallbackProject,
+      chat,
+    ],
   );
 
   return (

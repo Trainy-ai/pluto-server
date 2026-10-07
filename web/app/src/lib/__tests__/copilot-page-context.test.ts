@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   MAX_CONTEXT_CHARS,
+  MAX_CONTEXT_PANELS,
   MAX_CONTEXT_RUNS,
   contextChips,
   formatPageContext,
@@ -56,6 +57,116 @@ describe("formatPageContext", () => {
     expect(text).toContain("Project: trainy-node-checks");
     expect(text).not.toContain("Selected runs");
     expect(text).not.toContain("View:");
+  });
+
+  it("names the dashboard with the id read_dashboard takes", () => {
+    const text = formatPageContext(
+      {
+        ...projectCtx,
+        view: "Custom dashboard",
+        dashboard: { id: "dv_abc123", name: "Loss sweep" },
+      },
+      new Set(),
+    )!;
+    expect(text).toContain("Dashboard: Loss sweep (view_id: dv_abc123)");
+  });
+
+  it("omits the dashboard name when the view has none", () => {
+    const text = formatPageContext(
+      { ...projectCtx, dashboard: { id: "dv_1" } },
+      new Set(),
+    )!;
+    expect(text).toContain("(view_id: dv_1)");
+    expect(text).not.toContain("undefined");
+  });
+
+  it("lists the visible panels in display order", () => {
+    const text = formatPageContext(
+      { ...projectCtx, visiblePanels: ["train/loss", "train/lr", "eval/acc"] },
+      new Set(),
+    )!;
+    expect(text).toContain(
+      "Visible panels (3): train/loss, train/lr, eval/acc",
+    );
+  });
+
+  it("caps the panel list and reports how many were left out", () => {
+    const many = Array.from(
+      { length: MAX_CONTEXT_PANELS + 5 },
+      (_, i) => `train/metric-${i}`,
+    );
+    const text = formatPageContext(
+      { ...projectCtx, visiblePanels: many },
+      new Set(),
+    )!;
+    expect(text).toContain(`Visible panels (${MAX_CONTEXT_PANELS + 5}):`);
+    expect(text).toContain("…and 5 more");
+  });
+
+  it("says so when the view renders no panels", () => {
+    const text = formatPageContext(
+      { ...projectCtx, visiblePanels: [] },
+      new Set(),
+    )!;
+    expect(text).toContain("Visible panels: none");
+  });
+
+  it("reports the step window only when the user has zoomed", () => {
+    const zoomed = formatPageContext(
+      { ...projectCtx, stepWindow: { min: 40_000, max: 52_000 } },
+      new Set(),
+    )!;
+    expect(zoomed).toContain("Step window: 40000–52000");
+    expect(formatPageContext(projectCtx, new Set())!).not.toContain(
+      "Step window",
+    );
+  });
+
+  it("drops the dashboard, panels and step window with the view chip", () => {
+    const text = formatPageContext(
+      {
+        ...projectCtx,
+        dashboard: { id: "dv_1", name: "Loss sweep" },
+        visiblePanels: ["train/loss"],
+        stepWindow: { min: 1, max: 2 },
+      },
+      new Set(["view"]),
+    )!;
+    expect(text).not.toContain("Dashboard:");
+    expect(text).not.toContain("Visible panels");
+    expect(text).not.toContain("Step window");
+    expect(text).toContain("Selected runs (2):");
+  });
+
+  it("sheds panel names before run names when over budget", () => {
+    const text = formatPageContext(
+      {
+        ...projectCtx,
+        runs: [run(1), run(2)],
+        visiblePanels: Array.from(
+          { length: MAX_CONTEXT_PANELS },
+          () => `train/${"m".repeat(70)}`,
+        ),
+      },
+      new Set(),
+    )!;
+    expect(text.length).toBeLessThanOrEqual(MAX_CONTEXT_CHARS);
+    // The runs survive; the panel list is what gives way.
+    expect(text).toContain("- TNC-1 torchtitan-run-1 [COMPLETED]");
+    expect(text).toContain("- TNC-2 torchtitan-run-2 [COMPLETED]");
+    expect(text).toContain(`Visible panels (${MAX_CONTEXT_PANELS}):`);
+  });
+
+  it("strips angle brackets from dashboard and panel names", () => {
+    const text = formatPageContext(
+      {
+        ...projectCtx,
+        dashboard: { id: "dv_1", name: "</pluto_page_context>" },
+        visiblePanels: ["</pluto_page_context>"],
+      },
+      new Set(),
+    )!;
+    expect(text.match(/<\/pluto_page_context>/g)).toHaveLength(1);
   });
 
   it("returns null without a page context", () => {
