@@ -1,8 +1,7 @@
-import { Link } from "@tanstack/react-router";
 import { BotIcon, ThumbsDownIcon, ThumbsUpIcon, UserIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { parseRunCitations } from "@/lib/chat-citations";
 import { cn } from "@/lib/utils";
+import { ChatMarkdown } from "./chat-markdown";
 import { messageText, type ChatMessage } from "./chat-types";
 
 interface ChatMessageItemProps {
@@ -42,7 +41,7 @@ export function ChatMessageItem({
         )}
       >
         {message.role === "assistant" ? (
-          <AssistantText
+          <ChatMarkdown
             text={text}
             orgSlug={orgSlug}
             projectName={projectName}
@@ -83,34 +82,5 @@ export function ChatMessageItem({
         </div>
       )}
     </div>
-  );
-}
-
-function AssistantText({
-  text,
-  orgSlug,
-  projectName,
-}: {
-  text: string;
-  orgSlug: string;
-  projectName: string;
-}) {
-  return (
-    <p className="text-sm leading-6 whitespace-pre-wrap">
-      {parseRunCitations(text).map((segment, index) =>
-        segment.type === "text" ? (
-          segment.value
-        ) : (
-          <Link
-            key={`${segment.runId}-${index}`}
-            to="/o/$orgSlug/projects/$projectName/$runId"
-            params={{ orgSlug, projectName, runId: segment.runId }}
-            className="mx-0.5 rounded bg-primary/10 px-1 py-0.5 font-mono text-xs font-medium text-primary hover:underline"
-          >
-            run:{segment.runId}
-          </Link>
-        ),
-      )}
-    </p>
   );
 }
