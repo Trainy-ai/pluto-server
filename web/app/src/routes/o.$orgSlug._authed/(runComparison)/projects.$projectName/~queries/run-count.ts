@@ -13,6 +13,8 @@ export const useRunCount = (
   metricFilters?: MetricFilterParam[],
   systemFilters?: SystemFilterParam[],
   runIds?: string[],
+  // Experiments mode: count lineage tips (experiments), not runs.
+  lineageTipsOnly?: boolean,
 ) => {
   // Keep the runIds set order-independent so an unrelated selection
   // reorder doesn't invalidate the query. Fresh array literal every
@@ -31,6 +33,7 @@ export const useRunCount = (
       metricFilters: metricFilters && metricFilters.length > 0 ? metricFilters : undefined,
       systemFilters: systemFilters && systemFilters.length > 0 ? systemFilters : undefined,
       runIds: sortedRunIds,
+      lineageTipsOnly: lineageTipsOnly || undefined,
     }),
     queryFn: () =>
       trpcClient.runs.count.query({
@@ -44,6 +47,7 @@ export const useRunCount = (
         metricFilters: metricFilters && metricFilters.length > 0 ? metricFilters : undefined,
         systemFilters: systemFilters && systemFilters.length > 0 ? systemFilters : undefined,
         runIds: sortedRunIds,
+        lineageTipsOnly: lineageTipsOnly || undefined,
       }),
     staleTime: 30_000,
   });

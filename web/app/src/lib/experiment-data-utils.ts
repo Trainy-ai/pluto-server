@@ -109,26 +109,23 @@ export function computeExperimentSegments(runs: RunSegmentInfo[]): StepRange[] {
 }
 
 /**
- * Experiments list mode: collapse each fork/merge lineage to its tip run,
- * then dedupe by name (legacy behavior for resumed runs that reuse a name).
- * A run is hidden when another *loaded* run points at it via forkedFromRunId;
- * parents whose children are on other pages stay visible — this is a
- * presentation heuristic, matching the mode's "Preview" badge.
+ * Experiments list mode: collapse each fork/merge lineage to its tip run.
+ * A run is hidden when another run in the set continues it (forkedFromRunId).
+ * The server already lists only tips (`runs.list` `lineageTipsOnly`); this
+ * catches ancestors that reach the table another way — URL-prefetched or
+ * cached selected rows sticky-appended under "Display only selected".
+ * Same-name runs that aren't linked are separate experiments: link them with
+ * Merge instead of guessing from the name.
  */
 export function collapseLineageRows<
-  T extends { id: string; name: string; forkedFromRunId: string | null },
+  T extends { id: string; forkedFromRunId: string | null },
 >(runs: T[]): T[] {
   const continuedIds = new Set<string>();
   for (const run of runs) {
     if (run.forkedFromRunId) continuedIds.add(run.forkedFromRunId);
   }
-  const seenNames = new Set<string>();
-  return runs.filter((run) => {
-    if (continuedIds.has(run.id)) return false;
-    if (seenNames.has(run.name)) return false;
-    seenNames.add(run.name);
-    return true;
-  });
+  if (continuedIds.size === 0) return runs;
+  return runs.filter((run) => !continuedIds.has(run.id));
 }
 
 /**
@@ -175,42 +172,23 @@ export function keepLineageTipEntries<T extends { run: object }>(
   );
 }
 
-const MAX_CHAIN_WALK = 10; // mirrors MAX_LINEAGE_DEPTH on the server
-
 /**
- * Map each run to the tip of its fork/merge lineage *within the given set*
- * (the same set semantics as collapseLineageRows: links to runs outside the
- * set are ignored). Runs without lineage map to themselves.
- *
- * Experiments mode collapses a lineage to one row showing the tip's color
- * chip, so everything colored per-experiment (chart series, group highlight)
- * must resolve members to the tip — otherwise a merged pair renders as a
- * mid-curve color switch and reads as two runs.
+ * Selected runs that another selected run continues. In Experiments mode the
+ * selection is a set of experiments, each held by its tip (charts and media
+ * stitch the ancestors in through the tip), so a selected ancestor is a
+ * duplicate of its experiment: it would add a second, differently coloured
+ * series and inflate every "N selected" count.
  */
-export function mapRunsToLineageTips(
-  runs: Array<{ id: string; forkedFromRunId: string | null }>,
-): Map<string, string> {
-  const childOf = new Map<string, string>();
-  const inSet = new Set(runs.map((r) => r.id));
-  for (const run of runs) {
-    if (run.forkedFromRunId != null && inSet.has(run.forkedFromRunId)) {
-      childOf.set(run.forkedFromRunId, run.id);
-    }
+export function findContinuedSelectedRunIds(
+  selectedRuns: Record<string, { run: object }>,
+): string[] {
+  const continuedIds = new Set<string>();
+  for (const { run } of Object.values(selectedRuns)) {
+    const parent = (run as { forkedFromRunId?: unknown }).forkedFromRunId;
+    if (parent != null) continuedIds.add(String(parent));
   }
-
-  const result = new Map<string, string>();
-  for (const run of runs) {
-    let tip = run.id;
-    const walked = new Set<string>([tip]);
-    for (let i = 0; i < MAX_CHAIN_WALK; i++) {
-      const next = childOf.get(tip);
-      if (next == null || walked.has(next)) break; // end of chain or cycle
-      tip = next;
-      walked.add(tip);
-    }
-    result.set(run.id, tip);
-  }
-  return result;
+  if (continuedIds.size === 0) return [];
+  return Object.keys(selectedRuns).filter((id) => continuedIds.has(id));
 }
 
 /**

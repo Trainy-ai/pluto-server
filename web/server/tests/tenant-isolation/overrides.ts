@@ -45,6 +45,11 @@ export const PROCEDURE_OVERRIDES: Record<string, ProcedureOverride> = {
     reason:
       'resolveRunIdsResilient drops ids the org does not own instead of throwing, so the correct answer to foreign ids is an empty 200; the body is checked for org2 markers.',
   },
+  'runs.lineageTips': {
+    expect: 'no-leak',
+    reason:
+      'resolveRunIdsResilient drops foreign ids and the descendant walk is org + project scoped, so foreign ids get an empty tip map (200); the body is checked for org2 markers.',
+  },
   'runs.delete': {
     expect: 'no-leak',
     reason:

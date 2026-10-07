@@ -11,7 +11,6 @@ interface RunRowProps {
   tableBodyRef: React.RefObject<HTMLTableSectionElement | null>;
   isHidden?: boolean;
   /** In experiments mode, all run IDs belonging to this experiment (for group highlight) */
-  experimentRunIds?: string[];
   /** When grouping is active, the first column has been widened by
    *  this much in the colgroup. Push the cell's inner content right
    *  by the same amount so the eye sits at the right end of the wider
@@ -28,7 +27,7 @@ interface RunRowProps {
   isPinned?: boolean;
 }
 
-export function RunRow({ row, pinnedColumnMap, tableBodyRef, isHidden, experimentRunIds, firstCellPaddingLeft, isPinned }: RunRowProps) {
+export function RunRow({ row, pinnedColumnMap, tableBodyRef, isHidden, firstCellPaddingLeft, isPinned }: RunRowProps) {
   const isSelected = row.getIsSelected();
   return (
     <TableRow
@@ -67,7 +66,7 @@ export function RunRow({ row, pinnedColumnMap, tableBodyRef, isHidden, experimen
           }
           document.dispatchEvent(
             new CustomEvent("run-table-hover", {
-              detail: experimentRunIds ?? row.original.id,
+              detail: row.original.id,
             }),
           );
         }

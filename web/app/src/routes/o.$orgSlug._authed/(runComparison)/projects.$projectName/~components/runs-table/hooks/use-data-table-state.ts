@@ -297,17 +297,14 @@ export function useDataTableState({
     return sorted;
   }, [runs, showOnlySelected, searchQuery, isPinningActive, selectedRunsWithColors, sorting, customColumns, filters, serverFilteredRunIds]);
 
-  // In "experiments" mode, collapse each fork/merge lineage to its tip run,
-  // then dedupe same-name runs (legacy resumed-run behavior).
+  // In "experiments" mode, collapse each fork/merge lineage to its tip run.
+  // The server already lists tips only; this drops ancestors that arrive as
+  // URL-prefetched / cached selected rows.
   const finalDisplayedRuns = useMemo(() => {
     if (!isExperiments) return displayedRuns;
     return collapseLineageRows(displayedRuns);
   }, [displayedRuns, isExperiments]);
 
-  // Total experiment count across all loaded runs
-  const totalExperimentCount = useMemo(() => {
-    return collapseLineageRows(runs).length;
-  }, [runs]);
 
 
   // Compute column ordering: pinned columns first, then unpinned
@@ -354,8 +351,10 @@ export function useDataTableState({
     if (effectivePageSize === 0) return [];
     const startIndex = pageIndex * tablePageSize;
     const endIndex = startIndex + tablePageSize;
-    return displayedRuns.slice(startIndex, endIndex).map((run) => run.id);
-  }, [displayedRuns, pageIndex, tablePageSize, effectivePageSize]);
+    // finalDisplayedRuns: the rows the table actually paginates, so the
+    // "(N)" in "Select all on page" counts experiments in Experiments mode.
+    return finalDisplayedRuns.slice(startIndex, endIndex).map((run) => run.id);
+  }, [finalDisplayedRuns, pageIndex, tablePageSize, effectivePageSize]);
 
   // IDs the "Deselect all on page" button acts on. In pin-to-top mode
   // the user's "page" includes the pinned block (which is the entire
@@ -376,10 +375,11 @@ export function useDataTableState({
   // reason — e.g. React Query refetching runs.list after a window-
   // focus invalidation when another SDK had created a run. Removed.
   //
-  // Reset to page 0 when filters or sorting change to avoid showing empty pages
+  // Reset to page 0 when filters, sorting or list mode change to avoid
+  // showing empty pages (Experiments mode lists tips only — fewer rows).
   useEffect(() => {
     setPageIndex(0);
-  }, [filters, searchQuery, sorting]);
+  }, [filters, searchQuery, sorting, isExperiments]);
 
   const table = useReactTable({
     data: finalDisplayedRuns,
@@ -486,8 +486,6 @@ export function useDataTableState({
     // Derived data
     pinnedRuns,
     displayedRuns,
-    displayedRunCount: finalDisplayedRuns.length,
-    totalExperimentCount,
     pageRunIds,
     deselectablePageRunIds,
     pinnedColumnMap,

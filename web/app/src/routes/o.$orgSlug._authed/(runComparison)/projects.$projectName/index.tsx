@@ -35,10 +35,10 @@ import { bucketColorForRun } from "./~components/runs-table/bucket-color";
 import { DataTable } from "./~components/runs-table/data-table";
 import { useRefresh } from "./~hooks/use-refresh";
 import { useRunCount } from "./~queries/run-count";
+import { useExperimentSelection } from "./~hooks/use-experiment-selection";
 import { useRunFilters } from "./~hooks/use-run-filters";
 import { SYSTEM_FILTERABLE_FIELDS, type FilterableField, type FieldFilterParam, type MetricFilterParam, type SystemFilterParam, type SortParam } from "@/lib/run-filters";
 import { generateUuid } from "@/lib/uuid";
-import { mapRunsToLineageTips } from "@/lib/experiment-data-utils";
 import { buildRefreshQueryFilters } from "./~lib/build-refresh-queries";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -232,6 +232,10 @@ function RouteComponent() {
   // Persisted via URL param ?listMode=experiments|runs
   type ListMode = "experiments" | "runs";
   const listMode: ListMode = urlListMode ?? "runs";
+  // Experiments mode: one row per experiment. The server lists and counts
+  // lineage tips, and the selection holds tips only (useExperimentSelection),
+  // so every count and chart series is an experiment.
+  const isExperimentsMode = listMode === "experiments";
   const handleListModeChange = useCallback((mode: ListMode) => {
     navigate({
       to: ".",
@@ -574,19 +578,31 @@ function RouteComponent() {
     serverFilters.fieldFilters as FieldFilterParam[] | undefined,
     serverFilters.metricFilters as MetricFilterParam[] | undefined,
     serverFilters.systemFilters as SystemFilterParam[] | undefined,
+    undefined,
+    isExperimentsMode,
   );
 
   // Unfiltered total count for the project
   const { data: totalRunCount } = useRunCount(
     organizationId,
     projectName,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    isExperimentsMode,
   );
 
 
-  // Reset pageBase when sort/filter/search changes so the user starts at page 1
+  // Reset pageBase when sort/filter/search or list mode changes so the user
+  // starts at page 1 — Experiments mode lists a shorter (tips-only) set.
   useEffect(() => {
     setPageBase(0);
-  }, [sortParam, serverFilters, debouncedSearch]);
+  }, [sortParam, serverFilters, debouncedSearch, isExperimentsMode]);
 
   // Column configuration (custom columns in runs table).
   // Declared before useListRuns so we can derive `visibleColumns` from it
@@ -628,7 +644,7 @@ function RouteComponent() {
     // endpoints. The only consumer we lose is `allTags` (initial seed for
     // the tag-editor popover), which falls back to a direct distinctTags
     // fetch below — equivalent quality, ~1KB instead of ~10-200KB.
-  } = useListRuns(organizationId, projectName, serverFilters.tags, serverFilters.status, debouncedSearch, serverFilters.dateFilters, sortParam, serverFilters.fieldFilters as FieldFilterParam[] | undefined, serverFilters.metricFilters as MetricFilterParam[] | undefined, serverFilters.systemFilters as SystemFilterParam[] | undefined, pageSize, pageBase, listVisibleColumns, groupBy.length === 0);
+  } = useListRuns(organizationId, projectName, serverFilters.tags, serverFilters.status, debouncedSearch, serverFilters.dateFilters, sortParam, serverFilters.fieldFilters as FieldFilterParam[] | undefined, serverFilters.metricFilters as MetricFilterParam[] | undefined, serverFilters.systemFilters as SystemFilterParam[] | undefined, pageSize, pageBase, listVisibleColumns, groupBy.length === 0, isExperimentsMode);
 
   // Total rows the server has actually returned across all fetched
   // runs.list pages. Used for the *fetch trigger* (Next-button +
@@ -1026,6 +1042,16 @@ function RouteComponent() {
     onHiddenChange: debouncedHiddenChange,
   });
 
+  useExperimentSelection({
+    enabled: isExperimentsMode,
+    organizationId,
+    projectName,
+    selectedRunsWithColors,
+    selectAllByIds,
+    deselectByIds,
+    handleColorChange,
+  });
+
   // Intersection count: how many of the CURRENTLY SELECTED runs also
   // match the toolbar filter. Powers the toolbar's third status line
   // ("N of your S selected runs match the filter"). Only fires when
@@ -1050,6 +1076,7 @@ function RouteComponent() {
     shouldFireIntersection ? (serverFilters.metricFilters as MetricFilterParam[] | undefined) : undefined,
     shouldFireIntersection ? (serverFilters.systemFilters as SystemFilterParam[] | undefined) : undefined,
     shouldFireIntersection ? selectedRunIdsForCount : undefined,
+    isExperimentsMode,
   );
 
   // Enrich selectedRunsWithColors with metric summaries so that runs served
@@ -1309,9 +1336,7 @@ function RouteComponent() {
     [selectedRunIds, organizationId, projectName, bestStepToleranceSteps],
   );
 
-  // In experiments mode, unify colors so all runs in the same experiment
-  // (same name) share one color. Keep ALL runs for chart data — the table
-  // handles collapsing to one row per experiment, but charts show all branches.
+  // Effective chart colours for the selected runs.
   const effectiveRunsWithColors = useMemo(() => {
     // Grouping: every run in a bucket takes the bucket's colour. DERIVED, not
     // stored — the bucket tree used to push this through `onColorChange`, which
@@ -1325,37 +1350,10 @@ function RouteComponent() {
       }
       return result;
     }
-    if (listMode !== "experiments") return selectedRunsWithColors;
-    // A lineage collapses to one row showing the TIP's color chip, so every
-    // member of the chain takes the tip's color — otherwise a merged pair
-    // renders as a mid-curve color switch and reads as two runs. Name-based
-    // unification (legacy resumed-run experiments) applies on top.
-    const entries = Object.entries(selectedRunsWithColors);
-    const tipOf = mapRunsToLineageTips(
-      entries.map(([id, entry]) => ({
-        id,
-        forkedFromRunId:
-          (entry.run as { forkedFromRunId?: unknown }).forkedFromRunId != null
-            ? String((entry.run as { forkedFromRunId?: unknown }).forkedFromRunId)
-            : null,
-      })),
-    );
-    const nameToColor = new Map<string, string>();
-    const result: typeof selectedRunsWithColors = {};
-    for (const [id, entry] of entries) {
-      const tipId = tipOf.get(id) ?? id;
-      const lineageColor = selectedRunsWithColors[tipId]?.color ?? entry.color;
-      const name = entry.run.name;
-      if (!nameToColor.has(name)) {
-        nameToColor.set(name, lineageColor);
-      }
-      result[id] = {
-        ...entry,
-        color: tipId !== id ? lineageColor : nameToColor.get(name)!,
-      };
-    }
-    return result;
-  }, [selectedRunsWithColors, listMode, groupBy]);
+    // Experiments mode needs no override: the selection holds one tip per
+    // experiment, so each run's own colour is its experiment's colour.
+    return selectedRunsWithColors;
+  }, [selectedRunsWithColors, groupBy]);
 
   // Process metrics data from ALL selected runs (including hidden)
   // Hidden runs are toggled via imperative uPlot setSeries() in chart-sync-context,
@@ -1411,46 +1409,6 @@ function RouteComponent() {
     panelLayout,
     toggleListPanel,
   });
-
-  // Build experiment run ID lookup: runId → all runIds in the same experiment
-  // (same name, or same fork/merge lineage — a collapsed lineage is one
-  // experiment). Used by chart sync context for group highlighting.
-  const experimentRunIdsMap = useMemo(() => {
-    if (listMode !== "experiments") return null;
-    const entries = Object.entries(selectedRunsWithColors);
-    const tipOf = mapRunsToLineageTips(
-      entries.map(([id, entry]) => ({
-        id,
-        forkedFromRunId:
-          (entry.run as { forkedFromRunId?: unknown }).forkedFromRunId != null
-            ? String((entry.run as { forkedFromRunId?: unknown }).forkedFromRunId)
-            : null,
-      })),
-    );
-    // Group by name first (legacy), then merge name groups that share a
-    // lineage tip so a merged pair with distinct names is one group.
-    const keyToIds = new Map<string, string[]>();
-    const groupKeyOf = new Map<string, string>(); // name or tipId → canonical key
-    for (const [id, { run }] of entries) {
-      const tipId = tipOf.get(id) ?? id;
-      const nameKey = `name:${run.name}`;
-      const tipKey = `tip:${tipId}`;
-      const key = groupKeyOf.get(nameKey) ?? groupKeyOf.get(tipKey) ?? nameKey;
-      groupKeyOf.set(nameKey, key);
-      groupKeyOf.set(tipKey, key);
-      const ids = keyToIds.get(key) ?? [];
-      ids.push(id);
-      keyToIds.set(key, ids);
-    }
-    // Build reverse map: runId → all runIds in same experiment
-    const map = new Map<string, string[]>();
-    for (const ids of keyToIds.values()) {
-      for (const id of ids) {
-        map.set(id, ids);
-      }
-    }
-    return map;
-  }, [selectedRunsWithColors, listMode]);
 
   // Dispatch DOM event when hidden runs change — chart-sync-context listens
   // and imperatively toggles uPlot series visibility on already-mounted
@@ -1695,7 +1653,6 @@ function RouteComponent() {
                         onViewChange={handleViewChange}
                         showInheritedMetrics={urlInherited === "false" ? false : true}
                         onInheritedChange={handleInheritedChange}
-                        experimentRunIdsMap={experimentRunIdsMap}
                         hiddenRunIds={hiddenRunIds}
                         groupBy={groupBy}
                       />

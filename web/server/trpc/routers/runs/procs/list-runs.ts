@@ -10,6 +10,7 @@ import {
   type MetricFilterSpec,
 } from "../../../../lib/queries/metric-summaries";
 import { applyGroupFiltersToInput, loadGroupFilterDataTypes, buildTagPrefixExclusionConditions } from "../../../../lib/group-field";
+import { buildLineageTipCondition } from "../../../../lib/lineage-tips";
 import { fieldFilterSchema, buildFieldFilterConditions, type FieldFilter } from "./field-filter-sql";
 export * from "./field-filter-sql";
 
@@ -265,6 +266,9 @@ export const listRunsProcedure = protectedOrgProcedure
       // single bucket of a grouped view. Filtering pipeline: regular
       // filters → group filters (composed on top).
       groupFilters: z.array(groupFilterSchema).optional(),
+      // Experiments mode: only lineage tips (runs no other run continues),
+      // so each row — and each page and count — is one experiment.
+      lineageTipsOnly: z.boolean().optional(),
     })
   )
   .query(async ({ ctx, input }) => {
@@ -344,7 +348,8 @@ async function defaultCursorQuery(
     input.fieldFilters?.length ||
     input.metricFilters?.length ||
     input.systemFilters?.length ||
-    (input as any).tagPrefixExclusions?.length
+    (input as any).tagPrefixExclusions?.length ||
+    (input as any).lineageTipsOnly
   ) {
     return defaultCursorQueryWithFieldFilters(ctx, input);
   }
@@ -488,6 +493,7 @@ async function defaultCursorQueryWithFieldFilters(
       status: input.status,
       dateFilters: input.dateFilters,
       systemFilters: input.systemFilters,
+      lineageTipsOnly: (input as any).lineageTipsOnly,
     });
     if (matchIds.length === 0) return { runs: [], nextCursor: null, nextOffset: null };
 
@@ -508,6 +514,7 @@ async function defaultCursorQueryWithFieldFilters(
   // Field filters
   buildFieldFilterConditions(conditions, queryParams, input.fieldFilters, { organizationId: input.organizationId, projectName: input.projectName });
   buildTagPrefixExclusionConditions(conditions, queryParams, (input as any).tagPrefixExclusions);
+  buildLineageTipCondition(conditions, (input as any).lineageTipsOnly);
 
   // System filters (name, status, tags, creator.name) — only when not searching
   // (when searching, system filters are already applied inside searchRunIds)
@@ -884,6 +891,7 @@ async function systemColumnSortQuery(
       status: input.status,
       dateFilters: input.dateFilters,
       systemFilters: input.systemFilters,
+      lineageTipsOnly: (input as any).lineageTipsOnly,
     });
     if (matchIds.length === 0) return { runs: [], nextCursor: null, nextOffset: null, sortCursor: null };
 
@@ -905,6 +913,7 @@ async function systemColumnSortQuery(
   // Field filters
   buildFieldFilterConditions(conditions, queryParams, input.fieldFilters, { organizationId: input.organizationId, projectName: input.projectName });
   buildTagPrefixExclusionConditions(conditions, queryParams, (input as any).tagPrefixExclusions);
+  buildLineageTipCondition(conditions, (input as any).lineageTipsOnly);
 
   // System filters (name, status, tags, creator.name) — only when not searching
   let sysNeedsCreator = false;
@@ -1084,6 +1093,7 @@ async function jsonFieldSortQuery(
       status: input.status,
       dateFilters: input.dateFilters,
       systemFilters: input.systemFilters,
+      lineageTipsOnly: (input as any).lineageTipsOnly,
     };
     const { query: searchQuery, params: searchQueryParams } = buildRunSearchQuery(searchParams);
 
@@ -1113,6 +1123,7 @@ async function jsonFieldSortQuery(
   // Field filters
   buildFieldFilterConditions(conditions, queryParams, input.fieldFilters, { organizationId: input.organizationId, projectName: input.projectName });
   buildTagPrefixExclusionConditions(conditions, queryParams, (input as any).tagPrefixExclusions);
+  buildLineageTipCondition(conditions, (input as any).lineageTipsOnly);
 
   // System filters (name, status, tags, creator.name) — only when not searching
   let jsonNeedsCreator = false;
@@ -1319,8 +1330,10 @@ async function getCandidateRunIds(
   const hasTagPrefixExclusions =
     ((input as { tagPrefixExclusions?: string[] }).tagPrefixExclusions?.length ?? 0) > 0;
 
+  const hasLineageTipsOnly = !!(input as { lineageTipsOnly?: boolean }).lineageTipsOnly;
+
   // No PG filters — all runs in the project are candidates
-  if (!hasSearch && !hasTags && !hasStatus && !hasDateFilters && !hasFieldFilters && !hasSystemFilters && !hasTagPrefixExclusions) {
+  if (!hasSearch && !hasTags && !hasStatus && !hasDateFilters && !hasFieldFilters && !hasSystemFilters && !hasTagPrefixExclusions && !hasLineageTipsOnly) {
     return null;
   }
 
@@ -1345,6 +1358,7 @@ async function getCandidateRunIds(
       status: input.status,
       dateFilters: input.dateFilters,
       systemFilters: input.systemFilters,
+      lineageTipsOnly: (input as any).lineageTipsOnly,
     });
     if (matchIds.length === 0) return [];
 
@@ -1370,6 +1384,7 @@ async function getCandidateRunIds(
   // the other 3 call sites. (Was nested inside the `if` above, which dropped
   // the exclusion on the metric-sort candidate path.)
   buildTagPrefixExclusionConditions(conditions, queryParams, (input as any).tagPrefixExclusions);
+  buildLineageTipCondition(conditions, (input as any).lineageTipsOnly);
 
   // System filters (name, status, tags, creator.name) — only when not searching
   let candNeedsCreator = false;

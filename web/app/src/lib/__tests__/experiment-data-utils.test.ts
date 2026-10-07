@@ -3,8 +3,8 @@ import {
   collapseLineageRows,
   computeExperimentSegments,
   filterDataToRange,
+  findContinuedSelectedRunIds,
   keepLineageTips,
-  mapRunsToLineageTips,
   type RunSegmentInfo,
   type StepRange,
 } from "../experiment-data-utils";
@@ -194,13 +194,15 @@ describe("collapseLineageRows", () => {
     expect(rows.map((x) => x.id)).toEqual(["b"]);
   });
 
-  it("keeps unrelated runs and still dedupes by name (legacy behavior)", () => {
+  it("keeps same-name runs that aren't linked as separate experiments", () => {
+    // Regression: name dedupe merged an unlinked resume into a linked chain's
+    // row, so the table showed one experiment while the chart drew two.
     const rows = collapseLineageRows([
       r("x", "exp-1"),
       r("y", "exp-1"),
       r("z", "exp-2"),
     ]);
-    expect(rows.map((x) => x.id)).toEqual(["x", "z"]);
+    expect(rows.map((x) => x.id)).toEqual(["x", "y", "z"]);
   });
 
   it("collapses a 3-run chain to its tip", () => {
@@ -215,45 +217,6 @@ describe("collapseLineageRows", () => {
   it("keeps a parent whose child is not in the loaded set", () => {
     const rows = collapseLineageRows([r("a", "crashed"), r("b", "other", "zz")]);
     expect(rows.map((x) => x.id)).toEqual(["a", "b"]);
-  });
-});
-
-describe("mapRunsToLineageTips", () => {
-  it("maps every member of a merged chain to the tip, and standalone runs to themselves", () => {
-    const tips = mapRunsToLineageTips([
-      { id: "parent", forkedFromRunId: null },
-      { id: "restart", forkedFromRunId: "parent" },
-      { id: "other", forkedFromRunId: null },
-    ]);
-    expect(tips.get("parent")).toBe("restart");
-    expect(tips.get("restart")).toBe("restart");
-    expect(tips.get("other")).toBe("other");
-  });
-
-  it("walks multi-hop chains to the final tip", () => {
-    const tips = mapRunsToLineageTips([
-      { id: "a", forkedFromRunId: null },
-      { id: "b", forkedFromRunId: "a" },
-      { id: "c", forkedFromRunId: "b" },
-    ]);
-    expect(tips.get("a")).toBe("c");
-    expect(tips.get("b")).toBe("c");
-    expect(tips.get("c")).toBe("c");
-  });
-
-  it("ignores links to runs outside the given set (matches collapseLineageRows)", () => {
-    const tips = mapRunsToLineageTips([
-      { id: "child", forkedFromRunId: "unloaded-parent" },
-    ]);
-    expect(tips.get("child")).toBe("child");
-  });
-
-  it("terminates on a cyclic lineage instead of looping", () => {
-    const tips = mapRunsToLineageTips([
-      { id: "a", forkedFromRunId: "b" },
-      { id: "b", forkedFromRunId: "a" },
-    ]);
-    expect(tips.size).toBe(2);
   });
 });
 
@@ -288,5 +251,31 @@ describe("keepLineageTips", () => {
   it("returns the same array when there is no lineage", () => {
     const runs = [{ runId: "a" }, { runId: "b", forkedFromRunId: null }];
     expect(keepLineageTips(runs)).toBe(runs);
+  });
+});
+
+describe("findContinuedSelectedRunIds", () => {
+  const sel = (entries: Array<[string, string | null]>) =>
+    Object.fromEntries(
+      entries.map(([id, parent]) => [id, { run: { forkedFromRunId: parent } }]),
+    );
+
+  it("returns the ancestors of a selected chain, not its tip or an unlinked same-name run", () => {
+    // The prod case: 86nXP → LK68n → Q8bVi → cYFG2 linked, 4amlg resumed
+    // without a link. Only the three continued ancestors are duplicates.
+    const ids = findContinuedSelectedRunIds(
+      sel([
+        ["4amlg", null],
+        ["cYFG2", "Q8bVi"],
+        ["Q8bVi", "LK68n"],
+        ["LK68n", "86nXP"],
+        ["86nXP", "nWJ7d"],
+      ]),
+    );
+    expect(ids.sort()).toEqual(["86nXP", "LK68n", "Q8bVi"]);
+  });
+
+  it("returns nothing when no selected run continues another", () => {
+    expect(findContinuedSelectedRunIds(sel([["a", null], ["b", "unselected"]]))).toEqual([]);
   });
 });

@@ -2,6 +2,7 @@
  * Shared utilities for run search queries using ILIKE substring matching.
  * Consolidates search logic used across list-runs, latest-runs, runs-count, and runs-openapi.
  */
+import { buildLineageTipCondition } from "./lineage-tips";
 
 export interface DateFilter {
   field: "createdAt" | "updatedAt" | "statusUpdated";
@@ -25,6 +26,8 @@ export interface RunSearchParams {
   status?: string[];
   dateFilters?: DateFilter[];
   systemFilters?: SystemFilterSpec[];
+  /** Experiments mode: only lineage tips (see lib/lineage-tips.ts). */
+  lineageTipsOnly?: boolean;
   limit?: number;
 }
 
@@ -93,7 +96,7 @@ function appendDateFilters(
 }
 
 export function buildRunSearchQuery(params: RunSearchParams): QueryResult {
-  const { organizationId, search, projectId, projectName, tags, status, dateFilters, systemFilters, limit } = params;
+  const { organizationId, search, projectId, projectName, tags, status, dateFilters, systemFilters, lineageTipsOnly, limit } = params;
 
   const conditions: string[] = [`r."organizationId" = $1`];
   const queryParams: (string | bigint | string[] | number)[] = [organizationId];
@@ -127,6 +130,7 @@ export function buildRunSearchQuery(params: RunSearchParams): QueryResult {
 
   // Add system filters if provided
   const { needsCreatorJoin } = buildSearchSystemFilterConditions(conditions, queryParams, systemFilters);
+  buildLineageTipCondition(conditions, lineageTipsOnly);
 
   const joins: string[] = [];
   if (needsProjectJoin || needsProjectJoinForSearch) {
@@ -153,7 +157,7 @@ export function buildRunSearchQuery(params: RunSearchParams): QueryResult {
  * Builds a count query for runs using ILIKE substring matching.
  */
 export function buildRunCountQuery(params: Omit<RunSearchParams, "limit">): QueryResult {
-  const { organizationId, search, projectId, projectName, tags, status, dateFilters, systemFilters } = params;
+  const { organizationId, search, projectId, projectName, tags, status, dateFilters, systemFilters, lineageTipsOnly } = params;
 
   const conditions: string[] = [`r."organizationId" = $1`];
   const queryParams: (string | bigint | string[] | number)[] = [organizationId];
@@ -187,6 +191,7 @@ export function buildRunCountQuery(params: Omit<RunSearchParams, "limit">): Quer
 
   // Add system filters if provided
   const { needsCreatorJoin } = buildSearchSystemFilterConditions(conditions, queryParams, systemFilters);
+  buildLineageTipCondition(conditions, lineageTipsOnly);
 
   const joins: string[] = [];
   if (needsProjectJoin || needsProjectJoinForSearch) {

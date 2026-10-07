@@ -445,6 +445,7 @@ export function TableToolbar({
           onShowAllRuns={onShowAllRuns}
           onHideAllRuns={onHideAllRuns}
           isGrouped={groupBy.length > 0}
+          isExperiments={listMode === "experiments"}
         />
       </div>
       <div className="flex items-center justify-between gap-2">

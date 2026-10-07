@@ -60,6 +60,8 @@ interface VisibilityOptionsProps {
    *  client-side based on selectedAncestorPaths (see group-by-utils
    *  computeSelectedAncestorPaths). The two toggles stay enabled. */
   isGrouped?: boolean;
+  /** Experiments mode: rows, selection and counts are experiments. */
+  isExperiments?: boolean;
 }
 
 export const VisibilityOptions = memo(function VisibilityOptions({
@@ -89,6 +91,7 @@ export const VisibilityOptions = memo(function VisibilityOptions({
   onShowAllRuns,
   onHideAllRuns,
   isGrouped,
+  isExperiments,
 }: VisibilityOptionsProps) {
   const [open, setOpen] = useState(false);
   const [autoSelectCount, setAutoSelectCount] = useState(5);
@@ -192,7 +195,7 @@ export const VisibilityOptions = memo(function VisibilityOptions({
                 className="w-full h-7 text-xs"
                 onClick={handleAutoSelect}
               >
-                Select first {autoSelectCount} {autoSelectCount === 1 ? "run" : "runs"}
+                Select first {plural(autoSelectCount, isExperiments ? "experiment" : "run")}
               </Button>
             </div>
 

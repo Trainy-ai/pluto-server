@@ -5,6 +5,7 @@ import { buildFieldFilterConditions, buildSystemFilterConditions } from "./list-
 import { queryMetricFilteredRunIds } from "../../../../lib/queries/metric-summaries";
 import { applyGroupFiltersToInput, loadGroupFilterDataTypes, buildTagPrefixExclusionConditions } from "../../../../lib/group-field";
 import { sqidDecode } from "../../../../lib/sqid";
+import { buildLineageTipCondition } from "../../../../lib/lineage-tips";
 
 const groupFilterSchema = z.object({
   field: z.string(),
@@ -57,6 +58,8 @@ export const countRunsProcedure = protectedOrgProcedure
        *  pass the selected runs and get back how many satisfy the
        *  current toolbar filter. Sqids decoded server-side. */
       runIds: z.array(z.string()).max(1000).optional(),
+      /** Experiments mode: count lineage tips (= experiments), not runs. */
+      lineageTipsOnly: z.boolean().optional(),
     })
   )
   .query(async ({ ctx, input }) => {
@@ -93,6 +96,7 @@ export const countRunsProcedure = protectedOrgProcedure
         tags: input.tags,
         status: input.status,
         dateFilters: input.dateFilters,
+        lineageTipsOnly: input.lineageTipsOnly,
       });
     }
 
@@ -105,7 +109,7 @@ export const countRunsProcedure = protectedOrgProcedure
     const hasSystemFilters = input.systemFilters && input.systemFilters.length > 0;
     const hasTagPrefixExclusions = !!(input as any).tagPrefixExclusions?.length;
 
-    if (hasFieldFilters || hasMetricFilters || hasSystemFilters || hasTagPrefixExclusions || runIdBigints) {
+    if (hasFieldFilters || hasMetricFilters || hasSystemFilters || hasTagPrefixExclusions || runIdBigints || input.lineageTipsOnly) {
       const conditions: string[] = [];
       const queryParams: (string | bigint | string[] | number)[] = [];
 
@@ -153,6 +157,7 @@ export const countRunsProcedure = protectedOrgProcedure
 
       // Tag-prefix exclusions ("(unset)" bucket drill-in)
       buildTagPrefixExclusionConditions(conditions, queryParams, (input as any).tagPrefixExclusions);
+      buildLineageTipCondition(conditions, input.lineageTipsOnly);
 
       // Metric filters — query ClickHouse for matching run IDs
       if (hasMetricFilters && input.metricFilters) {

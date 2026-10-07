@@ -35,6 +35,8 @@ export const useListRuns = (
   // bucket tree drives the UI in that mode and the flat list is never
   // rendered, so the ~10-200KB payload is pure waste.
   enabled: boolean = true,
+  // Experiments mode: server lists only lineage tips, one row per experiment.
+  lineageTipsOnly: boolean = false,
 ) => {
   // Fetch at least 2x the display page size so clicking "next" always has data
   const fetchLimit = Math.max(pageSize ? pageSize * 2 : RUNS_FETCH_LIMIT, RUNS_FETCH_LIMIT);
@@ -63,7 +65,7 @@ export const useListRuns = (
   return useInfiniteQuery({
     // Include pageBase and visibleColumns in queryKey so each distinct
     // (filter + visible-column set) combination gets its own cache entry.
-    queryKey: [...queryOptions.queryKey, { tags, status, search, dateFilters, sort, fieldFilters, metricFilters, systemFilters, pageBase: pageBase || 0, visibleColumns }],
+    queryKey: [...queryOptions.queryKey, { tags, status, search, dateFilters, sort, fieldFilters, metricFilters, systemFilters, pageBase: pageBase || 0, visibleColumns, lineageTipsOnly }],
     queryFn: async ({ pageParam }) => {
       // After a jump, all fetches use offset mode (no cursor/keyset dependency)
       const useOffsetMode = jumped;
@@ -94,6 +96,7 @@ export const useListRuns = (
         metricFilters: metricFilters && metricFilters.length > 0 ? metricFilters : undefined,
         systemFilters: systemFilters && systemFilters.length > 0 ? systemFilters : undefined,
         visibleColumns,
+        lineageTipsOnly: lineageTipsOnly || undefined,
         // Sort params
         ...(sort ? {
           sortField: sort.field,

@@ -4794,6 +4794,120 @@ describe('SDK API Endpoints (with API Key)', () => {
       expect(childRow.forkedFromRunId).toBe(parentSqid);
       expect(Number(childRow.forkStep)).toBe(50);
     });
+
+    it('Test 20.14: lineageTipsOnly lists and counts one row per experiment on every sort path', async () => {
+      if (!sessionCookie || !TEST_API_KEY) {
+        console.log('   No session or API key - skipping');
+        return;
+      }
+
+      // root → mid → tip (linear chain), root → branch (second tip of the
+      // same tree), plus an unrelated standalone run. Tips: tip, branch,
+      // standalone. root and mid are continued, so they must never be rows.
+      const stamp = Date.now();
+      const projectName = `lineage-tips-${stamp}`;
+      const create = async (runName: string, forkRunId?: number, forkStep?: number) => {
+        const res = await makeRequest('/api/runs/create', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${TEST_API_KEY}` },
+          body: JSON.stringify({
+            projectName,
+            runName,
+            ...(forkRunId != null ? { forkRunId, forkStep } : {}),
+            config: { lr: 0.1 },
+          }),
+        });
+        expect(res.status).toBe(200);
+        return (await res.json()).runId as number;
+      };
+      const root = await create(`root-${stamp}`);
+      const mid = await create(`mid-${stamp}`, root, 10);
+      const tip = await create(`tip-${stamp}`, mid, 20);
+      const branch = await create(`branch-${stamp}`, root, 5);
+      const standalone = await create(`standalone-${stamp}`);
+
+      const auth = await (
+        await makeTrpcRequest('auth', {}, { Cookie: sessionCookie }, 'GET')
+      ).json();
+      const organizationId = auth.result?.data?.activeOrganization?.id ?? '';
+      if (!organizationId) {
+        console.log('   No active organization on session - skipping');
+        return;
+      }
+
+      const expectedTips = [tip, branch, standalone].map(sqidEncode).sort();
+      const allRuns = [root, mid, tip, branch, standalone].map(sqidEncode).sort();
+
+      const list = async (extra: Record<string, unknown>) => {
+        const res = await makeTrpcRequest(
+          'runs.list',
+          { organizationId, projectName, limit: 50, ...extra },
+          { Cookie: sessionCookie },
+          'GET',
+        );
+        expect(res.status).toBe(200);
+        const body = await res.json();
+        return (body.result?.data?.runs ?? []).map((r: any) => r.id).sort();
+      };
+
+      // Baseline: without the flag every run is a row.
+      expect(await list({})).toEqual(allRuns);
+
+      // Each runs.list sort path builds its own WHERE — cover them all.
+      const variants: Array<[string, Record<string, unknown>]> = [
+        ['default (Prisma path)', {}],
+        ['default + systemFilters (raw path)', { systemFilters: [{ field: 'name', operator: 'contains', values: [`${stamp}`] }] }],
+        ['search', { search: `${stamp}` }],
+        ['system sort', { sortField: 'name', sortSource: 'system', sortDirection: 'asc' }],
+        ['duration sort', { sortField: 'duration', sortSource: 'system', sortDirection: 'desc' }],
+        ['config sort', { sortField: 'lr', sortSource: 'config', sortDirection: 'asc' }],
+        ['metric sort', { sortField: 'train/loss', sortSource: 'metric', sortDirection: 'asc', sortAggregation: 'LAST' }],
+      ];
+      for (const [label, extra] of variants) {
+        const ids = await list({ ...extra, lineageTipsOnly: true });
+        // Metric sort only returns runs that logged the metric (none here);
+        // the invariant everywhere is "no continued run is ever a row".
+        if (label === 'metric sort') {
+          expect(ids.filter((id: string) => !expectedTips.includes(id)), label).toEqual([]);
+        } else {
+          expect(ids, label).toEqual(expectedTips);
+        }
+      }
+
+      const count = async (extra: Record<string, unknown>) => {
+        const res = await makeTrpcRequest(
+          'runs.count',
+          { organizationId, projectName, ...extra },
+          { Cookie: sessionCookie },
+          'GET',
+        );
+        expect(res.status).toBe(200);
+        return (await res.json()).result?.data;
+      };
+      expect(await count({})).toBe(5);
+      expect(await count({ lineageTipsOnly: true })).toBe(3);
+      expect(await count({ lineageTipsOnly: true, search: `${stamp}` })).toBe(3);
+      expect(
+        await count({ lineageTipsOnly: true, runIds: [sqidEncode(root), sqidEncode(tip)] }),
+      ).toBe(1);
+
+      // runs.lineageTips: mid has one chain below it → its tip. root branches
+      // (mid… and branch) → no single tip, omitted. Tips and unlinked runs
+      // are already experiments → omitted.
+      const tipsRes = await makeTrpcRequest(
+        'runs.lineageTips',
+        {
+          organizationId,
+          projectName,
+          runIds: [root, mid, tip, branch, standalone].map(sqidEncode),
+        },
+        { Cookie: sessionCookie },
+        'GET',
+      );
+      expect(tipsRes.status).toBe(200);
+      const tipIdByRunId = (await tipsRes.json()).result?.data?.tipIdByRunId;
+      expect(tipIdByRunId).toEqual({ [sqidEncode(mid)]: sqidEncode(tip) });
+    });
   });
 
   describe('Test Suite 21: Server-Side Field Filtering (Authenticated)', () => {

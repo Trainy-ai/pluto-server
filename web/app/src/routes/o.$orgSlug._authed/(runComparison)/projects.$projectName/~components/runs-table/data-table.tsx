@@ -494,22 +494,6 @@ export function DataTable({
   useEffect(() => { hiddenRunIdsRef.current = hiddenRunIds; }, [hiddenRunIds]);
   const getIsHidden = useCallback((runId: string) => hiddenRunIdsRef.current.has(runId), []);
 
-  // In experiments mode, build name→runIds map for group highlighting
-  const experimentRunIdsMap = useMemo(() => {
-    if (listMode !== "experiments") return null;
-    const map = new Map<string, string[]>();
-    for (const run of runs) {
-      const existing = map.get(run.name) ?? [];
-      existing.push(run.id);
-      map.set(run.name, existing);
-    }
-    return map;
-  }, [runs, listMode]);
-
-  const getExperimentRunIds = useCallback((runName: string): string[] | undefined => {
-    return experimentRunIdsMap?.get(runName);
-  }, [experimentRunIdsMap]);
-
   // Listen for chart hover events to highlight the corresponding run row
   useEffect(() => {
     let lastHighlightedRow: HTMLElement | null = null;
@@ -654,8 +638,6 @@ export function DataTable({
     isPinningActive,
     pinnedRuns,
     displayedRuns,
-    displayedRunCount,
-    totalExperimentCount,
     pageRunIds,
     deselectablePageRunIds,
     pinnedColumnMap,
@@ -902,11 +884,10 @@ export function DataTable({
         pinnedColumnMap={pinnedColumnMap}
         tableBodyRef={tableBodyRef}
         isHidden={hiddenRunIds.has(row.original.id)}
-        experimentRunIds={getExperimentRunIds(row.original.name)}
         isPinned={opts?.isPinned}
       />
     ),
-    [pinnedColumnMap, hiddenRunIds, getExperimentRunIds],
+    [pinnedColumnMap, hiddenRunIds],
   );
 
   // Inject a "Selected runs below do not match the active filter"
@@ -1104,8 +1085,8 @@ export function DataTable({
         onRunsDeleted={onCheckedDeleted ?? onDeselectAll}
         selectedRunsWithColors={selectedRunsWithColors}
         checkedRunsWithColors={checkedRunsWithColors}
-        runCount={listMode === "experiments" ? displayedRunCount : runCount}
-        totalRunCount={listMode === "experiments" ? totalExperimentCount : totalRunCount}
+        runCount={runCount}
+        totalRunCount={totalRunCount}
         selectedFilterMatchCount={selectedFilterMatchCount}
         totalGroupCountUnfiltered={totalGroupCountUnfiltered}
         searchQuery={searchQuery}
