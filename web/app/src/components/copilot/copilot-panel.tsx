@@ -147,7 +147,7 @@ export function CopilotPanel() {
           <SelectTrigger className="h-8 w-32 text-xs" aria-label="Chat backend">
             <SelectValue />
           </SelectTrigger>
-          <SelectContent>
+          <SelectContent data-tooltip-keep-pinned="">
             <SelectItem value="server" disabled={!serverEnabled}>
               Server model
             </SelectItem>
@@ -163,7 +163,7 @@ export function CopilotPanel() {
             <SelectTrigger className="h-8 w-40 text-xs" aria-label="Project">
               <SelectValue placeholder="Select a project" />
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent data-tooltip-keep-pinned="">
               {projectData.projects.map((project) => (
                 <SelectItem key={project.id.toString()} value={project.name}>
                   {project.name}

@@ -58,10 +58,13 @@ export function CopilotDock() {
   if (!state || !actions || !state.isOpen || isSuppressed) return null;
 
   if (!isDocked) {
+    // data-tooltip-keep-pinned: reading a pinned chart tooltip and clicking
+    // in here to ask about it must not dismiss the tooltip.
     return (
       <aside
         className="fixed inset-y-0 right-0 z-50 flex w-[min(420px,100vw)] flex-col border-l bg-background shadow-2xl"
         data-testid="copilot-panel"
+        data-tooltip-keep-pinned=""
         data-docked="false"
         aria-label="Copilot"
       >
@@ -106,6 +109,7 @@ export function CopilotDock() {
       className="sticky top-0 flex h-svh shrink-0 flex-col border-l bg-background"
       style={{ width: state.width }}
       data-testid="copilot-panel"
+      data-tooltip-keep-pinned=""
       data-docked="true"
       aria-label="Copilot"
     >

@@ -1,11 +1,13 @@
 import { describe, it, expect } from "vitest";
 import {
+  classifyOutsideClick,
   insertRawValueColumn,
   formatRawValueContent,
   formatMinMaxContent,
   formatValueContent,
   createPinHintRow,
   PIN_HINT_TEXT,
+  TOOLTIP_KEEP_PINNED_ATTR,
   type TooltipColumnConfig,
 } from "../tooltip-plugin";
 import { formatAxisLabel } from "../format";
@@ -343,5 +345,81 @@ describe("createPinHintRow", () => {
     const row = createPinHintRow();
     expect(row.style.opacity).toBe("0.5");
     expect(row.style.color).toBe("");
+  });
+});
+
+
+/**
+ * Regression: clicking into the copilot chat dismissed a pinned tooltip.
+ * The dock is an ordinary in-flow <aside>, so the click-outside handler saw
+ * it as unrelated UI and force-hid the tooltip the user was asking about.
+ */
+describe("classifyOutsideClick", () => {
+  function setup() {
+    document.body.innerHTML = `
+      <div id="tooltip"><span id="inside-tooltip">row</span></div>
+      <div data-tooltip-column-popover><button id="col-toggle">cols</button></div>
+      <div class="u-over"><span id="on-chart">chart</span></div>
+      <aside ${TOOLTIP_KEEP_PINNED_ATTR}>
+        <textarea id="chat-input"></textarea>
+      </aside>
+      <!-- Radix portals Select/Popover content to document.body, outside the
+           dock, so each such surface carries the attribute itself. -->
+      <div data-radix-popper-content-wrapper>
+        <div ${TOOLTIP_KEEP_PINNED_ATTR} role="listbox">
+          <div id="portal-option">Local agent</div>
+        </div>
+      </div>
+      <button id="toolbar">unrelated</button>
+    `;
+    return {
+      tooltip: document.getElementById("tooltip") as HTMLElement,
+      popover: document.querySelector("[data-tooltip-column-popover]"),
+      at: (id: string) => document.getElementById(id) as HTMLElement,
+    };
+  }
+
+  it("keeps the pin when the click lands in a keep-pinned surface", () => {
+    const { tooltip, popover, at } = setup();
+    expect(classifyOutsideClick(at("chat-input"), tooltip, popover)).toBe(
+      "keep",
+    );
+  });
+
+  it("keeps the pin for portalled copilot surfaces outside the dock", () => {
+    const { tooltip, popover, at } = setup();
+    expect(classifyOutsideClick(at("portal-option"), tooltip, popover)).toBe(
+      "keep",
+    );
+  });
+
+  it("keeps the pin for the tooltip itself and the column popover", () => {
+    const { tooltip, popover, at } = setup();
+    expect(classifyOutsideClick(at("inside-tooltip"), tooltip, popover)).toBe(
+      "keep",
+    );
+    expect(classifyOutsideClick(at("col-toggle"), tooltip, popover)).toBe(
+      "keep",
+    );
+  });
+
+  it("unpins without force-hiding when another chart is clicked", () => {
+    const { tooltip, popover, at } = setup();
+    expect(classifyOutsideClick(at("on-chart"), tooltip, popover)).toBe(
+      "unpin",
+    );
+  });
+
+  it("force-hides on unrelated UI, which is what opens a portal over the chart", () => {
+    const { tooltip, popover, at } = setup();
+    expect(classifyOutsideClick(at("toolbar"), tooltip, popover)).toBe(
+      "unpin-and-hide",
+    );
+  });
+
+  it("is a no-op without a target or a tooltip", () => {
+    const { tooltip, popover, at } = setup();
+    expect(classifyOutsideClick(null, tooltip, popover)).toBe("keep");
+    expect(classifyOutsideClick(at("toolbar"), null, popover)).toBe("keep");
   });
 });

@@ -785,6 +785,43 @@ export interface TooltipPluginOpts {
   reparentTooltip?: (container: HTMLElement | null) => void;
 }
 
+/**
+ * Attribute marking a surface that must NOT dismiss a pinned tooltip.
+ *
+ * Persistent side chrome — the copilot dock — is not an "outside click" in
+ * the dismissal sense: a user reading a pinned tooltip clicks into the chat
+ * precisely to ask about what it shows, and losing the pin loses the thing
+ * they were asking about. Opt-in by attribute so this layer stays unaware of
+ * which surfaces those are, and other persistent panels can join later.
+ */
+export const TOOLTIP_KEEP_PINNED_ATTR = "data-tooltip-keep-pinned";
+
+export type OutsideClickVerdict = "keep" | "unpin" | "unpin-and-hide";
+
+/**
+ * What a mousedown outside the pinned tooltip should do.
+ *
+ * A click on another chart unpins without force-hiding (the tooltip follows
+ * the new cursor); a click on unrelated UI force-hides, because the :hover
+ * heuristic in unpinTooltip can mis-fire when a Radix portal backdrop covers
+ * the chart and would otherwise leave the tooltip stuck.
+ */
+export function classifyOutsideClick(
+  target: Node | null,
+  tooltipEl: HTMLElement | null,
+  columnPopover: Element | null,
+): OutsideClickVerdict {
+  if (!target || !tooltipEl) return "keep";
+  if (tooltipEl.contains(target)) return "keep";
+  // The column-config popover is appended to document.body so it can extend
+  // past the tooltip's bounds, but for un-pin purposes it is the same UI.
+  if (columnPopover?.contains(target)) return "keep";
+
+  const targetEl = target as HTMLElement | null;
+  if (targetEl?.closest?.(`[${TOOLTIP_KEEP_PINNED_ATTR}]`)) return "keep";
+  return targetEl?.closest?.(".u-over") ? "unpin" : "unpin-and-hide";
+}
+
 export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
   const { yCategories } = opts;
   // A categorical chart's y values are indices; printing the number would be
@@ -1430,23 +1467,17 @@ export function tooltipPlugin(opts: TooltipPluginOpts): uPlot.Plugin {
       }
     };
 
-    // Click outside pinned tooltip unpins.
-    // If the click also landed outside any chart overlay (e.g. on a toolbar
-    // button or menu trigger that opens a dialog/popover), force-hide the
-    // tooltip — the :hover heuristic in unpinTooltip can mis-fire when a
-    // Radix portal backdrop covers the chart, leaving the tooltip stuck.
+    // Click outside the pinned tooltip unpins — see classifyOutsideClick for
+    // which surfaces count as "outside" and which force-hide.
     const handleDocumentMouseDown = (e: MouseEvent) => {
       if (!_pinState.isPinned || !tooltipEl) return;
-      const target = e.target as Node;
-      if (tooltipEl.contains(target)) return;
-      // Treat clicks inside the column-config popover as "inside the tooltip"
-      // — the popover is appended to document.body so it can extend past the
-      // tooltip's bounds, but for un-pin purposes it's part of the same UI.
-      const colPopover = document.querySelector("[data-tooltip-column-popover]");
-      if (colPopover && colPopover.contains(target)) return;
-      const targetEl = target as HTMLElement | null;
-      const clickedChart = !!targetEl && !!targetEl.closest?.(".u-over");
-      unpinTooltip(/* forceHide */ !clickedChart);
+      const verdict = classifyOutsideClick(
+        e.target as Node,
+        tooltipEl,
+        document.querySelector("[data-tooltip-column-popover]"),
+      );
+      if (verdict === "keep") return;
+      unpinTooltip(/* forceHide */ verdict === "unpin-and-hide");
     };
 
     overEl!.addEventListener("click", handleOverClick);

@@ -143,7 +143,11 @@ function RunsChip({
             <ChevronDownIcon className="size-3" />
           </button>
         </PopoverTrigger>
-        <PopoverContent align="start" className="w-72 p-0">
+        <PopoverContent
+        align="start"
+        className="w-72 p-0"
+        data-tooltip-keep-pinned=""
+      >
           <Command>
             <CommandInput placeholder="Search runs…" />
             <CommandList>
