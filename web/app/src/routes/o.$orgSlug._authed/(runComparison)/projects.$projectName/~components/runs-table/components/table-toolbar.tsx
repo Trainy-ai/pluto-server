@@ -196,29 +196,45 @@ export function TableToolbar({
   totalGroupCount,
   onGroupByChange,
 }: TableToolbarProps) {
+  // Experiments mode always stitches each lineage, so the toggle reads as on
+  // and can't be switched off there.
+  const isExperiments = listMode === "experiments";
+  const isInheritedOn = isExperiments || showInherited;
+
   return (
     <div className="mb-2 shrink-0 space-y-2">
       <div className="mt-2 flex items-center justify-between gap-x-3">
         <ExperimentRunsToggle mode={listMode} onChange={onListModeChange} />
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button
-              variant="outline"
-              size="icon"
-              className={cn(
-                "relative h-8 w-8 shrink-0",
-                showInherited && "border-primary bg-accent"
-              )}
-              onClick={onInheritedToggle}
-            >
-              <GitFork className="h-4 w-4" />
-              {showInherited && (
-                <span className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-primary" />
-              )}
-            </Button>
+            {/* span keeps the tooltip working while the button is disabled */}
+            <span className="shrink-0">
+              <Button
+                variant="outline"
+                size="icon"
+                className={cn(
+                  "relative h-8 w-8 shrink-0",
+                  isInheritedOn && "border-primary bg-accent"
+                )}
+                onClick={onInheritedToggle}
+                disabled={isExperiments}
+                data-testid="inherited-metrics-toggle"
+                aria-label="Show inherited datapoints"
+                aria-pressed={isInheritedOn}
+              >
+                <GitFork className="h-4 w-4" />
+                {isInheritedOn && (
+                  <span className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-primary" />
+                )}
+              </Button>
+            </span>
           </TooltipTrigger>
           <TooltipContent side="bottom">
-            {showInherited ? "Hide inherited datapoints" : "Show inherited datapoints"}
+            {isExperiments
+              ? "Experiments always show inherited datapoints"
+              : showInherited
+                ? "Hide inherited datapoints"
+                : "Show inherited datapoints"}
           </TooltipContent>
         </Tooltip>
         <div className="min-w-0 truncate pl-1 text-xs text-muted-foreground">

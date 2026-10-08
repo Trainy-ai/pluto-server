@@ -72,7 +72,9 @@ export const DEFAULT_SETTINGS: LineChartSettings = {
   skipMissingValues: false,
   maxSeriesCount: 500,
   chartResolution: "auto",
-  showInheritedMetrics: true,
+  // Off: a forked run shows only what it logged unless the user opts in
+  // (Experiments mode always stitches the lineage regardless).
+  showInheritedMetrics: false,
   downsamplingAlgorithm: "avg",
   includeNonFiniteMetrics: false,
 };

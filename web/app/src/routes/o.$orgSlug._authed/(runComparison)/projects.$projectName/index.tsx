@@ -247,26 +247,29 @@ function RouteComponent() {
     });
   }, [navigate]);
 
-  // Inherited metrics — synced via URL param. Default is ON (Neptune behavior).
-  // ?inherited=false explicitly disables; absent = enabled.
+  // Inherited metrics — synced via URL param. Default is OFF: in Runs mode
+  // each run shows only what it logged, so selecting a whole fork chain
+  // doesn't stack every run on top of its ancestors' history.
+  // ?inherited=true enables; absent (or the legacy ?inherited=false) = off.
+  // Experiments mode always stitches, independent of this setting.
+  const showInheritedMetrics = urlInherited === "true";
   const handleInheritedToggle = useCallback(() => {
-    const current = urlInherited !== "false"; // default true
     navigate({
       to: ".",
       search: (prev) => ({
         ...prev,
-        inherited: current ? "false" : undefined, // remove param when true (default)
+        inherited: showInheritedMetrics ? undefined : "true", // remove param when false (default)
       }),
       replace: true,
     });
-  }, [urlInherited, navigate]);
+  }, [showInheritedMetrics, navigate]);
 
   const handleInheritedChange = useCallback((value: boolean) => {
     navigate({
       to: ".",
       search: (prev) => ({
         ...prev,
-        inherited: value ? undefined : "false", // remove param when true (default)
+        inherited: value ? "true" : undefined, // remove param when false (default)
       }),
       replace: true,
     });
@@ -1568,7 +1571,7 @@ function RouteComponent() {
                 activeChartViewId={chart ?? null}
                 listMode={listMode}
                 onListModeChange={handleListModeChange}
-                showInherited={urlInherited !== "false"}
+                showInherited={showInheritedMetrics}
                 onInheritedToggle={handleInheritedToggle}
                 groupBy={groupBy}
                 onGroupByChange={handleGroupByChange}
@@ -1651,7 +1654,7 @@ function RouteComponent() {
                         selectedRuns={effectiveRunsWithColors}
                         selectedViewId={chart ?? null}
                         onViewChange={handleViewChange}
-                        showInheritedMetrics={urlInherited === "false" ? false : true}
+                        showInheritedMetrics={showInheritedMetrics}
                         onInheritedChange={handleInheritedChange}
                         hiddenRunIds={hiddenRunIds}
                         groupBy={groupBy}
