@@ -93,9 +93,13 @@ export function computeExperimentSegments(runs: RunSegmentInfo[]): StepRange[] {
       // Root: starts at 0
       minStep = 0;
     } else {
-      // Fork: starts right after parent's maxStep
+      // Fork: starts right after parent's maxStep. A fork whose parent isn't
+      // in the set starts at 0 — its stitched lineage carries the ancestors'
+      // data, and nothing else draws it. Experiments mode selects tips only,
+      // so this is the common case; clipping at forkStep+1 dropped every
+      // ancestor step whenever two or more experiments were selected.
       const parentMaxStep = maxStepOf.get(run.forkedFromRunId);
-      minStep = parentMaxStep != null ? parentMaxStep + 1 : (run.forkStep != null ? run.forkStep + 1 : 0);
+      minStep = parentMaxStep != null ? parentMaxStep + 1 : 0;
     }
 
     segments.push({

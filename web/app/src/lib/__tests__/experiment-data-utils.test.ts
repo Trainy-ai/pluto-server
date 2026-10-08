@@ -118,6 +118,20 @@ describe("computeExperimentSegments", () => {
     expect(computeExperimentSegments([])).toEqual([]);
   });
 
+  it("starts a fork whose parent isn't selected at step 0 (tips-only selection)", () => {
+    // Prod regression: the tip cYFG2 (forked from an unselected parent at
+    // 58607) next to an unlinked run. Clipping at forkStep+1 dropped every
+    // stitched ancestor step, so the experiment started at 58.6k.
+    const runs: RunSegmentInfo[] = [
+      { runId: "tip", forkStep: 58607, forkedFromRunId: "unselected-parent" },
+      { runId: "other", forkStep: null, forkedFromRunId: null },
+    ];
+    expect(computeExperimentSegments(runs)).toEqual([
+      { runId: "tip", minStep: 0, maxStep: null },
+      { runId: "other", minStep: 0, maxStep: null },
+    ]);
+  });
+
   it("handles runs with no fork relationships (no forkedFromRunId in set)", () => {
     // Two independent root runs (different experiments — shouldn't happen
     // in practice, but should still work)
