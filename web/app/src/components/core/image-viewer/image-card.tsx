@@ -8,7 +8,7 @@ import {
 import { parseAnnotations } from "@/lib/image-annotations";
 import type { MaskUrlResolver } from "@/hooks/use-mask-url";
 import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Download,
   ZoomIn,
@@ -35,6 +35,14 @@ import {
 } from "@/components/ui/tooltip";
 import type { PinSource } from "@/routes/o.$orgSlug._authed/(run)/projects.$projectName.$runId/~context/image-step-sync-context";
 import { downloadImageWithCaption } from "@/components/charts/chart-export-utils";
+
+// The default 16px corner X is easy to miss on a 95vw dialog that sits over
+// an image, so give it a button-sized, opaque hit area.
+const ZOOM_DIALOG_CLOSE_CLASS = buttonVariants({
+  variant: "outline",
+  size: "icon",
+  className: "top-2 right-2 z-10 bg-background opacity-100",
+});
 
 interface ImageCardStepNavigation {
   currentStepIndex: number;
@@ -394,7 +402,10 @@ export function ImageCard({
             )}
           </div>
         </DialogTrigger>
-        <DialogContent className="h-[95vh] w-[95vw] overflow-hidden">
+        <DialogContent
+          className="h-[95vh] w-[95vw] overflow-hidden"
+          closeClassName={ZOOM_DIALOG_CLOSE_CLASS}
+        >
           <div className="flex h-full w-full flex-col overflow-hidden">
             <div
               ref={containerRef}
