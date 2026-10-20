@@ -2,6 +2,7 @@
 
 import { useRef, useEffect, useCallback, useState } from "react";
 import {
+  DIALOG_LARGE_CLOSE_CLASS,
   Dialog,
   DialogContent,
   DialogHeader,
@@ -217,6 +218,7 @@ export function ChartFullscreenDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className="flex max-w-[95vw] h-[90vh] flex-col p-6 data-[state=open]:!animate-none"
+        closeClassName={DIALOG_LARGE_CLOSE_CLASS}
         onPointerDownOutside={(e) => {
           // Prevent closing when clicking on tooltip elements portaled to document.body
           const target = e.target as HTMLElement | null;

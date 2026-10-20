@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import {
+  DIALOG_LARGE_CLOSE_CLASS,
   Dialog,
   DialogContent,
   DialogHeader,
@@ -43,7 +44,10 @@ export function MediaFullscreenDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-w-[95vw] h-[90vh] flex-col p-6 data-[state=open]:!animate-none">
+      <DialogContent
+        className="flex max-w-[95vw] h-[90vh] flex-col p-6 data-[state=open]:!animate-none"
+        closeClassName={DIALOG_LARGE_CLOSE_CLASS}
+      >
         <DialogHeader>
           <div className="flex items-center justify-between pr-8 min-w-0 gap-2">
             <DialogTitle className="truncate" title={title}>

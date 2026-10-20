@@ -3,6 +3,15 @@ import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { XIcon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { buttonVariants } from "@/components/ui/button";
+
+// The default 16px corner X is easy to miss on a near-fullscreen dialog, so
+// large dialogs pass this as `closeClassName` for a button-sized, opaque hit area.
+const DIALOG_LARGE_CLOSE_CLASS = buttonVariants({
+  variant: "outline",
+  size: "icon",
+  className: "top-2 right-2 z-10 bg-background opacity-100",
+});
 
 function Dialog({
   ...props
@@ -128,6 +137,7 @@ function DialogDescription({
 }
 
 export {
+  DIALOG_LARGE_CLOSE_CLASS,
   Dialog,
   DialogClose,
   DialogContent,

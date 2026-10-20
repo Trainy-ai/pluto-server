@@ -10,6 +10,7 @@
 
 import { useCallback, useMemo, useRef, useState } from "react";
 import {
+  DIALOG_LARGE_CLOSE_CLASS,
   Dialog,
   DialogContent,
   DialogDescription,
@@ -199,6 +200,7 @@ export function PanelEditorDialog({
     >
       <DialogContent
         className="flex h-[90vh] max-w-[95vw] flex-col p-6 data-[state=open]:!animate-none"
+        closeClassName={DIALOG_LARGE_CLOSE_CLASS}
         data-testid="panel-editor-dialog"
       >
         <DialogHeader>
