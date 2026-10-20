@@ -3,6 +3,10 @@
  * Consolidates search logic used across list-runs, latest-runs, runs-count, and runs-openapi.
  */
 import { buildLineageTipCondition } from "./lineage-tips";
+import { parseDisplayId } from "./run-prefix";
+
+/** `runs.number` is a Postgres int4; larger numbers can't be a display ID. */
+const INT4_MAX = 2_147_483_647;
 
 export interface DateFilter {
   field: "createdAt" | "updatedAt" | "statusUpdated";
@@ -61,9 +65,20 @@ function appendSearchCondition(
   const hasSearchTerm = search.trim().length > 0;
 
   if (hasSearchTerm) {
-    conditions.push(
-      `(r."name" ILIKE '%' || $${idx} || '%' OR (p."runPrefix" IS NOT NULL AND r."number" IS NOT NULL AND (p."runPrefix" || '-' || r."number"::text) ILIKE '%' || $${idx} || '%'))`
-    );
+    const substringMatch = `(r."name" ILIKE '%' || $${idx} || '%' OR (p."runPrefix" IS NOT NULL AND r."number" IS NOT NULL AND (p."runPrefix" || '-' || r."number"::text) ILIKE '%' || $${idx} || '%'))`;
+    const displayId = parseDisplayId(search.trim());
+    if (displayId && displayId.number <= INT4_MAX) {
+      // An exact display ID names one run, so in a project that has it, return
+      // only that run instead of every run whose name contains the ID.
+      queryParams.push(displayId.prefix, displayId.number);
+      const prefixIdx = queryParams.length - 1;
+      const numIdx = queryParams.length;
+      conditions.push(
+        `(CASE WHEN p."runPrefix" = $${prefixIdx} AND EXISTS (SELECT 1 FROM "runs" rx WHERE rx."projectId" = r."projectId" AND rx."number" = $${numIdx}::int) THEN r."number" = $${numIdx}::int ELSE ${substringMatch} END)`
+      );
+    } else {
+      conditions.push(substringMatch);
+    }
   } else {
     conditions.push(`r."name" ILIKE '%' || $${idx} || '%'`);
   }

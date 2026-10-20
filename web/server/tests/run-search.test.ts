@@ -296,6 +296,51 @@ describe('buildRunSearchQuery', () => {
     expect(query).toContain('r."number"');
   });
 
+  // --- Exact display ID ---
+  // Runs are often named after the run they derive from ("t0-2557-ft"), so a
+  // substring search for "T0-2557" would bury the run with that ID under its
+  // descendants. An exact display ID match must win outright.
+
+  it('narrows to the exact display ID run when the project has one', () => {
+    const { query, params } = buildRunSearchQuery({
+      organizationId: 'org-123',
+      search: 't0-2557',
+    });
+
+    // Upper-cased prefix and parsed number are bound as their own params
+    expect(params).toContain('T0');
+    expect(params).toContain(2557);
+    const prefixIdx = params.indexOf('T0') + 1;
+    const numIdx = params.indexOf(2557) + 1;
+    expect(query).toContain(`p."runPrefix" = $${prefixIdx}`);
+    expect(query).toContain(`rx."number" = $${numIdx}::int`);
+    expect(query).toContain(`THEN r."number" = $${numIdx}::int`);
+    // Falls back to substring matching for projects without that ID
+    expect(query).toContain('ELSE');
+    expect(query).toContain("ILIKE '%' || $2 || '%'");
+  });
+
+  it('applies the exact display ID rule to the count query too', () => {
+    const { query, params } = buildRunCountQuery({
+      organizationId: 'org-123',
+      search: 'MMP-1',
+    });
+
+    expect(params).toContain('MMP');
+    expect(params).toContain(1);
+    expect(query).toContain('rx."number"');
+  });
+
+  it.each(['train', '42', 'MMP-', 'MMP-1-ft', 'MMP 1', 'MMP-99999999999'])(
+    'keeps plain substring matching for non-display-ID search %j',
+    (search) => {
+      const { query } = buildRunSearchQuery({ organizationId: 'org-123', search });
+
+      expect(query).not.toContain('rx."number"');
+      expect(query).toContain("ILIKE '%' || $2 || '%'");
+    },
+  );
+
   // --- LIMIT ---
 
   it('adds LIMIT when specified', () => {
