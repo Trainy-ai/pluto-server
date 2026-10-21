@@ -46,6 +46,14 @@ describe('collectTrpcProcedures', () => {
   it('reports the public procedure as public', () => {
     expect(procedures.find((p) => p.path === 'auth')?.auth).toBe('public');
   });
+
+  it('reports the cross-org admin procedures as platform-admin', () => {
+    // These deliberately take an organizationId the caller is NOT a member of,
+    // so they must never be mistaken for (or quietly become) session+org.
+    expect(procedures.find((p) => p.path === 'admin.listOrganizations')?.auth).toBe('platform-admin');
+    expect(procedures.find((p) => p.path === 'admin.createCheckoutSession')?.auth).toBe('platform-admin');
+    expect(procedures.find((p) => p.path === 'admin.status')?.auth).toBe('session');
+  });
 });
 
 describe('buildTrpcOpenApiDocument', () => {
@@ -91,7 +99,7 @@ describe('buildTrpcOpenApiDocument', () => {
         ),
       ),
     );
-    expect([...tags].sort()).toEqual(['public', 'session', 'session+org']);
+    expect([...tags].sort()).toEqual(['platform-admin', 'public', 'session', 'session+org']);
   });
 
   it('says plainly that API keys do not work here', () => {

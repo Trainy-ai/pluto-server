@@ -12,6 +12,7 @@ import { Sidebar, SidebarHeader } from "@/components/ui/sidebar";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { SidebarProfile } from "./sidebar-profile";
 import { SidebarOrg } from "./sidebar-org";
+import { SidebarAdmin } from "./sidebar-admin";
 import { UserDetails } from "@/components/layout/common/user-details";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { ChevronLeftIcon } from "lucide-react";
@@ -58,6 +59,7 @@ export function SettingsLayout({ children }: SettingsLayoutProps) {
             >
               <SidebarProfile isOrgSubRoute={isOrgSubRoute} />
               {isOrgSubRoute && <SidebarOrg />}
+              {orgSlug && <SidebarAdmin orgSlug={orgSlug} />}
             </ScrollArea>
           </SidebarContent>
           <SidebarFooter className="h-14">

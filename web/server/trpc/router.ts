@@ -9,6 +9,7 @@ import { dashboardViewsRouter } from "./routers/dashboard-views/router";
 import { runTableViewsRouter } from "./routers/run-table-views/router";
 import { sweepsRouter } from "./routers/sweeps/router";
 import { chartsLayoutRouter } from "./routers/charts-layout/router";
+import { adminRouter } from "./routers/admin/router";
 
 export const appRouter = router({
   // Procedures
@@ -24,6 +25,7 @@ export const appRouter = router({
   runTableViews: runTableViewsRouter,
   sweeps: sweepsRouter,
   chartsLayout: chartsLayoutRouter,
+  admin: adminRouter,
 });
 
 export type AppRouter = typeof appRouter;

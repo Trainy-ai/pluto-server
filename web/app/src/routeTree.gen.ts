@@ -33,6 +33,7 @@ import { Route as OOrgSlugAuthedSettingsIndexImport } from './routes/o.$orgSlug.
 import { Route as OOrgSlugAuthedProjectsIndexImport } from './routes/o.$orgSlug._authed/projects/index'
 import { Route as OOrgSlugAuthedindexIndexImport } from './routes/o.$orgSlug._authed/(index)/index'
 import { Route as indexAuthedSettingsAccountIndexImport } from './routes/(index)/_authed.settings/account/index'
+import { Route as OOrgSlugAuthedSettingsAdminImport } from './routes/o.$orgSlug._authed/settings/admin'
 import { Route as indexAuthedSettingsAccountPreferencesImport } from './routes/(index)/_authed.settings/account/preferences'
 import { Route as OOrgSlugAuthedSettingsOrgIndexImport } from './routes/o.$orgSlug._authed/settings/org/index'
 import { Route as OOrgSlugAuthedSettingsAccountIndexImport } from './routes/o.$orgSlug._authed/settings/account/index'
@@ -189,6 +190,13 @@ const indexAuthedSettingsAccountIndexRoute =
     id: '/settings/account/',
     path: '/settings/account/',
     getParentRoute: () => indexAuthedRoute,
+  } as any)
+
+const OOrgSlugAuthedSettingsAdminRoute =
+  OOrgSlugAuthedSettingsAdminImport.update({
+    id: '/settings/admin',
+    path: '/settings/admin',
+    getParentRoute: () => OOrgSlugAuthedRoute,
   } as any)
 
 const indexAuthedSettingsAccountPreferencesRoute =
@@ -454,6 +462,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof indexAuthedSettingsAccountPreferencesImport
       parentRoute: typeof indexAuthedImport
     }
+    '/o/$orgSlug/_authed/settings/admin': {
+      id: '/o/$orgSlug/_authed/settings/admin'
+      path: '/settings/admin'
+      fullPath: '/o/$orgSlug/settings/admin'
+      preLoaderRoute: typeof OOrgSlugAuthedSettingsAdminImport
+      parentRoute: typeof OOrgSlugAuthedImport
+    }
     '/(index)/_authed/settings/account/': {
       id: '/(index)/_authed/settings/account/'
       path: '/settings/account'
@@ -637,6 +652,7 @@ const indexRouteWithChildren = indexRoute._addFileChildren(indexRouteChildren)
 
 interface OOrgSlugAuthedRouteChildren {
   OOrgSlugAuthedChatRoute: typeof OOrgSlugAuthedChatRoute
+  OOrgSlugAuthedSettingsAdminRoute: typeof OOrgSlugAuthedSettingsAdminRoute
   OOrgSlugAuthedindexIndexRoute: typeof OOrgSlugAuthedindexIndexRoute
   OOrgSlugAuthedProjectsIndexRoute: typeof OOrgSlugAuthedProjectsIndexRoute
   OOrgSlugAuthedSettingsIndexRoute: typeof OOrgSlugAuthedSettingsIndexRoute
@@ -661,6 +677,7 @@ interface OOrgSlugAuthedRouteChildren {
 
 const OOrgSlugAuthedRouteChildren: OOrgSlugAuthedRouteChildren = {
   OOrgSlugAuthedChatRoute: OOrgSlugAuthedChatRoute,
+  OOrgSlugAuthedSettingsAdminRoute: OOrgSlugAuthedSettingsAdminRoute,
   OOrgSlugAuthedindexIndexRoute: OOrgSlugAuthedindexIndexRoute,
   OOrgSlugAuthedProjectsIndexRoute: OOrgSlugAuthedProjectsIndexRoute,
   OOrgSlugAuthedSettingsIndexRoute: OOrgSlugAuthedSettingsIndexRoute,
@@ -730,6 +747,7 @@ export interface FileRoutesByFullPath {
   '/o/$orgSlug/chat': typeof OOrgSlugAuthedChatRoute
   '/settings': typeof indexAuthedSettingsIndexRoute
   '/settings/account/preferences': typeof indexAuthedSettingsAccountPreferencesRoute
+  '/o/$orgSlug/settings/admin': typeof OOrgSlugAuthedSettingsAdminRoute
   '/settings/account': typeof indexAuthedSettingsAccountIndexRoute
   '/o/$orgSlug/': typeof OOrgSlugAuthedindexIndexRoute
   '/o/$orgSlug/projects': typeof OOrgSlugAuthedProjectsIndexRoute
@@ -770,6 +788,7 @@ export interface FileRoutesByTo {
   '/o/$orgSlug/chat': typeof OOrgSlugAuthedChatRoute
   '/settings': typeof indexAuthedSettingsIndexRoute
   '/settings/account/preferences': typeof indexAuthedSettingsAccountPreferencesRoute
+  '/o/$orgSlug/settings/admin': typeof OOrgSlugAuthedSettingsAdminRoute
   '/settings/account': typeof indexAuthedSettingsAccountIndexRoute
   '/o/$orgSlug/projects': typeof OOrgSlugAuthedProjectsIndexRoute
   '/o/$orgSlug/settings': typeof OOrgSlugAuthedSettingsIndexRoute
@@ -813,6 +832,7 @@ export interface FileRoutesById {
   '/o/$orgSlug/_authed/chat': typeof OOrgSlugAuthedChatRoute
   '/(index)/_authed/settings/': typeof indexAuthedSettingsIndexRoute
   '/(index)/_authed/settings/account/preferences': typeof indexAuthedSettingsAccountPreferencesRoute
+  '/o/$orgSlug/_authed/settings/admin': typeof OOrgSlugAuthedSettingsAdminRoute
   '/(index)/_authed/settings/account/': typeof indexAuthedSettingsAccountIndexRoute
   '/o/$orgSlug/_authed/(index)/': typeof OOrgSlugAuthedindexIndexRoute
   '/o/$orgSlug/_authed/projects/': typeof OOrgSlugAuthedProjectsIndexRoute
@@ -855,6 +875,7 @@ export interface FileRouteTypes {
     | '/o/$orgSlug/chat'
     | '/settings'
     | '/settings/account/preferences'
+    | '/o/$orgSlug/settings/admin'
     | '/settings/account'
     | '/o/$orgSlug/'
     | '/o/$orgSlug/projects'
@@ -894,6 +915,7 @@ export interface FileRouteTypes {
     | '/o/$orgSlug/chat'
     | '/settings'
     | '/settings/account/preferences'
+    | '/o/$orgSlug/settings/admin'
     | '/settings/account'
     | '/o/$orgSlug/projects'
     | '/o/$orgSlug/settings'
@@ -935,6 +957,7 @@ export interface FileRouteTypes {
     | '/o/$orgSlug/_authed/chat'
     | '/(index)/_authed/settings/'
     | '/(index)/_authed/settings/account/preferences'
+    | '/o/$orgSlug/_authed/settings/admin'
     | '/(index)/_authed/settings/account/'
     | '/o/$orgSlug/_authed/(index)/'
     | '/o/$orgSlug/_authed/projects/'
@@ -1074,6 +1097,7 @@ export const routeTree = rootRoute
       "parent": "/o/$orgSlug",
       "children": [
         "/o/$orgSlug/_authed/chat",
+        "/o/$orgSlug/_authed/settings/admin",
         "/o/$orgSlug/_authed/(index)/",
         "/o/$orgSlug/_authed/projects/",
         "/o/$orgSlug/_authed/settings/",
@@ -1113,6 +1137,10 @@ export const routeTree = rootRoute
     "/(index)/_authed/settings/account/preferences": {
       "filePath": "(index)/_authed.settings/account/preferences.tsx",
       "parent": "/(index)/_authed"
+    },
+    "/o/$orgSlug/_authed/settings/admin": {
+      "filePath": "o.$orgSlug._authed/settings/admin.tsx",
+      "parent": "/o/$orgSlug/_authed"
     },
     "/(index)/_authed/settings/account/": {
       "filePath": "(index)/_authed.settings/account/index.tsx",

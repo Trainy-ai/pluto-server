@@ -7,6 +7,9 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { PrismaClient } from '@prisma/client';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 // These two procs decode SQIDs directly rather than going through
 // resolveRunId, so the tests must address runs the way the app does.
 import { sqidEncode } from '../lib/sqid';
@@ -13495,6 +13498,131 @@ describe('SDK API Endpoints (with API Key)', () => {
       });
 
       expect(response.status).toBe(400);
+    });
+  });
+
+  // Test Suite 45: Platform admin procedures (/trpc/admin.*).
+  //
+  // These are the one deliberate exception to org scoping: a platform admin
+  // (PLATFORM_ADMIN_EMAILS) acts on organizations they are not a member of,
+  // e.g. opening a PRO checkout so a promotion code can be applied for a
+  // customer. The tenant-isolation suite covers session+org only, so this
+  // suite is the gate's regression test. It is driven by docs/api-surface.json:
+  // a new platform-admin procedure is covered without editing this file.
+  describe('Test Suite 45: Platform admin procedures', () => {
+    const ADMIN_EMAIL = process.env.TEST_USER_EMAIL || 'test-smoke@mlop.local';
+    const NON_ADMIN_EMAIL = process.env.TEST_ORG2_ONLY_USER_EMAIL || 'smoke-org2-only@example.com';
+    const ORG2_SLUG = process.env.TEST_ORG2_SLUG || '';
+    const PASSWORD = 'TestPassword123!';
+    // The smoke server is started with the smoke user on the allowlist
+    // (.buildkite/setup-test-env.sh); a local run without it skips the
+    // admin-side checks rather than failing them.
+    const smokeUserIsAdmin = (process.env.PLATFORM_ADMIN_EMAILS ?? '')
+      .split(',')
+      .map((email) => email.trim().toLowerCase())
+      .includes(ADMIN_EMAIL.toLowerCase());
+
+    const inventory = JSON.parse(
+      readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'docs', 'api-surface.json'), 'utf8'),
+    ) as { procedures: Array<{ path: string; type: 'query' | 'mutation'; auth: string }> };
+    const adminProcedures = inventory.procedures.filter((procedure) => procedure.auth === 'platform-admin');
+
+    let adminCookie: string | null = null;
+    let nonAdminCookie: string | null = null;
+
+    async function signIn(email: string): Promise<string | null> {
+      const response = await makeRequest('/api/auth/sign-in/email', {
+        method: 'POST',
+        body: JSON.stringify({ email, password: PASSWORD }),
+      });
+      const match = (response.headers.get('set-cookie') ?? '').match(/(better[-_]auth\.session_token)=([^;]+)/);
+      return match ? `${match[1]}=${match[2]}` : null;
+    }
+
+    /** tRPC v11 + superjson: the wire format is the envelope `{"json": <input>}`. */
+    async function call(path: string, type: 'query' | 'mutation', input: Record<string, unknown>, cookie?: string) {
+      const response = await makeTrpcRequest(
+        path,
+        { json: input },
+        cookie ? { Cookie: cookie } : {},
+        type === 'mutation' ? 'POST' : 'GET',
+      );
+      const body = await response.json().catch(() => null);
+      return { status: response.status, data: body?.result?.data?.json };
+    }
+
+    beforeAll(async () => {
+      adminCookie = await signIn(ADMIN_EMAIL);
+      nonAdminCookie = await signIn(NON_ADMIN_EMAIL);
+    });
+
+    it('Test 45.1: the inventory lists the admin procedures under their own tier', () => {
+      expect(adminProcedures.map((procedure) => procedure.path)).toEqual(
+        expect.arrayContaining(['admin.listOrganizations', 'admin.createCheckoutSession']),
+      );
+    });
+
+    it('Test 45.2: every platform-admin procedure rejects a caller with no session (401)', async () => {
+      for (const procedure of adminProcedures) {
+        const response = await call(procedure.path, procedure.type, { organizationId: 'nonexistent-org' });
+        expect(response.status, procedure.path).toBe(401);
+      }
+    });
+
+    it('Test 45.3: every platform-admin procedure rejects a signed-in non-admin (403)', async () => {
+      if (!nonAdminCookie) {
+        console.log('   No non-admin session - skipping');
+        return;
+      }
+      for (const procedure of adminProcedures) {
+        const response = await call(procedure.path, procedure.type, { organizationId: 'nonexistent-org' }, nonAdminCookie);
+        expect(response.status, procedure.path).toBe(403);
+      }
+    });
+
+    it('Test 45.4: admin.status reports the gate for each user', async () => {
+      if (!nonAdminCookie || !adminCookie) {
+        console.log('   No session - skipping');
+        return;
+      }
+      expect((await call('admin.status', 'query', {}, nonAdminCookie)).data).toEqual({ isPlatformAdmin: false });
+      expect((await call('admin.status', 'query', {}, adminCookie)).data).toEqual({
+        isPlatformAdmin: smokeUserIsAdmin,
+      });
+    });
+
+    it("Test 45.5: an admin finds an org by a member's email", async () => {
+      if (!adminCookie || !smokeUserIsAdmin || !ORG2_SLUG) {
+        console.log('   Smoke user is not a platform admin here - skipping');
+        return;
+      }
+      const response = await call('admin.listOrganizations', 'query', { search: NON_ADMIN_EMAIL }, adminCookie);
+      expect(response.status).toBe(200);
+      const org2 = (response.data as Array<Record<string, unknown>>).find((org) => org.slug === ORG2_SLUG);
+      expect(org2).toBeDefined();
+      expect(org2!.memberCount).toBeGreaterThanOrEqual(1);
+      expect(org2!.plan).toBeDefined();
+    });
+
+    it('Test 45.6: an admin checkout refuses an unknown org and needs Stripe for a real one', async () => {
+      if (!adminCookie || !smokeUserIsAdmin || !ORG2_SLUG) {
+        console.log('   Smoke user is not a platform admin here - skipping');
+        return;
+      }
+      const missing = await call('admin.createCheckoutSession', 'mutation', { organizationId: 'nonexistent-org' }, adminCookie);
+      expect(missing.status).toBe(404);
+
+      if (process.env.STRIPE_SECRET_KEY && process.env.STRIPE_PRO_PRICE_ID) {
+        console.log('   Stripe configured - not opening a real checkout');
+        return;
+      }
+      const listed = await call('admin.listOrganizations', 'query', { search: ORG2_SLUG }, adminCookie);
+      const org2 = (listed.data as Array<{ id: string; slug: string }>).find((org) => org.slug === ORG2_SLUG);
+      expect(org2).toBeDefined();
+      const response = await call('admin.createCheckoutSession', 'mutation', { organizationId: org2!.id }, adminCookie);
+      // The smoke env has no Stripe keys, so an admin who gets past the gate
+      // and the owner lookup for a real org ends at "billing is not configured".
+      expect(response.status).toBe(412);
     });
   });
 });

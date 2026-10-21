@@ -69,6 +69,9 @@ const envSchema = z.object({
 
   // Admin notifications (optional)
   ADMIN_NOTIFICATION_EMAIL: z.string().email().optional(), // Email to receive new signup notifications
+  // Comma-separated emails allowed to use the platform admin page (cross-org
+  // billing tools). Matched against the signed-in user's verified email.
+  PLATFORM_ADMIN_EMAILS: z.string().optional(),
 
   // Chat with data (optional private preview)
   OPENAI_COMPATIBLE_BASE_URL: z.string().url().optional(),

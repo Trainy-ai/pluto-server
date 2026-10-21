@@ -121,8 +121,9 @@ function markdown(
   lines.push("");
   lines.push(
     "Auth tiers: `public` (no credential), `session` (signed in), " +
-      `\`session+org\` (signed in **and** a member of the \`organizationId\` passed in the input). ` +
-      `Counts: ${byAuth("public")} public, ${byAuth("session")} session, ${byAuth("session+org")} session+org.`,
+      `\`session+org\` (signed in **and** a member of the \`organizationId\` passed in the input), ` +
+      `\`platform-admin\` (signed in with a verified email listed in \`PLATFORM_ADMIN_EMAILS\`; cross-org by design). ` +
+      `Counts: ${byAuth("public")} public, ${byAuth("session")} session, ${byAuth("session+org")} session+org, ${byAuth("platform-admin")} platform-admin.`,
   );
   lines.push("");
   lines.push(

@@ -1,6 +1,7 @@
 import { initTRPC, TRPCError } from "@trpc/server";
 import type { Context } from "./context";
 import { prisma } from "./prisma";
+import { isPlatformAdmin } from "./platform-admin";
 import superjson from "superjson";
 import { z } from "zod";
 
@@ -30,7 +31,7 @@ const fastSuperjson = {
  * reviewed and security-tested without reading every proc file.
  */
 export interface ProcedureMeta {
-  auth: "public" | "session" | "session+org";
+  auth: "public" | "session" | "session+org" | "platform-admin";
 }
 
 export const t = initTRPC.context<Context>().meta<ProcedureMeta>().create({
@@ -90,4 +91,21 @@ export const protectedOrgProcedure = protectedProcedure
         member,
       },
     });
+  });
+
+/**
+ * Cross-organization operator tools. Deliberately NOT org-scoped: the caller
+ * acts on organizations they are not a member of, so the gate is the
+ * deployment's PLATFORM_ADMIN_EMAILS allowlist (lib/platform-admin.ts).
+ */
+export const platformAdminProcedure = protectedProcedure
+  .meta({ auth: "platform-admin" })
+  .use(({ ctx, next }) => {
+    if (!isPlatformAdmin(ctx.user)) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "Platform admin access required",
+      });
+    }
+    return next();
   });

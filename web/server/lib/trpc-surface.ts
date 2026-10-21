@@ -18,7 +18,12 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 
 import { appRouter } from "../trpc/router";
 
-export type TrpcAuthTier = "public" | "session" | "session+org" | "unknown";
+export type TrpcAuthTier =
+  | "public"
+  | "session"
+  | "session+org"
+  | "platform-admin"
+  | "unknown";
 
 export interface TrpcProcedureSummary {
   path: string;
@@ -40,7 +45,10 @@ interface TrpcProcedureDef {
 
 function authOf(meta: unknown): TrpcAuthTier {
   const auth = (meta as { auth?: string } | undefined)?.auth;
-  return auth === "public" || auth === "session" || auth === "session+org"
+  return auth === "public" ||
+    auth === "session" ||
+    auth === "session+org" ||
+    auth === "platform-admin"
     ? auth
     : "unknown";
 }
