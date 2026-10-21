@@ -12,6 +12,7 @@ import { useSelectedRuns } from "./~hooks/use-selected-runs";
 import { usePanelLayout } from "./~hooks/use-panel-layout";
 import { useProjectCopilot } from "./~hooks/use-project-copilot";
 import { useRunListAssembly, useTableViewPartition } from "./~hooks/use-run-list-model";
+import { attachMetricSummaries } from "./~lib/run-list-model";
 import { prefetchListRuns, useListRuns, type Run } from "./~queries/list-runs";
 import { useSelectedRunLogs } from "./~queries/selected-run-logs";
 import { useDashboardView } from "./~queries/dashboard-views";
@@ -26,6 +27,7 @@ import { useDistinctColumnKeys, useSearchColumnKeys } from "./~queries/distinct-
 import { useColumnConfig, useBaseColumnOverrides, DEFAULT_COLUMNS, type ColumnConfig, type MetricAggregation } from "./~hooks/use-column-config";
 import { useLocalStorageBool } from "./~hooks/use-local-storage-bool";
 import { useSearchOtherMatches } from "./~hooks/use-search-other-matches";
+import { useExactIdMatch } from "./~hooks/use-exact-id-match";
 import { SearchOtherMatchesDropdown } from "./~components/runs-table/components/search-other-matches-dropdown";
 import { useDistinctMetricNames, useSearchMetricNames, useMetricSummaries } from "./~queries/metric-summaries";
 import { groupMetrics } from "./~lib/metrics-utils";
@@ -649,6 +651,21 @@ function RouteComponent() {
     // fetch below — equivalent quality, ~1KB instead of ~10-200KB.
   } = useListRuns(organizationId, projectName, serverFilters.tags, serverFilters.status, debouncedSearch, serverFilters.dateFilters, sortParam, serverFilters.fieldFilters as FieldFilterParam[] | undefined, serverFilters.metricFilters as MetricFilterParam[] | undefined, serverFilters.systemFilters as SystemFilterParam[] | undefined, pageSize, pageBase, listVisibleColumns, groupBy.length === 0, isExperimentsMode);
 
+  const exactMatchRun = useExactIdMatch({
+    organizationId,
+    projectName,
+    search: debouncedSearch,
+    filters: {
+      ...serverFilters,
+      fieldFilters: serverFilters.fieldFilters as FieldFilterParam[] | undefined,
+      metricFilters: serverFilters.metricFilters as MetricFilterParam[] | undefined,
+      systemFilters: serverFilters.systemFilters as SystemFilterParam[] | undefined,
+      visibleColumns: listVisibleColumns,
+      lineageTipsOnly: isExperimentsMode,
+    },
+    enabled: groupBy.length === 0,
+  });
+
   // Total rows the server has actually returned across all fetched
   // runs.list pages. Used for the *fetch trigger* (Next-button +
   // typed-page-input), NOT for the totalPages indicator. Decouples the
@@ -884,8 +901,11 @@ function RouteComponent() {
     for (const id of cachedSelectedRunIds) {
       ids.add(id);
     }
+    if (exactMatchRun) {
+      ids.add(exactMatchRun.id);
+    }
     return [...ids];
-  }, [allVisibleRuns, cachedSelectedRunIds]);
+  }, [allVisibleRuns, cachedSelectedRunIds, exactMatchRun]);
 
   // Fetch metric summaries for visible + selected runs
   const { data: metricSummariesData, loadedRunIds: metricLoadedRunIds } = useMetricSummaries(
@@ -906,17 +926,13 @@ function RouteComponent() {
   const runs = useMemo(() => {
     if (metricColumnSpecs.length === 0) return allVisibleRuns;
     const summaries = metricSummariesData?.summaries ?? {};
-    return allVisibleRuns.map((run) => {
-      const runSummaries = summaries[run.id];
-      const isLoading = !metricLoadedRunIds.has(run.id);
-      if (runSummaries == null && !isLoading) return run;
-      return {
-        ...run,
-        metricSummaries: runSummaries,
-        _metricsLoading: isLoading,
-      } as typeof run & { _metricsLoading?: boolean };
-    });
+    return allVisibleRuns.map((run) => attachMetricSummaries(run, summaries, metricLoadedRunIds));
   }, [allVisibleRuns, metricSummariesData, metricLoadedRunIds, metricColumnSpecs.length]);
+
+  const enrichedExactMatchRun = useMemo(() => {
+    if (!exactMatchRun || metricColumnSpecs.length === 0) return exactMatchRun;
+    return attachMetricSummaries(exactMatchRun, metricSummariesData?.summaries ?? {}, metricLoadedRunIds);
+  }, [exactMatchRun, metricSummariesData, metricLoadedRunIds, metricColumnSpecs.length]);
 
   // Build filterable fields from system fields + config/systemMetadata keys.
   // When the user is searching, merge results from the cache table so keys
@@ -1185,6 +1201,12 @@ function RouteComponent() {
     organizationId
   );
 
+  // The pinned exact-ID row is on screen, so it is never an "other match".
+  const otherMatchesInViewRunIds = useMemo(
+    () => (exactMatchRun ? new Set([...inViewRunIds, exactMatchRun.id]) : inViewRunIds),
+    [inViewRunIds, exactMatchRun],
+  );
+
   // "Other matches" dropdown — searches across all runs ignoring active filters.
   // Gated on `!otherMatchesDismissed` so window-focus refetches don't fire
   // while the popover is hidden.
@@ -1192,7 +1214,7 @@ function RouteComponent() {
     organizationId,
     projectName,
     query: debouncedSearch,
-    inViewRunIds,
+    inViewRunIds: otherMatchesInViewRunIds,
     filterActive,
     displayOnlySelectedActive: showOnlySelected,
     pinSelectedToTopActive: pinSelectedToTop,
@@ -1464,6 +1486,7 @@ function RouteComponent() {
                 runs={tableRuns}
                 serverFilteredRunIds={serverFilteredRunIds}
                 filterActive={filterActive}
+                exactMatchRun={enrichedExactMatchRun}
                 orgSlug={organizationSlug}
                 projectName={projectName}
                 organizationId={organizationId}

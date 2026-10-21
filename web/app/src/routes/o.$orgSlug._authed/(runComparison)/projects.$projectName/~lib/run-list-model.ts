@@ -246,3 +246,22 @@ export function computeInViewRunIds(params: {
   }
   return ids;
 }
+
+/**
+ * Attach a run's metric-column summaries. `_metricsLoading` marks a run whose
+ * summaries have not arrived yet, so its cells render a skeleton, not "-".
+ */
+export function attachMetricSummaries(
+  run: Run,
+  summaries: Record<string, Record<string, number>>,
+  loadedRunIds: Set<string>,
+): Run {
+  const runSummaries = summaries[run.id];
+  const isLoading = !loadedRunIds.has(run.id);
+  if (runSummaries == null && !isLoading) return run;
+  return {
+    ...run,
+    metricSummaries: runSummaries,
+    _metricsLoading: isLoading,
+  } as Run & { _metricsLoading?: boolean };
+}

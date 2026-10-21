@@ -32,6 +32,8 @@ export interface RunSearchParams {
   systemFilters?: SystemFilterSpec[];
   /** Experiments mode: only lineage tips (see lib/lineage-tips.ts). */
   lineageTipsOnly?: boolean;
+  /** "exactDisplayId" matches only the run whose display ID equals `search`. */
+  searchMode?: RunSearchMode;
   limit?: number;
 }
 
@@ -51,39 +53,46 @@ const DATE_FIELD_COLUMNS: Record<string, string> = {
   statusUpdated: '"statusUpdated"',
 };
 
+export type RunSearchMode = "contains" | "exactDisplayId";
+
+type Params = (string | bigint | string[] | number)[];
+
+const SUBSTRING_MATCH = (idx: number) =>
+  `(r."name" ILIKE '%' || $${idx} || '%' OR (p."runPrefix" IS NOT NULL AND r."number" IS NOT NULL AND (p."runPrefix" || '-' || r."number"::text) ILIKE '%' || $${idx} || '%'))`;
+
+/** Each mode returns the SQL condition for a non-empty, trimmed search term. */
+const SEARCH_CONDITIONS: Record<RunSearchMode, (search: string, queryParams: Params) => string> = {
+  contains: (search, queryParams) => {
+    queryParams.push(search);
+    return SUBSTRING_MATCH(queryParams.length);
+  },
+  exactDisplayId: (search, queryParams) => {
+    const displayId = parseDisplayId(search.trim());
+    if (!displayId || displayId.number > INT4_MAX) {
+      return "FALSE";
+    }
+    queryParams.push(displayId.prefix, displayId.number);
+    return `(p."runPrefix" = $${queryParams.length - 1} AND r."number" = $${queryParams.length}::int)`;
+  },
+};
+
 /**
- * Appends a search condition that matches on run name OR display ID (runPrefix-number).
- * Returns whether a project JOIN is needed for display ID resolution.
+ * Appends the search condition for `mode`. Returns whether a project JOIN is
+ * needed for display ID resolution.
  */
 function appendSearchCondition(
   conditions: string[],
-  queryParams: (string | bigint | string[] | number)[],
+  queryParams: Params,
   search: string,
+  mode: RunSearchMode = "contains",
 ): boolean {
-  queryParams.push(search);
-  const idx = queryParams.length;
-  const hasSearchTerm = search.trim().length > 0;
-
-  if (hasSearchTerm) {
-    const substringMatch = `(r."name" ILIKE '%' || $${idx} || '%' OR (p."runPrefix" IS NOT NULL AND r."number" IS NOT NULL AND (p."runPrefix" || '-' || r."number"::text) ILIKE '%' || $${idx} || '%'))`;
-    const displayId = parseDisplayId(search.trim());
-    if (displayId && displayId.number <= INT4_MAX) {
-      // An exact display ID names one run, so in a project that has it, return
-      // only that run instead of every run whose name contains the ID.
-      queryParams.push(displayId.prefix, displayId.number);
-      const prefixIdx = queryParams.length - 1;
-      const numIdx = queryParams.length;
-      conditions.push(
-        `(CASE WHEN p."runPrefix" = $${prefixIdx} AND EXISTS (SELECT 1 FROM "runs" rx WHERE rx."projectId" = r."projectId" AND rx."number" = $${numIdx}::int) THEN r."number" = $${numIdx}::int ELSE ${substringMatch} END)`
-      );
-    } else {
-      conditions.push(substringMatch);
-    }
-  } else {
-    conditions.push(`r."name" ILIKE '%' || $${idx} || '%'`);
+  if (search.trim().length === 0) {
+    queryParams.push(search);
+    conditions.push(`r."name" ILIKE '%' || $${queryParams.length} || '%'`);
+    return false;
   }
-
-  return hasSearchTerm;
+  conditions.push(SEARCH_CONDITIONS[mode](search, queryParams));
+  return true;
 }
 
 function appendDateFilters(
@@ -111,7 +120,7 @@ function appendDateFilters(
 }
 
 export function buildRunSearchQuery(params: RunSearchParams): QueryResult {
-  const { organizationId, search, projectId, projectName, tags, status, dateFilters, systemFilters, lineageTipsOnly, limit } = params;
+  const { organizationId, search, projectId, projectName, tags, status, dateFilters, systemFilters, lineageTipsOnly, searchMode, limit } = params;
 
   const conditions: string[] = [`r."organizationId" = $1`];
   const queryParams: (string | bigint | string[] | number)[] = [organizationId];
@@ -126,7 +135,7 @@ export function buildRunSearchQuery(params: RunSearchParams): QueryResult {
     conditions.push(`p.name = $${queryParams.length}`);
   }
 
-  const needsProjectJoinForSearch = appendSearchCondition(conditions, queryParams, search);
+  const needsProjectJoinForSearch = appendSearchCondition(conditions, queryParams, search, searchMode);
 
   // Add tags filter if provided
   if (tags && tags.length > 0) {
@@ -172,7 +181,7 @@ export function buildRunSearchQuery(params: RunSearchParams): QueryResult {
  * Builds a count query for runs using ILIKE substring matching.
  */
 export function buildRunCountQuery(params: Omit<RunSearchParams, "limit">): QueryResult {
-  const { organizationId, search, projectId, projectName, tags, status, dateFilters, systemFilters, lineageTipsOnly } = params;
+  const { organizationId, search, projectId, projectName, tags, status, dateFilters, systemFilters, lineageTipsOnly, searchMode } = params;
 
   const conditions: string[] = [`r."organizationId" = $1`];
   const queryParams: (string | bigint | string[] | number)[] = [organizationId];
@@ -187,7 +196,7 @@ export function buildRunCountQuery(params: Omit<RunSearchParams, "limit">): Quer
     conditions.push(`p.name = $${queryParams.length}`);
   }
 
-  const needsProjectJoinForSearch = appendSearchCondition(conditions, queryParams, search);
+  const needsProjectJoinForSearch = appendSearchCondition(conditions, queryParams, search, searchMode);
 
   // Add tags filter if provided
   if (tags && tags.length > 0) {

@@ -13,6 +13,34 @@ export type Run = ListRunResponse["runs"][number];
  *  Kept narrow — matches the backend's VisibleColumn shape. */
 export type VisibleColumn = { source: "config" | "systemMetadata"; key: string };
 
+export interface ListRunsFilters {
+  tags?: string[];
+  status?: string[];
+  search?: string;
+  dateFilters?: DateFilterParam[];
+  fieldFilters?: FieldFilterParam[];
+  metricFilters?: MetricFilterParam[];
+  systemFilters?: SystemFilterParam[];
+  visibleColumns?: VisibleColumn[];
+  lineageTipsOnly?: boolean;
+}
+
+/** The filter half of a runs.list input, shared by every query that must
+ *  return the same rows (and row shape) as the main runs table. */
+export function buildListRunsFilterInput(f: ListRunsFilters) {
+  return {
+    tags: f.tags && f.tags.length > 0 ? f.tags : undefined,
+    status: f.status && f.status.length > 0 ? f.status as ("RUNNING" | "COMPLETED" | "FAILED" | "TERMINATED" | "CANCELLED")[] : undefined,
+    search: f.search && f.search.trim() ? f.search.trim() : undefined,
+    dateFilters: f.dateFilters && f.dateFilters.length > 0 ? f.dateFilters : undefined,
+    fieldFilters: f.fieldFilters && f.fieldFilters.length > 0 ? f.fieldFilters : undefined,
+    metricFilters: f.metricFilters && f.metricFilters.length > 0 ? f.metricFilters : undefined,
+    systemFilters: f.systemFilters && f.systemFilters.length > 0 ? f.systemFilters : undefined,
+    visibleColumns: f.visibleColumns,
+    lineageTipsOnly: f.lineageTipsOnly || undefined,
+  };
+}
+
 export const useListRuns = (
   orgId: string,
   projectName: string,
@@ -88,15 +116,7 @@ export const useListRuns = (
         projectName: projectName,
         limit: fetchLimit,
         ...paginationParams,
-        tags: tags && tags.length > 0 ? tags : undefined,
-        status: status && status.length > 0 ? status as ("RUNNING" | "COMPLETED" | "FAILED" | "TERMINATED" | "CANCELLED")[] : undefined,
-        search: search && search.trim() ? search.trim() : undefined,
-        dateFilters: dateFilters && dateFilters.length > 0 ? dateFilters : undefined,
-        fieldFilters: fieldFilters && fieldFilters.length > 0 ? fieldFilters : undefined,
-        metricFilters: metricFilters && metricFilters.length > 0 ? metricFilters : undefined,
-        systemFilters: systemFilters && systemFilters.length > 0 ? systemFilters : undefined,
-        visibleColumns,
-        lineageTipsOnly: lineageTipsOnly || undefined,
+        ...buildListRunsFilterInput({ tags, status, search, dateFilters, fieldFilters, metricFilters, systemFilters, visibleColumns, lineageTipsOnly }),
         // Sort params
         ...(sort ? {
           sortField: sort.field,

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { protectedOrgProcedure } from "../../../../lib/trpc";
 import { sqidEncode } from "../../../../lib/sqid";
-import { searchRunIds, buildRunSearchQuery, type RunSearchParams } from "../../../../lib/run-search";
+import { searchRunIds, buildRunSearchQuery, type RunSearchMode, type RunSearchParams } from "../../../../lib/run-search";
 import {
   queryMetricSortedRunIds,
   queryMetricFilteredRunIds,
@@ -236,6 +236,7 @@ export const listRunsProcedure = protectedOrgProcedure
     z.object({
       projectName: z.string(),
       search: z.string().optional(),
+      searchMode: z.enum(["contains", "exactDisplayId"]).optional(),
       tags: z.array(z.string()).optional(),
       status: z.array(z.enum(["RUNNING", "COMPLETED", "FAILED", "TERMINATED", "CANCELLED"])).optional(),
       dateFilters: z.array(dateFilterSchema).optional(),
@@ -328,6 +329,7 @@ async function defaultCursorQuery(
     organizationId: string;
     projectName: string;
     search?: string;
+    searchMode?: RunSearchMode;
     tags?: string[];
     status?: string[];
     dateFilters?: z.infer<typeof dateFilterSchema>[];
@@ -367,6 +369,7 @@ async function defaultCursorQuery(
       organizationId: input.organizationId,
       projectId: project.id,
       search: input.search.trim(),
+      searchMode: input.searchMode,
       tags: input.tags,
       status: input.status,
       dateFilters: input.dateFilters,
@@ -458,6 +461,7 @@ async function defaultCursorQueryWithFieldFilters(
     organizationId: string;
     projectName: string;
     search?: string;
+    searchMode?: RunSearchMode;
     tags?: string[];
     status?: string[];
     dateFilters?: z.infer<typeof dateFilterSchema>[];
@@ -489,6 +493,7 @@ async function defaultCursorQueryWithFieldFilters(
       organizationId: input.organizationId,
       projectId: project.id,
       search: input.search.trim(),
+      searchMode: input.searchMode,
       tags: input.tags,
       status: input.status,
       dateFilters: input.dateFilters,
@@ -696,6 +701,7 @@ async function durationSortQuery(
     organizationId: string;
     projectName: string;
     search?: string;
+    searchMode?: RunSearchMode;
     tags?: string[];
     status?: string[];
     dateFilters?: z.infer<typeof dateFilterSchema>[];
@@ -849,6 +855,7 @@ async function systemColumnSortQuery(
     organizationId: string;
     projectName: string;
     search?: string;
+    searchMode?: RunSearchMode;
     tags?: string[];
     status?: string[];
     dateFilters?: z.infer<typeof dateFilterSchema>[];
@@ -887,6 +894,7 @@ async function systemColumnSortQuery(
       organizationId: input.organizationId,
       projectId: project.id,
       search: input.search.trim(),
+      searchMode: input.searchMode,
       tags: input.tags,
       status: input.status,
       dateFilters: input.dateFilters,
@@ -1051,6 +1059,7 @@ async function jsonFieldSortQuery(
     organizationId: string;
     projectName: string;
     search?: string;
+    searchMode?: RunSearchMode;
     tags?: string[];
     status?: string[];
     dateFilters?: z.infer<typeof dateFilterSchema>[];
@@ -1089,6 +1098,7 @@ async function jsonFieldSortQuery(
       organizationId: input.organizationId,
       projectId: project.id,
       search: input.search.trim(),
+      searchMode: input.searchMode,
       tags: input.tags,
       status: input.status,
       dateFilters: input.dateFilters,
@@ -1213,6 +1223,7 @@ async function metricSortQuery(
     organizationId: string;
     projectName: string;
     search?: string;
+    searchMode?: RunSearchMode;
     tags?: string[];
     status?: string[];
     dateFilters?: z.infer<typeof dateFilterSchema>[];
@@ -1309,6 +1320,7 @@ async function getCandidateRunIds(
     organizationId: string;
     projectName: string;
     search?: string;
+    searchMode?: RunSearchMode;
     tags?: string[];
     status?: string[];
     dateFilters?: z.infer<typeof dateFilterSchema>[];
@@ -1354,6 +1366,7 @@ async function getCandidateRunIds(
       organizationId: input.organizationId,
       projectId: project.id,
       search: input.search!.trim(),
+      searchMode: input.searchMode,
       tags: input.tags,
       status: input.status,
       dateFilters: input.dateFilters,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Run } from "../~queries/list-runs";
 import {
+  attachMetricSummaries,
   collectServerFilteredRunIds,
   computeInViewRunIds,
   dropPhantomSelectedRuns,
@@ -185,5 +186,30 @@ describe("computeInViewRunIds", () => {
       });
       expect(out).toEqual(new Set(["s1"]));
     }
+  });
+});
+
+describe("attachMetricSummaries", () => {
+  const summaries = { a: { "loss|MIN": 0.1 } };
+
+  it("attaches loaded summaries", () => {
+    expect(attachMetricSummaries(run("a"), summaries, new Set(["a"]))).toEqual({
+      ...run("a"),
+      metricSummaries: { "loss|MIN": 0.1 },
+      _metricsLoading: false,
+    });
+  });
+
+  it("flags a run whose summaries have not loaded yet", () => {
+    expect(attachMetricSummaries(run("b"), summaries, new Set())).toEqual({
+      ...run("b"),
+      metricSummaries: undefined,
+      _metricsLoading: true,
+    });
+  });
+
+  it("returns the same run when loaded with no summaries", () => {
+    const r = run("b");
+    expect(attachMetricSummaries(r, summaries, new Set(["b"]))).toBe(r);
   });
 });

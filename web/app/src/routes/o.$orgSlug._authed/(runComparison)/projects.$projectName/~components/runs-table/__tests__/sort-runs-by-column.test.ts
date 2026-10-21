@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { sortRunsByColumn } from "../hooks/use-data-table-state";
+import { sortRunsByColumn } from "../lib/pinned-rows";
 import type { Run } from "../../../~queries/list-runs";
 import type { ColumnConfig } from "../../../~hooks/use-column-config";
 import { makeRun } from "./_fixtures";

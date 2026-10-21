@@ -4498,6 +4498,41 @@ async function setupTestData(): Promise<TestData> {
     console.log(`   ✓ ${PANEL_PROJECT} already seeded, skipping`);
   }
 
+  // 5g⁴. `exact-id-search-test` — the run with display ID EIS-7 is the OLDEST
+  // in its project and sits under 35 newer substring matches (names
+  // `eis-7-ft-*`, IDs EIS-70..79), so it is past page 1 unless the exact-ID
+  // pin lifts it. Own project so no other spec's run counts move.
+  console.log('\n5️⃣g⁴ Creating exact-id-search-test project...');
+  const exactIdProject = await prisma.projects.upsert({
+    where: { organizationId_name: { organizationId: org.id, name: 'exact-id-search-test' } },
+    create: { name: 'exact-id-search-test', organizationId: org.id, runPrefix: 'EIS', nextRunNumber: 80 },
+    update: { runPrefix: 'EIS', nextRunNumber: 80 },
+  });
+  const exactIdExisting = await prisma.runs.count({ where: { projectId: exactIdProject.id } });
+  if (exactIdExisting === 0) {
+    const base = Date.now() - 2 * 24 * 60 * 60 * 1000;
+    const exactIdRuns = [
+      { name: 'eis-exact-target', number: 7 },
+      ...Array.from({ length: 25 }, (_, i) => ({ name: `eis-7-ft-${String(i).padStart(2, '0')}`, number: 8 + i })),
+      ...Array.from({ length: 10 }, (_, i) => ({ name: `eis-variant-${i}`, number: 70 + i })),
+    ];
+    await prisma.runs.createMany({
+      data: exactIdRuns.map((r, i) => ({
+        ...r,
+        organizationId: org.id,
+        projectId: exactIdProject.id,
+        createdById: user.id,
+        creatorApiKeyId: apiKey.id,
+        status: 'COMPLETED' as const,
+        createdAt: new Date(base + i * 60_000),
+        updatedAt: new Date(base + i * 60_000),
+      })),
+    });
+    console.log(`   ✓ Seeded ${exactIdRuns.length} runs (EIS-7 oldest)`);
+  } else {
+    console.log('   ✓ exact-id-search-test already seeded, skipping');
+  }
+
   console.log('\n5️⃣h Creating run-groups project...');
 
   // `optimizer` is a string config key (distinct values sgd/adam/adamw)

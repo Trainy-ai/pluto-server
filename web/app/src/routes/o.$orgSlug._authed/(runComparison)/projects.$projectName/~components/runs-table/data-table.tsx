@@ -178,6 +178,8 @@ interface DataTableProps {
   expandedGroups: string[];
   onExpandedGroupsChange: (expanded: string[]) => void;
   searchOtherMatchesDropdown?: React.ReactNode;
+  /** Run whose display ID equals the search, pinned above all other rows. */
+  exactMatchRun?: Run | null;
 }
 
 export function DataTable({
@@ -278,6 +280,7 @@ export function DataTable({
   pinSelectedToTop,
   onPinSelectedToTopChange,
   searchOtherMatchesDropdown,
+  exactMatchRun = null,
 }: DataTableProps) {
   const tableBodyRef = useRef<HTMLTableSectionElement>(null);
   const theadRef = useRef<HTMLTableSectionElement>(null);
@@ -636,6 +639,7 @@ export function DataTable({
     handleDrop,
     handleDragEnd,
     isPinningActive,
+    showPinnedBlock,
     pinnedRuns,
     displayedRuns,
     pageRunIds,
@@ -670,6 +674,7 @@ export function DataTable({
     // the run-row eye sits one level deeper than the deepest bucket
     // header. Zero in flat mode.
     groupedIndentPx: groupBy.length > 0 ? (0.5 + groupBy.length * 1.25) * 16 : 0,
+    exactMatchRun,
   });
 
   const groupedIndentPx = groupBy.length > 0
@@ -961,6 +966,18 @@ export function DataTable({
     [filterActive, serverFilteredRunIds, filterDividerRow, renderRow],
   );
 
+  // The exact-match row is outside serverFilteredRunIds (it may sit past the
+  // fetched pages), so it bypasses the filter partition, which would file it
+  // under "do not match".
+  const renderPinnedRows = (rows: Row<Run>[]): React.ReactNode[] => {
+    const exactRow = exactMatchRun ? rows.find((r) => r.original.id === exactMatchRun.id) : undefined;
+    if (!exactRow) return renderRowsWithFilterDivider(rows, { isPinned: true });
+    return [
+      renderRow(exactRow, { isPinned: true }),
+      ...renderRowsWithFilterDivider(rows.filter((r) => r !== exactRow), { isPinned: true }),
+    ];
+  };
+
   const renderHeaderCell = (header: Header<Run, unknown>) => {
     const def = header.column.columnDef;
     const isFixed = def.enableResizing === false;
@@ -1225,7 +1242,7 @@ export function DataTable({
               </TableBody>
             </Table>
           </div>
-        ) : isPinningActive ? (
+        ) : showPinnedBlock ? (
           // One scroll container, one <Table>, one <TableBody>. The
           // pinned rows render first, then the unpinned page slice.
           // Pagination math (in TablePagination) only advances the
@@ -1250,7 +1267,7 @@ export function DataTable({
                     so the pin section itself reads as two subsections
                     before the "Unselected runs below" pin divider
                     hands off to the unpinned matching set. */}
-                {renderRowsWithFilterDivider(pinnedTable.getRowModel().rows, { isPinned: true })}
+                {renderPinnedRows(pinnedTable.getRowModel().rows)}
                 {/* Divider between pinned (selected) and unpinned rows.
                     Only render when:
                      - there are pinned rows above,
@@ -1283,9 +1300,11 @@ export function DataTable({
                           className="sticky left-0 text-center text-[11px] font-semibold uppercase tracking-wider text-primary"
                           style={{ width: "var(--tbl-visible-w, 100%)" }}
                         >
-                          {filterActive
-                            ? "Unselected runs below that match the active filter"
-                            : "Unselected runs below"}
+                          {!isPinningActive
+                            ? "Other matching runs below"
+                            : filterActive
+                              ? "Unselected runs below that match the active filter"
+                              : "Unselected runs below"}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -1338,7 +1357,7 @@ export function DataTable({
         table={table}
         runCount={runCount}
         pinnedRunCount={pinnedRuns.length}
-        isPinningActive={isPinningActive}
+        isPinningActive={showPinnedBlock}
         pageIndex={pageIndex}
         pageSize={pageSize}
         effectivePageSize={effectivePageSize}

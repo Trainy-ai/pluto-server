@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeEffectivePageSize } from "../hooks/use-data-table-state";
+import { computeEffectivePageSize } from "../lib/pinned-rows";
 
 /**
  * Unit coverage for the pin-selected-to-top (PSTT) pagination math.
