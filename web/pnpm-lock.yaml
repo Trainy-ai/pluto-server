@@ -87,7 +87,7 @@ importers:
     dependencies:
       '@ai-sdk/react':
         specifier: ^4.0.50
-        version: 4.0.146(react@19.1.2)(zod@3.25.76)
+        version: 4.0.151(react@19.1.2)(zod@3.25.76)
       '@codemirror/lang-python':
         specifier: 6.2.1
         version: 6.2.1
@@ -201,7 +201,7 @@ importers:
         version: 12.6.0(@types/react@19.2.7)(react-dom@19.1.2(react@19.1.2))(react@19.1.2)
       ai:
         specifier: ^7.0.47
-        version: 7.0.142(zod@3.25.76)
+        version: 7.0.147(zod@3.25.76)
       ansi_up:
         specifier: 6.0.5
         version: 6.0.5
@@ -379,7 +379,7 @@ importers:
         version: 5.83.0(@types/node@22.14.1)(typescript@5.8.3)
       postcss:
         specifier: ^8.5.26
-        version: 8.5.30
+        version: 8.5.31
       prettier:
         specifier: 3.5.3
         version: 3.5.3
@@ -406,7 +406,7 @@ importers:
     dependencies:
       '@ai-sdk/openai-compatible':
         specifier: ^3.0.20
-        version: 3.0.70(zod@3.25.76)
+        version: 3.0.74(zod@3.25.76)
       '@aws-sdk/client-s3':
         specifier: 3.787.0
         version: 3.787.0
@@ -421,19 +421,19 @@ importers:
         version: 1.11.0
       '@hono/node-server':
         specifier: 1.19.15
-        version: 1.19.15(hono@4.13.10)
+        version: 1.19.15(hono@4.13.11)
       '@hono/swagger-ui':
         specifier: 0.5.3
-        version: 0.5.3(hono@4.13.10)
+        version: 0.5.3(hono@4.13.11)
       '@hono/trpc-server':
         specifier: 0.3.4
-        version: 0.3.4(@trpc/server@11.8.1(typescript@5.8.3))(hono@4.13.10)
+        version: 0.3.4(@trpc/server@11.8.1(typescript@5.8.3))(hono@4.13.11)
       '@hono/zod-openapi':
         specifier: 0.18.3
-        version: 0.18.3(hono@4.13.10)(zod@3.25.76)
+        version: 0.18.3(hono@4.13.11)(zod@3.25.76)
       '@hono/zod-validator':
         specifier: 0.4.3
-        version: 0.4.3(hono@4.13.10)(zod@3.25.76)
+        version: 0.4.3(hono@4.13.11)(zod@3.25.76)
       '@langfuse/client':
         specifier: ^5.10.0
         version: 5.14.0(@opentelemetry/api@1.9.1)
@@ -457,7 +457,7 @@ importers:
         version: 3.0.0
       ai:
         specifier: ^7.0.47
-        version: 7.0.142(zod@3.25.76)
+        version: 7.0.147(zod@3.25.76)
       better-auth:
         specifier: 1.6.27
         version: 1.6.27(@cloudflare/workers-types@4.20250413.0)(@opentelemetry/api@1.9.1)(@prisma/client@5.2.0(prisma@5.2.0))(drizzle-kit@0.31.8)(drizzle-orm@0.45.2(@cloudflare/workers-types@4.20250413.0)(@libsql/client@0.15.3)(@opentelemetry/api@1.9.1)(@prisma/client@5.2.0(prisma@5.2.0))(@types/pg@8.15.6)(bun-types@1.2.4)(gel@2.0.2)(kysely@0.28.17)(prisma@5.2.0))(next@15.5.27(@opentelemetry/api@1.9.1)(@playwright/test@1.57.0)(@types/node@22.14.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(prisma@5.2.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(solid-js@1.9.5)(vitest@4.1.11)
@@ -468,8 +468,8 @@ importers:
         specifier: 0.45.2
         version: 0.45.2(@cloudflare/workers-types@4.20250413.0)(@libsql/client@0.15.3)(@opentelemetry/api@1.9.1)(@prisma/client@5.2.0(prisma@5.2.0))(@types/pg@8.15.6)(bun-types@1.2.4)(gel@2.0.2)(kysely@0.28.17)(prisma@5.2.0)
       hono:
-        specifier: 4.13.10
-        version: 4.13.10
+        specifier: 4.13.11
+        version: 4.13.11
       lru-cache:
         specifier: 10.4.3
         version: 10.4.3
@@ -570,36 +570,36 @@ packages:
   '@adobe/css-tools@4.4.4':
     resolution: {integrity: sha512-Elp+iwUx5rN5+Y8xLt5/GRoG20WGoDCQ/1Fb+1LiGtvwbDavuSk0jhD/eZdckHAuzcDzccnkv+rEjyWfRx18gg==}
 
-  '@ai-sdk/gateway@4.0.115':
-    resolution: {integrity: sha512-Xn+gDWM4Ti2FzYmxhlZtjEuGBGZlOYaQMpwcVRSN4c9qCMUszD5F5TAbkxgLV/tHKeMfEX+WEuTCl6Kkj2r73A==}
+  '@ai-sdk/gateway@4.0.120':
+    resolution: {integrity: sha512-hHGDQrCBgiEiPuimtc1NHPRGwte7sBG3XQuxTdurrpuGXKqCSHVlrBIDsiXjFOBYOms1+9aDz2xpTq+kOhiJWA==}
     engines: {node: '>=22'}
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
 
-  '@ai-sdk/mcp@2.0.77':
-    resolution: {integrity: sha512-gv+dj2lHmWnUWy3i1h7OloTs2T9yM0nLoRpTAZl/dqMihtHokdVtGGDh3+Bvs5YdIKezT98qCj/hSi5m/WRQ/g==}
+  '@ai-sdk/mcp@2.0.80':
+    resolution: {integrity: sha512-sgOTk2gWIvzRwmWbA+F7kmGYnZ6s69sM0ipRxmMh7zrs7YkwKDukHTOeSSDJRrCun3V4Go434v0v/zZEHv5spw==}
     engines: {node: '>=22'}
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
 
-  '@ai-sdk/openai-compatible@3.0.70':
-    resolution: {integrity: sha512-0TefLzj+V7aMLrIIKdk3CKRji+hOu3oOSHeLKJVzr0+q/7rsH4Q56w6RK7GX7csmAd9Urtt097XBTkBwJbpDjA==}
+  '@ai-sdk/openai-compatible@3.0.74':
+    resolution: {integrity: sha512-W8+IW5dYlgmHpg/CQM/fcflhOe3JUbaHGrHzbE8sdbfETLjVFU/BgUTRfySpNlAst8FERaGH7prmKooQzp0qKw==}
     engines: {node: '>=22'}
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
 
-  '@ai-sdk/provider-utils@5.0.61':
-    resolution: {integrity: sha512-Y+Z3539UXw0ctFDNepTtG23VqBQHr2A6yI2qUxvQcg75DJYgJoD2F9U2Vp5OgQjX7lxto1BLgFtKuOhzrr52vQ==}
+  '@ai-sdk/provider-utils@5.0.64':
+    resolution: {integrity: sha512-BDU8rDR6mBR+na5U/Dj4B33LX980x200lqhBGRIOxxx1NFunoixuvvweqIB+sCsCoFC8cGCsa82Ce2fKoAPOqw==}
     engines: {node: '>=22'}
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
 
-  '@ai-sdk/provider@4.0.28':
-    resolution: {integrity: sha512-6ThcmkJQXSMlBrf6mirIjUUS04Q5/kApbYTOzd5lZfYXLa1XPpnDLxP/G96/DKc00fDIUOW9S2ls0mSzb0+l9w==}
+  '@ai-sdk/provider@4.0.31':
+    resolution: {integrity: sha512-3wJnwVTFg8SwOyoZCv+ov7Re2GB+7IQnU5a5MYJACrtiWDDUHgqTBeeesq2MB2ddgojzL8hgWleltwpAgtUqfg==}
     engines: {node: '>=22'}
 
-  '@ai-sdk/react@4.0.146':
-    resolution: {integrity: sha512-acYAJHpuq/6FBRAgFLZVZpg3hptDN+oKWIR0ufPHLQDVCZHQlfvryiDEFYGbeV35olnn7KA1dDHIN2EY3it4iw==}
+  '@ai-sdk/react@4.0.151':
+    resolution: {integrity: sha512-/3g8U0LpIxl3bF5I3Bh1amn63TKSBF5gLzehJMrpvP5C1GF7hLms0VABGtSMly8v5e6EozihwiiiWi7j9ZOa+Q==}
     engines: {node: '>=22'}
     peerDependencies:
       react: ^18 || ~19.0.1 || ~19.1.2 || ^19.2.1
@@ -2399,6 +2399,7 @@ packages:
   '@opentelemetry/propagator-jaeger@2.10.0':
     resolution: {integrity: sha512-yw/IX8DL470dSMZJoE82ScfYGp7JWZ/G8kFJo35ZILUVTB2jFPTOaioN+8s09pH0RHsWNhweVZb+ZnjJJpCChg==}
     engines: {node: ^18.19.0 || >=20.6.0}
+    deprecated: Package no longer supported. See https://github.com/open-telemetry/opentelemetry-js/pull/7077
     peerDependencies:
       '@opentelemetry/api': '>=1.0.0 <1.10.0'
 
@@ -2511,30 +2512,35 @@ packages:
   '@opentelemetry/sdk-trace-base@2.10.0':
     resolution: {integrity: sha512-GuYQQT7QD2EeO8lcZLRQzcbOyhqAzL+6WWTKTU9mSUBYBazkEDl+VrQcXQhbB08OWM9anD1aHleVadzulpOaUQ==}
     engines: {node: ^18.19.0 || >=20.6.0}
+    deprecated: Use @opentelemetry/sdk-trace package
     peerDependencies:
       '@opentelemetry/api': '>=1.3.0 <1.10.0'
 
   '@opentelemetry/sdk-trace-base@2.2.0':
     resolution: {integrity: sha512-xWQgL0Bmctsalg6PaXExmzdedSp3gyKV8mQBwK/j9VGdCDu2fmXIb2gAehBKbkXCpJ4HPkgv3QfoJWRT4dHWbw==}
     engines: {node: ^18.19.0 || >=20.6.0}
+    deprecated: Use @opentelemetry/sdk-trace package
     peerDependencies:
       '@opentelemetry/api': '>=1.3.0 <1.10.0'
 
   '@opentelemetry/sdk-trace-base@2.7.1':
     resolution: {integrity: sha512-NAYIlsF8MPUsKqJMiDQJTMPOmlbawC1Iz/omMLygZ1C9am8fTKYjTaI+OZM+WTY3t3Glo0wnOg/6/pac6RGPPw==}
     engines: {node: ^18.19.0 || >=20.6.0}
+    deprecated: Use @opentelemetry/sdk-trace package
     peerDependencies:
       '@opentelemetry/api': '>=1.3.0 <1.10.0'
 
   '@opentelemetry/sdk-trace-node@2.10.0':
     resolution: {integrity: sha512-GZK/G6oZyBLGlH1pUgeDch7D91KoHd2uotUGIkWCPi9GI5T9X0p4L7nNAMDR1BQjkRYoDqo+ddfVx9t5Uhys+Q==}
     engines: {node: ^18.19.0 || >=20.6.0}
+    deprecated: Use @opentelemetry/sdk-trace package
     peerDependencies:
       '@opentelemetry/api': '>=1.0.0 <1.10.0'
 
   '@opentelemetry/sdk-trace-node@2.7.1':
     resolution: {integrity: sha512-pCpQxU68lV+I9s9svqMyVu5iHdDDUnqUpSxqwyCU8A9ejEsSnMPCbearwsUO4yk08ZJzAIUCFuReMdVQvHrdvg==}
     engines: {node: ^18.19.0 || >=20.6.0}
+    deprecated: Use @opentelemetry/sdk-trace package
     peerDependencies:
       '@opentelemetry/api': '>=1.0.0 <1.10.0'
 
@@ -4514,8 +4520,8 @@ packages:
     resolution: {integrity: sha512-MnA+YT8fwfJPgBx3m60MNqakm30XOkyIoH1y6huTQvC0PwZG7ki8NacLBcrPbNoo8vEZy7Jpuk7+jMO+CUovTQ==}
     engines: {node: '>= 14'}
 
-  ai@7.0.142:
-    resolution: {integrity: sha512-Tifni6/6nNhCu4GnFEeYYR7CGmJ3Yhm44SGxYrOupqP2aaZwmGGiiB5Zx4hiauJR0AWimcXULejDT+Qsj+SHOQ==}
+  ai@7.0.147:
+    resolution: {integrity: sha512-9MsjkCddqIPYGDMDc6HF+i4cydkFpC2xteQGlR6Dz5cuWLIV5sCARbFCqaiTUn3/GaNxg3bIfRlfSzxPvi77fw==}
     engines: {node: '>=22'}
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
@@ -5642,8 +5648,8 @@ packages:
   hast-util-whitespace@3.0.0:
     resolution: {integrity: sha512-88JUN06ipLwsnv+dVn+OIYOvAuvBMy/Qoi6O7mQHxdPXpjy+Cd6xRkWwux7DKO+4sYILtLBRIKgsdpS2gQc7qw==}
 
-  hono@4.13.10:
-    resolution: {integrity: sha512-dQuLsa5oO+47QVMVMaaD9cIv8ctmVtK1iRvwWngkfloFJMeFeuoUFDswIqZGxmGX3hrRzREgEArjkK9OgsQEhA==}
+  hono@4.13.11:
+    resolution: {integrity: sha512-/SMX/RQNJn7oNmFwH6DtwDqcrzZU2otm1FD6OJe2cWF6cfy/F8hq0XVBv7xW3FTJshRQwuBnXHDq2kNsdZnshg==}
     engines: {node: '>=16.9.0'}
 
   html-encoding-sniffer@6.0.0:
@@ -6498,8 +6504,8 @@ packages:
     resolution: {integrity: sha512-LKWqWJRhstyYo9pGvgor/ivk2w94eSjE3RGVuzLGlr3NmD8bf7RcYGze1mNdEHRP6TRP6rMuDHk5t44hnTRyow==}
     engines: {node: '>=14.19.0'}
 
-  postcss@8.5.30:
-    resolution: {integrity: sha512-zkd+e9S1AQHhmaBKye9zlFHWjOwVgqXl1q3ECYy8561K7qxR2cREf/STLskulBFd78k6AOFeA+ff1TtEzk9bAA==}
+  postcss@8.5.31:
+    resolution: {integrity: sha512-YUbWYCgErwnMAVkjUnYa+KlMBzGpHwiIt/DE7f0G33AuX2LH9UcTk6KgWxd3zRU+pN3u/C+Xl3EnMLM4Hea7Sg==}
     engines: {node: ^10 || ^12 || >=14}
 
   postgres-array@2.0.0:
@@ -7789,46 +7795,46 @@ snapshots:
 
   '@adobe/css-tools@4.4.4': {}
 
-  '@ai-sdk/gateway@4.0.115(zod@3.25.76)':
+  '@ai-sdk/gateway@4.0.120(zod@3.25.76)':
     dependencies:
-      '@ai-sdk/provider': 4.0.28
-      '@ai-sdk/provider-utils': 5.0.61(zod@3.25.76)
+      '@ai-sdk/provider': 4.0.31
+      '@ai-sdk/provider-utils': 5.0.64(zod@3.25.76)
       '@vercel/oidc': 3.2.0
       zod: 3.25.76
 
-  '@ai-sdk/mcp@2.0.77(zod@3.25.76)':
+  '@ai-sdk/mcp@2.0.80(zod@3.25.76)':
     dependencies:
-      '@ai-sdk/provider': 4.0.28
-      '@ai-sdk/provider-utils': 5.0.61(zod@3.25.76)
+      '@ai-sdk/provider': 4.0.31
+      '@ai-sdk/provider-utils': 5.0.64(zod@3.25.76)
       cross-spawn: 7.0.6
       pkce-challenge: 5.0.1
       zod: 3.25.76
 
-  '@ai-sdk/openai-compatible@3.0.70(zod@3.25.76)':
+  '@ai-sdk/openai-compatible@3.0.74(zod@3.25.76)':
     dependencies:
-      '@ai-sdk/provider': 4.0.28
-      '@ai-sdk/provider-utils': 5.0.61(zod@3.25.76)
+      '@ai-sdk/provider': 4.0.31
+      '@ai-sdk/provider-utils': 5.0.64(zod@3.25.76)
       zod: 3.25.76
 
-  '@ai-sdk/provider-utils@5.0.61(zod@3.25.76)':
+  '@ai-sdk/provider-utils@5.0.64(zod@3.25.76)':
     dependencies:
-      '@ai-sdk/provider': 4.0.28
+      '@ai-sdk/provider': 4.0.31
       '@standard-schema/spec': 1.1.0
       '@workflow/serde': 4.1.0
       eventsource-parser: 3.1.1
       undici: 7.30.1
       zod: 3.25.76
 
-  '@ai-sdk/provider@4.0.28':
+  '@ai-sdk/provider@4.0.31':
     dependencies:
       json-schema: 0.4.0
 
-  '@ai-sdk/react@4.0.146(react@19.1.2)(zod@3.25.76)':
+  '@ai-sdk/react@4.0.151(react@19.1.2)(zod@3.25.76)':
     dependencies:
-      '@ai-sdk/mcp': 2.0.77(zod@3.25.76)
-      '@ai-sdk/provider': 4.0.28
-      '@ai-sdk/provider-utils': 5.0.61(zod@3.25.76)
-      ai: 7.0.142(zod@3.25.76)
+      '@ai-sdk/mcp': 2.0.80(zod@3.25.76)
+      '@ai-sdk/provider': 4.0.31
+      '@ai-sdk/provider-utils': 5.0.64(zod@3.25.76)
+      ai: 7.0.147(zod@3.25.76)
       react: 19.1.2
       swr: 2.5.1(react@19.1.2)
       throttleit: 2.1.0
@@ -8974,29 +8980,29 @@ snapshots:
       protobufjs: 7.6.5
       yargs: 17.7.2
 
-  '@hono/node-server@1.19.15(hono@4.13.10)':
+  '@hono/node-server@1.19.15(hono@4.13.11)':
     dependencies:
-      hono: 4.13.10
+      hono: 4.13.11
 
-  '@hono/swagger-ui@0.5.3(hono@4.13.10)':
+  '@hono/swagger-ui@0.5.3(hono@4.13.11)':
     dependencies:
-      hono: 4.13.10
+      hono: 4.13.11
 
-  '@hono/trpc-server@0.3.4(@trpc/server@11.8.1(typescript@5.8.3))(hono@4.13.10)':
+  '@hono/trpc-server@0.3.4(@trpc/server@11.8.1(typescript@5.8.3))(hono@4.13.11)':
     dependencies:
       '@trpc/server': 11.8.1(typescript@5.8.3)
-      hono: 4.13.10
+      hono: 4.13.11
 
-  '@hono/zod-openapi@0.18.3(hono@4.13.10)(zod@3.25.76)':
+  '@hono/zod-openapi@0.18.3(hono@4.13.11)(zod@3.25.76)':
     dependencies:
       '@asteasolutions/zod-to-openapi': 7.3.4(zod@3.25.76)
-      '@hono/zod-validator': 0.4.3(hono@4.13.10)(zod@3.25.76)
-      hono: 4.13.10
+      '@hono/zod-validator': 0.4.3(hono@4.13.11)(zod@3.25.76)
+      hono: 4.13.11
       zod: 3.25.76
 
-  '@hono/zod-validator@0.4.3(hono@4.13.10)(zod@3.25.76)':
+  '@hono/zod-validator@0.4.3(hono@4.13.11)(zod@3.25.76)':
     dependencies:
-      hono: 4.13.10
+      hono: 4.13.11
       zod: 3.25.76
 
   '@hookform/resolvers@5.0.1(react-hook-form@7.55.0(react@19.1.2))':
@@ -12547,11 +12553,11 @@ snapshots:
 
   agent-base@7.1.4: {}
 
-  ai@7.0.142(zod@3.25.76):
+  ai@7.0.147(zod@3.25.76):
     dependencies:
-      '@ai-sdk/gateway': 4.0.115(zod@3.25.76)
-      '@ai-sdk/provider': 4.0.28
-      '@ai-sdk/provider-utils': 5.0.61(zod@3.25.76)
+      '@ai-sdk/gateway': 4.0.120(zod@3.25.76)
+      '@ai-sdk/provider': 4.0.31
+      '@ai-sdk/provider-utils': 5.0.64(zod@3.25.76)
       zod: 3.25.76
 
   ajv@6.15.0:
@@ -13645,7 +13651,7 @@ snapshots:
     dependencies:
       '@types/hast': 3.0.4
 
-  hono@4.13.10: {}
+  hono@4.13.11: {}
 
   html-encoding-sniffer@6.0.0(@noble/hashes@2.0.1):
     dependencies:
@@ -14475,7 +14481,7 @@ snapshots:
       '@next/env': 15.5.27
       '@swc/helpers': 0.5.15
       caniuse-lite: 1.0.30001816
-      postcss: 8.5.30
+      postcss: 8.5.31
       react: 19.1.2
       react-dom: 19.1.2(react@19.1.2)
       styled-jsx: 5.1.6(@babel/core@7.29.7)(react@19.1.2)
@@ -14502,7 +14508,7 @@ snapshots:
       '@next/env': 15.5.27
       '@swc/helpers': 0.5.15
       caniuse-lite: 1.0.30001816
-      postcss: 8.5.30
+      postcss: 8.5.31
       react: 19.0.0
       react-dom: 19.0.0(react@19.0.0)
       styled-jsx: 5.1.6(react@19.0.0)
@@ -14735,7 +14741,7 @@ snapshots:
 
   pngjs@7.0.0: {}
 
-  postcss@8.5.30:
+  postcss@8.5.31:
     dependencies:
       nanoid: 3.3.20
       picocolors: 1.1.1
@@ -15906,7 +15912,7 @@ snapshots:
       esbuild: 0.25.12
       fdir: 6.5.0(picomatch@4.0.4)
       picomatch: 4.0.4
-      postcss: 8.5.30
+      postcss: 8.5.31
       rollup: 4.59.0
       tinyglobby: 0.2.15
     optionalDependencies:
