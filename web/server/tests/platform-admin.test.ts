@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
     PLATFORM_ADMIN_EMAILS: 'admin@trainy.ai' as string | undefined,
   },
   sessionsCreate: vi.fn(),
+  portalSessionsCreate: vi.fn(),
   prisma: {
     member: { findFirst: vi.fn(), count: vi.fn() },
     organization: { findUnique: vi.fn(), findMany: vi.fn() },
@@ -31,11 +32,15 @@ vi.mock('../lib/env', () => ({ env: mocks.env }));
 vi.mock('../lib/prisma', () => ({ prisma: mocks.prisma }));
 vi.mock('stripe', () => ({
   default: function FakeStripe() {
-    return { checkout: { sessions: { create: mocks.sessionsCreate } } };
+    return {
+      checkout: { sessions: { create: mocks.sessionsCreate } },
+      billingPortal: { sessions: { create: mocks.portalSessionsCreate } },
+    };
   },
 }));
 
 import { isPlatformAdmin } from '../lib/platform-admin';
+import { needsBillingSetup } from '../lib/stripe';
 import { adminRouter } from '../trpc/routers/admin/router';
 import { billingRouter } from '../trpc/routers/organization/routers/billing/router';
 
@@ -54,8 +59,14 @@ function callerFor(user: typeof ADMIN, activeOrganizationId: string | null = 'or
   };
 }
 
+interface TargetSubscription {
+  plan: 'FREE' | 'PRO';
+  stripeCustomerId: string;
+  stripeSubscriptionId: string;
+}
+
 /** Organization lookups: the admin's own org (for the return URL) and the target. */
-function mockOrganizations(targetPlan: 'FREE' | 'PRO' = 'FREE') {
+function mockOrganizations(subscription: Partial<TargetSubscription> = {}) {
   mocks.prisma.organization.findUnique.mockImplementation(async ({ where }: any) => {
     if (where.id === 'org_admin') {
       return { slug: 'trainy' };
@@ -65,7 +76,12 @@ function mockOrganizations(targetPlan: 'FREE' | 'PRO' = 'FREE') {
         id: 'org_customer',
         name: 'Customer Inc',
         slug: 'customer-inc',
-        OrganizationSubscription: { plan: targetPlan, stripeCustomerId: '' },
+        OrganizationSubscription: {
+          plan: 'FREE',
+          stripeCustomerId: '',
+          stripeSubscriptionId: '',
+          ...subscription,
+        },
       };
     }
     return null;
@@ -76,6 +92,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.env.PLATFORM_ADMIN_EMAILS = 'admin@trainy.ai';
   mocks.sessionsCreate.mockResolvedValue({ url: 'https://checkout.stripe.com/c/test' });
+  mocks.portalSessionsCreate.mockResolvedValue({ url: 'https://billing.stripe.com/p/test' });
   mocks.prisma.member.count.mockResolvedValue(3);
 });
 
@@ -169,6 +186,7 @@ describe('admin.listOrganizations', () => {
         owner: { name: 'Owner', email: 'owner@customer.com' },
         plan: 'PRO',
         isEducationPlan: true,
+        needsBillingSetup: false,
       },
       {
         id: 'org_orphan',
@@ -179,6 +197,7 @@ describe('admin.listOrganizations', () => {
         owner: null,
         plan: null,
         isEducationPlan: false,
+        needsBillingSetup: false,
       },
     ]);
   });
@@ -254,12 +273,35 @@ describe('admin.createCheckoutSession', () => {
     expect(params.success_url).toBe('https://app.example.com/o?upgraded=customer-inc');
   });
 
-  it('refuses an org that is already on PRO', async () => {
-    mockOrganizations('PRO');
+  it('refuses an org that is already billed on PRO', async () => {
+    mockOrganizations({ plan: 'PRO', stripeCustomerId: 'cus_123', stripeSubscriptionId: 'sub_123' });
     await expect(
       callerFor(ADMIN).admin.createCheckoutSession({ organizationId: 'org_customer' }),
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(mocks.sessionsCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses an education org (sponsored PRO, never billed)', async () => {
+    mockOrganizations({ plan: 'PRO', stripeSubscriptionId: 'edu' });
+    await expect(
+      callerFor(ADMIN).admin.createCheckoutSession({ organizationId: 'org_customer' }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.sessionsCreate).not.toHaveBeenCalled();
+  });
+
+  it('opens a checkout for a PRO org provisioned by hand (no Stripe subscription)', async () => {
+    mockOrganizations({ plan: 'PRO', stripeCustomerId: 'TODO', stripeSubscriptionId: '' });
+
+    const result = await callerFor(ADMIN).admin.createCheckoutSession({
+      organizationId: 'org_customer',
+    });
+
+    expect(result).toEqual({ checkoutUrl: 'https://checkout.stripe.com/c/test' });
+    const params = mocks.sessionsCreate.mock.calls[0][0];
+    // The placeholder customer is not passed to Stripe.
+    expect(params.customer).toBeUndefined();
+    expect(params.customer_email).toBe('owner@customer.com');
+    expect(params.metadata).toEqual({ organizationId: 'org_customer' });
   });
 
   it('refuses an org with no owner (or that does not exist)', async () => {
@@ -310,5 +352,72 @@ describe('organization.billing.createCheckoutSession (shares the checkout helper
       callerFor(CUSTOMER).billing.createCheckoutSession({ organizationId: 'org_customer' }),
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mocks.sessionsCreate).not.toHaveBeenCalled();
+  });
+});
+
+describe('needsBillingSetup', () => {
+  it('flags PRO with no Stripe subscription, including placeholders', () => {
+    expect(needsBillingSetup({ plan: 'PRO', stripeSubscriptionId: '' })).toBe(true);
+    expect(needsBillingSetup({ plan: 'PRO', stripeSubscriptionId: 'TODO' })).toBe(true);
+    expect(needsBillingSetup({ plan: 'PRO', stripeSubscriptionId: 'cancelled' })).toBe(true);
+  });
+
+  it('does not flag billed PRO, education PRO, or FREE', () => {
+    expect(needsBillingSetup({ plan: 'PRO', stripeSubscriptionId: 'sub_123' })).toBe(false);
+    expect(needsBillingSetup({ plan: 'PRO', stripeSubscriptionId: 'edu' })).toBe(false);
+    expect(needsBillingSetup({ plan: 'FREE', stripeSubscriptionId: '' })).toBe(false);
+  });
+});
+
+describe('organization.billing for a PRO org provisioned by hand', () => {
+  beforeEach(() => {
+    mocks.prisma.member.findFirst.mockResolvedValue({ role: 'OWNER' });
+  });
+
+  it('lets the owner run checkout to attach billing', async () => {
+    mockOrganizations({ plan: 'PRO', stripeCustomerId: '', stripeSubscriptionId: '' });
+
+    const result = await callerFor(CUSTOMER).billing.createCheckoutSession({
+      organizationId: 'org_customer',
+    });
+
+    expect(result).toEqual({ checkoutUrl: 'https://checkout.stripe.com/c/test' });
+    expect(mocks.sessionsCreate.mock.calls[0][0].metadata).toEqual({
+      organizationId: 'org_customer',
+    });
+  });
+
+  it('reuses a real Stripe customer when one is already recorded', async () => {
+    mockOrganizations({ plan: 'PRO', stripeCustomerId: 'cus_123', stripeSubscriptionId: '' });
+
+    await callerFor(CUSTOMER).billing.createCheckoutSession({ organizationId: 'org_customer' });
+
+    const params = mocks.sessionsCreate.mock.calls[0][0];
+    expect(params.customer).toBe('cus_123');
+    expect(params.customer_email).toBeUndefined();
+  });
+
+  it('rejects the portal cleanly instead of sending a placeholder customer to Stripe', async () => {
+    mockOrganizations({ plan: 'PRO', stripeCustomerId: 'TODO', stripeSubscriptionId: '' });
+
+    await expect(
+      callerFor(CUSTOMER).billing.createPortalSession({ organizationId: 'org_customer' }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.portalSessionsCreate).not.toHaveBeenCalled();
+  });
+
+  it('still opens the portal for a billed PRO org', async () => {
+    mockOrganizations({ plan: 'PRO', stripeCustomerId: 'cus_123', stripeSubscriptionId: 'sub_123' });
+
+    const result = await callerFor(CUSTOMER).billing.createPortalSession({
+      organizationId: 'org_customer',
+    });
+
+    expect(result).toEqual({ portalUrl: 'https://billing.stripe.com/p/test' });
+    expect(mocks.portalSessionsCreate.mock.calls[0][0].customer).toBe('cus_123');
+    // A billed PRO org still cannot open a second checkout.
+    await expect(
+      callerFor(CUSTOMER).billing.createCheckoutSession({ organizationId: 'org_customer' }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
 });

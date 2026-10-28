@@ -77,7 +77,8 @@ export function AdminOrganizationsTable({
                   {new Date(organization.createdAt).toLocaleDateString()}
                 </TableCell>
                 <TableCell className="text-right">
-                  {organization.plan === "FREE" && organization.owner && (
+                  {(organization.plan === "FREE" || organization.needsBillingSetup) &&
+                    organization.owner && (
                     <Button
                       size="sm"
                       variant="outline"
@@ -102,7 +103,13 @@ export function AdminOrganizationsTable({
 function PlanBadge({ organization }: { organization: AdminOrganization }) {
   if (organization.plan === "PRO") {
     return (
-      <Badge variant="default">{organization.isEducationPlan ? "Pro (edu)" : "Pro"}</Badge>
+      <Badge variant="default">
+        {organization.isEducationPlan
+          ? "Pro (edu)"
+          : organization.needsBillingSetup
+            ? "Pro (no billing)"
+            : "Pro"}
+      </Badge>
     );
   }
   if (organization.plan === "FREE") {

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { OrganizationRole, type Prisma } from "@prisma/client";
 import { platformAdminProcedure } from "../../../../lib/trpc";
-import { EDU_SUBSCRIPTION_ID } from "../../../../lib/stripe";
+import { EDU_SUBSCRIPTION_ID, needsBillingSetup } from "../../../../lib/stripe";
 
 const PAGE_SIZE = 50;
 
@@ -64,5 +64,8 @@ export const listOrganizationsProcedure = platformAdminProcedure
       isEducationPlan:
         organization.OrganizationSubscription?.stripeSubscriptionId ===
         EDU_SUBSCRIPTION_ID,
+      needsBillingSetup: organization.OrganizationSubscription
+        ? needsBillingSetup(organization.OrganizationSubscription)
+        : false,
     }));
   });

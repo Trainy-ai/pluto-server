@@ -1,6 +1,6 @@
 import { limitsSchema } from "../../lib/limits";
 import { publicProcedure } from "../../lib/trpc";
-import { EDU_SUBSCRIPTION_ID } from "../../lib/stripe";
+import { EDU_SUBSCRIPTION_ID, needsBillingSetup } from "../../lib/stripe";
 
 export const enhancedAuthProcedure = publicProcedure.query(async ({ ctx }) => {
   // Get session from the context
@@ -75,6 +75,9 @@ export const enhancedAuthProcedure = publicProcedure.query(async ({ ctx }) => {
           isEducationPlan:
             activeOrganization.OrganizationSubscription.stripeSubscriptionId ===
             EDU_SUBSCRIPTION_ID,
+          needsBillingSetup: needsBillingSetup(
+            activeOrganization.OrganizationSubscription
+          ),
         }
       : null;
 

@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { SubscriptionPlan } from "@prisma/client";
 import { prisma } from "./prisma";
-import { createCheckoutSession, isStripeConfigured } from "./stripe";
+import { createCheckoutSession, isStripeConfigured, needsBillingSetup } from "./stripe";
 
 interface StartProCheckoutParams {
   organizationId: string;
@@ -42,7 +42,10 @@ export async function startProCheckout(
     });
   }
 
-  if (organization.OrganizationSubscription?.plan === SubscriptionPlan.PRO) {
+  // A PRO org provisioned by hand has no Stripe subscription; checkout is how
+  // it gets one, so only a PRO org that is already billed is refused.
+  const subscription = organization.OrganizationSubscription;
+  if (subscription?.plan === SubscriptionPlan.PRO && !needsBillingSetup(subscription)) {
     throw new TRPCError({
       code: "BAD_REQUEST",
       message: "Organization is already on the PRO plan",

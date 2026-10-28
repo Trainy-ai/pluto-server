@@ -51,6 +51,8 @@ function RouteComponent() {
   const search = Route.useSearch();
   const isPro = orgSubscription.plan === "PRO";
   const isEducationPlan = orgSubscription.isEducationPlan;
+  // PRO provisioned by hand: no Stripe subscription yet, so checkout attaches one
+  const needsBillingSetup = orgSubscription.needsBillingSetup;
 
   // Check if Stripe billing is configured and get seat price
   const { data: billingConfig, isLoading: isBillingConfigLoading } = useQuery({
@@ -225,7 +227,17 @@ function RouteComponent() {
                   to upgrade to Pro
                 </p>
               )}
-              {isPro && !isEducationPlan && canManageBilling && isStripeConfigured && (
+              {needsBillingSetup && canManageBilling && isStripeConfigured && (
+                <Button
+                  className="w-full"
+                  onClick={handleUpgrade}
+                  loading={checkoutMutation.isPending}
+                >
+                  <CreditCard className="mr-2 h-4 w-4" />
+                  Set up billing
+                </Button>
+              )}
+              {isPro && !isEducationPlan && !needsBillingSetup && canManageBilling && isStripeConfigured && (
                 <Button
                   variant="outline"
                   className="w-full"

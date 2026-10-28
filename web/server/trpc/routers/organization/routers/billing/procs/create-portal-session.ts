@@ -60,11 +60,12 @@ export const createPortalSessionProcedure = protectedOrgProcedure
 
     const customerId =
       organization.OrganizationSubscription?.stripeCustomerId;
-    if (!customerId) {
+    // Placeholders ("", "TODO") on hand-provisioned orgs would make Stripe 500
+    if (!customerId?.startsWith("cus_")) {
       throw new TRPCError({
         code: "BAD_REQUEST",
         message:
-          "No billing account found. Please contact support.",
+          "Billing hasn't been set up for this organization yet.",
       });
     }
 

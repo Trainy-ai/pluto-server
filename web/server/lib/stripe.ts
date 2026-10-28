@@ -55,6 +55,23 @@ export function isActiveStripeSubscription(subscriptionId: string): boolean {
   );
 }
 
+/**
+ * A PRO org with no Stripe subscription behind it: provisioned by hand (e.g.
+ * SQL) rather than through checkout, so the billing portal has nothing to
+ * manage. Such an org may still run checkout to attach billing. Education
+ * orgs are sponsored and never billed.
+ */
+export function needsBillingSetup(subscription: {
+  plan: string;
+  stripeSubscriptionId: string;
+}): boolean {
+  return (
+    subscription.plan === "PRO" &&
+    subscription.stripeSubscriptionId !== EDU_SUBSCRIPTION_ID &&
+    !subscription.stripeSubscriptionId.startsWith("sub_")
+  );
+}
+
 // Per-seat pricing: $250/seat/month
 export const SEAT_PRICE_DOLLARS = 250;
 
