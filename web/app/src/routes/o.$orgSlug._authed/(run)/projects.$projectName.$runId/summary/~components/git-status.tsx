@@ -51,12 +51,32 @@ function parseGitUrl(url: string): ParsedGitUrl {
     const sshMatch = url.match(/git@([^:]+):(.+)$/);
     if (sshMatch) {
       const [, host, path] = sshMatch;
-      const httpsUrl = `https://${host}/${path}`;
-      return formatGitUrl(httpsUrl);
+      return formatGitUrl(sshToWebUrl(host, path));
     }
   }
 
+  // Handle ssh:// format (hostname drops any SSH port)
+  if (url.startsWith("ssh://")) {
+    const { hostname, pathname } = new URL(cleanUrl);
+    return formatGitUrl(sshToWebUrl(hostname, pathname.slice(1)));
+  }
+
   return formatGitUrl(cleanUrl);
+}
+
+function sshToWebUrl(host: string, path: string): string {
+  // Azure DevOps serves SSH from ssh.dev.azure.com:v3/org/project/repo,
+  // but the web UI lives at dev.azure.com/org/project/_git/repo
+  const azureMatch =
+    host === "ssh.dev.azure.com"
+      ? path.match(/^v3\/([^/]+)\/([^/]+)\/([^/]+)$/)
+      : null;
+  if (azureMatch) {
+    const [, org, project, repo] = azureMatch;
+    return `https://dev.azure.com/${org}/${project}/_git/${repo}`;
+  }
+
+  return `https://${host}/${path}`;
 }
 
 function formatGitUrl(url: string): ParsedGitUrl {
@@ -84,7 +104,7 @@ function formatGitUrl(url: string): ParsedGitUrl {
     displayUrl = `${urlObj.pathname.slice(1)}`;
   }
   // Azure DevOps
-  else if (host.includes("azure.com") || host.includes("visualstudio.com")) {
+  else if (host === "dev.azure.com" || host.endsWith(".visualstudio.com")) {
     provider = "azure";
     displayUrl = `${urlObj.pathname.split("/_git/")[1] || urlObj.pathname}`;
   }
@@ -135,6 +155,27 @@ function getBranchUrl(parsedUrl: ParsedGitUrl, branch: string): string | null {
       return `${webUrl}/src/${encodedBranch}`;
     case "azure":
       return `${webUrl}?version=GB${encodedBranch}`;
+    default:
+      return null;
+  }
+}
+
+function getCommitUrl(parsedUrl: ParsedGitUrl, commit: string): string | null {
+  // systemMetadata is client-supplied; only build a URL from a real hash
+  if (!/^[0-9a-f]{7,64}$/i.test(commit)) {
+    return null;
+  }
+
+  const { provider, webUrl } = parsedUrl;
+
+  switch (provider) {
+    case "github":
+    case "azure":
+      return `${webUrl}/commit/${commit}`;
+    case "gitlab":
+      return `${webUrl}/-/commit/${commit}`;
+    case "bitbucket":
+      return `${webUrl}/commits/${commit}`;
     default:
       return null;
   }
@@ -339,6 +380,9 @@ export function GitStatus({ systemMetadata }: GitStatusProps) {
               icon={<GitCommit className="h-4 w-4 text-muted-foreground" />}
               label="Commit"
               value={gitStatus.git.commit}
+              href={
+                parsedUrl ? getCommitUrl(parsedUrl, gitStatus.git.commit) : null
+              }
               isCopyable
               isHash
             />
@@ -398,6 +442,9 @@ interface GitInfoItemProps {
   isHash?: boolean;
   indented?: boolean;
   isLink?: boolean;
+  // Link target for the value itself (e.g. a commit page); isLink derives
+  // the target from a repository URL instead.
+  href?: string | null;
 }
 
 function GitInfoItem({
@@ -408,9 +455,12 @@ function GitInfoItem({
   isHash = false,
   indented = false,
   isLink = false,
+  href = null,
 }: GitInfoItemProps) {
   const [copied, setCopied] = useState(false);
   const parsedUrl = isLink ? parseGitUrl(value) : null;
+  const linkHref = parsedUrl ? parsedUrl.webUrl : href;
+  const linkText = parsedUrl ? parsedUrl.displayUrl : value;
 
   const copyToClipboard = () => {
     navigator.clipboard.writeText(value);
@@ -426,14 +476,14 @@ function GitInfoItem({
         <TooltipProvider>
           <Tooltip>
             <TooltipTrigger asChild>
-              {isLink && parsedUrl ? (
+              {linkHref ? (
                 <a
-                  href={parsedUrl.webUrl}
+                  href={linkHref}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="max-w-[300px] truncate font-mono text-sm text-blue-600 hover:text-blue-800 hover:underline sm:max-w-[400px] md:max-w-[500px] dark:text-blue-400 dark:hover:text-blue-300"
                 >
-                  {parsedUrl.displayUrl}
+                  {linkText}
                 </a>
               ) : (
                 <span className="max-w-[300px] truncate font-mono text-sm sm:max-w-[400px] md:max-w-[500px]">
