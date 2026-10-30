@@ -90,7 +90,61 @@ async function readBucketedValueAtStep(): Promise<number | null | undefined> {
   return point?.value ?? null;
 }
 
+interface SummaryRefreshState {
+  status: string;
+  lastSuccessTime: string;
+  exception: string;
+}
+
+/**
+ * A refresh requested after `beforeSuccess` has finished.
+ *
+ * "Scheduled" means both "idle, not started" and "finished", so status alone
+ * cannot tell them apart. last_success_time moves when a new attempt
+ * succeeds. It is DateTime (1s), so a refresh that starts in the same second
+ * as the previous success is only visible by watching status pass through
+ * Running.
+ */
+function summaryRefreshSettled(
+  beforeSuccess: string,
+  state: { status: string; lastSuccessTime: string },
+  sawRunning: boolean,
+): boolean {
+  if (!state.status || state.status === "Running") return false;
+  return state.lastSuccessTime !== beforeSuccess || sawRunning;
+}
+
+async function readSummaryRefreshState(): Promise<SummaryRefreshState> {
+  const r = await rawCh!.query({
+    query: `
+      SELECT
+        status,
+        if(last_success_time IS NULL, '', toString(last_success_time)) AS last_success_time,
+        exception
+      FROM system.view_refreshes
+      WHERE view = 'mlop_metric_summaries_v2_refresh_mv'
+    `,
+    format: "JSONEachRow",
+  });
+  const rows = (await r.json()) as Array<{
+    status: string;
+    last_success_time: string;
+    exception: string;
+  }>;
+  const row = rows[0];
+  return {
+    status: row?.status ?? "",
+    lastSuccessTime: row?.last_success_time ?? "",
+    exception: row?.exception ?? "",
+  };
+}
+
 async function refreshSummariesAndWait(): Promise<void> {
+  // SYSTEM REFRESH returns before the refresh runs. An idle view's status is
+  // "Scheduled", which is also the status after a refresh finishes, so the
+  // first non-Running poll can land before this refresh starts and the
+  // summary read below sees the row deleted in beforeAll.
+  const before = await readSummaryRefreshState();
   await rawCh!.command({
     query: "SYSTEM REFRESH VIEW mlop_metric_summaries_v2_refresh_mv",
   });
@@ -98,14 +152,23 @@ async function refreshSummariesAndWait(): Promise<void> {
   // a dev stack with a populated CH (millions of v2 rows from prior work)
   // the cold first refresh can take 10-15s. Anything over 60s is a real
   // problem, not just slow cluster.
+  let sawRunning = false;
   for (let attempt = 0; attempt < 240; attempt++) {
-    const r = await rawCh!.query({
-      query:
-        "SELECT status FROM system.view_refreshes WHERE view = 'mlop_metric_summaries_v2_refresh_mv'",
-      format: "JSONEachRow",
-    });
-    const rows = (await r.json()) as Array<{ status: string }>;
-    if (rows[0]?.status && rows[0].status !== "Running") return;
+    const state = await readSummaryRefreshState();
+    if (state.status === "Running") {
+      sawRunning = true;
+    } else if (summaryRefreshSettled(before.lastSuccessTime, state, sawRunning)) {
+      // last_success_time is DateTime (1s). A refresh that starts in the
+      // same second as the previous success does not move it; watching
+      // status leave Running covers that. A failed attempt leaves the
+      // timestamp unchanged and sets exception.
+      if (state.exception && state.lastSuccessTime === before.lastSuccessTime) {
+        throw new Error(
+          `mlop_metric_summaries_v2_refresh_mv refresh failed: ${state.exception}`,
+        );
+      }
+      return;
+    }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   throw new Error("mlop_metric_summaries_v2_refresh_mv refresh timed out after 60s");
@@ -190,6 +253,42 @@ beforeAll(async () => {
 afterAll(async () => {
   await rawCh?.close();
   await prisma.$disconnect();
+});
+
+describe("summaryRefreshSettled", () => {
+  const before = "2026-05-01 00:00:00";
+
+  it("does not treat an idle Scheduled view as a finished refresh", () => {
+    expect(
+      summaryRefreshSettled(before, { status: "Scheduled", lastSuccessTime: before }, false),
+    ).toBe(false);
+  });
+
+  it("finishes when last_success_time moves and the view is no longer Running", () => {
+    expect(
+      summaryRefreshSettled(
+        before,
+        { status: "Scheduled", lastSuccessTime: "2026-05-01 00:00:01" },
+        false,
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps waiting while the refresh is Running", () => {
+    expect(
+      summaryRefreshSettled(
+        before,
+        { status: "Running", lastSuccessTime: "2026-05-01 00:00:01" },
+        true,
+      ),
+    ).toBe(false);
+  });
+
+  it("finishes a same-second refresh once status has left Running", () => {
+    expect(
+      summaryRefreshSettled(before, { status: "Scheduled", lastSuccessTime: before }, true),
+    ).toBe(true);
+  });
 });
 
 describe("Dedup correctness (mlop_metrics_v2 FINAL + refreshable summaries MV)", () => {

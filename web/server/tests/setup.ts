@@ -137,21 +137,42 @@ function createClassMaskPNG(
  * everything the seeders wrote. The refreshable MV reads from v2 FINAL.
  */
 async function refreshMetricSummariesAndWait(ch: ClickHouseClient): Promise<void> {
+  // Idle status is "Scheduled", which is also the status after a refresh
+  // finishes. SYSTEM REFRESH returns immediately, so the first non-Running
+  // poll can land before this refresh starts. Wait until last_success_time
+  // moves (or status passes through Running — the timestamp is 1s resolution).
+  const before = await ch.query({
+    query: `SELECT if(last_success_time IS NULL, '', toString(last_success_time)) AS last_success_time
+            FROM system.view_refreshes
+            WHERE view = 'mlop_metric_summaries_v2_refresh_mv'`,
+    format: 'JSONEachRow',
+  });
+  const beforeRows = (await before.json()) as Array<{ last_success_time: string }>;
+  const beforeSuccess = beforeRows[0]?.last_success_time ?? '';
+
   await ch.command({
     query: 'SYSTEM REFRESH VIEW mlop_metric_summaries_v2_refresh_mv',
   });
-  // Poll until status leaves "Running". Refresh on test-scale data is ~1s.
-  // Cap at 15s; if it hits the timeout something is genuinely wrong.
-  for (let attempt = 0; attempt < 60; attempt++) {
+  // Refresh on test-scale data is ~1s; a cold scan of a populated v2 table
+  // can take 10-15s. Cap at 60s so the wait covers that without hanging setup.
+  let sawRunning = false;
+  for (let attempt = 0; attempt < 240; attempt++) {
     const r = await ch.query({
-      query: `SELECT status FROM system.view_refreshes WHERE view = 'mlop_metric_summaries_v2_refresh_mv'`,
+      query: `SELECT status, if(last_success_time IS NULL, '', toString(last_success_time)) AS last_success_time
+              FROM system.view_refreshes
+              WHERE view = 'mlop_metric_summaries_v2_refresh_mv'`,
       format: 'JSONEachRow',
     });
-    const rows = (await r.json()) as Array<{ status: string }>;
-    if (rows[0]?.status && rows[0].status !== 'Running') return;
+    const rows = (await r.json()) as Array<{ status: string; last_success_time: string }>;
+    const state = rows[0];
+    if (state?.status === 'Running') {
+      sawRunning = true;
+    } else if (state?.status && (state.last_success_time !== beforeSuccess || sawRunning)) {
+      return;
+    }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  throw new Error('mlop_metric_summaries_v2_refresh_mv refresh timed out after 15s');
+  throw new Error('mlop_metric_summaries_v2_refresh_mv refresh timed out after 60s');
 }
 
 /**
