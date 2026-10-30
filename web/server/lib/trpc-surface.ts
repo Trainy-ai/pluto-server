@@ -13,8 +13,7 @@
  * tRPC upgrade changes them, the unit tests in tests/trpc-surface.test.ts fail
  * loudly rather than silently publishing an empty surface.
  */
-import type { ZodTypeAny } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
+import { z, type ZodTypeAny } from "zod";
 
 import { appRouter } from "../trpc/router";
 
@@ -62,10 +61,15 @@ function inputJsonSchema(
   }
   const schemas = inputs.map(
     (schema) =>
-      zodToJsonSchema(schema, { $refStrategy: "none" }) as Record<
-        string,
-        unknown
-      >,
+      // Zod 4's own converter. `zod-to-json-schema` only understands Zod 3
+      // schemas and emitted `{}` for these, which dropped every property
+      // (including organizationId) from the published tRPC surface.
+      z.toJSONSchema(schema, {
+        target: "openapi-3.0",
+        unrepresentable: "any",
+        io: "input",
+        reused: "inline",
+      }) as Record<string, unknown>,
   );
   return schemas.length === 1 ? schemas[0] : { allOf: schemas };
 }

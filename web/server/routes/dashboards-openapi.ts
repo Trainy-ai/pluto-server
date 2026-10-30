@@ -277,7 +277,7 @@ const getDashboardRoute = createRoute({
               isDefault: z.boolean(),
               currentVersion: z.number().int().positive(),
               config: z
-                .record(z.unknown())
+                .record(z.string(), z.unknown())
                 .openapi({ description: "Full DashboardViewConfig" }),
               createdAt: z.string(),
               updatedAt: z.string(),
@@ -480,7 +480,7 @@ const getDashboardVersionRoute = createRoute({
       content: {
         "application/json": {
           schema: DashboardVersionMetadataSchema.extend({
-            config: z.record(z.unknown()),
+            config: z.record(z.string(), z.unknown()),
           }).openapi("DashboardVersionDetailsResponse"),
         },
       },
@@ -903,7 +903,7 @@ const restoreDashboardVersionRoute = createRoute({
               isDefault: z.boolean(),
               currentVersion: z.number().int().positive(),
               restoredFromVersion: z.number().int().positive(),
-              config: z.record(z.unknown()),
+              config: z.record(z.string(), z.unknown()),
               updatedAt: z.string(),
               url: z.string(),
             })

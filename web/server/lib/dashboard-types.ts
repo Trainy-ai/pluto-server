@@ -344,7 +344,7 @@ export const WidgetConfigSchema = z.union([
   // accidentally match the panel schema first. configSchemaForType below
   // remains the authoritative per-type validation either way.
   PanelWidgetConfigSchema.passthrough(),
-]) as unknown as z.ZodType<WidgetConfigType, z.ZodTypeDef, WidgetConfigType>;
+]) as unknown as z.ZodType<WidgetConfigType, WidgetConfigType>;
 export type WidgetConfig = WidgetConfigType;
 
 // Widget position and size in the grid
@@ -366,9 +366,9 @@ export type WidgetLayout = z.infer<typeof WidgetLayoutSchema>;
  * The one place that mapping lives, so validation and value-resolution below
  * cannot disagree about which schema owns a type.
  */
-// `AnyZodObject`, not `ZodTypeAny`: every config schema is a ZodObject, and the
+// `ZodObject`, not `ZodType`: every config schema is a ZodObject, and the
 // transform below needs `.passthrough()` on it.
-const configSchemaForType = (type: WidgetType): z.AnyZodObject | null => {
+const configSchemaForType = (type: WidgetType): z.ZodObject | null => {
   switch (type) {
     case "chart":
       return ChartWidgetConfigSchema;
@@ -406,9 +406,8 @@ export const WidgetSchema = z.object({
   // and `.passthrough()` means the transform below could never strip them back
   // out again. So the config is carried through untouched, validated per-type
   // by the superRefine, and resolved per-type by the transform.
-  config: z.record(z.unknown()) as unknown as z.ZodType<
+  config: z.record(z.string(), z.unknown()) as unknown as z.ZodType<
     WidgetConfigType,
-    z.ZodTypeDef,
     WidgetConfigType
   >,
   layout: WidgetLayoutSchema,
@@ -455,7 +454,7 @@ export type Widget = z.infer<typeof WidgetSchema>;
 // Dynamic patterns are only allowed on leaf sections (no children).
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- recursive schema needs a loose type annotation;
 // the runtime Zod validation guarantees the output matches Section.
-export const SectionSchema: z.ZodType<Section, z.ZodTypeDef, any> = z.lazy(() =>
+export const SectionSchema: z.ZodType<Section, any> = z.lazy(() =>
   z.object({
     id: z.string(),
     name: z.string(),
@@ -542,7 +541,9 @@ export const DashboardViewConfigSchema = z.object({
     gridCols: z.number().int().positive().default(12),
     rowHeight: z.number().int().positive().default(80),
     compactType: z.enum(["vertical", "horizontal", "none"]).default("vertical"),
-  }).default({}),
+    // `.prefault`, not `.default`: Zod 4 returns a `.default()` value as-is
+    // and does not parse it, so `{}` would skip gridCols/rowHeight/compactType.
+  }).prefault({}),
 });
 export type DashboardViewConfig = z.infer<typeof DashboardViewConfigSchema>;
 

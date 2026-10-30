@@ -1229,8 +1229,8 @@ const listRunsRoute = createRoute({
               status: z.string().openapi({ description: "Run status" }),
               tags: z.array(z.string()).openapi({ description: "Run tags" }),
               createdAt: z.string().openapi({ description: "Creation timestamp" }),
-              _flatConfig: z.record(z.unknown()).optional().openapi({ description: "Flattened config — only present when includeFieldValues=true" }),
-              _flatSystemMetadata: z.record(z.unknown()).optional().openapi({ description: "Flattened systemMetadata — only present when includeFieldValues=true" }),
+              _flatConfig: z.record(z.string(), z.unknown()).optional().openapi({ description: "Flattened config — only present when includeFieldValues=true" }),
+              _flatSystemMetadata: z.record(z.string(), z.unknown()).optional().openapi({ description: "Flattened systemMetadata — only present when includeFieldValues=true" }),
             })).openapi("RunListItem"),
             total: z.number().openapi({ description: "Total count of matching runs" }),
           }).openapi("ListRunsResponse"),
@@ -1696,8 +1696,8 @@ const modelGraphNodeSchema = z.object({
   node_type: z.nativeEnum(RunGraphNodeType).optional(),
   inst_id: z.string().optional(),
   args: z.array(z.any()).optional(),
-  kwargs: z.record(z.any()).optional(),
-  params: z.record(z.array(z.number())).optional(),
+  kwargs: z.record(z.string(), z.any()).optional(),
+  params: z.record(z.string(), z.array(z.number())).optional(),
   edges: z.array(z.array(z.string())).optional(),
 });
 

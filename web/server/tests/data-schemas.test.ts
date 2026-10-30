@@ -726,6 +726,26 @@ describe('createDefaultWidgetConfig round-trips through WidgetSchema', () => {
 // ============================================================================
 
 describe('DashboardViewConfigSchema: full dashboard save', () => {
+  it('fills nested settings defaults when settings is omitted', () => {
+    const parsed = DashboardViewConfigSchema.parse({});
+    expect(parsed.version).toBe(1);
+    expect(parsed.sections).toEqual([]);
+    expect(parsed.settings).toEqual({
+      gridCols: 12,
+      rowHeight: 80,
+      compactType: 'vertical',
+    });
+  });
+
+  it('fills missing settings fields when settings is partial', () => {
+    const parsed = DashboardViewConfigSchema.parse({ settings: { gridCols: 6 } });
+    expect(parsed.settings).toEqual({
+      gridCols: 6,
+      rowHeight: 80,
+      compactType: 'vertical',
+    });
+  });
+
   it('dashboard with one widget of every type validates', () => {
     const widgetTypes = Object.keys(VALID_CONFIGS) as WidgetType[];
     const dashboardConfig = {
