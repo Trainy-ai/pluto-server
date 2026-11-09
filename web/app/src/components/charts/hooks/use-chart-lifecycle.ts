@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import uPlot from "uplot";
 import { arrayMin, arrayMax } from "../lib/data-processing";
 import { zoomOverlapsData } from "../lib/scales";
-import { resetXScale, withProgrammaticScale } from "../lib/x-scale";
+import { padDegenerateXRange, resetXScale, withProgrammaticScale, xScaleKind } from "../lib/x-scale";
 import type { LineData } from "../lib/types";
 import {
   cacheLegendElement,
@@ -430,12 +430,11 @@ export function useChartLifecycle({
       if (!logXAxis && !isDateTime) {
         const xData = uplotData[0] as number[];
         if (xData.length === 1) {
-          const xVal = xData[0];
-          const padding = Math.max(Math.abs(xVal) * 0.5, 1);
+          const [min, max] = padDegenerateXRange(xData[0], xData[0]);
           try {
             isProgrammaticScaleRef.current = true;
             chart.batch(() => {
-              chart.setScale("x", { min: xVal - padding, max: xVal + padding });
+              chart.setScale("x", { min, max });
             });
           } catch {
             // Ignore errors if chart was already destroyed
@@ -536,8 +535,10 @@ export function useChartLifecycle({
       // Batched so uPlot commits (and fires its setScale hooks) synchronously,
       // while the programmatic flag is still raised — see withProgrammaticScale.
       withProgrammaticScale(chart, isProgrammaticScaleRef, () => {
-        // Set X scale to visible data range
-        chart.setScale("x", { min: newXMin, max: newXMax });
+        // Set X scale to visible data range. Padded: hiding runs can leave
+        // visible data at a single step, and min === max hangs uPlot's ticks.
+        const [xMin, xMax] = padDegenerateXRange(newXMin, newXMax, xScaleKind(chart));
+        chart.setScale("x", { min: xMin, max: xMax });
 
         // Set Y scale with padding (same algorithm as set-scale-hook.ts)
         if (!skipY && visibleYMin !== Infinity && visibleYMax !== -Infinity) {

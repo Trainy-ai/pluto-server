@@ -59,19 +59,72 @@ export function resetXScale(
   data: uPlot.AlignedData,
   globalRange: [number, number] | null,
 ): void {
-  if (globalRange) {
-    chart.setScale("x", { min: globalRange[0], max: globalRange[1] });
-    return;
-  }
+  const range = pickResetRange(chart, data, globalRange);
+  if (!range) return;
+  const [min, max] = padDegenerateXRange(range[0], range[1], xScaleKind(chart));
+  chart.setScale("x", { min, max });
+}
+
+function pickResetRange(
+  chart: uPlot,
+  data: uPlot.AlignedData,
+  globalRange: [number, number] | null,
+): [number, number] | null {
+  if (globalRange) return globalRange;
   const visibleRange = getVisibleXRange(chart, data);
-  if (visibleRange) {
-    chart.setScale("x", { min: visibleRange[0], max: visibleRange[1] });
-    return;
-  }
+  if (visibleRange) return visibleRange;
   const xVals = data[0] as number[];
-  if (xVals && xVals.length > 0) {
-    chart.setScale("x", { min: xVals[0], max: xVals[xVals.length - 1] });
+  if (xVals && xVals.length > 0) return [xVals[0], xVals[xVals.length - 1]];
+  return null;
+}
+
+/** How an X scale measures distance, which decides how to pad it. */
+export type XScaleKind = "linear" | "log" | "time";
+
+/** One minute in ms — datetime X values are epoch milliseconds. */
+const TIME_PAD_MS = 60_000;
+
+/**
+ * Widen a zero-width X range around its point; pass any real range through.
+ *
+ * Every data-derived `setScale("x", …)` must go through this. uPlot assigns an
+ * explicit min/max verbatim — the scale's `range` callback is skipped — so a
+ * single-step series (every run logged the metric once) hands it min === max.
+ * `findIncr` then sees a delta of 0, accepts its smallest increment (1e-16 for
+ * a one-digit value), and `numAxisSplits` loops `val += incr` where
+ * `6 + 1e-16 === 6`: `splits.push(6)` until V8's array cap at ~1 GB, which
+ * throws "Invalid array length" or OOMs the renderer outright.
+ *
+ * The padding follows the axis, because the reset and double-click paths are
+ * not gated on axis type:
+ *   - linear: ±max(|x|·0.5, 1) — the framing the chart already gave a lone
+ *     point on first render, so a reset lands where the initial view did.
+ *   - log: [x/2, 2x]. Additive padding can reach 0 (x=1 → [0, 2]), and an
+ *     explicit log min of 0 is uPlot's other infinite loop (scales-config).
+ *   - time: ±1 minute. Half an epoch timestamp would span decades.
+ */
+export function padDegenerateXRange(
+  min: number,
+  max: number,
+  kind: XScaleKind = "linear",
+): [number, number] {
+  if (min !== max) return [min, max];
+  if (kind === "log") {
+    return min > 0 ? [min / 2, min * 2] : [min, max];
   }
+  if (kind === "time") {
+    return [min - TIME_PAD_MS, max + TIME_PAD_MS];
+  }
+  const padding = Math.max(Math.abs(min) * 0.5, 1);
+  return [min - padding, max + padding];
+}
+
+/** Read the X scale's kind off a live chart; linear until uPlot has built it. */
+export function xScaleKind(chart: uPlot): XScaleKind {
+  const x = chart.scales?.x;
+  if (x?.distr === 3) return "log";
+  if (x?.time) return "time";
+  return "linear";
 }
 
 /**

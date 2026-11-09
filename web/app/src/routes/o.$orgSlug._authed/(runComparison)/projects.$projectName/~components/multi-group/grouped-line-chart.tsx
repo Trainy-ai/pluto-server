@@ -17,6 +17,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { useHiddenGroupPaths } from "@/hooks/use-hidden-group-paths";
 import { getDashPattern } from "./metric-dash";
 import { DEFAULT_MAX_GROUPS } from "@/components/charts/chart-scale-popover";
+import { padDegenerateXRange, xScaleKind } from "@/components/charts/lib/x-scale";
 
 /** Phase 10 (B) — when the page has an active `groupBy`, line-chart
  *  widgets render through this component instead of <MultiLineChart>.
@@ -245,7 +246,8 @@ export function GroupedLineChart({
       const xs = chart.data?.[0] as number[] | undefined;
       if (!xs || xs.length === 0) return;
       try {
-        chart.setScale("x", { min: xs[0], max: xs[xs.length - 1] });
+        const [min, max] = padDegenerateXRange(xs[0], xs[xs.length - 1], xScaleKind(chart));
+        chart.setScale("x", { min, max });
       } catch {
         // Chart may have been destroyed mid-frame.
       }

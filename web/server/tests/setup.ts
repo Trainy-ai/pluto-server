@@ -626,6 +626,83 @@ async function seedBlahMetrics(
   console.log(`   ✓ Seeded ${rows.length} blah eval rows across ${runs.length} runs`);
 }
 
+/**
+ * One metric logged at exactly ONE step (6) per run — the shape that hung uPlot.
+ *
+ * With a single x value, resetXScale used to call setScale("x", {min: 6,
+ * max: 6}); uPlot's tick loop then advanced by 1e-16 where `6 + 1e-16 === 6`
+ * and pushed until the tab OOM'd (prod: a metric every run logged once). The
+ * value differs per run so the chart has a real Y range — only X degenerates.
+ *
+ * `probe/` avoids "train" and "metric" so the default chart-test filters do not
+ * pick it up. Idempotent: skipped when the rows already exist, so it also lands
+ * on a DB whose bulk runs were seeded before this existed.
+ */
+const SINGLE_STEP_LOG_NAME = 'probe/single-step';
+const SINGLE_STEP_STEP = 6;
+
+async function seedSingleStepMetric(
+  runs: Array<{ id: bigint; name: string; createdAt: Date }>,
+  tenantId: string,
+  projectName: string,
+): Promise<void> {
+  const clickhouseUrl = process.env.CLICKHOUSE_URL;
+  if (!clickhouseUrl) {
+    console.log('   ⚠ CLICKHOUSE_URL not set, skipping single-step seeding');
+    return;
+  }
+  const clickhouse = createClient({
+    url: clickhouseUrl,
+    username: process.env.CLICKHOUSE_USER || 'default',
+    password: process.env.CLICKHOUSE_PASSWORD || '',
+  });
+  try {
+    const existing = await clickhouse.query({
+      query: `SELECT count() AS n FROM mlop_metrics
+              WHERE tenantId = {tenantId: String} AND projectName = {projectName: String}
+                AND logName = {logName: String}`,
+      query_params: { tenantId, projectName, logName: SINGLE_STEP_LOG_NAME },
+      format: 'JSONEachRow',
+    });
+    const [{ n }] = (await existing.json()) as Array<{ n: string }>;
+    if (Number(n) > 0) {
+      console.log(`   ✓ Single-step metric already seeded`);
+      return;
+    }
+
+    const rows = runs.map((run, i) => ({
+      tenantId,
+      projectName,
+      runId: Number(run.id),
+      logGroup: 'probe',
+      logName: SINGLE_STEP_LOG_NAME,
+      time: new Date(run.createdAt.getTime() + SINGLE_STEP_STEP * 1000)
+        .toISOString().replace('T', ' ').replace('Z', ''),
+      step: SINGLE_STEP_STEP,
+      value: 0.5 + i * 0.7,
+    }));
+    await clickhouse.insert({ table: 'mlop_metrics', values: rows, format: 'JSONEachRow' });
+    await clickhouse.command({
+      query: `
+        INSERT INTO mlop_metric_summaries
+        SELECT
+          tenantId, projectName, runId, logName,
+          min(value), max(value), sum(value), toUInt64(count()),
+          argMaxState(value, step), sum(value * value), min(step), max(step)
+        FROM mlop_metrics
+        WHERE tenantId = {tenantId: String}
+          AND projectName = {projectName: String}
+          AND logName = {logName: String}
+        GROUP BY tenantId, projectName, runId, logName
+      `,
+      query_params: { tenantId, projectName, logName: SINGLE_STEP_LOG_NAME },
+    });
+    console.log(`   ✓ Seeded single-step metric on ${rows.length} runs`);
+  } finally {
+    await clickhouse.close();
+  }
+}
+
 interface OrgSetupResult {
   org: { id: string; name: string; slug: string; createdAt: Date };
 }
@@ -2576,6 +2653,31 @@ async function setupTestData(): Promise<TestData> {
     }
   } else {
     console.log(`   ✓ Bulk runs already exist (found needle run)`);
+  }
+
+  // Outside the branch above so it also lands on an already-seeded DB.
+  {
+    const singleStepRuns = await prisma.runs.findMany({
+      where: {
+        projectId: project.id,
+        organizationId: org.id,
+        name: { in: ['a-bulk-run-011', 'a-bulk-run-012', 'a-bulk-run-013'] },
+      },
+      select: { id: true, name: true, createdAt: true },
+      orderBy: { name: 'asc' },
+    });
+    if (singleStepRuns.length > 0) {
+      await prisma.runLogs.createMany({
+        data: singleStepRuns.map((run) => ({
+          runId: run.id,
+          logName: SINGLE_STEP_LOG_NAME,
+          logGroup: 'probe',
+          logType: 'METRIC' as const,
+        })),
+        skipDuplicates: true,
+      });
+      await seedSingleStepMetric(singleStepRuns, org.id, project.name);
+    }
   }
 
   // 5c. Create staircase-test run for zoom congruence E2E tests

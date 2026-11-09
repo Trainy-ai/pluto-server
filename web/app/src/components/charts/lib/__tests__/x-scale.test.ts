@@ -2,7 +2,9 @@ import { describe, it, expect, vi } from "vitest";
 import type uPlot from "uplot";
 import {
   getVisibleXRange,
+  padDegenerateXRange,
   resetXScale,
+  xScaleKind,
   withProgrammaticScale,
 } from "../x-scale";
 
@@ -219,5 +221,151 @@ describe("withProgrammaticScale", () => {
     await flushMicrotasks();
 
     expect(flagAtHook).toEqual([false]);
+  });
+});
+
+/**
+ * Regression guard for the zero-width X scale that hung uPlot and OOM'd the tab.
+ *
+ * uPlot assigns an explicit `setScale("x", { min, max })` verbatim — no range
+ * callback, no padding. With min === max, `findIncr` sees delta 0, so every
+ * increment "fits" and it picks the smallest one its digit budget allows
+ * (1e-16 for a one-digit value). `numAxisSplits` then loops
+ * `val = roundDec(val + incr)`, and since `6 + 1e-16 === 6` the value never
+ * advances: `splits.push(6)` runs until V8's array-length cap (~1 GB), throwing
+ * "Invalid array length" or killing the renderer first. Seen in prod on a
+ * metric every run logged exactly once.
+ */
+describe("padDegenerateXRange", () => {
+  it("passes a real range through untouched", () => {
+    expect(padDegenerateXRange(0, 10)).toEqual([0, 10]);
+    expect(padDegenerateXRange(-5, 5)).toEqual([-5, 5]);
+  });
+
+  it("widens a single point at x=6 — the value from the prod crash", () => {
+    const [min, max] = padDegenerateXRange(6, 6);
+    expect(min).toBeLessThan(6);
+    expect(max).toBeGreaterThan(6);
+  });
+
+  it("centres the point, matching the chart's existing single-point framing", () => {
+    // ±max(|x|·0.5, 1) — the same padding use-chart-lifecycle used inline.
+    expect(padDegenerateXRange(6, 6)).toEqual([3, 9]);
+    expect(padDegenerateXRange(0, 0)).toEqual([-1, 1]);
+    expect(padDegenerateXRange(1, 1)).toEqual([0, 2]);
+    expect(padDegenerateXRange(-7, -7)).toEqual([-10.5, -3.5]);
+  });
+
+  it("leaves a range wide enough for ticks at every magnitude", () => {
+    // Values chosen from the ones verified to hang uPlot 1.6.32 unpadded.
+    for (const x of [1, 3, 6, 99, 5000, 123457, 1.5e9, -7, 0.3]) {
+      const [min, max] = padDegenerateXRange(x, x);
+      // The width must be representable at this magnitude, or uPlot's tick
+      // loop can stall exactly as it did for the unpadded point.
+      expect(max - min).toBeGreaterThanOrEqual(1);
+      expect(min + (max - min) / 2).toBeCloseTo(x);
+    }
+  });
+});
+
+describe("padDegenerateXRange on log and time axes", () => {
+  // The reset and double-click paths are not gated on axis type, so the
+  // padding reaches these scales too. Linear padding would be wrong on both.
+
+  it("pads a log axis multiplicatively, so the range stays positive", () => {
+    // Linear ±1 on x=1 would give [0, 2], and an explicit min of 0 sends
+    // uPlot's logAxisSplits into its own log(0) infinite loop.
+    expect(padDegenerateXRange(1, 1, "log")).toEqual([0.5, 2]);
+    expect(padDegenerateXRange(0.25, 0.25, "log")).toEqual([0.125, 0.5]);
+    expect(padDegenerateXRange(5000, 5000, "log")).toEqual([2500, 10000]);
+  });
+
+  it("pads a time axis by one minute, not by half the epoch", () => {
+    const t = Date.UTC(2026, 10, 7, 12, 0, 0); // ms, as the chart stores it
+    expect(padDegenerateXRange(t, t, "time")).toEqual([t - 60_000, t + 60_000]);
+  });
+
+  it("passes a real range through on every axis kind", () => {
+    expect(padDegenerateXRange(1, 10, "log")).toEqual([1, 10]);
+    expect(padDegenerateXRange(1000, 2000, "time")).toEqual([1000, 2000]);
+  });
+});
+
+describe("xScaleKind", () => {
+  it("reads log from distr 3 and time from the time flag", () => {
+    const of = (x: object) => xScaleKind({ scales: { x } } as unknown as uPlot);
+    expect(of({ distr: 3, time: false })).toBe("log");
+    expect(of({ distr: 1, time: true })).toBe("time");
+    expect(of({ distr: 1, time: false })).toBe("linear");
+  });
+
+  it("defaults to linear when the chart has no x scale yet", () => {
+    expect(xScaleKind({ scales: {} } as unknown as uPlot)).toBe("linear");
+    expect(xScaleKind({} as unknown as uPlot)).toBe("linear");
+  });
+});
+
+describe("resetXScale never commits a zero-width range", () => {
+  function lastRange(chart: FakeChart): { min: number; max: number } {
+    const calls = chart.setScale.mock.calls;
+    return calls[calls.length - 1][1];
+  }
+
+  it("pads a single-step series fitted from visible data", () => {
+    const chart = makeChart([true, true, true]);
+    // Every run logged the metric once, at step 6.
+    resetXScale(
+      chart as unknown as uPlot,
+      [[6], [0.5], [1.2], [2]] as uPlot.AlignedData,
+      null,
+    );
+    const { min, max } = lastRange(chart);
+    expect(max).toBeGreaterThan(min);
+  });
+
+  it("pads when the only visible series has a single point", () => {
+    // The hidden series spans 0..6; the visible one only reaches x=6.
+    const chart = makeChart([false, true]);
+    resetXScale(
+      chart as unknown as uPlot,
+      [[0, 6], [1, 2], [null, 3]] as uPlot.AlignedData,
+      null,
+    );
+    const { min, max } = lastRange(chart);
+    expect(min).toBeLessThan(6);
+    expect(max).toBeGreaterThan(6);
+  });
+
+  it("pads the full-extent fallback when nothing visible has data", () => {
+    const chart = makeChart([false]);
+    resetXScale(
+      chart as unknown as uPlot,
+      [[6], [1]] as uPlot.AlignedData,
+      null,
+    );
+    const { min, max } = lastRange(chart);
+    expect(max).toBeGreaterThan(min);
+  });
+
+  it("pads a single point on a log X axis without reaching zero", () => {
+    const chart = makeChart([true]);
+    (chart as unknown as { scales: object }).scales = { x: { distr: 3, time: false } };
+    resetXScale(
+      chart as unknown as uPlot,
+      [[1], [7]] as uPlot.AlignedData,
+      null,
+    );
+    expect(lastRange(chart)).toEqual({ min: 0.5, max: 2 });
+  });
+
+  it("pads a degenerate global range", () => {
+    const chart = makeChart([true]);
+    resetXScale(
+      chart as unknown as uPlot,
+      [[6], [1]] as uPlot.AlignedData,
+      [6, 6],
+    );
+    const { min, max } = lastRange(chart);
+    expect(max).toBeGreaterThan(min);
   });
 });

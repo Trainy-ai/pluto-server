@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import uPlot from "uplot";
 import { zoomOverlapsData } from "../lib/scales";
+import { padDegenerateXRange } from "../lib/x-scale";
 
 interface UseZoomSyncParams {
   chartRef: React.RefObject<uPlot | null>;
@@ -78,8 +79,7 @@ export function useZoomSync({
           isProgrammaticScaleRef.current = true;
           const xData = chart.data[0] as number[];
           if (xData.length > 0) {
-            const dataMin = xData[0];
-            const dataMax = xData[xData.length - 1];
+            const [dataMin, dataMax] = padDegenerateXRange(xData[0], xData[xData.length - 1]);
             chart.batch(() => {
               chart.setScale("x", { min: dataMin, max: dataMax });
             });
