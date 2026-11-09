@@ -134,6 +134,11 @@ model TwoFactor {
   userId      String
   user        User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  // Required by better-auth's twoFactor plugin (>= 1.6); validated at startup since 1.7.3
+  verified                Boolean?  @default(true)
+  failedVerificationCount Int?      @default(0)
+  lockedUntil             DateTime?
+
   @@map("twoFactor")
 }
 
@@ -218,6 +223,8 @@ model Invitation {
   expiresAt      DateTime
   inviterId      String
   user           User             @relation(fields: [inviterId], references: [id], onDelete: Cascade)
+  // Required by better-auth's organization plugin; validated at startup since 1.7.3
+  createdAt      DateTime         @default(now())
 
   @@map("invitation")
 }

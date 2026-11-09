@@ -3,14 +3,17 @@ import { z } from "zod";
 export const passThroughCredentialsSchema = z.object({
   email: z
     .string({
-      invalid_type_error: "Email must be a string.",
+      error: (issue) =>
+        issue.input === undefined ? undefined : "Email must be a string.",
     })
     .trim()
     .max(255, "Maximum 255 characters allowed."),
   password: z
     .string({
-      required_error: "Password is required.",
-      invalid_type_error: "Password must be a string.",
+      error: (issue) =>
+        issue.input === undefined
+          ? "Password is required."
+          : "Password must be a string.",
     })
     .max(72, "Maximum 72 characters allowed."),
 });

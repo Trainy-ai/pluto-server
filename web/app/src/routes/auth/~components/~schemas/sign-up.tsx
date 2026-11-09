@@ -51,16 +51,20 @@ export const passwordValidator = new PasswordValidator();
 export const signUpSchema = z.object({
   name: z
     .string({
-      required_error: "Name is required.",
-      invalid_type_error: "Name must be a string.",
+      error: (issue) =>
+        issue.input === undefined
+          ? "Name is required."
+          : "Name must be a string.",
     })
     .trim()
     .min(1, "Name is required.")
     .max(64, "Maximum 64 characters allowed."),
   email: z
     .string({
-      required_error: "Email is required.",
-      invalid_type_error: "Email must be a string.",
+      error: (issue) =>
+        issue.input === undefined
+          ? "Email is required."
+          : "Email must be a string.",
     })
     .trim()
     .min(1, "Email is required.")
@@ -68,8 +72,10 @@ export const signUpSchema = z.object({
     .email("Enter a valid email address."),
   password: z
     .string({
-      required_error: "Password is required.",
-      invalid_type_error: "Password must be a string.",
+      error: (issue) =>
+        issue.input === undefined
+          ? "Password is required."
+          : "Password must be a string.",
     })
     .min(1, "Password is required.")
     .max(72, "Maximum 72 characters allowed.")
@@ -78,8 +84,10 @@ export const signUpSchema = z.object({
     }),
   confirmPassword: z
     .string({
-      required_error: "Confirm password is required.",
-      invalid_type_error: "Confirm password must be a string.",
+      error: (issue) =>
+        issue.input === undefined
+          ? "Confirm password is required."
+          : "Confirm password must be a string.",
     })
     .min(1, "Confirm password is required.")
     .max(72, "Maximum 72 characters allowed."),

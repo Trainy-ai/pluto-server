@@ -38,7 +38,7 @@
     ],
     "overrides": {
       "@babel/core": "^7.29.6",
-      "@better-auth/utils": "0.4.2",
+      "@better-auth/utils": "0.5.1",
       "@grpc/grpc-js": "^1.14.5",
       "@humanfs/node": "^0.16.8",
       "@hyperdx/node-opentelemetry": "^0.11.0",
@@ -47,7 +47,10 @@
       "@protobufjs/utf8": "^1.1.1",
       "@simple-git/argv-parser": "^2.0.1",
       "@smithy/config-resolver": "^4.4.0",
-      "@xmldom/xmldom": "^0.8.15",
+      "@tanstack/router-generator>zod": "^4.6.6",
+      "@tanstack/router-plugin>zod": "^4.6.6",
+      "@xmldom/xmldom@0.8": "^0.8.15",
+      "@xmldom/xmldom@0.9": "^0.9.12",
       "ajv@6": "^6.15.0",
       "axios": "^1.20.0",
       "better-call>zod": "^4.4.3",
@@ -55,14 +58,14 @@
       "browserslist": "^4.28.9",
       "defu": "^6.1.5",
       "diff": "^8.0.3",
-      "dompurify": "^3.4.13",
+      "dompurify": "^3.4.17",
       "esbuild": "^0.25.12",
       "fast-xml-builder": "^1.1.7",
       "fast-xml-parser": "^5.8.0",
       "fflate@0.4": "^0.4.9",
       "fflate@0.8": "^0.8.3",
       "flatted": "^3.4.2",
-      "follow-redirects": "^1.16.0",
+      "follow-redirects": "^1.16.2",
       "form-data": "^4.0.6",
       "js-yaml@4": "^4.3.2",
       "kysely": "^0.28.17",
@@ -80,10 +83,11 @@
       "shell-quote": "^1.9.0",
       "simple-git": "^4.0.2",
       "smol-toml": "^1.6.1",
-      "undici": "^7.29.1",
+      "undici": "^7.30.1",
       "uuid": "^11.1.1",
       "ws@8": "^8.21.0",
-      "yaml@2": "^2.8.3"
+      "yaml@2": "^2.8.3",
+      "zod@4": "^4.6.6"
     }
   }
 }

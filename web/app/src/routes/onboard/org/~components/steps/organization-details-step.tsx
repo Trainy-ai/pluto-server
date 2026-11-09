@@ -175,7 +175,7 @@ export default function OrganizationDetailsStep({
       console.error(error);
       if (error instanceof z.ZodError) {
         const newErrors: Record<string, string> = {};
-        error.errors.forEach((err) => {
+        error.issues.forEach((err) => {
           if (err.path[0]) {
             newErrors[err.path[0] as string] = err.message;
           }
@@ -183,8 +183,8 @@ export default function OrganizationDetailsStep({
         setErrors(newErrors);
 
         // Show toast with the first error message
-        if (error.errors.length > 0) {
-          toast.error(error.errors[0].message);
+        if (error.issues.length > 0) {
+          toast.error(error.issues[0].message);
         }
       }
       return false;

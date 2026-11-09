@@ -51,6 +51,13 @@ async function notifyAdminOfNewSignup(user: { email: string; name: string; id: s
   });
 }
 
+// better-auth >= 1.7.3 validates the Prisma schema at startup and rejects all
+// auth requests on a mismatch. The SSO plugin (test/dev only, see `plugins`
+// below) expects an `ssoProvider` table that we deliberately do not ship to
+// production: the dummy IdP is configured via `defaultSSO` and never persisted.
+// Skip validation only where that plugin is enabled; production keeps it on.
+const ssoSchemaValidationOverride = { validateSchema: false } as const;
+
 export const auth = betterAuth({
   database: prismaAdapter(prisma, {
     provider: "postgresql",
@@ -222,6 +229,9 @@ export const auth = betterAuth({
               httpOnly: true,
               sameSite: "lax", // Standard setting, works with Vite proxy
             },
+            database: ssoSchemaValidationOverride,
           }
-        : undefined,
+        : env.NODE_ENV === "development"
+          ? { database: ssoSchemaValidationOverride }
+          : undefined,
 });
